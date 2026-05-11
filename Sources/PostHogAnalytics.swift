@@ -74,8 +74,8 @@ final class PostHogAnalytics {
     }
 
     func flush() {
-        dispatchSyncOnWorkQueue {
-            guard didStart else { return }
+        dispatchAsyncOnWorkQueue { [weak self] in
+            guard let self, self.didStart else { return }
             PostHogSDK.shared.flush()
         }
     }
@@ -188,14 +188,6 @@ final class PostHogAnalytics {
             return
         }
         workQueue.async(execute: block)
-    }
-
-    private func dispatchSyncOnWorkQueue(_ block: () -> Void) {
-        if DispatchQueue.getSpecific(key: workQueueSpecificKey) != nil {
-            block()
-            return
-        }
-        workQueue.sync(execute: block)
     }
 
     private func utcHourString(_ date: Date) -> String {
