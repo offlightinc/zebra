@@ -1054,6 +1054,7 @@ struct ContentView: View {
     @EnvironmentObject var sidebarSelectionState: SidebarSelectionState
     @EnvironmentObject var cmuxConfigStore: CmuxConfigStore
     @EnvironmentObject var fileExplorerState: FileExplorerState
+    @EnvironmentObject var sideNavBarState: SideNavBarState
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("titlebarControlsStyle") private var titlebarControlsStyleRawValue = TitlebarControlsStyle.classic.rawValue
     @State private var sidebarWidth: CGFloat = 200
@@ -2597,19 +2598,22 @@ struct ContentView: View {
         }
 
         return AnyView(
-            layout
-                .overlay(alignment: .leading) {
-                    if sidebarState.isVisible {
-                        sidebarResizerOverlay
-                            .zIndex(1000)
+            HStack(spacing: 0) {
+                SideNavBarIconColumn(state: sideNavBarState)
+                layout
+                    .overlay(alignment: .leading) {
+                        if sidebarState.isVisible {
+                            sidebarResizerOverlay
+                                .zIndex(1000)
+                        }
                     }
-                }
-                .overlay(alignment: .leading) {
-                    if rightSidebarVisible {
-                        rightSidebarResizerOverlay
-                            .zIndex(1000)
+                    .overlay(alignment: .leading) {
+                        if rightSidebarVisible {
+                            rightSidebarResizerOverlay
+                                .zIndex(1000)
+                        }
                     }
-                }
+            }
         )
     }
 
@@ -2627,7 +2631,7 @@ struct ContentView: View {
                 .overlay(alignment: .topLeading) {
                     if isFullScreen && sidebarState.isVisible && !isMinimalMode {
                         fullscreenControls
-                            .padding(.leading, 10)
+                            .padding(.leading, 10 + SideNavBarIconColumn.fixedWidth)
                             .padding(.top, 4)
                     }
                 }
