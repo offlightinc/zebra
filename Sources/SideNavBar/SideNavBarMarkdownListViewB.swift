@@ -1,0 +1,53 @@
+import SwiftUI
+
+struct SideNavBarMarkdownListViewB: View {
+    @ObservedObject var state: SideNavBarState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(FakeMarkdownData.entries) { entry in
+                        rowView(entry: entry)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .padding(.top, SidebarWorkspaceListMetrics.firstRowTopOffset)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .accessibilityIdentifier("SideNavBarContentPanelB.list")
+    }
+
+    @ViewBuilder
+    private func rowView(entry: FakeMarkdownEntry) -> some View {
+        let isSelected = state.selectedMarkdownFilePath == entry.path
+        Button {
+            state.selectedMarkdownFilePath = entry.path
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(entry.displayName)
+                    .font(.system(size: 13))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                if !entry.relativeParent.isEmpty {
+                    Text(entry.relativeParent)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+                    .padding(.horizontal, 6)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("SideNavBarContentPanelB.list.row.\(entry.path)")
+    }
+}

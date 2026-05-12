@@ -2574,8 +2574,9 @@ struct ContentView: View {
             layout = AnyView(
                 ZStack(alignment: .leading) {
                     HStack(spacing: 0) {
-                        terminalContentWithSidebarDropOverlay(appearance: appearance)
+                        SideNavBarContentPanelB(state: sideNavBarState)
                             .padding(.leading, sidebarState.isVisible ? sidebarWidth : 0)
+                        terminalContentWithSidebarDropOverlay(appearance: appearance)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(1)
                         rightSidebarPanelWithBackdrop(appearance: appearance)
@@ -2592,6 +2593,7 @@ struct ContentView: View {
                     if sidebarState.isVisible {
                         sidebarPanelWithBackdrop(appearance: appearance)
                     }
+                    SideNavBarContentPanelB(state: sideNavBarState)
                     terminalContentWithRightSidebarPanel(appearance: appearance)
                 }
             )
