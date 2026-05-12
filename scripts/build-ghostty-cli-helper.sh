@@ -16,6 +16,7 @@ EOF
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GHOSTTY_DIR="$REPO_ROOT/ghostty"
+REQUIRED_ZIG_VERSION="0.15.2"
 
 OUTPUT_PATH=""
 TARGET_TRIPLE=""
@@ -24,6 +25,11 @@ UNIVERSAL="false"
 zig_binary_arch() {
   local zig_path="$1"
   file "$zig_path" 2>/dev/null | grep -oE '(arm64|x86_64)' | head -1 || true
+}
+
+zig_version() {
+  local zig_path="$1"
+  "$zig_path" version 2>/dev/null || true
 }
 
 target_arch_for_triple() {
@@ -43,11 +49,20 @@ select_zig_for_target() {
       echo "error: CMUX_ZIG is not executable: $CMUX_ZIG" >&2
       return 1
     fi
+    if [[ "$(zig_version "$CMUX_ZIG")" != "$REQUIRED_ZIG_VERSION" ]]; then
+      echo "error: Ghostty CLI helper requires Zig $REQUIRED_ZIG_VERSION, found $(zig_version "$CMUX_ZIG") at $CMUX_ZIG" >&2
+      return 1
+    fi
     echo "$CMUX_ZIG"
     return 0
   fi
 
   local -a candidates=()
+  # Ghostty documents a Zig 0.15.x link failure with Xcode 26.4 for the
+  # official Zig tarball. Homebrew zig@0.15 carries the needed patch.
+  candidates+=("/opt/homebrew/opt/zig@0.15/bin/zig" "/usr/local/opt/zig@0.15/bin/zig")
+  local repo_zig="$REPO_ROOT/.tools/zig/$REQUIRED_ZIG_VERSION/zig"
+  [[ -x "$repo_zig" ]] && candidates+=("$repo_zig")
   local path_zig=""
   path_zig="$(command -v zig 2>/dev/null || true)"
   [[ -n "$path_zig" ]] && candidates+=("$path_zig")
@@ -58,11 +73,14 @@ select_zig_for_target() {
   local candidate=""
   local canonical=""
   local arch=""
+  local version=""
   for candidate in "${candidates[@]}"; do
     [[ -x "$candidate" ]] || continue
     canonical="$(cd "$(dirname "$candidate")" && pwd)/$(basename "$candidate")"
     [[ "$seen" == *" $canonical "* ]] && continue
     seen="${seen}${canonical} "
+    version="$(zig_version "$canonical")"
+    [[ "$version" == "$REQUIRED_ZIG_VERSION" ]] || continue
     [[ -z "$fallback" ]] && fallback="$canonical"
     if [[ -n "$desired_arch" ]]; then
       arch="$(zig_binary_arch "$canonical")"
@@ -78,7 +96,8 @@ select_zig_for_target() {
     return 0
   fi
 
-  echo "error: zig is required to build the Ghostty CLI helper" >&2
+  echo "error: Zig $REQUIRED_ZIG_VERSION is required to build the Ghostty CLI helper" >&2
+  echo "Install repo-local Zig at .tools/zig/$REQUIRED_ZIG_VERSION/zig or set CMUX_ZIG." >&2
   return 1
 }
 

@@ -151,4 +151,18 @@ final class MarkdownFileListStore: ObservableObject {
         }
         return parent + "/"
     }
+
+    #if DEBUG
+    static func previewStore(
+        entries: [MarkdownFileEntry],
+        rootPath: String? = "/preview/workspace",
+        isScanning: Bool = false
+    ) -> MarkdownFileListStore {
+        let store = MarkdownFileListStore()
+        store.rootPath = rootPath
+        store.mdFiles = entries
+        store.isScanning = isScanning
+        return store
+    }
+    #endif
 }

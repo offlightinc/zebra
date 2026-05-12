@@ -1,8 +1,8 @@
 import SwiftUI
 
-struct SideNavBarMarkdownListView: View {
+struct VerticalTabsSidebarMarkdownListView: View {
     @ObservedObject var store: MarkdownFileListStore
-    @ObservedObject var state: SideNavBarState
+    @ObservedObject var state: VerticalTabsSidebarModeState
     let onSelectFile: (String) -> Void
 
     @State private var collapsedFolders: Set<String> = []
@@ -16,13 +16,13 @@ struct SideNavBarMarkdownListView: View {
         Group {
             if !hasRoot {
                 placeholderState(
-                    text: String(localized: "sideNavBar.list.noWorkspace", defaultValue: "No workspace selected")
+                    text: String(localized: "verticalTabsSidebar.list.noWorkspace", defaultValue: "No workspace selected")
                 )
             } else if entries.isEmpty && isScanning {
                 loadingState
             } else if entries.isEmpty {
                 placeholderState(
-                    text: String(localized: "sideNavBar.list.empty", defaultValue: "No markdown files in this workspace")
+                    text: String(localized: "verticalTabsSidebar.list.empty", defaultValue: "No markdown files in this workspace")
                 )
             } else {
                 let root = MarkdownTreeFolder.build(from: entries)
@@ -53,7 +53,7 @@ struct SideNavBarMarkdownListView: View {
                         }
                         .padding(.vertical, 4)
                     }
-                    .accessibilityIdentifier("SideNavBarMarkdownList.scroll")
+                    .accessibilityIdentifier("VerticalTabsSidebarMarkdownList.scroll")
                 }
             }
         }
@@ -73,12 +73,12 @@ struct SideNavBarMarkdownListView: View {
             }
             .buttonStyle(.plain)
             .safeHelp(
-                String(localized: "sideNavBar.list.collapseAll.tooltip", defaultValue: "Collapse all folders")
+                String(localized: "verticalTabsSidebar.list.collapseAll.tooltip", defaultValue: "Collapse all folders")
             )
             .accessibilityLabel(
-                String(localized: "sideNavBar.list.collapseAll.accessibilityLabel", defaultValue: "Collapse all")
+                String(localized: "verticalTabsSidebar.list.collapseAll.accessibilityLabel", defaultValue: "Collapse all")
             )
-            .accessibilityIdentifier("SideNavBarMarkdownList.collapseAll")
+            .accessibilityIdentifier("VerticalTabsSidebarMarkdownList.collapseAll")
         }
         .padding(.horizontal, 6)
         .frame(height: SidebarWorkspaceListMetrics.firstRowTopOffset)
@@ -202,7 +202,7 @@ private struct MarkdownFolderRow: View, Equatable {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("SideNavBarMarkdownList.folder")
+        .accessibilityIdentifier("VerticalTabsSidebarMarkdownList.folder")
     }
 }
 
@@ -238,6 +238,117 @@ private struct MarkdownFileRow: View, Equatable {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("SideNavBarMarkdownList.row")
+        .accessibilityIdentifier("VerticalTabsSidebarMarkdownList.row")
     }
 }
+
+#if DEBUG
+private func previewSampleEntries() -> [MarkdownFileEntry] {
+    [
+        MarkdownFileEntry(
+            absolutePath: "/preview/workspace/README.md",
+            displayName: "README.md",
+            relativeParentPath: ""
+        ),
+        MarkdownFileEntry(
+            absolutePath: "/preview/workspace/CLAUDE.md",
+            displayName: "CLAUDE.md",
+            relativeParentPath: ""
+        ),
+        MarkdownFileEntry(
+            absolutePath: "/preview/workspace/docs/getting-started.md",
+            displayName: "getting-started.md",
+            relativeParentPath: "docs/"
+        ),
+        MarkdownFileEntry(
+            absolutePath: "/preview/workspace/docs/ghostty-fork.md",
+            displayName: "ghostty-fork.md",
+            relativeParentPath: "docs/"
+        ),
+        MarkdownFileEntry(
+            absolutePath: "/preview/workspace/docs/api/overview.md",
+            displayName: "overview.md",
+            relativeParentPath: "docs/api/"
+        ),
+        MarkdownFileEntry(
+            absolutePath: "/preview/workspace/docs/api/auth.md",
+            displayName: "auth.md",
+            relativeParentPath: "docs/api/"
+        ),
+    ]
+}
+
+#Preview("Populated tree, one active") {
+    VerticalTabsSidebarMarkdownListView(
+        store: MarkdownFileListStore.previewStore(entries: previewSampleEntries()),
+        state: VerticalTabsSidebarModeState(
+            activeMarkdownFilePaths: ["/preview/workspace/docs/api/overview.md"],
+            suppressPersistence: true
+        ),
+        onSelectFile: { _ in }
+    )
+    .frame(width: 260, height: 480)
+    .background(Color(NSColor.windowBackgroundColor))
+}
+
+#Preview("Multiple active highlights") {
+    VerticalTabsSidebarMarkdownListView(
+        store: MarkdownFileListStore.previewStore(entries: previewSampleEntries()),
+        state: VerticalTabsSidebarModeState(
+            activeMarkdownFilePaths: [
+                "/preview/workspace/README.md",
+                "/preview/workspace/docs/getting-started.md",
+                "/preview/workspace/docs/api/auth.md",
+            ],
+            suppressPersistence: true
+        ),
+        onSelectFile: { _ in }
+    )
+    .frame(width: 260, height: 480)
+    .background(Color(NSColor.windowBackgroundColor))
+}
+
+#Preview("Empty workspace") {
+    VerticalTabsSidebarMarkdownListView(
+        store: MarkdownFileListStore.previewStore(entries: []),
+        state: VerticalTabsSidebarModeState(suppressPersistence: true),
+        onSelectFile: { _ in }
+    )
+    .frame(width: 260, height: 480)
+    .background(Color(NSColor.windowBackgroundColor))
+}
+
+#Preview("No workspace selected") {
+    VerticalTabsSidebarMarkdownListView(
+        store: MarkdownFileListStore.previewStore(entries: [], rootPath: nil),
+        state: VerticalTabsSidebarModeState(suppressPersistence: true),
+        onSelectFile: { _ in }
+    )
+    .frame(width: 260, height: 480)
+    .background(Color(NSColor.windowBackgroundColor))
+}
+
+#Preview("Scanning") {
+    VerticalTabsSidebarMarkdownListView(
+        store: MarkdownFileListStore.previewStore(entries: [], isScanning: true),
+        state: VerticalTabsSidebarModeState(suppressPersistence: true),
+        onSelectFile: { _ in }
+    )
+    .frame(width: 260, height: 480)
+    .background(Color(NSColor.windowBackgroundColor))
+}
+
+#Preview("Dark — populated") {
+    VerticalTabsSidebarMarkdownListView(
+        store: MarkdownFileListStore.previewStore(entries: previewSampleEntries()),
+        state: VerticalTabsSidebarModeState(
+            activeMarkdownFilePaths: ["/preview/workspace/CLAUDE.md"],
+            suppressPersistence: true
+        ),
+        onSelectFile: { _ in }
+    )
+    .frame(width: 260, height: 480)
+    .background(Color(NSColor.windowBackgroundColor))
+    .preferredColorScheme(.dark)
+}
+#endif

@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+REQUIRED_ZIG_VERSION="0.15.2"
 
 cd "$PROJECT_DIR"
 
@@ -53,14 +54,53 @@ if required not in text:
 PY
 }
 
+select_zig_for_ghosttykit() {
+  if [[ -n "${CMUX_ZIG:-}" ]]; then
+    if [[ ! -x "$CMUX_ZIG" ]]; then
+      echo "error: CMUX_ZIG is not executable: $CMUX_ZIG" >&2
+      return 1
+    fi
+    echo "$CMUX_ZIG"
+    return 0
+  fi
+
+  # Ghostty documents a Zig 0.15.x link failure with Xcode 26.4 for the
+  # official Zig tarball. Homebrew zig@0.15 carries the needed patch.
+  local -a candidates=(
+    "/opt/homebrew/opt/zig@0.15/bin/zig"
+    "/usr/local/opt/zig@0.15/bin/zig"
+    "$PROJECT_DIR/.tools/zig/$REQUIRED_ZIG_VERSION/zig"
+  )
+  local path_zig=""
+  path_zig="$(command -v zig 2>/dev/null || true)"
+  [[ -n "$path_zig" ]] && candidates+=("$path_zig")
+
+  local candidate=""
+  for candidate in "${candidates[@]}"; do
+    [[ -x "$candidate" ]] || continue
+    if [[ "$("$candidate" version 2>/dev/null || true)" == "$REQUIRED_ZIG_VERSION" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+require_pinned_zig() {
+  local zig_bin="$1"
+  local zig_version
+  zig_version="$("$zig_bin" version)"
+  if [[ "$zig_version" != "$REQUIRED_ZIG_VERSION" ]]; then
+    echo "Error: GhosttyKit requires Zig $REQUIRED_ZIG_VERSION, found $zig_version at $zig_bin." >&2
+    echo "Install repo-local Zig at .tools/zig/$REQUIRED_ZIG_VERSION/zig or set CMUX_ZIG." >&2
+    return 1
+  fi
+  echo "==> Using Zig $zig_version at $zig_bin"
+}
+
 if [[ ! -d "$PROJECT_DIR/ghostty" ]]; then
   echo "error: ghostty submodule is missing. Run ./scripts/setup.sh first." >&2
-  exit 1
-fi
-
-if ! command -v zig >/dev/null 2>&1; then
-  echo "Error: zig is not installed." >&2
-  echo "Install via: brew install zig" >&2
   exit 1
 fi
 
@@ -213,13 +253,28 @@ else
 
   if [[ -d "$LOCAL_XCFRAMEWORK" && "$LOCAL_KEY" == "$GHOSTTY_KEY" ]]; then
     echo "==> Seeding cache from existing local GhosttyKit.xcframework (build key matches)"
+  elif [[ "${CMUX_SKIP_ZIG_BUILD:-}" == "1" && -d "$LOCAL_XCFRAMEWORK" ]]; then
+    echo "==> Reusing existing local GhosttyKit.xcframework (CMUX_SKIP_ZIG_BUILD=1)"
   elif try_fetch_prebuilt_xcframework; then
     echo "==> Seeding cache from prebuilt GhosttyKit.xcframework"
+  elif [[ "${CMUX_SKIP_ZIG_BUILD:-}" == "1" ]]; then
+    echo "Error: CMUX_SKIP_ZIG_BUILD=1 but no reusable GhosttyKit.xcframework exists." >&2
+    echo "Unset CMUX_SKIP_ZIG_BUILD or install the repo-required Zig version to build GhosttyKit." >&2
+    exit 1
   else
+    ZIG_BIN="$(select_zig_for_ghosttykit || true)"
+    if [[ -z "$ZIG_BIN" ]]; then
+      echo "Error: zig is not installed." >&2
+      echo "Install repo-local Zig at .tools/zig/$REQUIRED_ZIG_VERSION/zig or set CMUX_ZIG." >&2
+      exit 1
+    fi
+    if ! require_pinned_zig "$ZIG_BIN"; then
+      exit 1
+    fi
     echo "==> Building GhosttyKit.xcframework (this may take a few minutes)..."
     (
       cd ghostty
-      zig build -Demit-xcframework=true -Dxcframework-target=universal -Doptimize=ReleaseFast
+      "$ZIG_BIN" build -Demit-xcframework=true -Dxcframework-target=universal -Doptimize=ReleaseFast
     )
     echo "$GHOSTTY_KEY" > "$LOCAL_KEY_STAMP"
     echo "$GHOSTTY_SHA" > "$LEGACY_LOCAL_SHA_STAMP"

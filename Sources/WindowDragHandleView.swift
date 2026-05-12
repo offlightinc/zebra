@@ -546,7 +546,7 @@ enum MinimalModeSidebarTitlebarControlsMetrics {
     }
 
     static func leadingInset(defaults: UserDefaults = .standard) -> CGFloat {
-        MinimalModeTitlebarDebugSettings.leftControlsLeadingInset(defaults: defaults) + SideNavBarIconColumn.fixedWidth
+        MinimalModeTitlebarDebugSettings.leftControlsLeadingInset(defaults: defaults) + VerticalTabsSidebarModeRail.fixedWidth
     }
 
     static func topInset(defaults: UserDefaults = .standard) -> CGFloat {

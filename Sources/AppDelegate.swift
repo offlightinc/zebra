@@ -6975,7 +6975,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 #endif
 
-        let sideNavBarState = SideNavBarState()
+        let verticalTabsSidebarModeState = VerticalTabsSidebarModeState()
+        let verticalTabsSidebarVaultState = VerticalTabsSidebarVaultState()
         let markdownFileListStore = MarkdownFileListStore()
 
         let root = ContentView(updateViewModel: updateViewModel, windowId: windowId)
@@ -6985,7 +6986,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             .environmentObject(sidebarSelectionState)
             .environmentObject(fileExplorerState)
             .environmentObject(cmuxConfigStore)
-            .environmentObject(sideNavBarState)
+            .environmentObject(verticalTabsSidebarModeState)
+            .environmentObject(verticalTabsSidebarVaultState)
             .environmentObject(markdownFileListStore)
 
         // Use the current key window's size for new windows so Cmd+Shift+N

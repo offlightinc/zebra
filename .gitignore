@@ -12,6 +12,7 @@ xcuserdata/
 .env
 .envrc
 !web/.envrc
+.tools/
 
 # Swift Package Manager
 .swiftpm/

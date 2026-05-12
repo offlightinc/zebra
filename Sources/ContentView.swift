@@ -1054,7 +1054,8 @@ struct ContentView: View {
     @EnvironmentObject var sidebarSelectionState: SidebarSelectionState
     @EnvironmentObject var cmuxConfigStore: CmuxConfigStore
     @EnvironmentObject var fileExplorerState: FileExplorerState
-    @EnvironmentObject var sideNavBarState: SideNavBarState
+    @EnvironmentObject var verticalTabsSidebarModeState: VerticalTabsSidebarModeState
+    @EnvironmentObject var verticalTabsSidebarVaultState: VerticalTabsSidebarVaultState
     @EnvironmentObject var markdownFileListStore: MarkdownFileListStore
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("titlebarControlsStyle") private var titlebarControlsStyleRawValue = TitlebarControlsStyle.classic.rawValue
@@ -2488,35 +2489,7 @@ struct ContentView: View {
     }
 
     private func syncMarkdownFileListStoreDirectory() {
-        guard let selectedId = tabManager.selectedTabId,
-              let tab = tabManager.tabs.first(where: { $0.id == selectedId }) else {
-            markdownFileListStore.bind(rootPath: nil)
-            return
-        }
-        if tab.isRemoteWorkspace {
-            markdownFileListStore.bind(rootPath: nil)
-            return
-        }
-        let rawCwd = tab.currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !rawCwd.isEmpty else {
-            markdownFileListStore.bind(rootPath: nil)
-            return
-        }
-        let expanded = (rawCwd as NSString).expandingTildeInPath
-        let normalized: String
-        if expanded.count > 1, expanded.hasSuffix("/") {
-            normalized = String(expanded.dropLast())
-        } else {
-            normalized = expanded
-        }
-        // Avoid scanning home / filesystem root — too many TCC-protected subtrees,
-        // and rarely a useful workspace for a markdown navigator.
-        let homePath = NSHomeDirectory()
-        if normalized == homePath || normalized == "/" || normalized.isEmpty {
-            markdownFileListStore.bind(rootPath: nil)
-            return
-        }
-        markdownFileListStore.bind(rootPath: normalized)
+        markdownFileListStore.bind(rootPath: verticalTabsSidebarVaultState.selectedVault?.path)
     }
 
     private func syncFileExplorerDirectory() {
@@ -2601,13 +2574,6 @@ struct ContentView: View {
         // sit directly on the window background with no intermediate layers.
         let useWithinWindow = sidebarBlendMode == SidebarBlendModeOption.withinWindow.rawValue
             && !sidebarMatchTerminalBackground
-        let snbContentPanel = SideNavBarContentPanel(
-            state: sideNavBarState,
-            store: markdownFileListStore,
-            onSelectFile: { [self] filePath in
-                openFilePreviewFromSidebar(filePath: filePath)
-            }
-        )
         if useWithinWindow {
             // Overlay mode keeps the left sidebar on top, but the right
             // sidebar stays in an HStack so terminal rows are clipped before
@@ -2615,9 +2581,8 @@ struct ContentView: View {
             layout = AnyView(
                 ZStack(alignment: .leading) {
                     HStack(spacing: 0) {
-                        snbContentPanel
-                            .padding(.leading, sidebarState.isVisible ? sidebarWidth : 0)
                         terminalContentWithSidebarDropOverlay(appearance: appearance)
+                            .padding(.leading, sidebarState.isVisible ? sidebarWidth : 0)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(1)
                         rightSidebarPanelWithBackdrop(appearance: appearance)
@@ -2634,29 +2599,25 @@ struct ContentView: View {
                     if sidebarState.isVisible {
                         sidebarPanelWithBackdrop(appearance: appearance)
                     }
-                    snbContentPanel
                     terminalContentWithRightSidebarPanel(appearance: appearance)
                 }
             )
         }
 
         return AnyView(
-            HStack(spacing: 0) {
-                SideNavBarIconColumn(state: sideNavBarState)
-                layout
-                    .overlay(alignment: .leading) {
-                        if sidebarState.isVisible {
-                            sidebarResizerOverlay
-                                .zIndex(1000)
-                        }
+            layout
+                .overlay(alignment: .leading) {
+                    if sidebarState.isVisible {
+                        sidebarResizerOverlay
+                            .zIndex(1000)
                     }
-                    .overlay(alignment: .leading) {
-                        if rightSidebarVisible {
-                            rightSidebarResizerOverlay
-                                .zIndex(1000)
-                        }
+                }
+                .overlay(alignment: .leading) {
+                    if rightSidebarVisible {
+                        rightSidebarResizerOverlay
+                            .zIndex(1000)
                     }
-            }
+                }
         )
     }
 
@@ -2674,7 +2635,7 @@ struct ContentView: View {
                 .overlay(alignment: .topLeading) {
                     if isFullScreen && sidebarState.isVisible && !isMinimalMode {
                         fullscreenControls
-                            .padding(.leading, 10 + SideNavBarIconColumn.fixedWidth)
+                            .padding(.leading, 10)
                             .padding(.top, 4)
                     }
                 }
@@ -2688,7 +2649,7 @@ struct ContentView: View {
         view = AnyView(view.onAppear {
             selectedWorkspaceDirectoryObserver.wire(tabManager: tabManager)
             activeMarkdownPathsObserver.wire(tabManager: tabManager)
-            sideNavBarState.activeMarkdownFilePaths = activeMarkdownPathsObserver.paths
+            verticalTabsSidebarModeState.activeMarkdownFilePaths = activeMarkdownPathsObserver.paths
             syncMarkdownFileListStoreDirectory()
             tabManager.applyWindowBackgroundForSelectedTab()
             reconcileMountedWorkspaceIds()
@@ -2788,17 +2749,19 @@ struct ContentView: View {
         // File explorer: keep the Combine subscription stable across body re-evaluations.
         view = AnyView(view.onChange(of: selectedWorkspaceDirectoryObserver.directoryChangeGeneration) { _ in
             syncFileExplorerDirectory()
-            syncMarkdownFileListStoreDirectory()
             activeMarkdownPathsObserver.recompute()
         })
 
         view = AnyView(view.onChange(of: tabManager.selectedTabId) { _ in
-            syncMarkdownFileListStoreDirectory()
             activeMarkdownPathsObserver.recompute()
         })
 
+        view = AnyView(view.onChange(of: verticalTabsSidebarVaultState.selectedVaultPath) { _ in
+            syncMarkdownFileListStoreDirectory()
+        })
+
         view = AnyView(view.onChange(of: activeMarkdownPathsObserver.paths) { newPaths in
-            sideNavBarState.activeMarkdownFilePaths = newPaths
+            verticalTabsSidebarModeState.activeMarkdownFilePaths = newPaths
         })
 
         view = AnyView(view.onChange(of: tabManager.isWorkspaceCycleHot) { _ in
@@ -9092,6 +9055,9 @@ struct VerticalTabsSidebar: View {
     let onNewTab: () -> Void
     @EnvironmentObject var tabManager: TabManager
     @EnvironmentObject var notificationStore: TerminalNotificationStore
+    @EnvironmentObject var verticalTabsSidebarModeState: VerticalTabsSidebarModeState
+    @EnvironmentObject var verticalTabsSidebarVaultState: VerticalTabsSidebarVaultState
+    @EnvironmentObject var markdownFileListStore: MarkdownFileListStore
     @Binding var selection: SidebarSelection
     @Binding var selectedTabIds: Set<UUID>
     @Binding var lastSidebarSelectionIndex: Int?
@@ -9226,11 +9192,8 @@ struct VerticalTabsSidebar: View {
             workspaceTerminalScrollBarHiddenById: workspaceTerminalScrollBarHiddenById
         )
 
-        ZStack(alignment: .bottomLeading) {
-            workspaceScrollArea(renderContext: renderContext)
-            SidebarFooter(updateViewModel: updateViewModel, fileExplorerState: fileExplorerState, onSendFeedback: onSendFeedback)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        verticalTabsSidebarBody(renderContext: renderContext)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay {
             FirstMouseGatedHostingOverlay()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -9312,6 +9275,85 @@ struct VerticalTabsSidebar: View {
             terminalScrollBarVisibilityGeneration &+= 1
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func verticalTabsSidebarBody(renderContext: WorkspaceListRenderContext) -> some View {
+        HStack(spacing: 0) {
+            VerticalTabsSidebarModeRail(state: verticalTabsSidebarModeState)
+                .fixedSize(horizontal: true, vertical: false)
+            verticalTabsSidebarContentColumn(renderContext: renderContext)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .clipped()
+    }
+
+    private func verticalTabsSidebarContentColumn(renderContext: WorkspaceListRenderContext) -> some View {
+        VStack(spacing: 0) {
+            verticalTabsSidebarModeContent(renderContext: renderContext)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+            verticalTabsSidebarFooter
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var verticalTabsSidebarFooter: some View {
+        VerticalTabsSidebarFooter(
+            vaultState: verticalTabsSidebarVaultState,
+            onSendFeedback: onSendFeedback
+        )
+    }
+
+    private func verticalTabsSidebarModeContent(renderContext: WorkspaceListRenderContext) -> some View {
+        ZStack(alignment: .topLeading) {
+            verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .terminal) {
+                workspaceScrollArea(renderContext: renderContext)
+            }
+            verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .goals && verticalTabsSidebarModeState.listVisible) {
+                VerticalTabsSidebarGoalsContent(
+                    state: verticalTabsSidebarModeState,
+                    store: markdownFileListStore,
+                    onSelectFile: openVerticalTabsSidebarMarkdownFile
+                )
+            }
+            verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .tasks && verticalTabsSidebarModeState.listVisible) {
+                VerticalTabsSidebarTasksContent(
+                    state: verticalTabsSidebarModeState,
+                    store: markdownFileListStore,
+                    onSelectFile: openVerticalTabsSidebarMarkdownFile
+                )
+            }
+            verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .documents && verticalTabsSidebarModeState.listVisible) {
+                VerticalTabsSidebarDocumentsContent(
+                    state: verticalTabsSidebarModeState,
+                    store: markdownFileListStore,
+                    onSelectFile: openVerticalTabsSidebarMarkdownFile
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .animation(.easeOut(duration: 0.15), value: verticalTabsSidebarModeState.selectedMode)
+        .animation(.easeOut(duration: 0.15), value: verticalTabsSidebarModeState.listVisible)
+    }
+
+    private func verticalTabsSidebarModeLayer<Content: View>(
+        isVisible: Bool,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .opacity(isVisible ? 1 : 0)
+            .allowsHitTesting(isVisible)
+            .accessibilityHidden(!isVisible)
+    }
+
+    private func openVerticalTabsSidebarMarkdownFile(filePath: String) {
+        guard let workspace = tabManager.selectedWorkspace else { return }
+        guard let paneId = workspace.bonsplitController.focusedPaneId ?? workspace.bonsplitController.allPaneIds.first else {
+            return
+        }
+
+        selection = .tabs
+        _ = workspace.openOrFocusFilePreviewSurface(inPane: paneId, filePath: filePath)
     }
 
     private func workspaceScrollArea(renderContext: WorkspaceListRenderContext) -> some View {
@@ -10573,6 +10615,133 @@ private struct SidebarFooterButtons: View {
             UpdatePill(model: updateViewModel)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct VerticalTabsSidebarFooter: View {
+    @ObservedObject var vaultState: VerticalTabsSidebarVaultState
+    let onSendFeedback: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            VerticalTabsSidebarVaultMenu(vaultState: vaultState)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            SidebarHelpMenuButton(onSendFeedback: onSendFeedback)
+            VerticalTabsSidebarSettingsButton()
+        }
+        .padding(.leading, 6)
+        .padding(.trailing, 10)
+        .padding(.bottom, 6)
+        .padding(.top, 6)
+        .background(
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor).opacity(0.35))
+                .frame(height: 1),
+            alignment: .top
+        )
+        .accessibilityIdentifier("VerticalTabsSidebarFooter")
+    }
+}
+
+private struct VerticalTabsSidebarVaultMenu: View {
+    @ObservedObject var vaultState: VerticalTabsSidebarVaultState
+
+    private var selectedTitle: String {
+        vaultState.selectedVault?.name
+            ?? String(localized: "verticalTabsSidebar.vault.none", defaultValue: "No Vault")
+    }
+
+    var body: some View {
+        Menu {
+            if vaultState.vaults.isEmpty {
+                Text(String(localized: "verticalTabsSidebar.vault.empty", defaultValue: "No vaults"))
+            } else {
+                ForEach(vaultState.vaults) { vault in
+                    Button {
+                        vaultState.selectVault(vault)
+                    } label: {
+                        Label(
+                            vault.name,
+                            systemImage: vault.path == vaultState.selectedVaultPath ? "checkmark" : "folder"
+                        )
+                    }
+                    .help(vault.path)
+                }
+                Divider()
+            }
+
+            Button {
+                chooseVaultFolder()
+            } label: {
+                Label(
+                    String(localized: "verticalTabsSidebar.vault.manage", defaultValue: "Manage Vaults…"),
+                    systemImage: "folder.badge.plus"
+                )
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .frame(width: 16)
+                Text(selectedTitle)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .frame(height: 30)
+            .padding(.horizontal, 8)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        )
+        .accessibilityIdentifier("VerticalTabsSidebarVaultMenu")
+    }
+
+    private func chooseVaultFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = String(localized: "verticalTabsSidebar.vault.manage.title", defaultValue: "Choose Vault")
+        panel.prompt = String(localized: "verticalTabsSidebar.vault.manage.prompt", defaultValue: "Choose")
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        vaultState.addVault(url: url)
+    }
+}
+
+private struct VerticalTabsSidebarSettingsButton: View {
+    private let buttonSize: CGFloat = 22
+    private let iconSize: CGFloat = 11
+    private let settingsTitle = String(localized: "menu.app.settings", defaultValue: "Settings…")
+
+    var body: some View {
+        Button {
+            if let appDelegate = AppDelegate.shared {
+                appDelegate.openPreferencesWindow(debugSource: "verticalTabsSidebar.footer")
+            } else {
+                AppDelegate.presentPreferencesWindow()
+            }
+        } label: {
+            Image(systemName: "gearshape")
+                .symbolRenderingMode(.monochrome)
+                .font(.system(size: iconSize, weight: .medium))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .frame(width: buttonSize, height: buttonSize, alignment: .center)
+        }
+        .buttonStyle(SidebarFooterIconButtonStyle())
+        .frame(width: buttonSize, height: buttonSize, alignment: .center)
+        .safeHelp(settingsTitle)
+        .accessibilityLabel(settingsTitle)
+        .accessibilityIdentifier("VerticalTabsSidebarSettingsButton")
     }
 }
 

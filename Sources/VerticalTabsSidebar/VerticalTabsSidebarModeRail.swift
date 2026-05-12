@@ -1,14 +1,14 @@
 import SwiftUI
 
-struct SideNavBarIconColumn: View {
+struct VerticalTabsSidebarModeRail: View {
     static let fixedWidth: CGFloat = 48
     static let topInset: CGFloat = SidebarWorkspaceListMetrics.firstRowTopOffset
 
-    @ObservedObject var state: SideNavBarState
+    @ObservedObject var state: VerticalTabsSidebarModeState
 
     var body: some View {
         VStack(spacing: 4) {
-            ForEach(SideNavBarMode.allCases) { mode in
+            ForEach(VerticalTabsSidebarMode.allCases) { mode in
                 iconButton(for: mode)
             }
             Spacer(minLength: 0)
@@ -22,11 +22,11 @@ struct SideNavBarIconColumn: View {
                 .fill(Color.primary.opacity(0.08))
                 .frame(width: 1)
         }
-        .accessibilityIdentifier("SideNavBarIconColumn")
+        .accessibilityIdentifier("VerticalTabsSidebarModeRail")
     }
 
     @ViewBuilder
-    private func iconButton(for mode: SideNavBarMode) -> some View {
+    private func iconButton(for mode: VerticalTabsSidebarMode) -> some View {
         let isSelected = state.selectedMode == mode
         let isActiveAndVisible = isSelected && state.listVisible
         Button {
@@ -44,6 +44,45 @@ struct SideNavBarIconColumn: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(mode.label)
-        .accessibilityIdentifier("SideNavBarIconColumn.button.\(mode.rawValue)")
+        .accessibilityIdentifier("VerticalTabsSidebarModeRail.button.\(mode.rawValue)")
     }
 }
+
+#if DEBUG
+#Preview("Terminal selected, list visible") {
+    VerticalTabsSidebarModeRail(
+        state: VerticalTabsSidebarModeState(
+            selectedMode: .terminal,
+            listVisible: true,
+            suppressPersistence: true
+        )
+    )
+    .frame(height: 480)
+    .background(Color(NSColor.windowBackgroundColor))
+}
+
+#Preview("Goals selected, list hidden") {
+    VerticalTabsSidebarModeRail(
+        state: VerticalTabsSidebarModeState(
+            selectedMode: .goals,
+            listVisible: false,
+            suppressPersistence: true
+        )
+    )
+    .frame(height: 480)
+    .background(Color(NSColor.windowBackgroundColor))
+}
+
+#Preview("Dark — documents selected") {
+    VerticalTabsSidebarModeRail(
+        state: VerticalTabsSidebarModeState(
+            selectedMode: .documents,
+            listVisible: true,
+            suppressPersistence: true
+        )
+    )
+    .frame(height: 480)
+    .background(Color(NSColor.windowBackgroundColor))
+    .preferredColorScheme(.dark)
+}
+#endif

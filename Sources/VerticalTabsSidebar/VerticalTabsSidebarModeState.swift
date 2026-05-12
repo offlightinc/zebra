@@ -2,10 +2,10 @@ import Combine
 import Foundation
 
 @MainActor
-final class SideNavBarState: ObservableObject {
-    static let listVisibleDefaultsKey = "sideNavBar.listVisible"
+final class VerticalTabsSidebarModeState: ObservableObject {
+    static let listVisibleDefaultsKey = "verticalTabsSidebar.modeListVisible"
 
-    @Published var selectedMode: SideNavBarMode
+    @Published var selectedMode: VerticalTabsSidebarMode
     @Published var listVisible: Bool {
         didSet {
             guard !suppressPersistence else { return }
@@ -17,7 +17,7 @@ final class SideNavBarState: ObservableObject {
     private let suppressPersistence: Bool
 
     init(
-        selectedMode: SideNavBarMode = .goals,
+        selectedMode: VerticalTabsSidebarMode = .terminal,
         listVisible: Bool? = nil,
         activeMarkdownFilePaths: Set<String> = [],
         suppressPersistence: Bool = false
@@ -36,7 +36,7 @@ final class SideNavBarState: ObservableObject {
         self.activeMarkdownFilePaths = activeMarkdownFilePaths
     }
 
-    func handleIconClick(_ mode: SideNavBarMode) {
+    func handleIconClick(_ mode: VerticalTabsSidebarMode) {
         if selectedMode == mode {
             listVisible.toggle()
         } else {
