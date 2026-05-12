@@ -1055,6 +1055,7 @@ struct ContentView: View {
     @EnvironmentObject var cmuxConfigStore: CmuxConfigStore
     @EnvironmentObject var fileExplorerState: FileExplorerState
     @EnvironmentObject var sideNavBarState: SideNavBarState
+    @EnvironmentObject var markdownFileListStore: MarkdownFileListStore
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("titlebarControlsStyle") private var titlebarControlsStyleRawValue = TitlebarControlsStyle.classic.rawValue
     @State private var sidebarWidth: CGFloat = 200
@@ -1071,6 +1072,7 @@ struct ContentView: View {
     @StateObject private var fileExplorerStore = FileExplorerStore()
     @StateObject private var sessionIndexStore = SessionIndexStore()
     @StateObject private var selectedWorkspaceDirectoryObserver = SelectedWorkspaceDirectoryObserver()
+    @StateObject private var activeMarkdownPathsObserver = ActiveMarkdownPathsObserver()
     @State private var backgroundWorkspacePrimeCoordinator = BackgroundWorkspacePrimeCoordinator()
     @State private var fileExplorerWidth: CGFloat = 220
     @State private var fileExplorerDragStartWidth: CGFloat?
@@ -2485,6 +2487,38 @@ struct ContentView: View {
         _ = workspace.openOrFocusFilePreviewSurface(inPane: paneId, filePath: filePath)
     }
 
+    private func syncMarkdownFileListStoreDirectory() {
+        guard let selectedId = tabManager.selectedTabId,
+              let tab = tabManager.tabs.first(where: { $0.id == selectedId }) else {
+            markdownFileListStore.bind(rootPath: nil)
+            return
+        }
+        if tab.isRemoteWorkspace {
+            markdownFileListStore.bind(rootPath: nil)
+            return
+        }
+        let rawCwd = tab.currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawCwd.isEmpty else {
+            markdownFileListStore.bind(rootPath: nil)
+            return
+        }
+        let expanded = (rawCwd as NSString).expandingTildeInPath
+        let normalized: String
+        if expanded.count > 1, expanded.hasSuffix("/") {
+            normalized = String(expanded.dropLast())
+        } else {
+            normalized = expanded
+        }
+        // Avoid scanning home / filesystem root — too many TCC-protected subtrees,
+        // and rarely a useful workspace for a markdown navigator.
+        let homePath = NSHomeDirectory()
+        if normalized == homePath || normalized == "/" || normalized.isEmpty {
+            markdownFileListStore.bind(rootPath: nil)
+            return
+        }
+        markdownFileListStore.bind(rootPath: normalized)
+    }
+
     private func syncFileExplorerDirectory() {
         guard let selectedId = tabManager.selectedTabId,
               let tab = tabManager.tabs.first(where: { $0.id == selectedId }) else {
@@ -2567,6 +2601,13 @@ struct ContentView: View {
         // sit directly on the window background with no intermediate layers.
         let useWithinWindow = sidebarBlendMode == SidebarBlendModeOption.withinWindow.rawValue
             && !sidebarMatchTerminalBackground
+        let snbContentPanel = SideNavBarContentPanel(
+            state: sideNavBarState,
+            store: markdownFileListStore,
+            onSelectFile: { [self] filePath in
+                openFilePreviewFromSidebar(filePath: filePath)
+            }
+        )
         if useWithinWindow {
             // Overlay mode keeps the left sidebar on top, but the right
             // sidebar stays in an HStack so terminal rows are clipped before
@@ -2574,8 +2615,9 @@ struct ContentView: View {
             layout = AnyView(
                 ZStack(alignment: .leading) {
                     HStack(spacing: 0) {
-                        terminalContentWithSidebarDropOverlay(appearance: appearance)
+                        snbContentPanel
                             .padding(.leading, sidebarState.isVisible ? sidebarWidth : 0)
+                        terminalContentWithSidebarDropOverlay(appearance: appearance)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(1)
                         rightSidebarPanelWithBackdrop(appearance: appearance)
@@ -2592,6 +2634,7 @@ struct ContentView: View {
                     if sidebarState.isVisible {
                         sidebarPanelWithBackdrop(appearance: appearance)
                     }
+                    snbContentPanel
                     terminalContentWithRightSidebarPanel(appearance: appearance)
                 }
             )
@@ -2644,6 +2687,9 @@ struct ContentView: View {
 
         view = AnyView(view.onAppear {
             selectedWorkspaceDirectoryObserver.wire(tabManager: tabManager)
+            activeMarkdownPathsObserver.wire(tabManager: tabManager)
+            sideNavBarState.activeMarkdownFilePaths = activeMarkdownPathsObserver.paths
+            syncMarkdownFileListStoreDirectory()
             tabManager.applyWindowBackgroundForSelectedTab()
             reconcileMountedWorkspaceIds()
             previousSelectedWorkspaceId = tabManager.selectedTabId
@@ -2742,6 +2788,17 @@ struct ContentView: View {
         // File explorer: keep the Combine subscription stable across body re-evaluations.
         view = AnyView(view.onChange(of: selectedWorkspaceDirectoryObserver.directoryChangeGeneration) { _ in
             syncFileExplorerDirectory()
+            syncMarkdownFileListStoreDirectory()
+            activeMarkdownPathsObserver.recompute()
+        })
+
+        view = AnyView(view.onChange(of: tabManager.selectedTabId) { _ in
+            syncMarkdownFileListStoreDirectory()
+            activeMarkdownPathsObserver.recompute()
+        })
+
+        view = AnyView(view.onChange(of: activeMarkdownPathsObserver.paths) { newPaths in
+            sideNavBarState.activeMarkdownFilePaths = newPaths
         })
 
         view = AnyView(view.onChange(of: tabManager.isWorkspaceCycleHot) { _ in

@@ -28,16 +28,17 @@ struct SideNavBarIconColumn: View {
     @ViewBuilder
     private func iconButton(for mode: SideNavBarMode) -> some View {
         let isSelected = state.selectedMode == mode
+        let isActiveAndVisible = isSelected && state.listVisible
         Button {
-            state.selectedMode = mode
+            state.handleIconClick(mode)
         } label: {
             Image(systemName: mode.symbolName)
                 .font(.system(size: 16, weight: .regular))
                 .frame(width: 36, height: 36)
-                .foregroundColor(isSelected ? .accentColor : .secondary)
+                .foregroundColor(isActiveAndVisible ? .accentColor : (isSelected ? .primary : .secondary))
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isSelected ? Color.secondary.opacity(0.18) : Color.clear)
+                        .fill(isActiveAndVisible ? Color.secondary.opacity(0.22) : (isSelected ? Color.secondary.opacity(0.10) : Color.clear))
                 )
                 .contentShape(Rectangle())
         }
