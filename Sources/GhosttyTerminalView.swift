@@ -7474,7 +7474,9 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 
             if !shouldRetryMainMenu {
                 lastPerformKeyEvent = nil
-                if CmuxSystemShortcutMatcher.shouldYieldTerminalCommandEquivalentToSystem(event: event) {
+                if MainActor.assumeIsolated({
+                    CmuxSystemShortcutMatcher.shouldYieldTerminalCommandEquivalentToSystem(event: event)
+                }) {
                     return false
                 }
                 keyDown(with: event)
