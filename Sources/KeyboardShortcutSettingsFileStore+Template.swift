@@ -98,6 +98,7 @@ extension CmuxSettingsFileStore {
                     "branchLayout": SidebarBranchLayoutSettings.defaultVerticalLayout ? "vertical" : "inline",
                     "showNotificationMessage": SidebarWorkspaceDetailSettings.defaultShowNotificationMessage,
                     "showBranchDirectory": SidebarWorkspaceDetailDefaults.showBranchDirectory,
+                    "disableGitMetadataWatcher": GitMetadataWatcherSettings.defaultDisabled,
                     "showPullRequests": SidebarWorkspaceDetailDefaults.showPullRequests,
                     "makePullRequestsClickable": SidebarPullRequestClickabilitySettings.defaultClickable,
                     "openPullRequestLinksInCmuxBrowser": BrowserLinkOpenSettings.defaultOpenSidebarPullRequestLinksInCmuxBrowser,

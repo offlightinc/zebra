@@ -1574,6 +1574,12 @@ struct ContentView: View {
     private static let maximumRightSidebarWidth: CGFloat = 1200
     private static let minimumTerminalWidthWithRightSidebar: CGFloat = 360
 
+    enum WorkspaceGitMetadataWatcherContextMenuMode: Equatable {
+        case hidden
+        case enable
+        case disable
+    }
+
     private enum SidebarResizerHandle: Hashable {
         case divider
         case explorerDivider
@@ -2277,6 +2283,25 @@ struct ContentView: View {
 
     private var titlebarControlsConfig: TitlebarControlsStyleConfig {
         (TitlebarControlsStyle(rawValue: titlebarControlsStyleRawValue) ?? .classic).config
+    }
+
+    static func workspaceGitMetadataWatcherContextMenuMode(
+        targetWorkspaces: [Workspace],
+        globalDisabled: Bool
+    ) -> WorkspaceGitMetadataWatcherContextMenuMode {
+        // The watcher toggle only controls the local FS watcher, so in a
+        // mixed local+remote multi-select we want to derive the action from
+        // the eligible (local) workspaces only instead of hiding the entry
+        // outright.
+        let eligibleWorkspaces = targetWorkspaces.filter { !$0.isRemoteWorkspace }
+        guard !globalDisabled, !eligibleWorkspaces.isEmpty else {
+            return .hidden
+        }
+
+        let allEffectivelyDisabled = eligibleWorkspaces.allSatisfy { workspace in
+            workspace.gitMetadataWatcherDisabled
+        }
+        return allEffectivelyDisabled ? .enable : .disable
     }
 
     private var titlebarDebugChromeSnapshot: MinimalModeTitlebarDebugSnapshot {
@@ -8896,6 +8921,7 @@ private struct SidebarTabItemSettingsSnapshot: Equatable {
     let sidebarShortcutHintXOffset: Double
     let sidebarShortcutHintYOffset: Double
     let alwaysShowShortcutHints: Bool
+    let gitMetadataWatcherGloballyDisabled: Bool
     let showsGitBranch: Bool
     let usesVerticalBranchLayout: Bool
     let showsGitBranchIcon: Bool
@@ -8914,6 +8940,7 @@ private struct SidebarTabItemSettingsSnapshot: Equatable {
         sidebarShortcutHintXOffset = ShortcutHintDebugSettings.defaultSidebarHintX
         sidebarShortcutHintYOffset = ShortcutHintDebugSettings.defaultSidebarHintY
         alwaysShowShortcutHints = ShortcutHintDebugSettings.alwaysShowHints()
+        gitMetadataWatcherGloballyDisabled = GitMetadataWatcherSettings.isDisabled(defaults: defaults)
         showsGitBranch = Self.bool(defaults: defaults, key: "sidebarShowGitBranch", defaultValue: true)
         usesVerticalBranchLayout = SidebarBranchLayoutSettings.usesVerticalLayout(defaults: defaults)
         showsGitBranchIcon = Self.bool(defaults: defaults, key: "sidebarShowGitBranchIcon", defaultValue: false)
@@ -9043,6 +9070,7 @@ struct VerticalTabsSidebar: View {
     @State private var dropIndicator: SidebarDropIndicator?
     @State private var frozenTabItemPresentation: SidebarTabItemPresentationSnapshot?
     @State private var terminalScrollBarVisibilityGeneration: UInt64 = 0
+    @State private var gitMetadataWatcherDisabledGeneration: UInt64 = 0
     @State private var laidOutWorkspaceRowIds: Set<UUID> = []
     @State private var pendingSelectedWorkspaceScrollId: UUID?
     @AppStorage(WorkspacePresentationModeSettings.modeKey)
@@ -9116,6 +9144,7 @@ struct VerticalTabsSidebar: View {
         let canCloseWorkspace: Bool
         let workspaceNumberShortcut: StoredShortcut
         let tabItemSettings: SidebarTabItemSettingsSnapshot
+        let tabById: [UUID: Workspace]
         let tabIndexById: [UUID: Int]
         let selectedContextTargetIds: [UUID]
         let selectedRemoteContextMenuWorkspaceIds: [UUID]
@@ -9130,11 +9159,13 @@ struct VerticalTabsSidebar: View {
 
     var body: some View {
         let _ = terminalScrollBarVisibilityGeneration
+        let _ = gitMetadataWatcherDisabledGeneration
         let tabs = tabManager.tabs
         let workspaceCount = tabs.count
         let canCloseWorkspace = workspaceCount > 1
         let workspaceNumberShortcut = self.workspaceNumberShortcut
         let tabItemSettings = tabItemSettingsStore.snapshot
+        let tabById = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         let tabIndexById = Dictionary(uniqueKeysWithValues: tabs.enumerated().map {
             ($0.element.id, $0.offset)
         })
@@ -9157,6 +9188,7 @@ struct VerticalTabsSidebar: View {
             canCloseWorkspace: canCloseWorkspace,
             workspaceNumberShortcut: workspaceNumberShortcut,
             tabItemSettings: tabItemSettings,
+            tabById: tabById,
             tabIndexById: tabIndexById,
             selectedContextTargetIds: selectedContextTargetIds,
             selectedRemoteContextMenuWorkspaceIds: selectedRemoteContextMenuWorkspaceIds,
@@ -9244,6 +9276,19 @@ struct VerticalTabsSidebar: View {
             // Workspace scrollbar visibility changes do not publish on TabManager.tabs,
             // so bump a local generation to refresh the precomputed context-menu state.
             terminalScrollBarVisibilityGeneration &+= 1
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: Workspace.gitMetadataWatcherDisabledDidChangeNotification)
+                .receive(on: RunLoop.main)
+        ) { notification in
+            guard let workspace = notification.object as? Workspace,
+                  tabManager.tabs.contains(where: { $0 === workspace }) else {
+                return
+            }
+
+            // Workspace watcher preferences do not publish through TabManager.tabs,
+            // so bump a local generation to refresh context-menu state.
+            gitMetadataWatcherDisabledGeneration &+= 1
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -9467,6 +9512,14 @@ struct VerticalTabsSidebar: View {
             contextMenuWorkspaceIds.allSatisfy { workspaceId in
                 renderContext.workspaceTerminalScrollBarHiddenById[workspaceId] == true
             }
+        let contextMenuTargetWorkspaces = contextMenuWorkspaceIds.compactMap { renderContext.tabById[$0] }
+        let gitMetadataWatcherWorkspaceIds = contextMenuTargetWorkspaces
+            .filter { !$0.isRemoteWorkspace }
+            .map(\.id)
+        let gitMetadataWatcherMenuMode = ContentView.workspaceGitMetadataWatcherContextMenuMode(
+            targetWorkspaces: contextMenuTargetWorkspaces,
+            globalDisabled: renderContext.tabItemSettings.gitMetadataWatcherGloballyDisabled
+        )
         let contextMenuPinTarget = WorkspaceActionDispatcher.Target(
             workspaceIds: contextMenuWorkspaceIds,
             anchorWorkspaceId: tab.id
@@ -9520,6 +9573,8 @@ struct VerticalTabsSidebar: View {
             draggedTabId: $draggedTabId,
             dropIndicator: $dropIndicator,
             contextMenuWorkspaceIds: contextMenuWorkspaceIds,
+            gitMetadataWatcherMenuMode: gitMetadataWatcherMenuMode,
+            gitMetadataWatcherWorkspaceIds: gitMetadataWatcherWorkspaceIds,
             remoteContextMenuWorkspaceIds: remoteContextMenuWorkspaceIds,
             allRemoteContextMenuTargetsConnecting: allRemoteContextMenuTargetsConnecting,
             allRemoteContextMenuTargetsDisconnected: allRemoteContextMenuTargetsDisconnected,
@@ -11938,6 +11993,8 @@ private struct TabItemView: View, Equatable {
         lhs.rowSpacing == rhs.rowSpacing &&
         lhs.showsModifierShortcutHints == rhs.showsModifierShortcutHints &&
         lhs.contextMenuWorkspaceIds == rhs.contextMenuWorkspaceIds &&
+        lhs.gitMetadataWatcherMenuMode == rhs.gitMetadataWatcherMenuMode &&
+        lhs.gitMetadataWatcherWorkspaceIds == rhs.gitMetadataWatcherWorkspaceIds &&
         lhs.remoteContextMenuWorkspaceIds == rhs.remoteContextMenuWorkspaceIds &&
         lhs.allRemoteContextMenuTargetsConnecting == rhs.allRemoteContextMenuTargetsConnecting &&
         lhs.allRemoteContextMenuTargetsDisconnected == rhs.allRemoteContextMenuTargetsDisconnected &&
@@ -11970,6 +12027,11 @@ private struct TabItemView: View, Equatable {
     @Binding var draggedTabId: UUID?
     @Binding var dropIndicator: SidebarDropIndicator?
     let contextMenuWorkspaceIds: [UUID]
+    let gitMetadataWatcherMenuMode: ContentView.WorkspaceGitMetadataWatcherContextMenuMode
+    // Subset of contextMenuWorkspaceIds limited to local workspaces so the
+    // "Enable/Disable Git Metadata Watcher" button never acts on remote
+    // workspaces (which don't have a local watcher to toggle).
+    let gitMetadataWatcherWorkspaceIds: [UUID]
     let remoteContextMenuWorkspaceIds: [UUID]
     let allRemoteContextMenuTargetsConnecting: Bool
     let allRemoteContextMenuTargetsDisconnected: Bool
@@ -12786,6 +12848,22 @@ private struct TabItemView: View, Equatable {
                 }
             }
 
+        }
+
+        if gitMetadataWatcherMenuMode != .hidden {
+            Button(
+                gitMetadataWatcherMenuMode == .enable
+                    ? String(localized: "contextMenu.enableGitMetadataWatcher", defaultValue: "Enable Git Metadata Watcher")
+                    : String(localized: "contextMenu.disableGitMetadataWatcher", defaultValue: "Disable Git Metadata Watcher")
+            ) {
+                // Use the local-only subset of the context-menu selection so
+                // remote workspace IDs are never forwarded to the local
+                // watcher toggle (remote workspaces have no local watcher).
+                tabManager.setWorkspaceGitMetadataWatcherDisabled(
+                    workspaceIds: gitMetadataWatcherWorkspaceIds,
+                    disabled: gitMetadataWatcherMenuMode == .disable
+                )
+            }
         }
 
         if !remoteContextMenuWorkspaceIds.isEmpty {

@@ -5027,6 +5027,8 @@ struct SettingsView: View {
     @AppStorage("sidebarSelectionColorHex") private var sidebarSelectionColorHex: String?
     @AppStorage("sidebarNotificationBadgeColorHex") private var sidebarNotificationBadgeColorHex: String?
     @AppStorage("sidebarShowBranchDirectory") private var sidebarShowBranchDirectory = SidebarWorkspaceDetailDefaults.showBranchDirectory
+    @AppStorage(GitMetadataWatcherSettings.disabledKey)
+    private var sidebarDisableGitMetadataWatcher = GitMetadataWatcherSettings.defaultDisabled
     @AppStorage("sidebarShowPullRequest") private var sidebarShowPullRequest = SidebarWorkspaceDetailDefaults.showPullRequests
     @AppStorage(SidebarPullRequestClickabilitySettings.key) private var sidebarMakePullRequestClickable = SidebarPullRequestClickabilitySettings.defaultClickable
     @AppStorage(BrowserLinkOpenSettings.openSidebarPullRequestLinksInCmuxBrowserKey)
@@ -6227,6 +6229,20 @@ struct SettingsView: View {
                         SettingsCardDivider()
 
                         SettingsCardRow(
+                            configurationReview: .json("sidebar.disableGitMetadataWatcher"),
+                            String(localized: "settings.app.disableGitMetadataWatcher", defaultValue: "Disable Git Metadata Watcher"),
+                            subtitle: sidebarDisableGitMetadataWatcher
+                                ? String(localized: "settings.app.disableGitMetadataWatcher.subtitleOn", defaultValue: "Stop the background repo watcher and PR refresher for sidebar git metadata.")
+                                : String(localized: "settings.app.disableGitMetadataWatcher.subtitleOff", defaultValue: "Use FSEvents to refresh branch, dirty-state, and PR metadata only when repo files change.")
+                        ) {
+                            Toggle("", isOn: $sidebarDisableGitMetadataWatcher)
+                                .labelsHidden()
+                                .controlSize(.small)
+                        }
+
+                        SettingsCardDivider()
+
+                        SettingsCardRow(
                             configurationReview: .json("sidebar.showPullRequests"),
                             String(localized: "settings.app.showPullRequests", defaultValue: "Show Pull Requests in Sidebar"),
                             subtitle: String(localized: "settings.app.showPullRequests.subtitle", defaultValue: "Display review items (PR/MR/etc.) with status and number.")
@@ -7262,6 +7278,7 @@ struct SettingsView: View {
         sidebarSelectionColorHex = nil
         sidebarNotificationBadgeColorHex = nil
         sidebarShowBranchDirectory = SidebarWorkspaceDetailDefaults.showBranchDirectory
+        sidebarDisableGitMetadataWatcher = GitMetadataWatcherSettings.defaultDisabled
         sidebarShowPullRequest = SidebarWorkspaceDetailDefaults.showPullRequests
         sidebarMakePullRequestClickable = SidebarPullRequestClickabilitySettings.defaultClickable
         openSidebarPullRequestLinksInCmuxBrowser = BrowserLinkOpenSettings.defaultOpenSidebarPullRequestLinksInCmuxBrowser

@@ -331,8 +331,11 @@ final class PiVaultAgentPersistenceTests: XCTestCase {
         let workspace = SessionWorkspaceSnapshot(
             processTitle: "Terminal",
             customTitle: "Restored",
+            customDescription: nil,
             customColor: nil,
             isPinned: true,
+            gitMetadataWatcherDisabled: nil,
+            terminalScrollBarHidden: nil,
             currentDirectory: "/tmp",
             focusedPanelId: nil,
             layout: .pane(SessionPaneLayoutSnapshot(panelIds: [], selectedPanelId: nil)),

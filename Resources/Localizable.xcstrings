@@ -36027,6 +36027,40 @@
         }
       }
     },
+    "contextMenu.disableGitMetadataWatcher": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disable Git Metadata Watcher"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git メタデータウォッチャーを無効化"
+          }
+        }
+      }
+    },
+    "contextMenu.enableGitMetadataWatcher": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable Git Metadata Watcher"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git メタデータウォッチャーを有効化"
+          }
+        }
+      }
+    },
     "contextMenu.renameWorkspace": {
       "extractionState": "manual",
       "localizations": {
@@ -56301,6 +56335,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "워크스페이스 제목 표시줄을 숨기고 워크스페이스 컨트롤을 사이드바로 이동합니다."
+          }
+        }
+      }
+    },
+    "settings.app.disableGitMetadataWatcher": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disable Git Metadata Watcher"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git メタデータウォッチャーを無効化"
+          }
+        }
+      }
+    },
+    "settings.app.disableGitMetadataWatcher.subtitleOff": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use FSEvents to refresh branch, dirty-state, and PR metadata only when repo files change."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リポジトリ内のファイルが変化したときだけ、FSEvents でブランチ、変更状態、PR メタデータを更新します。"
+          }
+        }
+      }
+    },
+    "settings.app.disableGitMetadataWatcher.subtitleOn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop the background repo watcher and PR refresher for sidebar git metadata."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サイドバーの Git メタデータ用バックグラウンドウォッチャーと PR 更新を停止します。"
           }
         }
       }

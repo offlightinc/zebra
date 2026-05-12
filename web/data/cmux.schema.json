@@ -397,6 +397,11 @@
           "default": true,
           "description": "Show the workspace working directory."
         },
+        "disableGitMetadataWatcher": {
+          "type": "boolean",
+          "default": false,
+          "description": "Disable local git metadata watching for sidebar branch, dirty-state, and pull request refreshes."
+        },
         "showPullRequests": {
           "type": "boolean",
           "default": true,

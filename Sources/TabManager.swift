@@ -4,6 +4,7 @@ import Foundation
 import Bonsplit
 import CoreVideo
 import Combine
+import CoreServices
 
 // MARK: - Tab Type Alias for Backwards Compatibility
 // The old Tab class is replaced by Workspace
@@ -126,6 +127,19 @@ enum SidebarPullRequestClickabilitySettings {
     }
 }
 
+enum GitMetadataWatcherSettings {
+    static let disabledKey = "sidebarDisableGitMetadataWatcher"
+    static let defaultDisabled = false
+
+    static func isDisabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: disabledKey) as? Bool ?? defaultDisabled
+    }
+
+    static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
+        !isDisabled(defaults: defaults)
+    }
+}
+
 struct SidebarWorkspaceAuxiliaryDetailVisibility: Equatable {
     let showsMetadata: Bool
     let showsLog: Bool
@@ -161,6 +175,346 @@ struct SidebarWorkspaceAuxiliaryDetailVisibility: Equatable {
             showsPullRequests: showPullRequests,
             showsPorts: showPorts
         )
+    }
+}
+
+private struct WorkspaceGitRepositoryInfo: Hashable, Sendable {
+    let repoRoot: String
+    let gitDirectory: String
+    let gitCommonDirectory: String
+    let additionalGitConfigPaths: [String]
+
+    init(
+        repoRoot: String,
+        gitDirectory: String,
+        gitCommonDirectory: String,
+        additionalGitConfigPaths: [String] = []
+    ) {
+        self.repoRoot = repoRoot
+        self.gitDirectory = gitDirectory
+        self.gitCommonDirectory = gitCommonDirectory
+        self.additionalGitConfigPaths = additionalGitConfigPaths.sorted()
+    }
+
+    var gitConfigPaths: [String] {
+        var paths: [String] = []
+        var seen: Set<String> = []
+
+        let commonConfigPath = URL(fileURLWithPath: gitCommonDirectory).appendingPathComponent("config").path
+        if seen.insert(commonConfigPath).inserted {
+            paths.append(commonConfigPath)
+        }
+
+        let worktreeConfigPath = URL(fileURLWithPath: gitDirectory).appendingPathComponent("config.worktree").path
+        if seen.insert(worktreeConfigPath).inserted {
+            paths.append(worktreeConfigPath)
+        }
+
+        for path in additionalGitConfigPaths where seen.insert(path).inserted {
+            paths.append(path)
+        }
+
+        return paths
+    }
+
+    var primaryGitWatcherRoots: [String] {
+        var roots: [String] = []
+        var seen: Set<String> = []
+        for path in [repoRoot, gitDirectory, gitCommonDirectory] where seen.insert(path).inserted {
+            roots.append(path)
+        }
+        return roots
+    }
+
+    var gitWatcherRoots: [String] {
+        var roots = primaryGitWatcherRoots
+        var seen = Set(roots)
+
+        for configPath in additionalGitConfigPaths {
+            let isCoveredByPrimaryRoot = primaryGitWatcherRoots.contains { root in
+                configPath == root || configPath.hasPrefix(root + "/")
+            }
+            guard !isCoveredByPrimaryRoot else { continue }
+
+            let parentPath = URL(fileURLWithPath: configPath)
+                .deletingLastPathComponent()
+                .standardizedFileURL
+                .path
+            if seen.insert(parentPath).inserted {
+                roots.append(parentPath)
+            }
+        }
+
+        return roots
+    }
+
+    var cmuxIgnorePath: String {
+        URL(fileURLWithPath: repoRoot).appendingPathComponent(".cmuxignore").path
+    }
+}
+
+private struct WorkspaceGitConfigSnapshot: Sendable {
+    static let empty = WorkspaceGitConfigSnapshot(
+        remoteURLsByName: [:],
+        metadataWatcherDisabled: false
+    )
+
+    let remoteURLsByName: [String: [String]]
+    let metadataWatcherDisabled: Bool
+}
+
+private struct WorkspaceGitStatusSnapshot: Sendable {
+    let branch: String?
+    let isDirty: Bool
+}
+
+private final class WorkspaceGitEventWatcher {
+    private static let debounceDelay: TimeInterval = 0.25
+    // Test-only toggle; flipped from `@MainActor` test hooks and read from
+    // `start()` which may run on any queue. Tests never exercise it
+    // concurrently from multiple actors, so `nonisolated(unsafe)` matches the
+    // sibling `forceGitStatusFailureForTesting` flag.
+    nonisolated(unsafe) static var forceStartFailureForTesting = false
+
+    private let repositoryInfo: WorkspaceGitRepositoryInfo
+    private let queue: DispatchQueue
+    private let onChange: ([String]) -> Void
+    private let stateLock = NSLock()
+    private var stream: FSEventStreamRef?
+    private var debounceTimer: DispatchSourceTimer?
+    private var pendingPaths: Set<String> = []
+    private var isInvalidated = false
+    private(set) var startFailureReason: String?
+
+    init(
+        repositoryInfo: WorkspaceGitRepositoryInfo,
+        onChange: @escaping ([String]) -> Void
+    ) {
+        self.repositoryInfo = repositoryInfo
+        self.queue = DispatchQueue(
+            label: "com.cmux.git-metadata-watcher.\(repositoryInfo.gitDirectory)",
+            qos: .utility
+        )
+        self.onChange = onChange
+        start()
+    }
+
+    var isActive: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return stream != nil
+    }
+
+    deinit {
+        invalidate()
+    }
+
+    func invalidate() {
+        let debounceTimer: DispatchSourceTimer?
+        let stream: FSEventStreamRef?
+        let shouldTearDownStream: Bool
+        stateLock.lock()
+        shouldTearDownStream = !isInvalidated
+        isInvalidated = true
+        debounceTimer = self.debounceTimer
+        self.debounceTimer = nil
+        stream = self.stream
+        self.stream = nil
+        pendingPaths.removeAll(keepingCapacity: false)
+        stateLock.unlock()
+
+        debounceTimer?.setEventHandler {}
+        debounceTimer?.cancel()
+
+        guard shouldTearDownStream, let stream else { return }
+        FSEventStreamStop(stream)
+        FSEventStreamInvalidate(stream)
+        // Release may drop the last strong reference held by the stream
+        // context; the matching `Unmanaged.release` fires from the context's
+        // release callback.
+        FSEventStreamRelease(stream)
+
+        // Drain any in-flight callbacks already dispatched onto `queue` so
+        // FSEvents cannot invoke `handle(paths:)` after this call returns.
+        queue.sync { }
+    }
+
+    private func start() {
+        if Self.forceStartFailureForTesting {
+            startFailureReason = "forcedForTesting"
+            return
+        }
+        // Retain `self` for the stream's lifetime so the FSEvents trampoline
+        // cannot reach a deallocated object if a callback lands after the
+        // owning TabManager has dropped its reference. The matching release
+        // fires when FSEventStreamRelease tears the stream down.
+        var context = FSEventStreamContext(
+            version: 0,
+            info: UnsafeMutableRawPointer(Unmanaged.passRetained(self).toOpaque()),
+            retain: nil,
+            release: { info in
+                guard let info else { return }
+                Unmanaged<WorkspaceGitEventWatcher>.fromOpaque(info).release()
+            },
+            copyDescription: nil
+        )
+
+        let pathsToWatch = repositoryInfo.gitWatcherRoots as CFArray
+
+        let flags = FSEventStreamCreateFlags(
+            kFSEventStreamCreateFlagFileEvents
+                | kFSEventStreamCreateFlagNoDefer
+                | kFSEventStreamCreateFlagUseCFTypes
+        )
+
+        guard let stream = FSEventStreamCreate(
+            kCFAllocatorDefault,
+            { _, clientCallBackInfo, _, eventPathsPointer, _, _ in
+                guard let clientCallBackInfo else { return }
+                let watcher = Unmanaged<WorkspaceGitEventWatcher>
+                    .fromOpaque(clientCallBackInfo)
+                    .takeUnretainedValue()
+                let paths = unsafeBitCast(eventPathsPointer, to: NSArray.self) as? [String] ?? []
+                watcher.handle(paths: paths)
+            },
+            &context,
+            pathsToWatch,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            0.05,
+            flags
+        ) else {
+            // FSEventStreamCreate never took ownership of the context info, so
+            // balance the `passRetained` above to avoid leaking `self`.
+            Unmanaged<WorkspaceGitEventWatcher>
+                .fromOpaque(context.info!)
+                .release()
+            startFailureReason = "createFailed"
+            return
+        }
+
+        stateLock.lock()
+        self.stream = stream
+        stateLock.unlock()
+        FSEventStreamSetDispatchQueue(stream, queue)
+        guard FSEventStreamStart(stream) else {
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            stateLock.lock()
+            self.stream = nil
+            stateLock.unlock()
+            startFailureReason = "startFailed"
+            return
+        }
+        startFailureReason = nil
+    }
+
+    private func handle(paths: [String]) {
+        let relevantPaths = paths.compactMap { rawPath -> String? in
+            let normalized = URL(fileURLWithPath: rawPath).standardizedFileURL.path
+            return isRelevant(path: normalized) ? normalized : nil
+        }
+
+        guard !relevantPaths.isEmpty else { return }
+        stateLock.lock()
+        guard !isInvalidated else {
+            stateLock.unlock()
+            return
+        }
+        pendingPaths.formUnion(relevantPaths)
+        stateLock.unlock()
+        scheduleDebounce()
+    }
+
+    private func scheduleDebounce() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.debounceDelay, repeating: .never)
+        timer.setEventHandler { [weak self] in
+            self?.flushPendingPaths()
+        }
+        let previousTimer: DispatchSourceTimer?
+        stateLock.lock()
+        if isInvalidated {
+            stateLock.unlock()
+            timer.setEventHandler {}
+            timer.cancel()
+            return
+        }
+        previousTimer = debounceTimer
+        debounceTimer = timer
+        stateLock.unlock()
+        previousTimer?.setEventHandler {}
+        previousTimer?.cancel()
+        timer.resume()
+    }
+
+    private func flushPendingPaths() {
+        let firedTimer: DispatchSourceTimer?
+        stateLock.lock()
+        guard !isInvalidated else {
+            stateLock.unlock()
+            return
+        }
+        let paths = pendingPaths.sorted()
+        pendingPaths.removeAll(keepingCapacity: true)
+        firedTimer = debounceTimer
+        debounceTimer = nil
+        stateLock.unlock()
+        // The one-shot timer has fired, but GCD dispatch sources should still
+        // be cancelled before their last strong reference is dropped; clear
+        // the handler to break any retain cycle and cancel explicitly.
+        firedTimer?.setEventHandler {}
+        firedTimer?.cancel()
+        guard !paths.isEmpty else { return }
+        onChange(paths)
+    }
+
+    private func isRelevant(path: String) -> Bool {
+        if path == repositoryInfo.cmuxIgnorePath {
+            return true
+        }
+
+        if repositoryInfo.gitConfigPaths.contains(path) {
+            return true
+        }
+
+        if path == repositoryInfo.repoRoot {
+            return false
+        }
+
+        if isRelevantGitPath(path, root: repositoryInfo.gitDirectory) {
+            return true
+        }
+
+        if repositoryInfo.gitCommonDirectory != repositoryInfo.gitDirectory,
+           isRelevantGitPath(path, root: repositoryInfo.gitCommonDirectory) {
+            return true
+        }
+
+        if path.hasPrefix(repositoryInfo.repoRoot + "/") {
+            let relativePath = String(path.dropFirst(repositoryInfo.repoRoot.count + 1))
+            if relativePath == ".git" {
+                return true
+            }
+            return !relativePath.hasPrefix(".git/")
+        }
+
+        return false
+    }
+
+    private func isRelevantGitPath(_ path: String, root: String) -> Bool {
+        if path == root {
+            return true
+        }
+
+        guard path.hasPrefix(root + "/") else { return false }
+        let relativePath = String(path.dropFirst(root.count + 1))
+        return relativePath == "HEAD"
+            || relativePath == "index"
+            || relativePath == "packed-refs"
+            || relativePath == "config"
+            || relativePath == "config.worktree"
+            || relativePath == "commondir"
+            || relativePath.hasPrefix("refs/")
     }
 }
 
@@ -731,14 +1085,18 @@ class TabManager: ObservableObject {
         case deferred
         case unsupportedRepository
         case notFound
+        case disabled
         case resolved(SidebarPullRequestState)
         case transientFailure
     }
 
     private struct InitialWorkspaceGitMetadataSnapshot: Equatable {
         let branch: String?
-        let isDirty: Bool
+        let isDirty: Bool?
         let pullRequest: WorkspacePullRequestSnapshot
+        let repositoryInfo: WorkspaceGitRepositoryInfo?
+        let repositorySlugs: [String]
+        let gitMetadataWatcherOptedOut: Bool
     }
 
     struct CommandResult: Sendable {
@@ -751,7 +1109,7 @@ class TabManager: ObservableObject {
 
 #if DEBUG
     nonisolated(unsafe) static var commandRunnerForTesting: (
-        @Sendable (String, String, [String], TimeInterval?) -> CommandResult?
+        @Sendable (String, String, [String], [String: String]?, TimeInterval?) -> CommandResult?
     )?
 #endif
 
@@ -802,8 +1160,14 @@ class TabManager: ObservableObject {
 
         let workspaceId: UUID
         let panelId: UUID
+        let branch: String
         let resolution: Resolution
         let usedCachedRepoData: Bool
+    }
+
+    private struct WorkspacePullRequestAbsentState: Sendable {
+        let branch: String
+        let fetchedAt: Date
     }
 
     private struct WorkspacePullRequestRepoCacheEntry: Sendable {
@@ -923,6 +1287,7 @@ class TabManager: ObservableObject {
     private nonisolated static let workspacePullRequestPollJitterFraction = 0.10
     private nonisolated static let workspacePullRequestProbeTimeout: TimeInterval = 5.0
     private nonisolated static let mergedPullRequestBadgeStaleAfter: TimeInterval = 14 * 24 * 60 * 60
+    private nonisolated(unsafe) static var forceGitStatusFailureForTesting = false
     @Published var selectedTabId: UUID? {
         willSet {
 #if DEBUG
@@ -1013,14 +1378,26 @@ class TabManager: ObservableObject {
     private var workspaceGitProbeStateByKey: [WorkspaceGitProbeKey: WorkspaceGitProbeState] = [:]
     private var workspaceGitProbeTimersByKey: [WorkspaceGitProbeKey: [DispatchSourceTimer]] = [:]
     private var workspaceGitTrackedDirectoryByKey: [WorkspaceGitProbeKey: String] = [:]
+    private var workspaceGitEventWatchersByRepository: [WorkspaceGitRepositoryInfo: WorkspaceGitEventWatcher] = [:]
+    private var workspaceGitWatcherStartFailedRepositories: Set<WorkspaceGitRepositoryInfo> = []
+    private var workspaceGitWatcherSubscribersByRepository: [WorkspaceGitRepositoryInfo: Set<WorkspaceGitProbeKey>] = [:]
+    private var workspaceGitRepositoryByProbeKey: [WorkspaceGitProbeKey: WorkspaceGitRepositoryInfo] = [:]
+    private var workspaceGitRepositorySlugsByRepository: [WorkspaceGitRepositoryInfo: [String]] = [:]
+    private var workspaceGitRepositoryOptOutState: [WorkspaceGitRepositoryInfo: Bool] = [:]
+    private var workspaceGitFallbackPollNextAtByKey: [WorkspaceGitProbeKey: Date] = [:]
     private var workspacePullRequestProbeStateByKey: [WorkspaceGitProbeKey: WorkspaceGitProbeState] = [:]
     private var workspacePullRequestNextPollAtByKey: [WorkspaceGitProbeKey: Date] = [:]
     private var workspacePullRequestLastTerminalStateRefreshAtByKey: [WorkspaceGitProbeKey: Date] = [:]
+    private var workspacePullRequestPendingRefreshKeys: Set<WorkspaceGitProbeKey> = []
+    private var workspacePullRequestNeedsRefreshOnGitEventKeys: Set<WorkspaceGitProbeKey> = []
     private var workspacePullRequestTransientFailureCountByKey: [WorkspaceGitProbeKey: Int] = [:]
+    private var workspacePullRequestAbsentStateByKey: [WorkspaceGitProbeKey: WorkspacePullRequestAbsentState] = [:]
     private var workspacePullRequestRepoCacheBySlug: [String: WorkspacePullRequestRepoCacheEntry] = [:]
     private var workspacePullRequestPollTimer: DispatchSourceTimer?
     private var workspacePullRequestRefreshTask: Task<Void, Never>?
+    private var workspacePullRequestPendingBypassRepoCache = false
     private var workspacePullRequestFollowUpShouldBypassRepoCache = false
+    private var lastKnownGlobalGitMetadataWatcherDisabled = GitMetadataWatcherSettings.isDisabled()
 
     // Recent tab history for back/forward navigation (like browser history)
     private var tabHistory: [UUID] = []
@@ -1036,8 +1413,6 @@ class TabManager: ObservableObject {
     private var closeConfirmationInFlight = false
     var confirmCloseHandler: ((String, String, Bool) -> Bool)?
     private var agentPIDSweepTimer: DispatchSourceTimer?
-    private var workspaceGitMetadataPollTimer: DispatchSourceTimer?
-    private var selectedWorkspaceGitMetadataPollTimer: DispatchSourceTimer?
 #if DEBUG
     private var debugWorkspaceSwitchCounter: UInt64 = 0
     private var debugWorkspaceSwitchId: UInt64 = 0
@@ -1094,9 +1469,17 @@ class TabManager: ObservableObject {
             }
         })
 
+        observers.append(NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { [weak self] in
+                self?.handleGitMetadataWatcherDefaultsChange()
+            }
+        })
+
         startAgentPIDSweepTimer()
-        startWorkspaceGitMetadataPollTimer()
-        startSelectedWorkspaceGitMetadataPollTimer()
         updateWorkspacePullRequestPollTimer()
 #if DEBUG
         setupUITestFocusShortcutsIfNeeded()
@@ -1109,9 +1492,17 @@ class TabManager: ObservableObject {
     deinit {
         workspaceCycleCooldownTask?.cancel()
         agentPIDSweepTimer?.cancel()
-        workspaceGitMetadataPollTimer?.cancel()
-        selectedWorkspaceGitMetadataPollTimer?.cancel()
         workspacePullRequestPollTimer?.cancel()
+        for watcher in workspaceGitEventWatchersByRepository.values {
+            watcher.invalidate()
+        }
+        workspaceGitEventWatchersByRepository.removeAll()
+        workspaceGitWatcherStartFailedRepositories.removeAll()
+        workspaceGitWatcherSubscribersByRepository.removeAll()
+        workspaceGitRepositoryByProbeKey.removeAll()
+        workspaceGitRepositorySlugsByRepository.removeAll()
+        workspaceGitRepositoryOptOutState.removeAll()
+        workspaceGitFallbackPollNextAtByKey.removeAll()
         workspacePullRequestRefreshTask?.cancel()
     }
 
@@ -1134,42 +1525,6 @@ class TabManager: ObservableObject {
         agentPIDSweepTimer = timer
     }
 
-    /// Periodically refreshes git/PR metadata for tracked workspace branches so
-    /// remote GitHub state changes (e.g. PR open -> merged) reach sidebar state
-    /// even when the local branch/directory does not change.
-    private func startWorkspaceGitMetadataPollTimer() {
-        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        let interval = Self.backgroundPollInterval
-        timer.schedule(deadline: .now() + interval, repeating: interval)
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.refreshTrackedWorkspaceGitMetadata()
-            }
-        }
-        timer.resume()
-        workspaceGitMetadataPollTimer = timer
-    }
-
-    /// Refresh the selected workspace more aggressively so branch checkouts and
-    /// newly created PRs show up in the sidebar without waiting for the slower
-    /// background sweep across every tracked workspace.
-    private func startSelectedWorkspaceGitMetadataPollTimer() {
-        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        let interval = Self.selectedPollInterval
-        timer.schedule(deadline: .now() + interval, repeating: interval)
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.refreshSelectedWorkspaceGitMetadata()
-            }
-        }
-        timer.resume()
-        selectedWorkspaceGitMetadataPollTimer = timer
-    }
-
     private func updateWorkspacePullRequestPollTimer() {
         guard workspacePullRequestRefreshTask == nil else {
             workspacePullRequestPollTimer?.cancel()
@@ -1177,7 +1532,11 @@ class TabManager: ObservableObject {
             return
         }
 
-        guard let nextPollAt = workspacePullRequestNextPollAtByKey.values.min() else {
+        let nextPollAt = [
+            workspacePullRequestNextPollAtByKey.values.min(),
+            workspaceGitFallbackPollNextAtByKey.values.min(),
+        ].compactMap { $0 }.min()
+        guard let nextPollAt else {
             workspacePullRequestPollTimer?.cancel()
             workspacePullRequestPollTimer = nil
             return
@@ -1189,6 +1548,7 @@ class TabManager: ObservableObject {
                 guard let self else { return }
                 DispatchQueue.main.async { [weak self] in
                     self?.refreshTrackedWorkspacePullRequestsIfNeeded(reason: "timer")
+                    self?.refreshFallbackWorkspaceGitMetadataIfNeeded()
                 }
             }
             timer.resume()
@@ -1214,31 +1574,302 @@ class TabManager: ObservableObject {
                 scheduleWorkspaceGitMetadataRefreshIfPossible(
                     workspaceId: workspace.id,
                     panelId: panelId,
-                    reason: "periodicPoll"
+                    reason: "manualRefreshForTesting"
                 )
             }
         }
     }
 
-    private func refreshSelectedWorkspaceGitMetadata() {
-        guard let workspace = selectedWorkspace,
-              let focusedPanelId = workspace.focusedPanelId else {
+    private func refreshFallbackWorkspaceGitMetadataIfNeeded(now: Date = Date()) {
+        let activeProbeKeys = activeWorkspaceGitProbeKeys
+
+        for (key, repositoryInfo) in workspaceGitRepositoryByProbeKey {
+            guard workspaceGitWatcherStartFailedRepositories.contains(repositoryInfo) else {
+                workspaceGitFallbackPollNextAtByKey.removeValue(forKey: key)
+                continue
+            }
+            guard let workspace = tabs.first(where: { $0.id == key.workspaceId }),
+                  workspace.panels[key.panelId] != nil,
+                  !workspace.isRemoteWorkspace,
+                  isWorkspaceGitMetadataWatcherEnabled(for: workspace) else {
+                workspaceGitFallbackPollNextAtByKey.removeValue(forKey: key)
+                continue
+            }
+            guard !activeProbeKeys.contains(key) else { continue }
+
+            let nextPollAt = workspaceGitFallbackPollNextAtByKey[key] ?? .distantPast
+            guard nextPollAt <= now else { continue }
+
+            scheduleWorkspaceGitMetadataRefreshIfPossible(
+                workspaceId: key.workspaceId,
+                panelId: key.panelId,
+                reason: isSelectedFocusedPanel(workspace: workspace, panelId: key.panelId)
+                    ? "selectedPeriodicPoll"
+                    : "periodicPoll"
+            )
+            scheduleNextWorkspaceGitFallbackPoll(
+                key: key,
+                workspace: workspace,
+                panelId: key.panelId,
+                now: now
+            )
+        }
+    }
+
+    private func handleGitMetadataWatcherDefaultsChange() {
+        let isDisabled = GitMetadataWatcherSettings.isDisabled()
+        guard isDisabled != lastKnownGlobalGitMetadataWatcherDisabled else { return }
+        lastKnownGlobalGitMetadataWatcherDisabled = isDisabled
+
+        refreshWorkspaceGitMetadataWatcherConfiguration(reason: "globalSettingChanged")
+    }
+
+    private func refreshWorkspaceGitMetadataWatcherConfiguration(reason: String) {
+        if GitMetadataWatcherSettings.isDisabled() {
+            for workspace in tabs {
+                clearWorkspaceGitProbes(workspaceId: workspace.id)
+                clearWorkspaceSidebarGitMetadata(workspaceId: workspace.id)
+            }
+            stopAllWorkspaceGitEventWatchers()
+            resetWorkspacePullRequestRefreshState()
             return
         }
 
-        let activeProbeKeys = activeWorkspaceGitProbeKeys
-        let candidatePanelIds = trackedWorkspaceGitMetadataPollCandidatePanelIds(
-            in: workspace,
-            activeProbeKeys: activeProbeKeys
-        )
-        guard candidatePanelIds.contains(focusedPanelId) else { return }
+        for workspace in tabs {
+            scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(
+                in: workspace,
+                reason: reason,
+                delays: Self.initialWorkspaceGitProbeDelays
+            )
+        }
+    }
 
-        scheduleWorkspaceGitMetadataRefreshIfPossible(
-            workspaceId: workspace.id,
-            panelId: focusedPanelId,
-            reason: "selectedPeriodicPoll"
-        )
+    private func isWorkspaceGitMetadataWatcherEnabled(for workspace: Workspace) -> Bool {
+        GitMetadataWatcherSettings.isEnabled() && !workspace.gitMetadataWatcherDisabled
+    }
 
+    private func clearWorkspaceSidebarGitMetadata(for key: WorkspaceGitProbeKey) {
+        guard let workspace = tabs.first(where: { $0.id == key.workspaceId }),
+              !workspace.isRemoteWorkspace,
+              workspace.panels[key.panelId] != nil else {
+            return
+        }
+
+        if workspace.panelGitBranches[key.panelId] != nil {
+            workspace.clearPanelGitBranch(panelId: key.panelId)
+        }
+        if workspace.panelPullRequests[key.panelId] != nil {
+            workspace.clearPanelPullRequest(panelId: key.panelId)
+        }
+        if key.panelId == workspace.focusedPanelId {
+            if workspace.gitBranch != nil {
+                workspace.gitBranch = nil
+            }
+            if workspace.pullRequest != nil {
+                workspace.pullRequest = nil
+            }
+        }
+    }
+
+    private func clearWorkspaceSidebarGitMetadata(workspaceId: UUID) {
+        guard let workspace = tabs.first(where: { $0.id == workspaceId }),
+              !workspace.isRemoteWorkspace else {
+            return
+        }
+
+        let panelIds = Set(workspace.panelGitBranches.keys).union(workspace.panelPullRequests.keys)
+        for panelId in panelIds {
+            clearWorkspaceSidebarGitMetadata(
+                for: WorkspaceGitProbeKey(workspaceId: workspaceId, panelId: panelId)
+            )
+        }
+        if workspace.gitBranch != nil {
+            workspace.gitBranch = nil
+        }
+        if workspace.pullRequest != nil {
+            workspace.pullRequest = nil
+        }
+    }
+
+    private func scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(
+        in workspace: Workspace,
+        reason: String,
+        delays: [TimeInterval] = [0]
+    ) {
+        guard !workspace.isRemoteWorkspace,
+              isWorkspaceGitMetadataWatcherEnabled(for: workspace) else {
+            return
+        }
+
+        for panelId in workspace.panels.keys
+        where workspace.terminalPanel(for: panelId) != nil
+            && gitProbeDirectory(for: workspace, panelId: panelId) != nil {
+            scheduleWorkspaceGitMetadataRefreshIfPossible(
+                workspaceId: workspace.id,
+                panelId: panelId,
+                reason: reason,
+                delays: delays
+            )
+        }
+    }
+
+    private enum WorkspaceGitEventWatcherAttachment {
+        case active
+        case fallbackPolling
+    }
+
+    @discardableResult
+    private func attachWorkspaceGitEventWatcher(
+        for key: WorkspaceGitProbeKey,
+        repositoryInfo: WorkspaceGitRepositoryInfo
+    ) -> WorkspaceGitEventWatcherAttachment {
+        if workspaceGitRepositoryByProbeKey[key] == repositoryInfo {
+            workspaceGitWatcherSubscribersByRepository[repositoryInfo, default: []].insert(key)
+            return workspaceGitEventWatchersByRepository[repositoryInfo] == nil
+                ? .fallbackPolling
+                : .active
+        }
+
+        detachWorkspaceGitEventWatcher(for: key)
+        workspaceGitRepositoryByProbeKey[key] = repositoryInfo
+        workspaceGitWatcherSubscribersByRepository[repositoryInfo, default: []].insert(key)
+
+        if workspaceGitEventWatchersByRepository[repositoryInfo] == nil,
+           !workspaceGitWatcherStartFailedRepositories.contains(repositoryInfo) {
+            let watcher = WorkspaceGitEventWatcher(
+                repositoryInfo: repositoryInfo
+            ) { [weak self] changedPaths in
+                DispatchQueue.main.async { [weak self] in
+                    self?.handleWorkspaceGitEvent(
+                        repositoryInfo: repositoryInfo,
+                        changedPaths: changedPaths
+                    )
+                }
+            }
+            if watcher.isActive {
+                workspaceGitWatcherStartFailedRepositories.remove(repositoryInfo)
+                workspaceGitEventWatchersByRepository[repositoryInfo] = watcher
+            } else {
+                workspaceGitWatcherStartFailedRepositories.insert(repositoryInfo)
+#if DEBUG
+                cmuxDebugLog(
+                    "workspace.gitWatcher.unavailable repo=\(repositoryInfo.repoRoot) " +
+                    "reason=\(watcher.startFailureReason ?? "unknown") fallback=periodicPoll"
+                )
+#endif
+            }
+        }
+        return workspaceGitEventWatchersByRepository[repositoryInfo] == nil
+            ? .fallbackPolling
+            : .active
+    }
+
+    private func detachWorkspaceGitEventWatcher(for key: WorkspaceGitProbeKey) {
+        workspaceGitFallbackPollNextAtByKey.removeValue(forKey: key)
+        guard let repositoryInfo = workspaceGitRepositoryByProbeKey.removeValue(forKey: key) else {
+            return
+        }
+
+        workspaceGitWatcherSubscribersByRepository[repositoryInfo]?.remove(key)
+        if workspaceGitWatcherSubscribersByRepository[repositoryInfo]?.isEmpty == true {
+            workspaceGitWatcherSubscribersByRepository.removeValue(forKey: repositoryInfo)
+            workspaceGitWatcherStartFailedRepositories.remove(repositoryInfo)
+            workspaceGitRepositorySlugsByRepository.removeValue(forKey: repositoryInfo)
+            workspaceGitRepositoryOptOutState.removeValue(forKey: repositoryInfo)
+            workspaceGitEventWatchersByRepository[repositoryInfo]?.invalidate()
+            workspaceGitEventWatchersByRepository.removeValue(forKey: repositoryInfo)
+        }
+    }
+
+    private func detachWorkspaceGitEventWatchers(workspaceId: UUID) {
+        let keys = workspaceGitRepositoryByProbeKey.keys.filter { $0.workspaceId == workspaceId }
+        for key in keys {
+            detachWorkspaceGitEventWatcher(for: key)
+        }
+    }
+
+    private func stopAllWorkspaceGitEventWatchers() {
+        for watcher in workspaceGitEventWatchersByRepository.values {
+            watcher.invalidate()
+        }
+        workspaceGitEventWatchersByRepository.removeAll()
+        workspaceGitWatcherStartFailedRepositories.removeAll()
+        workspaceGitWatcherSubscribersByRepository.removeAll()
+        workspaceGitRepositoryByProbeKey.removeAll()
+        workspaceGitRepositorySlugsByRepository.removeAll()
+        workspaceGitRepositoryOptOutState.removeAll()
+        workspaceGitFallbackPollNextAtByKey.removeAll()
+    }
+
+    private func handleWorkspaceGitEvent(
+        repositoryInfo: WorkspaceGitRepositoryInfo,
+        changedPaths: [String]
+    ) {
+        let isRepoOptedOut = workspaceGitRepositoryOptOutState[repositoryInfo] ?? false
+        if isRepoOptedOut,
+           !shouldRefreshOptedOutWorkspaceGitMetadata(
+                repositoryInfo: repositoryInfo,
+                changedPaths: changedPaths
+           ) {
+            return
+        }
+
+        let shouldForcePullRequestRefresh = shouldForceWorkspacePullRequestRefreshForGitEvent(
+            repositoryInfo: repositoryInfo,
+            changedPaths: changedPaths
+        )
+        for key in workspaceGitWatcherSubscribersByRepository[repositoryInfo] ?? [] {
+            if shouldForcePullRequestRefresh {
+                workspacePullRequestNeedsRefreshOnGitEventKeys.insert(key)
+            }
+            scheduleWorkspaceGitMetadataRefreshIfPossible(
+                workspaceId: key.workspaceId,
+                panelId: key.panelId,
+                reason: "fsEvent"
+            )
+        }
+    }
+
+    private func shouldRefreshOptedOutWorkspaceGitMetadata(
+        repositoryInfo: WorkspaceGitRepositoryInfo,
+        changedPaths: [String]
+    ) -> Bool {
+        let gitMarkerPath = URL(fileURLWithPath: repositoryInfo.repoRoot)
+            .appendingPathComponent(".git")
+            .path
+        return changedPaths.contains { path in
+            path == repositoryInfo.cmuxIgnorePath
+                || repositoryInfo.gitConfigPaths.contains(path)
+                || repositoryInfo.primaryGitWatcherRoots.contains(path)
+                || path == gitMarkerPath
+        }
+    }
+
+    private func shouldForceWorkspacePullRequestRefreshForGitEvent(
+        repositoryInfo: WorkspaceGitRepositoryInfo,
+        changedPaths: [String]
+    ) -> Bool {
+        let gitMarkerPath = URL(fileURLWithPath: repositoryInfo.repoRoot)
+            .appendingPathComponent(".git")
+            .path
+        return changedPaths.contains { path in
+            if repositoryInfo.gitConfigPaths.contains(path)
+                || repositoryInfo.primaryGitWatcherRoots.contains(path)
+                || path == gitMarkerPath {
+                return true
+            }
+
+            for root in [repositoryInfo.gitDirectory, repositoryInfo.gitCommonDirectory] {
+                guard path.hasPrefix(root + "/") else { continue }
+                let relativePath = String(path.dropFirst(root.count + 1))
+                if relativePath == "HEAD"
+                    || relativePath == "packed-refs"
+                    || relativePath.hasPrefix("refs/") {
+                    return true
+                }
+            }
+            return false
+        }
     }
 
     private func refreshTrackedWorkspacePullRequestsIfNeeded(
@@ -1246,19 +1877,56 @@ class TabManager: ObservableObject {
         allowCachedResultsOverride: Bool? = nil
     ) {
         let now = Date()
-        var candidateSeeds: [WorkspacePullRequestCandidateSeed] = []
+        let repoCacheCutoff = now.addingTimeInterval(-Self.workspacePullRequestRepoCachePruneLifetime)
+        workspacePullRequestRepoCacheBySlug = workspacePullRequestRepoCacheBySlug.filter {
+            $0.value.fetchedAt >= repoCacheCutoff
+        }
+
+        var candidates: [WorkspacePullRequestCandidate] = []
+        var candidateBranchesByRepo: [String: Set<String>] = [:]
+        var repoDirectoriesBySlug: [String: String] = [:]
         var requestedKeys: [WorkspaceGitProbeKey] = []
         var validKeys: Set<WorkspaceGitProbeKey> = []
+        let pendingKeys = workspacePullRequestPendingRefreshKeys
+        if pendingKeys.isEmpty && workspacePullRequestRefreshTask == nil {
+            let hasTrackedCandidates = tabs.contains { workspace in
+                !workspace.isRemoteWorkspace
+                    && (!workspace.panelGitBranches.isEmpty || !workspace.panelPullRequests.isEmpty)
+            }
+            guard hasTrackedCandidates else {
+                workspacePullRequestPendingBypassRepoCache = false
+                updateWorkspacePullRequestPollTimer()
+                return
+            }
+        }
 
-        for workspace in tabs {
-            for panelId in Set(workspace.panelGitBranches.keys).union(workspace.panelPullRequests.keys) {
+        for workspace in tabs where !workspace.isRemoteWorkspace {
+            let panelIds = Set(workspace.panelGitBranches.keys).union(workspace.panelPullRequests.keys)
+            for panelId in panelIds {
                 let key = WorkspaceGitProbeKey(workspaceId: workspace.id, panelId: panelId)
                 validKeys.insert(key)
+
+                guard workspace.panels[panelId] != nil else {
+                    clearWorkspacePullRequestTracking(for: key)
+                    continue
+                }
+
+                guard isWorkspacePullRequestRefreshEnabled(for: workspace, key: key) else {
+                    if workspace.panelPullRequests[panelId] != nil {
+                        workspace.clearPanelPullRequest(panelId: panelId)
+                    }
+                    clearWorkspacePullRequestTracking(for: key)
+                    continue
+                }
+
                 let branch = Self.normalizedBranchName(
                     workspace.panelGitBranches[panelId]?.branch
                         ?? workspace.panelPullRequests[panelId]?.branch
                 )
                 guard let branch else {
+                    if workspace.panelPullRequests[panelId] != nil {
+                        workspace.clearPanelPullRequest(panelId: panelId)
+                    }
                     clearWorkspacePullRequestTracking(for: key)
                     continue
                 }
@@ -1269,13 +1937,14 @@ class TabManager: ObservableObject {
                     continue
                 }
 
-                guard shouldRefreshWorkspacePullRequest(
-                    key: key,
-                    now: now,
-                    currentPullRequest: workspace.panelPullRequests[panelId]
-                ) else {
-                    continue
-                }
+                let currentPullRequest = workspace.panelPullRequests[panelId]
+                let shouldRefresh = pendingKeys.contains(key)
+                    || shouldRefreshWorkspacePullRequest(
+                        key: key,
+                        now: now,
+                        currentPullRequest: currentPullRequest
+                    )
+                guard shouldRefresh else { continue }
 
                 if case .inFlight = workspacePullRequestProbeStateByKey[key] {
                     markWorkspacePullRequestProbeRerunPending(
@@ -1285,46 +1954,57 @@ class TabManager: ObservableObject {
                     continue
                 }
 
-                let candidateSeed = workspacePullRequestCandidateSeed(
+                let candidate = workspacePullRequestCandidate(
                     workspace: workspace,
+                    probeKey: key,
                     panelId: panelId,
-                    branch: branch
+                    branch: branch,
+                    reason: reason
                 )
-                candidateSeeds.append(candidateSeed)
+                candidates.append(candidate)
                 requestedKeys.append(key)
+                for repoSlug in candidate.repoSlugs {
+                    candidateBranchesByRepo[repoSlug, default: []].insert(candidate.branch)
+                }
+                if let directory = gitProbeDirectory(for: workspace, panelId: panelId) {
+                    for repoSlug in candidate.repoSlugs where repoDirectoriesBySlug[repoSlug] == nil {
+                        repoDirectoriesBySlug[repoSlug] = directory
+                    }
+                }
             }
         }
 
         pruneWorkspacePullRequestTracking(validKeys: validKeys)
+        guard !candidates.isEmpty else {
+            workspacePullRequestPendingBypassRepoCache = false
+            updateWorkspacePullRequestPollTimer()
+            return
+        }
         guard workspacePullRequestRefreshTask == nil else {
             updateWorkspacePullRequestPollTimer()
             return
         }
-        guard !candidateSeeds.isEmpty else {
-            updateWorkspacePullRequestPollTimer()
-            return
-        }
-        workspacePullRequestPollTimer?.cancel()
-        workspacePullRequestPollTimer = nil
+
+        workspacePullRequestPendingRefreshKeys.subtract(requestedKeys)
         for key in requestedKeys {
             workspacePullRequestProbeStateByKey[key] = .inFlight(rerunPending: false)
         }
 
         let cacheBySlug = workspacePullRequestRepoCacheBySlug
+        let pendingBypassRepoCache = workspacePullRequestPendingBypassRepoCache
+        workspacePullRequestPendingBypassRepoCache = false
         let allowCachedResults = allowCachedResultsOverride
-            ?? Self.workspacePullRequestRefreshAllowsRepoCache(reason: reason)
+            ?? !pendingBypassRepoCache
         workspacePullRequestRefreshTask = Task.detached(priority: .utility) { [weak self] in
-            let candidateResolution = await Self.resolveWorkspacePullRequestCandidateSeeds(candidateSeeds)
-            guard !Task.isCancelled else { return }
             let repoResults = await Self.fetchWorkspacePullRequestRepoResults(
-                repoDirectoriesBySlug: candidateResolution.repoDirectoriesBySlug,
-                candidateBranchesByRepo: candidateResolution.candidateBranchesByRepo,
+                repoDirectoriesBySlug: repoDirectoriesBySlug,
+                candidateBranchesByRepo: candidateBranchesByRepo,
                 cacheBySlug: cacheBySlug,
                 now: now,
                 allowCachedResults: allowCachedResults
             )
             let results = Self.resolveWorkspacePullRequestRefreshResults(
-                candidates: candidateResolution.candidates,
+                candidates: candidates,
                 repoResults: repoResults
             )
             guard !Task.isCancelled else { return }
@@ -1343,30 +2023,23 @@ class TabManager: ObservableObject {
         }
     }
 
-    private func shouldRefreshWorkspacePullRequest(
-        key: WorkspaceGitProbeKey,
-        now: Date,
-        currentPullRequest: SidebarPullRequestState?
-    ) -> Bool {
-        Self.shouldRefreshWorkspacePullRequest(
-            now: now,
-            nextPollAt: workspacePullRequestNextPollAtByKey[key],
-            lastTerminalStateRefreshAt: workspacePullRequestLastTerminalStateRefreshAtByKey[key],
-            currentPullRequestStatus: currentPullRequest?.status
-        )
-    }
-
-    private func workspacePullRequestCandidateSeed(
+    private func workspacePullRequestCandidate(
         workspace: Workspace,
+        probeKey: WorkspaceGitProbeKey,
         panelId: UUID,
-        branch: String
-    ) -> WorkspacePullRequestCandidateSeed {
-        let directory = gitProbeDirectory(for: workspace, panelId: panelId)
-        return WorkspacePullRequestCandidateSeed(
+        branch: String,
+        reason: String
+    ) -> WorkspacePullRequestCandidate {
+        let repoSlugs = resolvedRepositorySlugsForPullRequestRefresh(
+            probeKey: probeKey,
+            directory: gitProbeDirectory(for: workspace, panelId: panelId),
+            reason: reason
+        )
+        return WorkspacePullRequestCandidate(
             workspaceId: workspace.id,
             panelId: panelId,
             branch: branch,
-            directory: directory
+            repoSlugs: repoSlugs
         )
     }
 
@@ -1385,7 +2058,7 @@ class TabManager: ObservableObject {
                 if let cachedRepoSlugs = repoSlugsByDirectory[directory] {
                     repoSlugs = cachedRepoSlugs
                 } else {
-                    let resolvedRepoSlugs = await githubRepositorySlugs(directory: directory)
+                    let resolvedRepoSlugs = githubRepositorySlugs(directory: directory)
                     repoSlugsByDirectory[directory] = resolvedRepoSlugs
                     repoSlugs = resolvedRepoSlugs
                 }
@@ -1418,23 +2091,68 @@ class TabManager: ObservableObject {
         )
     }
 
+    private func resolvedRepositorySlugsForPullRequestRefresh(
+        probeKey: WorkspaceGitProbeKey,
+        directory: String?,
+        reason: String
+    ) -> [String] {
+        if !Self.workspacePullRequestRefreshAllowsRepoCache(reason: reason),
+           let directory {
+            let resolvedRepositorySlugs = Self.githubRepositorySlugs(directory: directory)
+            if let repositoryInfo = Self.gitRepositoryInfo(for: directory) {
+                workspaceGitRepositorySlugsByRepository[repositoryInfo] = resolvedRepositorySlugs
+            }
+            return resolvedRepositorySlugs
+        }
+
+        let repositoryInfo = workspaceGitRepositoryByProbeKey[probeKey]
+        let cachedRepositorySlugs = repositoryInfo.flatMap {
+            workspaceGitRepositorySlugsByRepository[$0]
+        } ?? []
+        let probeDirectory = repositoryInfo?.repoRoot ?? directory
+        let resolvedRepositorySlugs = Self.resolvedRepositorySlugsForPullRequestRefresh(
+            directory: probeDirectory,
+            cachedRepositorySlugs: cachedRepositorySlugs,
+            reason: reason
+        )
+        if let repositoryInfo,
+           resolvedRepositorySlugs != cachedRepositorySlugs {
+            workspaceGitRepositorySlugsByRepository[repositoryInfo] = resolvedRepositorySlugs
+        }
+        return resolvedRepositorySlugs
+    }
+
     private func scheduleWorkspacePullRequestRefresh(
         workspaceId: UUID,
         panelId: UUID,
         reason: String
     ) {
+        guard let workspace = tabs.first(where: { $0.id == workspaceId }),
+              workspace.panels[panelId] != nil,
+              !workspace.isRemoteWorkspace,
+              isWorkspaceGitMetadataWatcherEnabled(for: workspace) else {
+            clearWorkspacePullRequestTracking(
+                for: WorkspaceGitProbeKey(workspaceId: workspaceId, panelId: panelId)
+            )
+            return
+        }
+
         let key = WorkspaceGitProbeKey(workspaceId: workspaceId, panelId: panelId)
         let shouldBypassRepoCache = !Self.workspacePullRequestRefreshAllowsRepoCache(reason: reason)
+        if shouldBypassRepoCache {
+            workspacePullRequestPendingBypassRepoCache = true
+        }
         if shouldBypassRepoCache, workspacePullRequestRefreshTask != nil {
             workspacePullRequestFollowUpShouldBypassRepoCache = true
         }
+        workspacePullRequestNextPollAtByKey[key] = .distantPast
         if case .inFlight = workspacePullRequestProbeStateByKey[key] {
             markWorkspacePullRequestProbeRerunPending(
                 for: key,
                 bypassRepoCache: shouldBypassRepoCache
             )
         } else {
-            workspacePullRequestNextPollAtByKey[key] = .distantPast
+            workspacePullRequestPendingRefreshKeys.insert(key)
         }
 #if DEBUG
         cmuxDebugLog(
@@ -1469,7 +2187,7 @@ class TabManager: ObservableObject {
         var needsFollowUpPass = false
 
         defer {
-            if needsFollowUpPass {
+            if needsFollowUpPass || !workspacePullRequestPendingRefreshKeys.isEmpty {
                 let shouldBypassRepoCache = workspacePullRequestFollowUpShouldBypassRepoCache
                 workspacePullRequestFollowUpShouldBypassRepoCache = false
                 refreshTrackedWorkspacePullRequestsIfNeeded(
@@ -1483,7 +2201,7 @@ class TabManager: ObservableObject {
             let rerunPending = workspacePullRequestProbeRerunPending(for: key)
             workspacePullRequestProbeStateByKey[key] = .idle
             if rerunPending {
-                workspacePullRequestNextPollAtByKey[key] = .distantPast
+                workspacePullRequestPendingRefreshKeys.insert(key)
                 needsFollowUpPass = true
             }
 
@@ -1499,7 +2217,9 @@ class TabManager: ObservableObject {
             }
 
             guard let workspace = tabs.first(where: { $0.id == result.workspaceId }),
-                  workspace.panels[result.panelId] != nil else {
+                  workspace.panels[result.panelId] != nil,
+                  !workspace.isRemoteWorkspace,
+                  isWorkspaceGitMetadataWatcherEnabled(for: workspace) else {
                 clearWorkspacePullRequestTracking(for: key)
                 continue
             }
@@ -1510,6 +2230,7 @@ class TabManager: ObservableObject {
             switch result.resolution {
             case .resolved(let resolvedPullRequest):
                 workspacePullRequestTransientFailureCountByKey[key] = 0
+                workspacePullRequestAbsentStateByKey.removeValue(forKey: key)
                 guard let status = SidebarPullRequestStatus(rawValue: resolvedPullRequest.statusRawValue),
                       let url = URL(string: resolvedPullRequest.urlString) else {
                     continue
@@ -1525,12 +2246,17 @@ class TabManager: ObservableObject {
                 )
             case .notFound:
                 workspacePullRequestTransientFailureCountByKey[key] = 0
+                workspacePullRequestAbsentStateByKey[key] = WorkspacePullRequestAbsentState(
+                    branch: result.branch,
+                    fetchedAt: now
+                )
                 workspacePullRequestLastTerminalStateRefreshAtByKey.removeValue(forKey: key)
                 if workspace.panelPullRequests[result.panelId] != nil {
                     workspace.clearPanelPullRequest(panelId: result.panelId)
                 }
             case .unsupportedRepository:
                 workspacePullRequestTransientFailureCountByKey[key] = 0
+                workspacePullRequestAbsentStateByKey.removeValue(forKey: key)
                 workspacePullRequestLastTerminalStateRefreshAtByKey.removeValue(forKey: key)
                 if workspace.panelPullRequests[result.panelId] != nil {
                     workspace.clearPanelPullRequest(panelId: result.panelId)
@@ -1587,81 +2313,67 @@ class TabManager: ObservableObject {
         updateWorkspacePullRequestPollTimer()
     }
 
-    private func scheduleNextWorkspacePullRequestPoll(
-        key: WorkspaceGitProbeKey,
-        workspace: Workspace,
-        panelId: UUID,
-        now: Date,
-        resolution: WorkspacePullRequestRefreshResult.Resolution,
-        countsAsTerminalSweep: Bool
-    ) {
-        if countsAsTerminalSweep {
-            workspacePullRequestLastTerminalStateRefreshAtByKey[key] = now
-        }
-
-        if case .resolved(let resolvedPullRequest) = resolution,
-           let status = SidebarPullRequestStatus(rawValue: resolvedPullRequest.statusRawValue),
-           status != .open {
-            workspacePullRequestLastTerminalStateRefreshAtByKey[key] = now
-            workspacePullRequestNextPollAtByKey[key] = now.addingTimeInterval(Self.workspacePullRequestTerminalStateSweepInterval)
-            return
-        }
-
-        if case .transientFailure = resolution,
-           workspacePullRequestLastTerminalStateRefreshAtByKey[key] != nil {
-            workspacePullRequestNextPollAtByKey[key] = now.addingTimeInterval(Self.workspacePullRequestTerminalStateSweepInterval)
-            return
-        }
-
-        if case .unsupportedRepository = resolution {
-            workspacePullRequestLastTerminalStateRefreshAtByKey.removeValue(forKey: key)
-            workspacePullRequestNextPollAtByKey[key] = now.addingTimeInterval(Self.jitteredPollInterval(base: Self.backgroundPollInterval))
-            return
-        }
-
-        workspacePullRequestLastTerminalStateRefreshAtByKey.removeValue(forKey: key)
-        let baseInterval = isSelectedFocusedPanel(workspace: workspace, panelId: panelId)
-            ? Self.selectedPollInterval
-            : Self.backgroundPollInterval
-        workspacePullRequestNextPollAtByKey[key] = now.addingTimeInterval(Self.jitteredPollInterval(base: baseInterval))
-    }
-
-    private func pruneWorkspacePullRequestTracking(validKeys: Set<WorkspaceGitProbeKey>) {
-        workspacePullRequestNextPollAtByKey = workspacePullRequestNextPollAtByKey.filter { validKeys.contains($0.key) }
-        workspacePullRequestProbeStateByKey = workspacePullRequestProbeStateByKey.filter { validKeys.contains($0.key) }
-        workspacePullRequestLastTerminalStateRefreshAtByKey = workspacePullRequestLastTerminalStateRefreshAtByKey.filter { validKeys.contains($0.key) }
-        workspacePullRequestTransientFailureCountByKey = workspacePullRequestTransientFailureCountByKey.filter { validKeys.contains($0.key) }
-        let repoCacheCutoff = Date().addingTimeInterval(-Self.workspacePullRequestRepoCachePruneLifetime)
-        workspacePullRequestRepoCacheBySlug = workspacePullRequestRepoCacheBySlug.filter {
-            $0.value.fetchedAt >= repoCacheCutoff
-        }
-        updateWorkspacePullRequestPollTimer()
-    }
-
     private func clearWorkspacePullRequestTracking(for key: WorkspaceGitProbeKey) {
-        workspacePullRequestNextPollAtByKey.removeValue(forKey: key)
+        workspacePullRequestPendingRefreshKeys.remove(key)
+        workspacePullRequestNeedsRefreshOnGitEventKeys.remove(key)
         workspacePullRequestProbeStateByKey.removeValue(forKey: key)
+        workspacePullRequestNextPollAtByKey.removeValue(forKey: key)
         workspacePullRequestLastTerminalStateRefreshAtByKey.removeValue(forKey: key)
         workspacePullRequestTransientFailureCountByKey.removeValue(forKey: key)
+        workspacePullRequestAbsentStateByKey.removeValue(forKey: key)
+        if workspacePullRequestPendingRefreshKeys.isEmpty {
+            workspacePullRequestPendingBypassRepoCache = false
+        }
         updateWorkspacePullRequestPollTimer()
     }
 
     private func clearWorkspacePullRequestTracking(workspaceId: UUID) {
-        workspacePullRequestNextPollAtByKey = workspacePullRequestNextPollAtByKey.filter { $0.key.workspaceId != workspaceId }
+        workspacePullRequestPendingRefreshKeys = Set(workspacePullRequestPendingRefreshKeys.filter {
+            $0.workspaceId != workspaceId
+        })
+        workspacePullRequestNeedsRefreshOnGitEventKeys = Set(workspacePullRequestNeedsRefreshOnGitEventKeys.filter {
+            $0.workspaceId != workspaceId
+        })
         workspacePullRequestProbeStateByKey = workspacePullRequestProbeStateByKey.filter { $0.key.workspaceId != workspaceId }
-        workspacePullRequestLastTerminalStateRefreshAtByKey = workspacePullRequestLastTerminalStateRefreshAtByKey.filter { $0.key.workspaceId != workspaceId }
+        workspacePullRequestNextPollAtByKey = workspacePullRequestNextPollAtByKey.filter { $0.key.workspaceId != workspaceId }
+        workspacePullRequestLastTerminalStateRefreshAtByKey = workspacePullRequestLastTerminalStateRefreshAtByKey.filter {
+            $0.key.workspaceId != workspaceId
+        }
         workspacePullRequestTransientFailureCountByKey = workspacePullRequestTransientFailureCountByKey.filter { $0.key.workspaceId != workspaceId }
+        workspacePullRequestAbsentStateByKey = workspacePullRequestAbsentStateByKey.filter {
+            $0.key.workspaceId != workspaceId
+        }
+        if workspacePullRequestPendingRefreshKeys.isEmpty {
+            workspacePullRequestPendingBypassRepoCache = false
+        }
         updateWorkspacePullRequestPollTimer()
+    }
+
+    private func isWorkspacePullRequestRefreshEnabled(
+        for workspace: Workspace,
+        key: WorkspaceGitProbeKey
+    ) -> Bool {
+        guard isWorkspaceGitMetadataWatcherEnabled(for: workspace) else {
+            return false
+        }
+        guard let repositoryInfo = workspaceGitRepositoryByProbeKey[key] else {
+            return true
+        }
+        return workspaceGitRepositoryOptOutState[repositoryInfo] != true
     }
 
     private func resetWorkspacePullRequestRefreshState() {
         workspacePullRequestRefreshTask?.cancel()
         workspacePullRequestRefreshTask = nil
+        workspacePullRequestPendingRefreshKeys.removeAll()
+        workspacePullRequestNeedsRefreshOnGitEventKeys.removeAll()
         workspacePullRequestProbeStateByKey.removeAll()
         workspacePullRequestNextPollAtByKey.removeAll()
         workspacePullRequestLastTerminalStateRefreshAtByKey.removeAll()
         workspacePullRequestTransientFailureCountByKey.removeAll()
+        workspacePullRequestAbsentStateByKey.removeAll()
         workspacePullRequestRepoCacheBySlug.removeAll()
+        workspacePullRequestPendingBypassRepoCache = false
         workspacePullRequestFollowUpShouldBypassRepoCache = false
         updateWorkspacePullRequestPollTimer()
     }
@@ -1712,8 +2424,116 @@ class TabManager: ObservableObject {
         return rerunPending
     }
 
+    private func shouldRefreshWorkspacePullRequest(
+        key: WorkspaceGitProbeKey,
+        now: Date,
+        currentPullRequest: SidebarPullRequestState?
+    ) -> Bool {
+        Self.shouldRefreshWorkspacePullRequest(
+            now: now,
+            nextPollAt: workspacePullRequestNextPollAtByKey[key],
+            lastTerminalStateRefreshAt: workspacePullRequestLastTerminalStateRefreshAtByKey[key],
+            currentPullRequestStatus: currentPullRequest?.status
+        )
+    }
+
+    private func scheduleNextWorkspacePullRequestPoll(
+        key: WorkspaceGitProbeKey,
+        workspace: Workspace,
+        panelId: UUID,
+        now: Date,
+        resolution: WorkspacePullRequestRefreshResult.Resolution,
+        countsAsTerminalSweep: Bool
+    ) {
+        if countsAsTerminalSweep {
+            workspacePullRequestLastTerminalStateRefreshAtByKey[key] = now
+        }
+
+        if case .resolved(let resolvedPullRequest) = resolution,
+           let status = SidebarPullRequestStatus(rawValue: resolvedPullRequest.statusRawValue),
+           status != .open {
+            workspacePullRequestLastTerminalStateRefreshAtByKey[key] = now
+            workspacePullRequestNextPollAtByKey[key] = now.addingTimeInterval(
+                Self.workspacePullRequestTerminalStateSweepInterval
+            )
+            return
+        }
+
+        if case .transientFailure = resolution,
+           workspacePullRequestLastTerminalStateRefreshAtByKey[key] != nil {
+            workspacePullRequestNextPollAtByKey[key] = now.addingTimeInterval(
+                Self.workspacePullRequestTerminalStateSweepInterval
+            )
+            return
+        }
+
+        if case .unsupportedRepository = resolution {
+            workspacePullRequestLastTerminalStateRefreshAtByKey.removeValue(forKey: key)
+            workspacePullRequestNextPollAtByKey[key] = now.addingTimeInterval(
+                Self.jitteredPollInterval(base: Self.backgroundPollInterval)
+            )
+            return
+        }
+
+        workspacePullRequestLastTerminalStateRefreshAtByKey.removeValue(forKey: key)
+        let baseInterval = isSelectedFocusedPanel(workspace: workspace, panelId: panelId)
+            ? Self.selectedPollInterval
+            : Self.backgroundPollInterval
+        workspacePullRequestNextPollAtByKey[key] = now.addingTimeInterval(
+            Self.jitteredPollInterval(base: baseInterval)
+        )
+    }
+
+    private func pruneWorkspacePullRequestTracking(validKeys: Set<WorkspaceGitProbeKey>) {
+        workspacePullRequestPendingRefreshKeys = Set(
+            workspacePullRequestPendingRefreshKeys.filter { validKeys.contains($0) }
+        )
+        workspacePullRequestNeedsRefreshOnGitEventKeys = Set(
+            workspacePullRequestNeedsRefreshOnGitEventKeys.filter { validKeys.contains($0) }
+        )
+        workspacePullRequestProbeStateByKey = workspacePullRequestProbeStateByKey.filter {
+            validKeys.contains($0.key)
+        }
+        workspacePullRequestNextPollAtByKey = workspacePullRequestNextPollAtByKey.filter {
+            validKeys.contains($0.key)
+        }
+        workspacePullRequestLastTerminalStateRefreshAtByKey =
+            workspacePullRequestLastTerminalStateRefreshAtByKey.filter {
+                validKeys.contains($0.key)
+            }
+        workspacePullRequestTransientFailureCountByKey = workspacePullRequestTransientFailureCountByKey.filter {
+            validKeys.contains($0.key)
+        }
+        workspacePullRequestAbsentStateByKey = workspacePullRequestAbsentStateByKey.filter {
+            validKeys.contains($0.key)
+        }
+        let repoCacheCutoff = Date().addingTimeInterval(-Self.workspacePullRequestRepoCachePruneLifetime)
+        workspacePullRequestRepoCacheBySlug = workspacePullRequestRepoCacheBySlug.filter {
+            $0.value.fetchedAt >= repoCacheCutoff
+        }
+        if workspacePullRequestPendingRefreshKeys.isEmpty {
+            workspacePullRequestPendingBypassRepoCache = false
+        }
+        updateWorkspacePullRequestPollTimer()
+    }
+
     private func isSelectedFocusedPanel(workspace: Workspace, panelId: UUID) -> Bool {
         selectedWorkspace?.id == workspace.id && selectedWorkspace?.focusedPanelId == panelId
+    }
+
+    private func scheduleNextWorkspaceGitFallbackPoll(
+        key: WorkspaceGitProbeKey,
+        workspace: Workspace,
+        panelId: UUID,
+        now: Date
+    ) {
+        let baseInterval = isSelectedFocusedPanel(workspace: workspace, panelId: panelId)
+            ? Self.selectedPollInterval
+            : Self.backgroundPollInterval
+        workspaceGitFallbackPollNextAtByKey[key] = now.addingTimeInterval(
+            Self.jitteredPollInterval(base: baseInterval)
+        )
+        updateWorkspacePullRequestPollTimer()
     }
 
     private nonisolated static func jitteredPollInterval(base: TimeInterval) -> TimeInterval {
@@ -1721,18 +2541,91 @@ class TabManager: ObservableObject {
         return base + Double.random(in: -jitter...jitter)
     }
 
+    private func shouldRefreshKnownAbsentWorkspacePullRequest(
+        for key: WorkspaceGitProbeKey,
+        branch: String,
+        now: Date
+    ) -> Bool {
+        Self.shouldRefreshKnownAbsentWorkspacePullRequest(
+            branch: branch,
+            absentState: workspacePullRequestAbsentStateByKey[key],
+            now: now
+        )
+    }
+
+    private nonisolated static func shouldRefreshKnownAbsentWorkspacePullRequest(
+        branch: String,
+        absentState: WorkspacePullRequestAbsentState?,
+        now: Date
+    ) -> Bool {
+        guard let absentState,
+              absentState.branch == normalizedBranchName(branch) else {
+            return true
+        }
+        return now.timeIntervalSince(absentState.fetchedAt) >= workspacePullRequestRepoCacheLifetime
+    }
+
+    nonisolated static func shouldRefreshKnownAbsentWorkspacePullRequestForTesting(
+        branch: String,
+        absentBranch: String?,
+        absentAge: TimeInterval?
+    ) -> Bool {
+        let absentState: WorkspacePullRequestAbsentState? = {
+            guard let absentBranch,
+                  let absentAge else { return nil }
+            return WorkspacePullRequestAbsentState(
+                branch: absentBranch,
+                fetchedAt: Date().addingTimeInterval(-absentAge)
+            )
+        }()
+        return shouldRefreshKnownAbsentWorkspacePullRequest(
+            branch: branch,
+            absentState: absentState,
+            now: Date()
+        )
+    }
+
+    nonisolated static func shouldRefreshWorkspacePullRequestForTesting(
+        now: Date,
+        nextPollAt: Date?,
+        lastTerminalStateRefreshAt: Date?,
+        currentPullRequestStatus: SidebarPullRequestStatus?
+    ) -> Bool {
+        shouldRefreshWorkspacePullRequest(
+            now: now,
+            nextPollAt: nextPollAt,
+            lastTerminalStateRefreshAt: lastTerminalStateRefreshAt,
+            currentPullRequestStatus: currentPullRequestStatus
+        )
+    }
+
     nonisolated static func workspacePullRequestRefreshAllowsRepoCache(reason: String) -> Bool {
-        let periodicPrefixes = [
+        let cacheablePrefixes = [
+            "timer",
             "periodicPoll",
             "selectedPeriodicPoll",
-            "timer",
         ]
-        return periodicPrefixes.contains { prefix in
+        return cacheablePrefixes.contains { prefix in
             reason == prefix || reason.hasPrefix("\(prefix).")
         }
     }
 
-    nonisolated static func shouldRefreshWorkspacePullRequest(
+    private nonisolated static func resolvedRepositorySlugsForPullRequestRefresh(
+        directory: String?,
+        cachedRepositorySlugs: [String],
+        reason: String
+    ) -> [String] {
+        if !cachedRepositorySlugs.isEmpty {
+            return cachedRepositorySlugs
+        }
+        guard workspacePullRequestRefreshAllowsRepoCache(reason: reason),
+              let directory else {
+            return cachedRepositorySlugs
+        }
+        return githubRepositorySlugs(directory: directory)
+    }
+
+    private nonisolated static func shouldRefreshWorkspacePullRequest(
         now: Date,
         nextPollAt: Date?,
         lastTerminalStateRefreshAt: Date?,
@@ -1749,11 +2642,76 @@ class TabManager: ObservableObject {
         }
 
         let lastTerminalRefreshAt = lastTerminalStateRefreshAt ?? .distantPast
-        return now.timeIntervalSince(lastTerminalRefreshAt) >= Self.workspacePullRequestTerminalStateSweepInterval
+        return now.timeIntervalSince(lastTerminalRefreshAt)
+            >= Self.workspacePullRequestTerminalStateSweepInterval
     }
 
     func refreshTrackedWorkspaceGitMetadataForTesting() {
         refreshTrackedWorkspaceGitMetadata()
+    }
+
+    func refreshFallbackWorkspaceGitMetadataForTesting(now: Date = Date()) {
+        refreshFallbackWorkspaceGitMetadataIfNeeded(now: now)
+    }
+
+    nonisolated static func workspaceGitMetadataSummaryForTesting(
+        directory: String,
+        environmentOverride: [String: String] = [:]
+    ) -> (branch: String?, isDirty: Bool?, isWatcherOptedOut: Bool) {
+        let snapshot = initialWorkspaceGitMetadataSnapshot(
+            for: directory,
+            environmentOverride: environmentOverride
+        )
+        return (
+            branch: snapshot.branch,
+            isDirty: snapshot.isDirty,
+            isWatcherOptedOut: snapshot.gitMetadataWatcherOptedOut
+        )
+    }
+
+    nonisolated static func githubRepositorySlugsForTesting(directory: String) -> [String] {
+        githubRepositorySlugs(directory: directory)
+    }
+
+    nonisolated static func resolvedRepositorySlugsForPullRequestRefreshForTesting(
+        directory: String?,
+        cachedRepositorySlugs: [String],
+        reason: String
+    ) -> [String] {
+        resolvedRepositorySlugsForPullRequestRefresh(
+            directory: directory,
+            cachedRepositorySlugs: cachedRepositorySlugs,
+            reason: reason
+        )
+    }
+
+    func resolvedRepositorySlugsForPanelPullRequestRefreshForTesting(
+        workspaceId: UUID,
+        panelId: UUID,
+        reason: String
+    ) -> [String] {
+        guard let workspace = tabs.first(where: { $0.id == workspaceId }),
+              workspace.panels[panelId] != nil else {
+            return []
+        }
+        let key = WorkspaceGitProbeKey(workspaceId: workspaceId, panelId: panelId)
+        return resolvedRepositorySlugsForPullRequestRefresh(
+            probeKey: key,
+            directory: gitProbeDirectory(for: workspace, panelId: panelId),
+            reason: reason
+        )
+    }
+
+    nonisolated static func setWorkspaceGitWatcherForceStartFailureForTesting(_ shouldFail: Bool) {
+        WorkspaceGitEventWatcher.forceStartFailureForTesting = shouldFail
+    }
+
+    nonisolated static func setWorkspaceGitStatusFailureForTesting(_ shouldFail: Bool) {
+        forceGitStatusFailureForTesting = shouldFail
+    }
+
+    func handleGitMetadataWatcherDefaultsChangeForTesting() {
+        handleGitMetadataWatcherDefaultsChange()
     }
 
     func trackedWorkspaceGitMetadataPollCandidatePanelIdsForTesting(workspaceId: UUID) -> Set<UUID> {
@@ -1771,6 +2729,27 @@ class TabManager: ObservableObject {
         let probeKeys = Set(workspaceGitProbeStateByKey.keys.filter { $0.workspaceId == workspaceId })
             .union(workspaceGitProbeTimersByKey.keys.filter { $0.workspaceId == workspaceId })
         return Set(probeKeys.map(\.panelId))
+    }
+
+    func attachedWorkspaceGitWatcherPanelIdsForTesting(workspaceId: UUID) -> Set<UUID> {
+        Set(
+            workspaceGitRepositoryByProbeKey.keys
+                .filter { $0.workspaceId == workspaceId }
+                .map(\.panelId)
+        )
+    }
+
+    func trackedWorkspacePullRequestRefreshCandidatePanelIdsForTesting(workspaceId: UUID) -> Set<UUID> {
+        guard let workspace = tabs.first(where: { $0.id == workspaceId }),
+              !workspace.isRemoteWorkspace else {
+            return []
+        }
+        let panelIds = Set(workspace.panelGitBranches.keys).union(workspace.panelPullRequests.keys)
+        return Set(panelIds.filter { panelId in
+            let key = WorkspaceGitProbeKey(workspaceId: workspace.id, panelId: panelId)
+            guard workspace.panels[panelId] != nil else { return false }
+            return isWorkspacePullRequestRefreshEnabled(for: workspace, key: key)
+        })
     }
 
     private func trackedWorkspaceGitMetadataPollCandidatePanelIds(
@@ -1869,9 +2848,39 @@ class TabManager: ObservableObject {
         reason: String,
         delays: [TimeInterval] = [0]
     ) {
+        let key = WorkspaceGitProbeKey(workspaceId: workspaceId, panelId: panelId)
         guard let workspace = tabs.first(where: { $0.id == workspaceId }),
-              workspace.panels[panelId] != nil,
-              let directory = gitProbeDirectory(for: workspace, panelId: panelId) else {
+              workspace.panels[panelId] != nil else {
+            clearWorkspaceGitProbe(key)
+            detachWorkspaceGitEventWatcher(for: key)
+            workspaceGitTrackedDirectoryByKey.removeValue(forKey: key)
+            clearWorkspacePullRequestTracking(for: key)
+            return
+        }
+
+        guard workspace.terminalPanel(for: panelId) != nil else {
+            clearWorkspaceGitProbe(key)
+            detachWorkspaceGitEventWatcher(for: key)
+            workspaceGitTrackedDirectoryByKey.removeValue(forKey: key)
+            clearWorkspacePullRequestTracking(for: key)
+            clearWorkspaceSidebarGitMetadata(for: key)
+            return
+        }
+
+        guard isWorkspaceGitMetadataWatcherEnabled(for: workspace) else {
+            clearWorkspaceGitProbe(key)
+            detachWorkspaceGitEventWatcher(for: key)
+            workspaceGitTrackedDirectoryByKey.removeValue(forKey: key)
+            clearWorkspacePullRequestTracking(for: key)
+            clearWorkspaceSidebarGitMetadata(for: key)
+            return
+        }
+
+        guard let directory = gitProbeDirectory(for: workspace, panelId: panelId) else {
+            clearWorkspaceGitProbe(key)
+            detachWorkspaceGitEventWatcher(for: key)
+            workspaceGitTrackedDirectoryByKey.removeValue(forKey: key)
+            clearWorkspacePullRequestTracking(for: key)
             return
         }
 
@@ -2313,7 +3322,7 @@ class TabManager: ObservableObject {
         }
 
         Task.detached(priority: .utility) { [weak self] in
-            let snapshot = await Self.initialWorkspaceGitMetadataSnapshot(for: expectedDirectory)
+            let snapshot = Self.initialWorkspaceGitMetadataSnapshot(for: expectedDirectory)
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 self?.applyWorkspaceGitMetadataSnapshot(
@@ -2347,6 +3356,7 @@ class TabManager: ObservableObject {
         for key in keys {
             clearWorkspaceGitProbe(key)
         }
+        detachWorkspaceGitEventWatchers(workspaceId: workspaceId)
         workspaceGitTrackedDirectoryByKey = workspaceGitTrackedDirectoryByKey.filter { key, _ in
             key.workspaceId != workspaceId
         }
@@ -2389,22 +3399,33 @@ class TabManager: ObservableObject {
         guard wasInFlight else { return }
         guard let workspace = tabs.first(where: { $0.id == probeKey.workspaceId }) else {
             clearWorkspaceGitProbe(probeKey)
+            detachWorkspaceGitEventWatcher(for: probeKey)
             didClearProbe = true
             return
         }
         guard workspace.panels[probeKey.panelId] != nil else {
             clearWorkspaceGitProbe(probeKey)
+            detachWorkspaceGitEventWatcher(for: probeKey)
+            didClearProbe = true
+            return
+        }
+        guard isWorkspaceGitMetadataWatcherEnabled(for: workspace) else {
+            clearWorkspaceGitProbe(probeKey)
+            detachWorkspaceGitEventWatcher(for: probeKey)
+            clearWorkspacePullRequestTracking(for: probeKey)
             didClearProbe = true
             return
         }
 
         guard let currentDirectory = gitProbeDirectory(for: workspace, panelId: probeKey.panelId) else {
             clearWorkspaceGitProbe(probeKey)
+            detachWorkspaceGitEventWatcher(for: probeKey)
             didClearProbe = true
             return
         }
         if currentDirectory != expectedDirectory {
             clearWorkspaceGitProbe(probeKey)
+            detachWorkspaceGitEventWatcher(for: probeKey)
             didClearProbe = true
 #if DEBUG
             cmuxDebugLog(
@@ -2416,8 +3437,37 @@ class TabManager: ObservableObject {
             return
         }
 
+        let previousRepositoryInfo = workspaceGitRepositoryByProbeKey[probeKey]
+        let previousTrackedDirectory = workspaceGitTrackedDirectoryByKey[probeKey]
+        let shouldForcePullRequestRefresh = workspacePullRequestNeedsRefreshOnGitEventKeys.remove(probeKey) != nil
+        let now = Date()
         workspace.updatePanelDirectory(panelId: probeKey.panelId, directory: expectedDirectory)
+        if let repositoryInfo = snapshot.repositoryInfo {
+            let watcherAttachment = attachWorkspaceGitEventWatcher(
+                for: probeKey,
+                repositoryInfo: repositoryInfo
+            )
+            workspaceGitRepositorySlugsByRepository[repositoryInfo] = snapshot.repositorySlugs
+            workspaceGitRepositoryOptOutState[repositoryInfo] = snapshot.gitMetadataWatcherOptedOut
+            if watcherAttachment == .fallbackPolling {
+                scheduleNextWorkspaceGitFallbackPoll(
+                    key: probeKey,
+                    workspace: workspace,
+                    panelId: probeKey.panelId,
+                    now: now
+                )
+            } else {
+                workspaceGitFallbackPollNextAtByKey.removeValue(forKey: probeKey)
+                updateWorkspacePullRequestPollTimer()
+            }
+        } else {
+            detachWorkspaceGitEventWatcher(for: probeKey)
+            workspaceGitFallbackPollNextAtByKey.removeValue(forKey: probeKey)
+            updateWorkspacePullRequestPollTimer()
+        }
 
+        let previousBranch = Self.normalizedBranchName(workspace.panelGitBranches[probeKey.panelId]?.branch)
+        let previousPullRequest = workspace.panelPullRequests[probeKey.panelId]
         let resolvedPullRequest: SidebarPullRequestState? = {
             guard case .resolved(let pullRequest) = snapshot.pullRequest else { return nil }
             return pullRequest
@@ -2430,11 +3480,35 @@ class TabManager: ObservableObject {
         }
 
         let nextBranch = snapshot.branch
+        let normalizedNextBranch = nextBranch.flatMap(Self.normalizedBranchName)
+        let canReusePreviousDirtyState =
+            previousRepositoryInfo == snapshot.repositoryInfo
+            && previousTrackedDirectory == expectedDirectory
+            && previousBranch == normalizedNextBranch
+        let shouldRefreshMissingPullRequest = normalizedNextBranch.map { branch in
+            previousPullRequest == nil
+                && shouldRefreshKnownAbsentWorkspacePullRequest(
+                    for: probeKey,
+                    branch: branch,
+                    now: now
+                )
+        } ?? false
+        let resolvedDirtyState: Bool? = {
+            guard snapshot.branch != nil else { return nil }
+            if let isDirty = snapshot.isDirty {
+                return isDirty
+            }
+            if snapshot.gitMetadataWatcherOptedOut {
+                return false
+            }
+            guard canReusePreviousDirtyState else { return nil }
+            return workspace.panelGitBranches[probeKey.panelId]?.isDirty
+        }()
         if let nextBranch {
             workspace.updatePanelGitBranch(
                 panelId: probeKey.panelId,
                 branch: nextBranch,
-                isDirty: snapshot.isDirty
+                isDirty: resolvedDirtyState ?? false
             )
         } else {
             workspace.clearPanelGitBranch(panelId: probeKey.panelId)
@@ -2455,15 +3529,27 @@ class TabManager: ObservableObject {
             if workspace.panelPullRequests[probeKey.panelId] != nil {
                 workspace.clearPanelPullRequest(panelId: probeKey.panelId)
             }
+        case .disabled:
+            clearWorkspacePullRequestTracking(for: probeKey)
+            if workspace.panelPullRequests[probeKey.panelId] != nil {
+                workspace.clearPanelPullRequest(panelId: probeKey.panelId)
+            }
         case .deferred, .unsupportedRepository, .transientFailure:
             break
         }
 
-        if snapshot.branch != nil {
+        if snapshot.branch != nil,
+           !snapshot.gitMetadataWatcherOptedOut,
+           let normalizedNextBranch,
+           shouldForcePullRequestRefresh
+                || normalizedNextBranch != previousBranch
+                || shouldRefreshMissingPullRequest
+                || previousTrackedDirectory != expectedDirectory
+                || previousRepositoryInfo != snapshot.repositoryInfo {
             scheduleWorkspacePullRequestRefresh(
                 workspaceId: probeKey.workspaceId,
                 panelId: probeKey.panelId,
-                reason: "localGitProbe"
+                reason: shouldForcePullRequestRefresh ? "gitFsEvent" : "localGitProbe"
             )
         }
 
@@ -2477,6 +3563,8 @@ class TabManager: ObservableObject {
                 return "unsupported"
             case .notFound:
                 return "none"
+            case .disabled:
+                return "disabled"
             case .transientFailure:
                 return "transientFailure"
             case .resolved(let pullRequest):
@@ -2485,7 +3573,8 @@ class TabManager: ObservableObject {
         }()
         cmuxDebugLog(
             "workspace.gitProbe.apply workspace=\(probeKey.workspaceId.uuidString.prefix(5)) " +
-            "panel=\(probeKey.panelId.uuidString.prefix(5)) branch=\(branchLabel) dirty=\(snapshot.isDirty ? 1 : 0) " +
+            "panel=\(probeKey.panelId.uuidString.prefix(5)) branch=\(branchLabel) " +
+            "dirty=\((resolvedDirtyState ?? false) ? 1 : 0) " +
             "pr=\(prLabel)"
         )
 #endif
@@ -2497,39 +3586,617 @@ class TabManager: ObservableObject {
         switch snapshot.pullRequest {
         case .deferred, .transientFailure:
             return false
-        case .unsupportedRepository, .notFound, .resolved:
+        case .unsupportedRepository, .notFound, .disabled, .resolved:
             return true
         }
     }
 
     private nonisolated static func initialWorkspaceGitMetadataSnapshot(
-        for directory: String
-    ) async -> InitialWorkspaceGitMetadataSnapshot {
-        let branchOutput = await runGitCommand(directory: directory, arguments: ["branch", "--show-current"])
-        let branch = normalizedBranchName(branchOutput)
-        guard let branch else {
+        for directory: String,
+        environmentOverride: [String: String] = [:]
+    ) -> InitialWorkspaceGitMetadataSnapshot {
+        guard let repositoryInfo = gitRepositoryInfo(for: directory) else {
             return InitialWorkspaceGitMetadataSnapshot(
                 branch: nil,
-                isDirty: false,
-                pullRequest: .notFound
+                isDirty: nil,
+                pullRequest: .notFound,
+                repositoryInfo: nil,
+                repositorySlugs: [],
+                gitMetadataWatcherOptedOut: false
             )
         }
 
-        let statusOutput = await runGitCommand(directory: directory, arguments: ["status", "--porcelain", "-uno"])
-        let isDirty = !(statusOutput?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let configSnapshot = gitConfigSnapshot(
+            for: repositoryInfo,
+            environmentOverride: environmentOverride
+        )
+        let branchFromHead = gitHeadBranch(for: repositoryInfo)
+        let gitMetadataWatcherOptedOut = configSnapshot.metadataWatcherDisabled
+            || FileManager.default.fileExists(atPath: repositoryInfo.cmuxIgnorePath)
+
+        if gitMetadataWatcherOptedOut {
+            return InitialWorkspaceGitMetadataSnapshot(
+                branch: branchFromHead,
+                isDirty: nil,
+                pullRequest: .disabled,
+                repositoryInfo: repositoryInfo,
+                repositorySlugs: [],
+                gitMetadataWatcherOptedOut: true
+            )
+        }
+
+        let repositorySlugs = branchFromHead == nil
+            ? []
+            : githubRepositorySlugs(
+                directory: repositoryInfo.repoRoot,
+                environmentOverride: environmentOverride
+            )
+
+        if let statusSnapshot = gitStatusSnapshot(
+            directory: repositoryInfo.repoRoot,
+            environmentOverride: environmentOverride
+        ) {
+            let branch = normalizedBranchName(statusSnapshot.branch) ?? branchFromHead
+            return InitialWorkspaceGitMetadataSnapshot(
+                branch: branch,
+                isDirty: statusSnapshot.isDirty,
+                pullRequest: branch == nil ? .notFound : .deferred,
+                repositoryInfo: repositoryInfo,
+                repositorySlugs: branch == nil ? [] : repositorySlugs,
+                gitMetadataWatcherOptedOut: false
+            )
+        }
+
         return InitialWorkspaceGitMetadataSnapshot(
-            branch: branch,
-            isDirty: isDirty,
-            pullRequest: .deferred
+            branch: branchFromHead,
+            isDirty: nil,
+            pullRequest: branchFromHead == nil ? .notFound : .deferred,
+            repositoryInfo: repositoryInfo,
+            repositorySlugs: repositorySlugs,
+            gitMetadataWatcherOptedOut: false
         )
     }
 
-    private nonisolated static func runGitCommand(directory: String, arguments: [String]) async -> String? {
-        await runCommand(
+    private nonisolated static func gitRepositoryInfo(
+        for directory: String
+    ) -> WorkspaceGitRepositoryInfo? {
+        let fileManager = FileManager.default
+        var directoryURL = URL(fileURLWithPath: directory)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory) else {
+            return nil
+        }
+        if !isDirectory.boolValue {
+            directoryURL.deleteLastPathComponent()
+        }
+
+        while true {
+            let gitMarkerURL = directoryURL.appendingPathComponent(".git")
+            if let repositoryInfo = resolveGitRepositoryInfo(
+                gitMarkerURL: gitMarkerURL,
+                repoRootURL: directoryURL
+            ) {
+                return repositoryInfo
+            }
+
+            let parentURL = directoryURL.deletingLastPathComponent()
+            guard parentURL.path != directoryURL.path else { break }
+            directoryURL = parentURL
+        }
+
+        return nil
+    }
+
+    private nonisolated static func resolveGitRepositoryInfo(
+        gitMarkerURL: URL,
+        repoRootURL: URL
+    ) -> WorkspaceGitRepositoryInfo? {
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: gitMarkerURL.path, isDirectory: &isDirectory) else {
+            return nil
+        }
+
+        let resolvedRepoRoot = repoRootURL.resolvingSymlinksInPath().standardizedFileURL.path
+        let gitDirectoryURL: URL
+        if isDirectory.boolValue {
+            gitDirectoryURL = gitMarkerURL
+        } else {
+            guard let gitDirectoryPath = resolvedGitDirectoryPath(fromGitFileAt: gitMarkerURL) else {
+                return nil
+            }
+            gitDirectoryURL = URL(fileURLWithPath: gitDirectoryPath)
+        }
+
+        let resolvedGitDirectory = gitDirectoryURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        let resolvedGitCommonDirectory = resolvedGitCommonDirectoryPath(
+            fromGitDirectory: resolvedGitDirectory
+        )
+        let baseRepositoryInfo = WorkspaceGitRepositoryInfo(
+            repoRoot: resolvedRepoRoot,
+            gitDirectory: resolvedGitDirectory.path,
+            gitCommonDirectory: resolvedGitCommonDirectory
+        )
+        return WorkspaceGitRepositoryInfo(
+            repoRoot: resolvedRepoRoot,
+            gitDirectory: resolvedGitDirectory.path,
+            gitCommonDirectory: resolvedGitCommonDirectory,
+            additionalGitConfigPaths: resolvedIncludedGitConfigPaths(for: baseRepositoryInfo)
+        )
+    }
+
+    private nonisolated static func resolvedGitDirectoryPath(fromGitFileAt gitFileURL: URL) -> String? {
+        guard let contents = try? String(contentsOf: gitFileURL, encoding: .utf8) else {
+            return nil
+        }
+
+        for rawLine in contents.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard line.lowercased().hasPrefix("gitdir:") else { continue }
+            let gitDirectoryValue = String(line.dropFirst("gitdir:".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !gitDirectoryValue.isEmpty else { return nil }
+
+            if gitDirectoryValue.hasPrefix("/") {
+                return String(gitDirectoryValue)
+            }
+            return gitFileURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(String(gitDirectoryValue))
+                .standardizedFileURL
+                .path
+        }
+
+        return nil
+    }
+
+    private nonisolated static func resolvedGitCommonDirectoryPath(
+        fromGitDirectory gitDirectoryURL: URL
+    ) -> String {
+        let resolvedGitDirectory = gitDirectoryURL.resolvingSymlinksInPath().standardizedFileURL
+        let commondirURL = resolvedGitDirectory.appendingPathComponent("commondir")
+        guard let contents = try? String(contentsOf: commondirURL, encoding: .utf8) else {
+            return resolvedGitDirectory.path
+        }
+
+        let rawValue = contents
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !rawValue.isEmpty else {
+            return resolvedGitDirectory.path
+        }
+
+        let commonDirectoryURL: URL
+        if rawValue.hasPrefix("/") {
+            commonDirectoryURL = URL(fileURLWithPath: rawValue, isDirectory: true)
+        } else {
+            commonDirectoryURL = resolvedGitDirectory.appendingPathComponent(rawValue, isDirectory: true)
+        }
+        return commonDirectoryURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+    }
+
+    private nonisolated static func gitConfigSnapshot(
+        for repositoryInfo: WorkspaceGitRepositoryInfo,
+        environmentOverride: [String: String] = [:]
+    ) -> WorkspaceGitConfigSnapshot {
+        if let configEntries = gitConfigEntries(
+            for: repositoryInfo,
+            environmentOverride: environmentOverride
+        ) {
+            var remoteURLsByName: [String: [String]] = [:]
+            var metadataWatcherDisabled = false
+            applyGitConfigEntries(
+                configEntries,
+                remoteURLsByName: &remoteURLsByName,
+                metadataWatcherDisabled: &metadataWatcherDisabled
+            )
+            return WorkspaceGitConfigSnapshot(
+                remoteURLsByName: remoteURLsByName,
+                metadataWatcherDisabled: metadataWatcherDisabled
+            )
+        }
+
+        var remoteURLsByName: [String: [String]] = [:]
+        var metadataWatcherDisabled = false
+        var parsedConfig = false
+
+        for configPath in repositoryInfo.gitConfigPaths {
+            guard let contents = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+                continue
+            }
+            parsedConfig = true
+            applyGitConfig(
+                contents,
+                remoteURLsByName: &remoteURLsByName,
+                metadataWatcherDisabled: &metadataWatcherDisabled
+            )
+        }
+
+        guard parsedConfig else { return .empty }
+
+        return WorkspaceGitConfigSnapshot(
+            remoteURLsByName: remoteURLsByName,
+            metadataWatcherDisabled: metadataWatcherDisabled
+        )
+    }
+
+    private nonisolated static func resolvedIncludedGitConfigPaths(
+        for repositoryInfo: WorkspaceGitRepositoryInfo
+    ) -> [String] {
+        var paths: [String] = []
+        var seen = Set(repositoryInfo.gitConfigPaths)
+        let environment = [
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+        ]
+
+        for arguments in [
+            [
+                "--no-optional-locks",
+                "config",
+                "--local",
+                "--includes",
+                "--show-origin",
+                "--list",
+                "-z",
+            ],
+            [
+                "--no-optional-locks",
+                "config",
+                "--worktree",
+                "--includes",
+                "--show-origin",
+                "--list",
+                "-z",
+            ],
+        ] {
+            guard let originPaths = gitConfigOriginPaths(
+                directory: repositoryInfo.repoRoot,
+                arguments: arguments,
+                environment: environment
+            ) else {
+                continue
+            }
+            for path in originPaths where seen.insert(path).inserted {
+                paths.append(path)
+            }
+        }
+
+        return paths
+    }
+
+    private nonisolated static func gitConfigEntries(
+        for repositoryInfo: WorkspaceGitRepositoryInfo,
+        environmentOverride: [String: String] = [:]
+    ) -> [(String, String)]? {
+        var entries: [(String, String)] = []
+        var parsedAny = false
+        let environment = [
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+        ].merging(environmentOverride) { _, new in new }
+
+        if let localEntries = gitConfigEntries(
+            directory: repositoryInfo.repoRoot,
+            arguments: [
+                "--no-optional-locks",
+                "config",
+                "--local",
+                "--includes",
+                "--list",
+                "-z",
+            ],
+            environment: environment
+        ) {
+            entries.append(contentsOf: localEntries)
+            parsedAny = true
+        }
+
+        if let worktreeEntries = gitConfigEntries(
+            directory: repositoryInfo.repoRoot,
+            arguments: [
+                "--no-optional-locks",
+                "config",
+                "--worktree",
+                "--includes",
+                "--list",
+                "-z",
+            ],
+            environment: environment
+        ) {
+            entries.append(contentsOf: worktreeEntries)
+            parsedAny = true
+        }
+
+        return parsedAny ? entries : nil
+    }
+
+    private nonisolated static func gitConfigOriginPaths(
+        directory: String,
+        arguments: [String],
+        environment: [String: String]
+    ) -> [String]? {
+        guard let output = runCommand(
             directory: directory,
             executable: "git",
-            arguments: arguments
-        )
+            arguments: arguments,
+            environment: environment,
+            timeout: 2
+        ) else {
+            return nil
+        }
+
+        let records = output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
+        guard !records.isEmpty else { return [] }
+
+        var paths: [String] = []
+        var seen: Set<String> = []
+        var index = 0
+        while index + 1 < records.count {
+            if let path = resolvedGitConfigOriginPath(
+                records[index],
+                relativeTo: directory
+            ), seen.insert(path).inserted {
+                paths.append(path)
+            }
+            index += 2
+        }
+        return paths
+    }
+
+    private nonisolated static func resolvedGitConfigOriginPath(
+        _ origin: String,
+        relativeTo directory: String
+    ) -> String? {
+        guard origin.hasPrefix("file:") else { return nil }
+        let rawPath = String(origin.dropFirst("file:".count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawPath.isEmpty else { return nil }
+
+        let url: URL
+        if rawPath.hasPrefix("/") {
+            url = URL(fileURLWithPath: rawPath, isDirectory: false)
+        } else {
+            url = URL(fileURLWithPath: directory, isDirectory: true)
+                .appendingPathComponent(rawPath, isDirectory: false)
+        }
+
+        return url
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+    }
+
+    private nonisolated static func gitConfigEntries(
+        directory: String,
+        arguments: [String],
+        environment: [String: String]
+    ) -> [(String, String)]? {
+        guard let output = runCommand(
+            directory: directory,
+            executable: "git",
+            arguments: arguments,
+            environment: environment,
+            timeout: 2
+        ) else {
+            return nil
+        }
+
+        return output
+            .split(separator: "\0", omittingEmptySubsequences: true)
+            .compactMap { entry -> (String, String)? in
+                guard let separatorIndex = entry.firstIndex(of: "\n") else { return nil }
+                let rawKey = entry[..<separatorIndex]
+                let rawValue = entry[entry.index(after: separatorIndex)...]
+                let key = String(rawKey).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !key.isEmpty else { return nil }
+                let value = String(rawValue).trimmingCharacters(in: .whitespacesAndNewlines)
+                return (key, value)
+            }
+    }
+
+    private nonisolated static func applyGitConfig(
+        _ contents: String,
+        remoteURLsByName: inout [String: [String]],
+        metadataWatcherDisabled: inout Bool
+    ) {
+        var currentSectionName = ""
+        var currentSubsectionName: String?
+
+        for rawLine in contents.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty,
+                  !line.hasPrefix("#"),
+                  !line.hasPrefix(";") else {
+                continue
+            }
+
+            if line.hasPrefix("[") && line.hasSuffix("]") {
+                let header = String(line.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+                if let separatorIndex = header.firstIndex(of: " ") {
+                    currentSectionName = String(header[..<separatorIndex])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased()
+                    currentSubsectionName = gitConfigSubsectionName(
+                        from: String(header[header.index(after: separatorIndex)...])
+                    )
+                } else {
+                    currentSectionName = String(header).lowercased()
+                    currentSubsectionName = nil
+                }
+                continue
+            }
+
+            guard let equalsIndex = line.firstIndex(of: "=") else { continue }
+            let key = String(line[..<equalsIndex]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = String(line[line.index(after: equalsIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if currentSectionName == "remote",
+               key == "url",
+               let currentSubsectionName,
+               !value.isEmpty {
+                remoteURLsByName[currentSubsectionName, default: []].append(value)
+                continue
+            }
+
+            if currentSectionName == "cmux",
+               key == "metadatawatcher",
+               let parsedValue = gitConfigBoolean(value) {
+                metadataWatcherDisabled = !parsedValue
+            }
+        }
+    }
+
+    private nonisolated static func applyGitConfigEntries(
+        _ entries: [(String, String)],
+        remoteURLsByName: inout [String: [String]],
+        metadataWatcherDisabled: inout Bool
+    ) {
+        for (rawKey, rawValue) in entries {
+            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if key.hasPrefix("remote."),
+               key.hasSuffix(".url"),
+               key.count > "remote..url".count {
+                let startIndex = key.index(key.startIndex, offsetBy: "remote.".count)
+                let endIndex = key.index(key.endIndex, offsetBy: -".url".count)
+                let remoteName = String(key[startIndex..<endIndex])
+                if !remoteName.isEmpty, !value.isEmpty {
+                    remoteURLsByName[remoteName, default: []].append(value)
+                }
+                continue
+            }
+
+            if key == "cmux.metadatawatcher",
+               let parsedValue = gitConfigBoolean(value) {
+                metadataWatcherDisabled = !parsedValue
+            }
+        }
+    }
+
+    private nonisolated static func gitConfigSubsectionName(from rawValue: String) -> String? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if trimmed.first == "\"",
+           trimmed.last == "\"",
+           trimmed.count >= 2 {
+            var unescaped = ""
+            var isEscaping = false
+            for character in trimmed.dropFirst().dropLast() {
+                if isEscaping {
+                    if character == "\"" || character == "\\" {
+                        unescaped.append(character)
+                    } else {
+                        unescaped.append("\\")
+                        unescaped.append(character)
+                    }
+                    isEscaping = false
+                    continue
+                }
+                if character == "\\" {
+                    isEscaping = true
+                    continue
+                }
+                unescaped.append(character)
+            }
+            if isEscaping {
+                unescaped.append("\\")
+            }
+            return unescaped
+        }
+        return trimmed
+    }
+
+    private nonisolated static func gitConfigBoolean(_ rawValue: String) -> Bool? {
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "true", "yes", "on", "1":
+            return true
+        case "false", "no", "off", "0":
+            return false
+        default:
+            return nil
+        }
+    }
+
+    private nonisolated static func gitHeadBranch(
+        for repositoryInfo: WorkspaceGitRepositoryInfo
+    ) -> String? {
+        let headPath = URL(fileURLWithPath: repositoryInfo.gitDirectory).appendingPathComponent("HEAD").path
+        guard let contents = try? String(contentsOfFile: headPath, encoding: .utf8) else {
+            return nil
+        }
+
+        let trimmed = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("ref:") else {
+            return nil
+        }
+
+        let reference = String(trimmed.dropFirst("ref:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard reference.hasPrefix("refs/heads/") else {
+            return nil
+        }
+        return normalizedBranchName(String(reference.dropFirst("refs/heads/".count)))
+    }
+
+    private nonisolated static func gitStatusSnapshot(
+        directory: String,
+        environmentOverride: [String: String] = [:]
+    ) -> WorkspaceGitStatusSnapshot? {
+        if forceGitStatusFailureForTesting {
+            return nil
+        }
+        let environment = ["GIT_OPTIONAL_LOCKS": "0"]
+            .merging(environmentOverride) { _, new in new }
+        guard let output = runCommand(
+            directory: directory,
+            executable: "git",
+            arguments: [
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "--untracked-files=no",
+            ],
+            environment: environment,
+            timeout: Self.workspacePullRequestProbeTimeout
+        ) else {
+            return nil
+        }
+
+        var branch: String?
+        var isDirty = false
+        for rawLine in output.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            let line = String(rawLine)
+            if line.hasPrefix("# branch.head ") {
+                let branchHead = String(line.dropFirst("# branch.head ".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if branchHead != "(detached)" {
+                    branch = branchHead
+                }
+                continue
+            }
+
+            if line.hasPrefix("#") {
+                continue
+            }
+
+            if !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                isDirty = true
+            }
+        }
+
+        return WorkspaceGitStatusSnapshot(branch: branch, isDirty: isDirty)
     }
 
     private nonisolated static func fetchWorkspacePullRequestRepoResults(
@@ -2591,6 +4258,7 @@ class TabManager: ObservableObject {
                 return WorkspacePullRequestRefreshResult(
                     workspaceId: candidate.workspaceId,
                     panelId: candidate.panelId,
+                    branch: candidate.branch,
                     resolution: .unsupportedRepository,
                     usedCachedRepoData: false
                 )
@@ -2645,6 +4313,7 @@ class TabManager: ObservableObject {
             return WorkspacePullRequestRefreshResult(
                 workspaceId: candidate.workspaceId,
                 panelId: candidate.panelId,
+                branch: candidate.branch,
                 resolution: resolution,
                 usedCachedRepoData: usedCachedRepoData
             )
@@ -2971,7 +4640,7 @@ class TabManager: ObservableObject {
         }
 
         let directory = FileManager.default.currentDirectoryPath
-        let token = await runCommand(
+        let token = runCommand(
             directory: directory,
             executable: "gh",
             arguments: ["auth", "token"],
@@ -3303,12 +4972,14 @@ class TabManager: ObservableObject {
         directory: String,
         executable: String,
         arguments: [String],
+        environment: [String: String]? = nil,
         timeout: TimeInterval? = nil
-    ) async -> String? {
-        let result = await runCommandResult(
+    ) -> String? {
+        let result = runCommandResult(
             directory: directory,
             executable: executable,
             arguments: arguments,
+            environment: environment,
             timeout: timeout
         )
         guard let result,
@@ -3323,93 +4994,85 @@ class TabManager: ObservableObject {
         directory: String,
         executable: String,
         arguments: [String],
+        environment: [String: String]? = nil,
         timeout: TimeInterval? = nil
-    ) async -> CommandResult? {
+    ) -> CommandResult? {
 #if DEBUG
-        assert(!Thread.isMainThread, "TabManager.runCommandResult must not run on the main thread")
         if let commandRunnerForTesting {
-            return commandRunnerForTesting(directory, executable, arguments, timeout)
+            return commandRunnerForTesting(directory, executable, arguments, environment, timeout)
         }
 #endif
-        return await withCheckedContinuation { continuation in
-            let process = Process()
-            let stdout = Pipe()
-            let stderr = Pipe()
-            if let resolvedExecutable = resolvedCommandPath(executable: executable) {
-                process.executableURL = URL(fileURLWithPath: resolvedExecutable)
-                process.arguments = arguments
-            } else {
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.arguments = [executable] + arguments
-            }
-            process.currentDirectoryURL = URL(fileURLWithPath: directory)
-            process.standardInput = FileHandle.nullDevice
-            process.standardOutput = stdout
-            process.standardError = stderr
-
-            let state = CommandRunState(continuation: continuation)
-            let timeoutWorkItem = timeout.map { _ in
-                DispatchWorkItem { [state, process] in
-                    guard !state.hasResumed() else { return }
-                    guard process.isRunning else { return }
-                    process.terminate()
-                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.2) {
-                        if process.isRunning {
-                            kill(process.processIdentifier, SIGKILL)
-                        }
-                    }
-                    state.resume(
-                        returning: CommandResult(
-                            stdout: nil,
-                            stderr: nil,
-                            exitStatus: nil,
-                            timedOut: true,
-                            executionError: nil
-                        )
-                    )
-                }
-            }
-            state.setTimeoutWorkItem(timeoutWorkItem)
-            process.terminationHandler = { terminatedProcess in
-                state.completeTermination(exitStatus: terminatedProcess.terminationStatus)
-            }
-
-            do {
-                try process.run()
-            } catch {
-                try? stdout.fileHandleForWriting.close()
-                try? stderr.fileHandleForWriting.close()
-                state.resume(
-                    returning: CommandResult(
-                        stdout: nil,
-                        stderr: nil,
-                        exitStatus: nil,
-                        timedOut: false,
-                        executionError: String(describing: error)
-                    )
-                )
-                return
-            }
-
-            try? stdout.fileHandleForWriting.close()
-            try? stderr.fileHandleForWriting.close()
-
-            DispatchQueue.global(qos: .utility).async {
-                let data = stdout.fileHandleForReading.readDataToEndOfFile()
-                state.completeStdout(data)
-            }
-            DispatchQueue.global(qos: .utility).async {
-                let data = stderr.fileHandleForReading.readDataToEndOfFile()
-                state.completeStderr(data)
-            }
-            if let timeout,
-               let timeoutWorkItem {
-                DispatchQueue.global(qos: .utility).asyncAfter(
-                    deadline: .now() + timeout,
-                    execute: timeoutWorkItem
-                )
-            }
+        let process = Process()
+        let stdout = Pipe()
+        let stderr = Pipe()
+        let mergedEnvironment: [String: String]? = environment.map { overrides in
+            ProcessInfo.processInfo.environment.merging(overrides) { _, new in new }
         }
+        // When the caller injects a `PATH` override, honor it during executable
+        // resolution so tests can point `git` at a shim without mutating the
+        // process-wide environment.
+        let resolutionEnvironment = mergedEnvironment ?? ProcessInfo.processInfo.environment
+        if let resolvedExecutable = resolvedCommandPath(
+            executable: executable,
+            environment: resolutionEnvironment
+        ) {
+            process.executableURL = URL(fileURLWithPath: resolvedExecutable)
+            process.arguments = arguments
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = [executable] + arguments
+        }
+        process.currentDirectoryURL = URL(fileURLWithPath: directory)
+        if let mergedEnvironment {
+            process.environment = mergedEnvironment
+        }
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        let completion = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            completion.signal()
+        }
+
+        do {
+            try process.run()
+        } catch {
+            return CommandResult(
+                stdout: nil,
+                stderr: nil,
+                exitStatus: nil,
+                timedOut: false,
+                executionError: String(describing: error)
+            )
+        }
+
+        if let timeout,
+           completion.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            if completion.wait(timeout: .now() + 0.2) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                _ = completion.wait(timeout: .now() + 0.2)
+            }
+            return CommandResult(
+                stdout: nil,
+                stderr: nil,
+                exitStatus: nil,
+                timedOut: true,
+                executionError: nil
+            )
+        } else if timeout == nil {
+            completion.wait()
+        }
+
+        let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
+        return CommandResult(
+            stdout: String(data: stdoutData, encoding: .utf8),
+            stderr: String(data: stderrData, encoding: .utf8),
+            exitStatus: process.terminationStatus,
+            timedOut: false,
+            executionError: nil
+        )
     }
 
     nonisolated static func githubRepositorySlugs(fromGitRemoteVOutput output: String) -> [String] {
@@ -3453,11 +5116,42 @@ class TabManager: ObservableObject {
         return orderedSlugs
     }
 
-    private nonisolated static func githubRepositorySlugs(directory: String) async -> [String] {
-        guard let output = await runGitCommand(directory: directory, arguments: ["remote", "-v"]) else {
+    private nonisolated static func githubRepositorySlugs(
+        directory: String,
+        environmentOverride: [String: String] = [:]
+    ) -> [String] {
+        guard let repositoryInfo = gitRepositoryInfo(for: directory) else { return [] }
+        let environment = ["GIT_OPTIONAL_LOCKS": "0"]
+            .merging(environmentOverride) { _, new in new }
+        if let remoteOutput = runCommand(
+            directory: repositoryInfo.repoRoot,
+            executable: "git",
+            arguments: ["--no-optional-locks", "remote", "-v"],
+            environment: environment,
+            timeout: 2
+        ) {
+            return githubRepositorySlugs(fromGitRemoteVOutput: remoteOutput)
+        }
+
+        let configSnapshot = gitConfigSnapshot(
+            for: repositoryInfo,
+            environmentOverride: environmentOverride
+        )
+        guard !configSnapshot.remoteURLsByName.isEmpty else { return [] }
+
+        let remoteOutput = configSnapshot.remoteURLsByName
+            .keys
+            .sorted()
+            .flatMap { remoteName in
+                configSnapshot.remoteURLsByName[remoteName, default: []].map {
+                    "\(remoteName) \($0) (fetch)"
+                }
+            }
+            .joined(separator: "\n")
+        guard !remoteOutput.isEmpty else {
             return []
         }
-        return githubRepositorySlugs(fromGitRemoteVOutput: output)
+        return githubRepositorySlugs(fromGitRemoteVOutput: remoteOutput)
     }
 
     private nonisolated static func githubRemotePriority(_ remoteName: String) -> Int {
@@ -3935,6 +5629,31 @@ class TabManager: ObservableObject {
         reorderTabForPinnedState(tab)
     }
 
+    func setWorkspaceGitMetadataWatcherDisabled(workspaceIds: [UUID], disabled: Bool) {
+        for workspaceId in workspaceIds {
+            guard let workspace = tabs.first(where: { $0.id == workspaceId }),
+                  !workspace.isRemoteWorkspace,
+                  workspace.gitMetadataWatcherDisabled != disabled else {
+                continue
+            }
+
+            // The assignment's didSet clears cached sidebar metadata when
+            // `disabled` flips to true on a local workspace, so we only need
+            // to drop in-flight probes and (when re-enabling) schedule a
+            // refresh.
+            workspace.gitMetadataWatcherDisabled = disabled
+            clearWorkspaceGitProbes(workspaceId: workspaceId)
+
+            if !disabled {
+                scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(
+                    in: workspace,
+                    reason: "workspaceSettingChanged",
+                    delays: Self.initialWorkspaceGitProbeDelays
+                )
+            }
+        }
+    }
+
     private func reorderTabForPinnedState(_ tab: Workspace) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         tabs.remove(at: index)
@@ -3961,11 +5680,6 @@ class TabManager: ObservableObject {
         tab.updatePanelDirectory(panelId: surfaceId, directory: normalized)
         let nextDirectory = normalizedWorkingDirectory(normalized)
         if previousDirectory != nextDirectory {
-            scheduleWorkspacePullRequestRefresh(
-                workspaceId: tabId,
-                panelId: surfaceId,
-                reason: "directoryChange"
-            )
             scheduleWorkspaceGitMetadataRefreshIfPossible(
                 workspaceId: tabId,
                 panelId: surfaceId,
@@ -4191,6 +5905,7 @@ class TabManager: ObservableObject {
 
     /// Attach an existing workspace to this window.
     func attachWorkspace(_ workspace: Workspace, at index: Int? = nil, select: Bool = true) {
+        clearWorkspaceGitProbes(workspaceId: workspace.id)
         workspace.owningTabManager = self
         wireClosedBrowserTracking(for: workspace)
         let insertIndex: Int = {
@@ -4200,6 +5915,16 @@ class TabManager: ObservableObject {
         tabs.insert(workspace, at: insertIndex)
         if select {
             selectedTabId = workspace.id
+        }
+        if isWorkspaceGitMetadataWatcherEnabled(for: workspace) {
+            scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(
+                in: workspace,
+                reason: "workspaceAttached",
+                delays: Self.initialWorkspaceGitProbeDelays
+            )
+        } else {
+            clearWorkspacePullRequestTracking(workspaceId: workspace.id)
+            clearWorkspaceSidebarGitMetadata(workspaceId: workspace.id)
         }
     }
 
@@ -7229,6 +8954,7 @@ extension TabManager {
             hasher.combine(workspace.customDescription ?? "")
             hasher.combine(workspace.customColor ?? "")
             hasher.combine(workspace.isPinned)
+            hasher.combine(workspace.gitMetadataWatcherDisabled)
             hasher.combine(workspace.terminalScrollBarHidden)
             hasher.combine(workspace.panels.count)
             hasher.combine(workspace.statusEntries.count)
@@ -7385,6 +9111,7 @@ extension TabManager {
         for key in existingProbeKeys {
             clearWorkspaceGitProbe(key)
         }
+        stopAllWorkspaceGitEventWatchers()
         workspaceGitTrackedDirectoryByKey.removeAll()
         resetWorkspacePullRequestRefreshState()
 

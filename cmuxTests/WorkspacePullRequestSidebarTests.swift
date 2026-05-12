@@ -100,7 +100,7 @@ final class WorkspacePullRequestSidebarTests: XCTestCase {
     func testPullRequestRefreshRepositoryDiscoveryDoesNotBlockMainRunLoop() throws {
         let invocationCounter = CommandRunnerInvocationCounter()
         let commandDelay: TimeInterval = 0.03
-        TabManager.commandRunnerForTesting = { _, executable, arguments, _ in
+        TabManager.commandRunnerForTesting = { _, executable, arguments, _, _ in
             if executable == "git", arguments == ["remote", "-v"] {
                 invocationCounter.increment()
                 Thread.sleep(forTimeInterval: commandDelay)

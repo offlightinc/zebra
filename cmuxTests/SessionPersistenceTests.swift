@@ -163,6 +163,44 @@ final class SessionPersistenceTests: XCTestCase {
         )
     }
 
+    func testSaveAndLoadRoundTripPreservesWorkspaceGitMetadataWatcherDisabledTrue() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-session-tests-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let snapshotURL = tempDir.appendingPathComponent("session.json", isDirectory: false)
+        var snapshot = makeSnapshot(version: SessionSnapshotSchema.currentVersion)
+        snapshot.windows[0].tabManager.workspaces[0].gitMetadataWatcherDisabled = true
+
+        XCTAssertTrue(SessionPersistenceStore.save(snapshot, fileURL: snapshotURL))
+
+        let loaded = SessionPersistenceStore.load(fileURL: snapshotURL)
+        XCTAssertEqual(
+            loaded?.windows.first?.tabManager.workspaces.first?.gitMetadataWatcherDisabled,
+            true
+        )
+    }
+
+    func testSaveAndLoadRoundTripPreservesWorkspaceGitMetadataWatcherDisabledFalse() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-session-tests-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let snapshotURL = tempDir.appendingPathComponent("session.json", isDirectory: false)
+        var snapshot = makeSnapshot(version: SessionSnapshotSchema.currentVersion)
+        snapshot.windows[0].tabManager.workspaces[0].gitMetadataWatcherDisabled = false
+
+        XCTAssertTrue(SessionPersistenceStore.save(snapshot, fileURL: snapshotURL))
+
+        let loaded = SessionPersistenceStore.load(fileURL: snapshotURL)
+        XCTAssertEqual(
+            loaded?.windows.first?.tabManager.workspaces.first?.gitMetadataWatcherDisabled,
+            false
+        )
+    }
+
     func testSaveSkipsRewritingIdenticalSnapshotData() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("cmux-session-tests-\(UUID().uuidString)", isDirectory: true)
@@ -1408,8 +1446,11 @@ final class SessionPersistenceTests: XCTestCase {
         let workspace = SessionWorkspaceSnapshot(
             processTitle: "Terminal",
             customTitle: "Restored",
+            customDescription: nil,
             customColor: nil,
             isPinned: true,
+            gitMetadataWatcherDisabled: nil,
+            terminalScrollBarHidden: nil,
             currentDirectory: "/tmp",
             focusedPanelId: nil,
             layout: .pane(SessionPaneLayoutSnapshot(panelIds: [], selectedPanelId: nil)),

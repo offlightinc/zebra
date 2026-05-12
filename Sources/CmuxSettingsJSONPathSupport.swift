@@ -49,6 +49,7 @@ extension CmuxSettingsFileStore {
         "sidebar.branchLayout",
         "sidebar.showNotificationMessage",
         "sidebar.showBranchDirectory",
+        "sidebar.disableGitMetadataWatcher",
         "sidebar.showPullRequests",
         "sidebar.makePullRequestsClickable",
         "sidebar.openPullRequestLinksInCmuxBrowser",
