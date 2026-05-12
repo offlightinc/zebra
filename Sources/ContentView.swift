@@ -2567,6 +2567,11 @@ struct ContentView: View {
         // sit directly on the window background with no intermediate layers.
         let useWithinWindow = sidebarBlendMode == SidebarBlendModeOption.withinWindow.rawValue
             && !sidebarMatchTerminalBackground
+        let snbPanelC = SideNavBarContentPanelC(
+            onOpenFilePreview: { [self] filePath in
+                openFilePreviewFromSidebar(filePath: filePath)
+            }
+        )
         if useWithinWindow {
             // Overlay mode keeps the left sidebar on top, but the right
             // sidebar stays in an HStack so terminal rows are clipped before
@@ -2574,8 +2579,9 @@ struct ContentView: View {
             layout = AnyView(
                 ZStack(alignment: .leading) {
                     HStack(spacing: 0) {
-                        terminalContentWithSidebarDropOverlay(appearance: appearance)
+                        snbPanelC
                             .padding(.leading, sidebarState.isVisible ? sidebarWidth : 0)
+                        terminalContentWithSidebarDropOverlay(appearance: appearance)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(1)
                         rightSidebarPanelWithBackdrop(appearance: appearance)
@@ -2592,6 +2598,7 @@ struct ContentView: View {
                     if sidebarState.isVisible {
                         sidebarPanelWithBackdrop(appearance: appearance)
                     }
+                    snbPanelC
                     terminalContentWithRightSidebarPanel(appearance: appearance)
                 }
             )

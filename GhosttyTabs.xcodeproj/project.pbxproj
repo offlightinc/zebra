@@ -146,6 +146,8 @@
 		5B5B0001A1B2C3D4E5F60711 /* SideNavBarMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0001A1B2C3D4E5F60710 /* SideNavBarMode.swift */; };
 		5B5B0002A1B2C3D4E5F60711 /* SideNavBarState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0002A1B2C3D4E5F60710 /* SideNavBarState.swift */; };
 		5B5B0003A1B2C3D4E5F60711 /* SideNavBarIconColumn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0003A1B2C3D4E5F60710 /* SideNavBarIconColumn.swift */; };
+		5B5B0008A1B2C3D4E5F60711 /* FakeMarkdownDataC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0008A1B2C3D4E5F60710 /* FakeMarkdownDataC.swift */; };
+		5B5B0009A1B2C3D4E5F60711 /* SideNavBarContentPanelC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0009A1B2C3D4E5F60710 /* SideNavBarContentPanelC.swift */; };
 		A8CBA43C2DA5AB9E3A1E65A4 /* CommandPaletteSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38A09EB2E92203B2E95923A7 /* CommandPaletteSearch.swift */; };
 		B84BD7AD94EE485B8DDAB6FF /* GhosttySurfaceConfigurationRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DAB808A8EC74C40B95F7672 /* GhosttySurfaceConfigurationRefresh.swift */; };
 		0D56BE882EAD4B67AC44F96D /* TerminalDirectoryOpenSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B8E2E03F4A64C61B729CF19 /* TerminalDirectoryOpenSupport.swift */; };
@@ -625,6 +627,8 @@
 		5B5B0001A1B2C3D4E5F60710 /* SideNavBarMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SideNavBar/SideNavBarMode.swift; sourceTree = "<group>"; };
 		5B5B0002A1B2C3D4E5F60710 /* SideNavBarState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SideNavBar/SideNavBarState.swift; sourceTree = "<group>"; };
 		5B5B0003A1B2C3D4E5F60710 /* SideNavBarIconColumn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SideNavBar/SideNavBarIconColumn.swift; sourceTree = "<group>"; };
+		5B5B0008A1B2C3D4E5F60710 /* FakeMarkdownDataC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SideNavBar/FakeMarkdownDataC.swift; sourceTree = "<group>"; };
+		5B5B0009A1B2C3D4E5F60710 /* SideNavBarContentPanelC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SideNavBar/SideNavBarContentPanelC.swift; sourceTree = "<group>"; };
 		38A09EB2E92203B2E95923A7 /* CommandPaletteSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPalette/CommandPaletteSearch.swift; sourceTree = "<group>"; };
 		9DAB808A8EC74C40B95F7672 /* GhosttySurfaceConfigurationRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/GhosttySurfaceConfigurationRefresh.swift; sourceTree = "<group>"; };
 		6B8E2E03F4A64C61B729CF19 /* TerminalDirectoryOpenSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/TerminalDirectoryOpenSupport.swift; sourceTree = "<group>"; };
@@ -1138,6 +1142,8 @@
 				5B5B0001A1B2C3D4E5F60710 /* SideNavBarMode.swift */,
 				5B5B0002A1B2C3D4E5F60710 /* SideNavBarState.swift */,
 				5B5B0003A1B2C3D4E5F60710 /* SideNavBarIconColumn.swift */,
+				5B5B0008A1B2C3D4E5F60710 /* FakeMarkdownDataC.swift */,
+				5B5B0009A1B2C3D4E5F60710 /* SideNavBarContentPanelC.swift */,
 				38A09EB2E92203B2E95923A7 /* CommandPaletteSearch.swift */,
 				9DAB808A8EC74C40B95F7672 /* GhosttySurfaceConfigurationRefresh.swift */,
 				6B8E2E03F4A64C61B729CF19 /* TerminalDirectoryOpenSupport.swift */,
@@ -1777,6 +1783,8 @@
 				5B5B0001A1B2C3D4E5F60711 /* SideNavBarMode.swift in Sources */,
 				5B5B0002A1B2C3D4E5F60711 /* SideNavBarState.swift in Sources */,
 				5B5B0003A1B2C3D4E5F60711 /* SideNavBarIconColumn.swift in Sources */,
+				5B5B0008A1B2C3D4E5F60711 /* FakeMarkdownDataC.swift in Sources */,
+				5B5B0009A1B2C3D4E5F60711 /* SideNavBarContentPanelC.swift in Sources */,
 				A8CBA43C2DA5AB9E3A1E65A4 /* CommandPaletteSearch.swift in Sources */,
 				B84BD7AD94EE485B8DDAB6FF /* GhosttySurfaceConfigurationRefresh.swift in Sources */,
 				0D56BE882EAD4B67AC44F96D /* TerminalDirectoryOpenSupport.swift in Sources */,
