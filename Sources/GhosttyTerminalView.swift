@@ -7347,14 +7347,17 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         }
     }
 
+    @MainActor
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         performKeyEquivalent(with: event, shouldRetryMainMenu: true)
     }
 
+    @MainActor
     func performKeyEquivalentAfterMenuMiss(with event: NSEvent) -> Bool {
         performKeyEquivalent(with: event, shouldRetryMainMenu: false)
     }
 
+    @MainActor
     private func performKeyEquivalent(with event: NSEvent, shouldRetryMainMenu: Bool) -> Bool {
 #if DEBUG
         let typingTimingStart = CmuxTypingTiming.start()
@@ -7474,9 +7477,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 
             if !shouldRetryMainMenu {
                 lastPerformKeyEvent = nil
-                if MainActor.assumeIsolated({
-                    CmuxSystemShortcutMatcher.shouldYieldTerminalCommandEquivalentToSystem(event: event)
-                }) {
+                if CmuxSystemShortcutMatcher.shouldYieldTerminalCommandEquivalentToSystem(event: event) {
                     return false
                 }
                 keyDown(with: event)
