@@ -22,6 +22,7 @@ final class FileDropOverlayViewTests: XCTestCase {
             .environmentObject(SidebarSelectionState())
             .environmentObject(FileExplorerState())
             .environmentObject(CmuxConfigStore())
+            .environmentObject(SideNavBarState())
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 340),
