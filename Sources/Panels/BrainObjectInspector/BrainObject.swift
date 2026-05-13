@@ -72,7 +72,7 @@ struct UnknownObject {
 // MARK: - Property value types
 
 enum BrainTaskStatus: String, CaseIterable {
-    case todo, doing, blocked, waiting, completed, canceled
+    case todo, doing, active, blocked, waiting, completed, canceled
 }
 
 enum BrainPriority: String, CaseIterable {
@@ -193,6 +193,12 @@ enum BrainObjectParser {
                     result: .success(.note(buildNote(pairs: pairs, title: title, body: body)))
                 )
             default:
+                if type != nil {
+                    return BrainObjectParse(
+                        strippedBody: body,
+                        result: .success(.note(buildNote(pairs: pairs, title: title, body: body)))
+                    )
+                }
                 let flat = pairs.map { (key: $0.0, value: $0.1.debugFlat) }
                 return BrainObjectParse(
                     strippedBody: body,
@@ -285,7 +291,16 @@ enum BrainObjectParser {
                     if indent == 0 { break }
                     if nextTrim.hasPrefix("- ") {
                         let valStr = String(nextTrim.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-                        items.append(try parseInlineValue(valStr, line: blockStartLine + j))
+                        let parsed = try parseBlockListItem(
+                            firstValue: valStr,
+                            rawLines: rawLines,
+                            startIndex: j,
+                            itemIndent: indent,
+                            blockStartLine: blockStartLine
+                        )
+                        items.append(parsed.value)
+                        j = parsed.nextIndex
+                        continue
                     } else if nextTrim == "-" {
                         items.append(.null)
                     } else {
@@ -303,6 +318,47 @@ enum BrainObjectParser {
             }
         }
         return pairs
+    }
+
+    private static func parseBlockListItem(
+        firstValue: String,
+        rawLines: [String],
+        startIndex: Int,
+        itemIndent: Int,
+        blockStartLine: Int
+    ) throws -> (value: YamlValue, nextIndex: Int) {
+        guard let firstPair = try parseMapEntry(firstValue, line: blockStartLine + startIndex) else {
+            return (try parseInlineValue(firstValue, line: blockStartLine + startIndex), startIndex + 1)
+        }
+
+        var map: [(String, YamlValue)] = [firstPair]
+        var j = startIndex + 1
+        while j < rawLines.count {
+            let line = rawLines[j]
+            let trimmed = line.drop { $0 == " " }
+            if trimmed.isEmpty {
+                j += 1
+                continue
+            }
+            let indent = line.count - trimmed.count
+            if indent <= itemIndent { break }
+            if trimmed.hasPrefix("- ") { break }
+            guard let pair = try parseMapEntry(String(trimmed), line: blockStartLine + j) else { break }
+            map.append(pair)
+            j += 1
+        }
+        return (.map(map), j)
+    }
+
+    private static func parseMapEntry(_ raw: String, line: Int) throws -> (String, YamlValue)? {
+        let s = raw.trimmingCharacters(in: .whitespaces)
+        guard !s.hasPrefix("["),
+              !s.hasPrefix("{"),
+              let colon = s.firstIndex(of: ":") else { return nil }
+        let key = String(s[..<colon]).trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty, !key.contains(" ") else { return nil }
+        let rest = String(s[s.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+        return (key, try parseInlineValue(rest, line: line))
     }
 
     fileprivate static func parseInlineValue(_ raw: String, line: Int) throws -> YamlValue {
@@ -387,7 +443,7 @@ extension BrainObjectParser {
         let dict = Dictionary(uniqueKeysWithValues: pairs.map { ($0.0, $0.1) })
         return TaskObject(
             title: title,
-            status: dict["status"]?.scalar.flatMap(BrainTaskStatus.init(rawValue:)),
+            status: dict["status"]?.scalar.flatMap(parseStatus(_:)),
             priority: dict["priority"]?.scalar.flatMap(BrainPriority.init(rawValue:)),
             owner: dict["owner"]?.scalar,
             reviewer: dict["reviewer"]?.scalar,
@@ -397,7 +453,7 @@ extension BrainObjectParser {
             blockedReason: dict["blocked_reason"]?.scalar,
             waitingOn: dict["waiting_on"]?.scalar,
             tags: stringList(dict["tags"]),
-            lastUpdated: lastUpdatedFromBody(body),
+            lastUpdated: dict["updated"]?.scalar.flatMap(parseDate(_:)) ?? lastUpdatedFromBody(body),
             backlinks: nil,
             checklist: checklistFromBody(body)
         )
@@ -414,7 +470,7 @@ extension BrainObjectParser {
         return GoalObject(
             title: title,
             goalId: dict["goal_id"]?.scalar,
-            status: dict["status"]?.scalar.flatMap(BrainTaskStatus.init(rawValue:)),
+            status: dict["status"]?.scalar.flatMap(parseStatus(_:)),
             owner: dict["owner"]?.scalar,
             targetDate: dict["target_date"]?.scalar.flatMap(parseDate(_:)),
             reviewCadence: dict["review_cadence"]?.scalar,
@@ -427,7 +483,7 @@ extension BrainObjectParser {
             tasksOpen: nil,
             tasksDone: nil,
             backlinks: nil,
-            lastUpdated: lastUpdatedFromBody(body)
+            lastUpdated: dict["updated"]?.scalar.flatMap(parseDate(_:)) ?? lastUpdatedFromBody(body)
         )
     }
 
@@ -457,6 +513,27 @@ extension BrainObjectParser {
         return arr.compactMap { $0.scalar }
     }
 
+    fileprivate static func parseStatus(_ s: String) -> BrainTaskStatus? {
+        switch s.lowercased() {
+        case "todo", "pending", "open":
+            return .todo
+        case "doing", "in_progress", "in-progress":
+            return .doing
+        case "active":
+            return .active
+        case "blocked":
+            return .blocked
+        case "waiting":
+            return .waiting
+        case "completed", "complete", "done":
+            return .completed
+        case "canceled", "cancelled":
+            return .canceled
+        default:
+            return nil
+        }
+    }
+
     fileprivate static func parseMetric(_ v: YamlValue) -> BrainMetric? {
         guard let map = v.mapValue else { return nil }
         let d = Dictionary(uniqueKeysWithValues: map.map { ($0.0, $0.1) })
@@ -469,9 +546,10 @@ extension BrainObjectParser {
     fileprivate static func parseMilestone(_ v: YamlValue) -> BrainMilestone? {
         guard let map = v.mapValue else { return nil }
         let d = Dictionary(uniqueKeysWithValues: map.map { ($0.0, $0.1) })
-        guard let name = d["name"]?.scalar else { return nil }
-        let done = (d["done"]?.scalar ?? "false") == "true"
-        let current = (d["current"]?.scalar ?? "false") == "true"
+        guard let name = d["description"]?.scalar ?? d["name"]?.scalar ?? d["id"]?.scalar else { return nil }
+        let status = d["status"]?.scalar?.lowercased()
+        let done = (d["done"]?.scalar ?? "false") == "true" || status == "done" || status == "completed"
+        let current = (d["current"]?.scalar ?? "false") == "true" || status == "active" || status == "doing" || status == "current"
         return BrainMilestone(
             name: name,
             date: d["date"]?.scalar.flatMap(parseDate(_:)),
@@ -483,11 +561,16 @@ extension BrainObjectParser {
     /// Accepts `YYYY-MM-DD`. Anything else returns nil — the date badge
     /// then renders the muted em-dash via the `is-empty` styling.
     fileprivate static func parseDate(_ s: String) -> BrainDate? {
+        let source = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        let datePrefix = String(source.prefix(10))
+        guard datePrefix.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil else {
+            return nil
+        }
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.timeZone = TimeZone(identifier: "UTC")
-        guard let d = f.date(from: s) else { return nil }
-        return BrainDate(date: d, source: s)
+        guard let d = f.date(from: datePrefix) else { return nil }
+        return BrainDate(date: d, source: datePrefix)
     }
 
     // MARK: - Body-derived properties

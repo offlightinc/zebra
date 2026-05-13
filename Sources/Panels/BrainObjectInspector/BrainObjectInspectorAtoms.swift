@@ -259,6 +259,7 @@ struct StatusPillView: View {
         switch status! {
         case .todo: return String(localized: "brain.status.todo", defaultValue: "Todo")
         case .doing: return String(localized: "brain.status.doing", defaultValue: "In progress")
+        case .active: return String(localized: "brain.status.active", defaultValue: "Active")
         case .blocked: return String(localized: "brain.status.blocked", defaultValue: "Blocked")
         case .waiting: return String(localized: "brain.status.waiting", defaultValue: "Waiting")
         case .completed: return String(localized: "brain.status.completed", defaultValue: "Completed")
@@ -285,7 +286,7 @@ struct StatusGlyph: View {
                 var path = Path(ellipseIn: circleRect)
                 ctx.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.2, dash: [2, 1.4]))
                 _ = path
-            case .doing:
+            case .doing, .active:
                 ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
                 var fill = Path()
                 fill.move(to: center)
@@ -329,6 +330,7 @@ struct StatusGlyph: View {
         switch status {
         case .todo: return BVColor.statusTodo
         case .doing: return BVColor.statusDoing
+        case .active: return BVColor.statusCompleted
         case .blocked: return BVColor.statusBlocked
         case .waiting: return BVColor.statusWaiting
         case .completed: return BVColor.statusCompleted
