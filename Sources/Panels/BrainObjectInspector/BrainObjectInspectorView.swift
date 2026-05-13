@@ -146,7 +146,6 @@ struct GoalInspectorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            InspectorHeader(tag: .goal, title: goal.title, secondary: goal.goalId)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     InspectorSection {
@@ -172,6 +171,19 @@ struct GoalInspectorView: View {
                             PropertyRow(label: String(localized: "brain.row.parent", defaultValue: "Parent"), icon: "arrow.triangle.branch", layout: .stack) {
                                 RelationRowView(ref: parent, onActivate: onActivateRelation)
                                     .padding(.horizontal, -16) // RelationRowView adds its own gutter
+                            }
+                        }
+                    }
+
+                    if !goal.subgoals.isEmpty {
+                        InspectorSection(
+                            title: String(localized: "brain.section.subgoals", defaultValue: "Subgoals"),
+                            count: goal.subgoals.count
+                        ) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(goal.subgoals, id: \.self) { r in
+                                    RelationRowView(ref: r, onActivate: onActivateRelation)
+                                }
                             }
                         }
                     }
@@ -211,19 +223,6 @@ struct GoalInspectorView: View {
                             VStack(alignment: .leading, spacing: 0) {
                                 ForEach(Array(goal.milestones.enumerated()), id: \.offset) { _, m in
                                     MilestoneRowView(milestone: m)
-                                }
-                            }
-                        }
-                    }
-
-                    if !goal.subgoals.isEmpty {
-                        InspectorSection(
-                            title: String(localized: "brain.section.subgoals", defaultValue: "Subgoals"),
-                            count: goal.subgoals.count
-                        ) {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(goal.subgoals, id: \.self) { r in
-                                    RelationRowView(ref: r, onActivate: onActivateRelation)
                                 }
                             }
                         }
