@@ -185,6 +185,44 @@ private struct GoalFlatRowChrome: ViewModifier {
     }
 }
 
+struct GoalCollapsibleHeader: View, Equatable {
+    let title: String
+    let count: Int
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.title == rhs.title && lhs.count == rhs.count && lhs.isExpanded == rhs.isExpanded
+    }
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: GoalsDesignTokens.groupHeaderCountSpacing) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                    .frame(width: 10)
+                Text(title)
+                    .font(.system(size: GoalsDesignTokens.groupHeaderFontSize, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .textCase(.uppercase)
+                Text("\(count)")
+                    .font(.system(size: GoalsDesignTokens.groupHeaderFontSize, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                    .monospacedDigit()
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, GoalsDesignTokens.groupHeaderHorizontalPadding)
+            .padding(.top, GoalsDesignTokens.groupHeaderTopPadding)
+            .padding(.bottom, GoalsDesignTokens.groupHeaderBottomPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("VerticalTabsSidebar.Goals.sectionHeader")
+    }
+}
+
 struct GoalGroupHeader: View, Equatable {
     let title: String
     let count: Int

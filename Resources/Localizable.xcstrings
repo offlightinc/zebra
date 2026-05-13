@@ -114617,6 +114617,38 @@
         }
       }
     },
+    "verticalTabsSidebar.goals.collapseAll.accessibilityLabel": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse all"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべて折りたたむ"
+          }
+        }
+      }
+    },
+    "verticalTabsSidebar.goals.collapseAll.tooltip": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse all"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべて折りたたむ"
+          }
+        }
+      }
+    },
     "verticalTabsSidebar.goals.due.noDue": {
       "localizations": {
         "en": {

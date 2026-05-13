@@ -44,15 +44,23 @@ private struct GoalsListBody: View {
     let onPickerSelect: (GoalsViewState.Picker) -> Void
 
     @State private var collapsedOutlineIds: Set<String> = []
+    @State private var collapsedCadenceSections: Set<GoalCadence> = []
+    @State private var collapsedStatusSections: Set<GoalStatus> = []
 
     var body: some View {
+        // Collapse-all sits as the first row at the very top of the sidebar
+        // column so it lines up horizontally with the titlebar's bell/+ buttons,
+        // matching the placement used by VerticalTabsSidebarMarkdownListView's
+        // toolbar in the documents/tasks modes. Picker drops into the second row.
+        // Reserve the first-row slot even when entries are empty so the column's
+        // top edge does not jump when the goals list populates.
         VStack(spacing: 0) {
+            collapseAllToolbar
             GoalsPicker(selection: snapshot.picker, onSelect: onPickerSelect)
                 .padding(.horizontal, GoalsDesignTokens.pickerOuterHorizontalPadding)
                 .padding(.vertical, GoalsDesignTokens.pickerVerticalPadding)
             content
         }
-        .padding(.top, SidebarWorkspaceListMetrics.firstRowTopOffset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -85,6 +93,64 @@ private struct GoalsListBody: View {
         }
     }
 
+    // Same icon/hit area/font as VerticalTabsSidebarMarkdownListView so docs and
+    // goals modes share visual rhythm with the titlebar trailing buttons.
+    // Button only enables when there is something to collapse.
+    private var collapseAllToolbar: some View {
+        let canCollapse = snapshot.hasRoot && !snapshot.entries.isEmpty
+        return HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            Button {
+                collapseAll()
+            } label: {
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canCollapse)
+            .opacity(canCollapse ? 1 : 0)
+            .safeHelp(
+                String(localized: "verticalTabsSidebar.goals.collapseAll.tooltip", defaultValue: "Collapse all")
+            )
+            .accessibilityLabel(
+                String(localized: "verticalTabsSidebar.goals.collapseAll.accessibilityLabel", defaultValue: "Collapse all")
+            )
+            .accessibilityIdentifier("VerticalTabsSidebar.Goals.collapseAll")
+        }
+        .padding(.horizontal, 6)
+        .frame(height: SidebarWorkspaceListMetrics.firstRowTopOffset)
+    }
+
+    private func collapseAll() {
+        switch snapshot.picker {
+        case .outline:
+            var ids: Set<String> = []
+            let tree = GoalOutlineTree.build(entries: snapshot.entries)
+            collectAllOutlineIds(nodes: tree.roots, into: &ids)
+            collapsedOutlineIds = ids
+        case .cadence:
+            collapsedCadenceSections = Set(GoalCadence.allCases)
+        case .status:
+            collapsedStatusSections = Set(GoalStatus.allCases)
+        }
+    }
+
+    private func collectAllOutlineIds(nodes: [GoalOutlineNode], into ids: inout Set<String>) {
+        for node in nodes {
+            ids.insert(node.entry.goalId)
+            collectAllOutlineIds(nodes: node.children, into: &ids)
+        }
+    }
+
+    // `.equatable()` lets SwiftUI skip body re-eval (and the build/bucketize work
+    // inside each layout) when the value inputs are unchanged. Mirrors cmux's
+    // existing per-row Equatable shim pattern (see TabItemView in ContentView.swift
+    // and the rows in SessionIndexView.swift). Closures and Bindings stay
+    // capture-by-reference and are excluded from equality on purpose — they only
+    // fire actions, never participate in identity.
     @ViewBuilder
     private var layoutBody: some View {
         switch snapshot.picker {
@@ -95,18 +161,23 @@ private struct GoalsListBody: View {
                 collapsedIds: $collapsedOutlineIds,
                 onSelectFile: onSelectFile
             )
+            .equatable()
         case .cadence:
             CadenceLayout(
                 entries: snapshot.entries,
                 activePaths: snapshot.activePaths,
+                collapsedSections: $collapsedCadenceSections,
                 onSelectFile: onSelectFile
             )
+            .equatable()
         case .status:
             StatusLayout(
                 entries: snapshot.entries,
                 activePaths: snapshot.activePaths,
+                collapsedSections: $collapsedStatusSections,
                 onSelectFile: onSelectFile
             )
+            .equatable()
         }
     }
 
@@ -196,11 +267,20 @@ private extension GoalsViewState.Picker {
 
 // MARK: - Outline
 
-private struct OutlineLayout: View {
+private struct OutlineLayout: View, Equatable {
     let entries: [GoalEntry]
     let activePaths: Set<String>
     @Binding var collapsedIds: Set<String>
     let onSelectFile: (String) -> Void
+
+    // Compare only value inputs. onSelectFile captures may be stale and that is
+    // fine — they fire actions, not identity. The Binding's wrappedValue
+    // participates via `collapsedIds`.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.entries == rhs.entries
+            && lhs.activePaths == rhs.activePaths
+            && lhs.collapsedIds == rhs.collapsedIds
+    }
 
     var body: some View {
         let tree = GoalOutlineTree.build(entries: entries)
@@ -296,28 +376,52 @@ enum GoalOutlineTree {
 
 // MARK: - Cadence
 
-private struct CadenceLayout: View {
+private struct CadenceLayout: View, Equatable {
     let entries: [GoalEntry]
     let activePaths: Set<String>
+    @Binding var collapsedSections: Set<GoalCadence>
     let onSelectFile: (String) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.entries == rhs.entries
+            && lhs.activePaths == rhs.activePaths
+            && lhs.collapsedSections == rhs.collapsedSections
+    }
 
     var body: some View {
         let buckets = bucketize(entries: entries)
         ForEach(GoalCadence.allCases, id: \.self) { cadence in
             let bucket = buckets[cadence] ?? []
-            GoalGroupHeader(title: cadence.label, count: bucket.count)
-            ForEach(bucket, id: \.id) { entry in
-                GoalCadenceRow(
-                    displayName: entry.displayName,
-                    due: GoalDueLabelBuilder.descriptor(for: entry.targetDate),
-                    isCompleted: entry.status == .completed,
-                    isSelected: activePaths.contains(entry.absolutePath),
-                    onTap: { [path = entry.absolutePath] in
-                        onSelectFile(path)
-                    }
-                )
-                .equatable()
+            let isExpanded = !collapsedSections.contains(cadence)
+            GoalCollapsibleHeader(
+                title: cadence.label,
+                count: bucket.count,
+                isExpanded: isExpanded,
+                onToggle: { toggle(cadence) }
+            )
+            .equatable()
+            if isExpanded {
+                ForEach(bucket, id: \.id) { entry in
+                    GoalCadenceRow(
+                        displayName: entry.displayName,
+                        due: GoalDueLabelBuilder.descriptor(for: entry.targetDate),
+                        isCompleted: entry.status == .completed,
+                        isSelected: activePaths.contains(entry.absolutePath),
+                        onTap: { [path = entry.absolutePath] in
+                            onSelectFile(path)
+                        }
+                    )
+                    .equatable()
+                }
             }
+        }
+    }
+
+    private func toggle(_ cadence: GoalCadence) {
+        if collapsedSections.contains(cadence) {
+            collapsedSections.remove(cadence)
+        } else {
+            collapsedSections.insert(cadence)
         }
     }
 
@@ -346,29 +450,53 @@ private struct CadenceLayout: View {
 
 // MARK: - Status
 
-private struct StatusLayout: View {
+private struct StatusLayout: View, Equatable {
     let entries: [GoalEntry]
     let activePaths: Set<String>
+    @Binding var collapsedSections: Set<GoalStatus>
     let onSelectFile: (String) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.entries == rhs.entries
+            && lhs.activePaths == rhs.activePaths
+            && lhs.collapsedSections == rhs.collapsedSections
+    }
 
     var body: some View {
         let buckets = bucketize(entries: entries)
         ForEach(GoalStatus.allCases, id: \.self) { status in
             let bucket = buckets[status] ?? []
-            GoalGroupHeader(title: status.label, count: bucket.count)
-            ForEach(bucket, id: \.id) { entry in
-                GoalStatusRow(
-                    displayName: entry.displayName,
-                    milestoneDone: entry.milestoneDone,
-                    milestoneTotal: entry.milestoneTotal,
-                    isCompleted: entry.status == .completed,
-                    isSelected: activePaths.contains(entry.absolutePath),
-                    onTap: { [path = entry.absolutePath] in
-                        onSelectFile(path)
-                    }
-                )
-                .equatable()
+            let isExpanded = !collapsedSections.contains(status)
+            GoalCollapsibleHeader(
+                title: status.label,
+                count: bucket.count,
+                isExpanded: isExpanded,
+                onToggle: { toggle(status) }
+            )
+            .equatable()
+            if isExpanded {
+                ForEach(bucket, id: \.id) { entry in
+                    GoalStatusRow(
+                        displayName: entry.displayName,
+                        milestoneDone: entry.milestoneDone,
+                        milestoneTotal: entry.milestoneTotal,
+                        isCompleted: entry.status == .completed,
+                        isSelected: activePaths.contains(entry.absolutePath),
+                        onTap: { [path = entry.absolutePath] in
+                            onSelectFile(path)
+                        }
+                    )
+                    .equatable()
+                }
             }
+        }
+    }
+
+    private func toggle(_ status: GoalStatus) {
+        if collapsedSections.contains(status) {
+            collapsedSections.remove(status)
+        } else {
+            collapsedSections.insert(status)
         }
     }
 
