@@ -64,8 +64,18 @@ final class ActiveMarkdownPathsObserver: ObservableObject {
         for paneId in workspace.bonsplitController.allPaneIds {
             guard let tab = workspace.bonsplitController.selectedTab(inPane: paneId) else { continue }
             guard let panelId = workspace.panelIdFromSurfaceId(tab.id) else { continue }
-            guard let preview = workspace.panels[panelId] as? FilePreviewPanel else { continue }
-            let filePath = preview.filePath
+            // Markdown can land in either panel kind: FilePreviewPanel is the
+            // generic preview surface, MarkdownPanel is the richer view that also
+            // hosts the brain object inspector. Accept both so sidebar highlight
+            // works regardless of which entrypoint opened the file.
+            let filePath: String
+            if let preview = workspace.panels[panelId] as? FilePreviewPanel {
+                filePath = preview.filePath
+            } else if let markdown = workspace.panels[panelId] as? MarkdownPanel {
+                filePath = markdown.filePath
+            } else {
+                continue
+            }
             let ext = (filePath as NSString).pathExtension.lowercased()
             if ext == "md" || ext == "markdown" {
                 paths.insert(filePath)
