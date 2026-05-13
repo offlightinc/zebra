@@ -13,9 +13,9 @@ enum GoalFrontmatterParser {
     /// Reads only the head of the file (frontmatter is at the top).
     static func parse(filePath: String, headBytes: Int = 4096) -> GoalEntry? {
         guard let head = readHead(path: filePath, bytes: headBytes) else { return nil }
-        let raw = extractFrontmatterBlock(from: head)
-        let kv = raw.map { parseFlatKeyValues($0) } ?? [:]
-        let milestones = raw.map { parseMilestones($0) } ?? []
+        guard let raw = extractFrontmatterBlock(from: head) else { return nil }
+        let kv = parseFlatKeyValues(raw)
+        let milestones = parseMilestones(raw)
 
         let displayNameFallback = (filePath as NSString).lastPathComponent
         let stem = ((filePath as NSString).lastPathComponent as NSString).deletingPathExtension
