@@ -454,7 +454,7 @@ extension BrainObjectParser {
             waitingOn: dict["waiting_on"]?.scalar,
             tags: stringList(dict["tags"]),
             lastUpdated: dict["updated"]?.scalar.flatMap(parseDate(_:)) ?? lastUpdatedFromBody(body),
-            backlinks: nil,
+            backlinks: referencedInCount(body),
             checklist: checklistFromBody(body)
         )
     }
@@ -482,7 +482,7 @@ extension BrainObjectParser {
             progressFraction: progress,
             tasksOpen: nil,
             tasksDone: nil,
-            backlinks: nil,
+            backlinks: referencedInCount(body),
             lastUpdated: dict["updated"]?.scalar.flatMap(parseDate(_:)) ?? lastUpdatedFromBody(body)
         )
     }
@@ -497,7 +497,7 @@ extension BrainObjectParser {
             updated: dict["updated"]?.scalar.flatMap(parseDate(_:)),
             headings: extractH2Outline(body),
             seeAlso: extractSeeAlso(body),
-            backlinks: nil
+            backlinks: referencedInCount(body)
         )
     }
 
@@ -641,6 +641,20 @@ extension BrainObjectParser {
             }
         }
         return seeAlso
+    }
+
+    /// MVP backlink count: use generated/manual `Referenced in ...` timeline
+    /// rows when present. A later graph index should replace this with actual
+    /// inbound link computation across the vault.
+    fileprivate static func referencedInCount(_ body: String) -> Int? {
+        let count = body.components(separatedBy: "\n").reduce(0) { total, line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("- "), trimmed.localizedStandardContains("Referenced in") else {
+                return total
+            }
+            return total + 1
+        }
+        return count > 0 ? count : nil
     }
 
     /// Cheap "last touched" heuristic: the latest `YYYY-MM-DD` mention in the body.
