@@ -328,6 +328,19 @@ struct DocInspectorView: View {
                         }
                     }
 
+                    if !note.referencedIn.isEmpty {
+                        InspectorSection(
+                            title: String(localized: "brain.section.referencedIn", defaultValue: "Referenced in"),
+                            count: note.referencedIn.count
+                        ) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(note.referencedIn, id: \.self) { r in
+                                    RelationRowView(ref: r, onActivate: onActivateRelation)
+                                }
+                            }
+                        }
+                    }
+
                     InspectorSection(title: String(localized: "brain.section.meta", defaultValue: "Meta")) {
                         if let n = note.backlinks {
                             PropertyRow(label: String(localized: "brain.row.backlinks", defaultValue: "Backlinks"), icon: "link") {

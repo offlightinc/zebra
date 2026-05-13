@@ -59,6 +59,7 @@ struct NoteObject {
     var updated: BrainDate?
     var headings: [String]
     var seeAlso: [BrainObjectRef]
+    var referencedIn: [BrainObjectRef]
     var backlinks: Int?
 }
 
@@ -489,6 +490,7 @@ extension BrainObjectParser {
 
     fileprivate static func buildNote(pairs: [(String, YamlValue)], title: String, body: String) -> NoteObject {
         let dict = Dictionary(uniqueKeysWithValues: pairs.map { ($0.0, $0.1) })
+        let referencedIn = extractReferencedIn(body)
         return NoteObject(
             title: title,
             aliases: stringList(dict["aliases"]),
@@ -497,7 +499,8 @@ extension BrainObjectParser {
             updated: dict["updated"]?.scalar.flatMap(parseDate(_:)),
             headings: extractH2Outline(body),
             seeAlso: extractSeeAlso(body),
-            backlinks: referencedInCount(body)
+            referencedIn: referencedIn,
+            backlinks: referencedIn.isEmpty ? nil : referencedIn.count
         )
     }
 
@@ -643,18 +646,64 @@ extension BrainObjectParser {
         return seeAlso
     }
 
-    /// MVP backlink count: use generated/manual `Referenced in ...` timeline
+    /// MVP backlink source: use generated/manual `Referenced in ...` timeline
     /// rows when present. A later graph index should replace this with actual
     /// inbound link computation across the vault.
-    fileprivate static func referencedInCount(_ body: String) -> Int? {
-        let count = body.components(separatedBy: "\n").reduce(0) { total, line in
+    fileprivate static func extractReferencedIn(_ body: String) -> [BrainObjectRef] {
+        body.components(separatedBy: "\n").compactMap { line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("- "), trimmed.localizedStandardContains("Referenced in") else {
-                return total
+                return nil
             }
-            return total + 1
+            return referencedInRef(from: trimmed)
         }
+    }
+
+    fileprivate static func referencedInCount(_ body: String) -> Int? {
+        let count = extractReferencedIn(body).count
         return count > 0 ? count : nil
+    }
+
+    private static func referencedInRef(from line: String) -> BrainObjectRef? {
+        guard let marker = line.range(of: "Referenced in") else { return nil }
+        let rest = String(line[marker.upperBound...]).trimmingCharacters(in: .whitespaces)
+        if let wiki = firstWikiLink(in: rest) {
+            return BrainObjectRef(raw: wiki)
+        }
+        if let md = firstMarkdownLinkTarget(in: rest) {
+            return BrainObjectRef(raw: normalizedBrainPath(md))
+        }
+        return nil
+    }
+
+    private static func firstWikiLink(in text: String) -> String? {
+        guard let start = text.range(of: "[["),
+              let end = text[start.upperBound...].range(of: "]]") else { return nil }
+        let inner = String(text[start.upperBound..<end.lowerBound])
+        let target = inner.split(separator: "|", maxSplits: 1).first.map(String.init) ?? inner
+        return target.trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func firstMarkdownLinkTarget(in text: String) -> String? {
+        guard let closeBracket = text.firstIndex(of: "]") else { return nil }
+        let afterBracket = text[text.index(after: closeBracket)...]
+        guard afterBracket.first == "(",
+              let closeParen = afterBracket.dropFirst().firstIndex(of: ")") else { return nil }
+        return String(afterBracket.dropFirst()[..<closeParen])
+    }
+
+    private static func normalizedBrainPath(_ path: String) -> String {
+        var normalized = path.trimmingCharacters(in: .whitespaces)
+        while normalized.hasPrefix("../") {
+            normalized = String(normalized.dropFirst(3))
+        }
+        if normalized.hasPrefix("./") {
+            normalized = String(normalized.dropFirst(2))
+        }
+        if normalized.hasSuffix(".md") {
+            normalized = String(normalized.dropLast(3))
+        }
+        return normalized
     }
 
     /// Cheap "last touched" heuristic: the latest `YYYY-MM-DD` mention in the body.
