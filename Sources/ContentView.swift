@@ -2641,7 +2641,7 @@ struct ContentView: View {
                 .overlay(alignment: .topLeading) {
                     if isFullScreen && sidebarState.isVisible && !isMinimalMode {
                         fullscreenControls
-                            .padding(.leading, 10)
+                            .padding(.leading, 10 + VerticalTabsSidebarModeRail.fixedWidth)
                             .padding(.top, 4)
                     }
                 }
