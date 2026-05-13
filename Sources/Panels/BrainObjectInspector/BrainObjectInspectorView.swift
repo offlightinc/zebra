@@ -168,9 +168,9 @@ struct GoalInspectorView: View {
                             }
                         }
                         if let parent = goal.parentGoal {
-                            PropertyRow(label: String(localized: "brain.row.parent", defaultValue: "Parent"), icon: "arrow.triangle.branch", layout: .stack) {
-                                RelationRowView(ref: parent, onActivate: onActivateRelation)
-                                    .padding(.horizontal, -16) // RelationRowView adds its own gutter
+                            PropertyRow(label: String(localized: "brain.row.parent", defaultValue: "Parent goal"), icon: "arrow.triangle.branch") {
+                                RelationRowView(ref: parent, showsLeadingIcon: false, showsTrailingMeta: false, onActivate: onActivateRelation)
+                                    .padding(.leading, -16) // cancel RelationRowView's left gutter so it aligns with other inline values
                             }
                         }
                     }
@@ -182,7 +182,7 @@ struct GoalInspectorView: View {
                         ) {
                             VStack(alignment: .leading, spacing: 0) {
                                 ForEach(goal.subgoals, id: \.self) { r in
-                                    RelationRowView(ref: r, onActivate: onActivateRelation)
+                                    RelationRowView(ref: r, showsTrailingMeta: false, onActivate: onActivateRelation)
                                 }
                             }
                         }

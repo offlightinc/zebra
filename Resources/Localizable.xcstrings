@@ -6378,19 +6378,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Parent"
+            "value": "Parent goal"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "親"
+            "value": "上位ゴール"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "상위"
+            "value": "상위 목표"
           }
         }
       }

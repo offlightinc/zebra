@@ -602,20 +602,24 @@ struct BrainInspectorFlowLayout: Layout {
 struct RelationRowView: View {
     let ref: BrainObjectRef
     var statusOverride: BrainTaskStatus? = nil
+    var showsLeadingIcon: Bool = true
+    var showsTrailingMeta: Bool = true
     var onActivate: ((BrainObjectRef) -> Void)? = nil
     @State private var isHovering = false
 
     var body: some View {
         Button(action: { onActivate?(ref) }) {
             HStack(spacing: 7) {
-                Group {
-                    if let s = statusOverride {
-                        StatusGlyph(status: s).frame(width: 12, height: 12)
-                    } else {
-                        Image(systemName: inferredSymbol)
-                            .font(.system(size: 11))
-                            .foregroundColor(BVColor.fgMute)
-                            .opacity(0.7)
+                if showsLeadingIcon {
+                    Group {
+                        if let s = statusOverride {
+                            StatusGlyph(status: s).frame(width: 12, height: 12)
+                        } else {
+                            Image(systemName: inferredSymbol)
+                                .font(.system(size: 11))
+                                .foregroundColor(BVColor.fgMute)
+                                .opacity(0.7)
+                        }
                     }
                 }
                 Text(ref.displayTitle)
@@ -624,7 +628,7 @@ struct RelationRowView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 6)
-                if let meta = compactMeta {
+                if showsTrailingMeta, let meta = compactMeta {
                     Text(meta)
                         .font(.system(size: 10.5, design: .monospaced))
                         .foregroundColor(BVColor.fgFaint)
