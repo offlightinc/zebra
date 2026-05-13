@@ -19,7 +19,7 @@ struct MarkdownPanelView: View {
             if panel.isFileUnavailable {
                 fileUnavailableView
             } else {
-                markdownContentView
+                splitContentView
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -45,10 +45,35 @@ struct MarkdownPanelView: View {
 
     // MARK: - Content
 
+    /// Top-level split: markdown body on the left, brain-object inspector
+    /// on the right. The inspector hides via a chevron in the header and
+    /// the split collapses on its own.
+    private var splitContentView: some View {
+        HSplitView {
+            markdownContentView
+                .frame(minWidth: 360)
+
+            if panel.showsInspector {
+                BrainObjectInspectorView(parse: panel.parse)
+                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 420)
+            }
+        }
+    }
+
+    /// Markdown body uses the stripped body when frontmatter parsed
+    /// cleanly; falls back to the raw content otherwise so a parse
+    /// failure never breaks rendering on the left.
+    private var renderedMarkdown: String {
+        if let stripped = panel.parse?.strippedBody, !stripped.isEmpty {
+            return stripped
+        }
+        return panel.content
+    }
+
     private var markdownContentView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                // File path breadcrumb
+                // File path breadcrumb + inspector toggle
                 filePathHeader
                     .padding(.horizontal, 24)
                     .padding(.top, 16)
@@ -58,7 +83,7 @@ struct MarkdownPanelView: View {
                     .padding(.horizontal, 16)
 
                 // Rendered markdown
-                Markdown(panel.content)
+                Markdown(renderedMarkdown)
                     .markdownTheme(cmuxMarkdownTheme)
                     .textSelection(.enabled)
                     // Wire link activation through NSWorkspace explicitly.
@@ -88,7 +113,29 @@ struct MarkdownPanelView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
+            inspectorToggle
         }
+    }
+
+    /// Chevron that hides/shows the right-pane inspector. The icon
+    /// matches the panel-side convention (right-pointing chevron when
+    /// closed, left when open).
+    private var inspectorToggle: some View {
+        Button {
+            panel.toggleInspector()
+        } label: {
+            Image(systemName: panel.showsInspector
+                  ? "sidebar.right"
+                  : "sidebar.right")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(panel.showsInspector ? .primary : .secondary)
+                .padding(4)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(panel.showsInspector
+              ? String(localized: "brain.toggle.hide", defaultValue: "Hide object inspector")
+              : String(localized: "brain.toggle.show", defaultValue: "Show object inspector"))
     }
 
     private var fileUnavailableView: some View {

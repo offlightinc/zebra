@@ -9353,7 +9353,11 @@ struct VerticalTabsSidebar: View {
         }
 
         selection = .tabs
-        _ = workspace.openOrFocusFilePreviewSurface(inPane: paneId, filePath: filePath)
+        // Markdown rail modes (goals / tasks / documents) route through the
+        // brain-object-aware MarkdownPanel so the right-pane inspector lights
+        // up. Other entrypoints (Cmd-click in terminal, file-explorer reveal)
+        // keep using FilePreviewPanel for raw text / diff workflows.
+        _ = workspace.openOrFocusMarkdownSurface(inPane: paneId, filePath: filePath)
     }
 
     private func workspaceScrollArea(renderContext: WorkspaceListRenderContext) -> some View {
