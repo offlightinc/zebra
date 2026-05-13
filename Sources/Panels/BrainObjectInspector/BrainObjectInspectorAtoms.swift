@@ -453,14 +453,24 @@ struct PersonChipView: View {
     /// PERSON_COLORS map for the common handles and falling back to a
     /// hash-derived hue for everyone else.
     private func colorFor(handle: String) -> Color {
-        let known: [String: Color] = [
-            "dan": Color(nsColor: NSColor(srgbRed: 0x5b / 255, green: 0x9d / 255, blue: 0xf9 / 255, alpha: 1)),
-            "leo": Color(nsColor: NSColor(srgbRed: 0xc1 / 255, green: 0x84 / 255, blue: 0xe0 / 255, alpha: 1)),
-            "alex": Color(nsColor: NSColor(srgbRed: 0x54 / 255, green: 0xc0 / 255, blue: 0x71 / 255, alpha: 1)),
-            "sam": Color(nsColor: NSColor(srgbRed: 0xe0 / 255, green: 0xb3 / 255, blue: 0x41 / 255, alpha: 1)),
-            "pat": Color(nsColor: NSColor(srgbRed: 0xf0 / 255, green: 0x8a / 255, blue: 0x3e / 255, alpha: 1)),
-            "mira": Color(nsColor: NSColor(srgbRed: 0xef / 255, green: 0x5a / 255, blue: 0x5a / 255, alpha: 1)),
-        ]
+        BrainPersonColor.color(for: handle)
+    }
+}
+
+/// Single source of truth for per-handle avatar color. Centralizes the
+/// known-handle palette and hash-derived fallback that used to live in
+/// three places (`PersonChipView`, `EditableOwnerChip`, `OwnerPickerView`).
+enum BrainPersonColor {
+    private static let known: [String: Color] = [
+        "dan": Color(nsColor: NSColor(srgbRed: 0x5b / 255, green: 0x9d / 255, blue: 0xf9 / 255, alpha: 1)),
+        "leo": Color(nsColor: NSColor(srgbRed: 0xc1 / 255, green: 0x84 / 255, blue: 0xe0 / 255, alpha: 1)),
+        "alex": Color(nsColor: NSColor(srgbRed: 0x54 / 255, green: 0xc0 / 255, blue: 0x71 / 255, alpha: 1)),
+        "sam": Color(nsColor: NSColor(srgbRed: 0xe0 / 255, green: 0xb3 / 255, blue: 0x41 / 255, alpha: 1)),
+        "pat": Color(nsColor: NSColor(srgbRed: 0xf0 / 255, green: 0x8a / 255, blue: 0x3e / 255, alpha: 1)),
+        "mira": Color(nsColor: NSColor(srgbRed: 0xef / 255, green: 0x5a / 255, blue: 0x5a / 255, alpha: 1)),
+    ]
+
+    static func color(for handle: String) -> Color {
         if let c = known[handle] { return c }
         var hasher = Hasher(); hasher.combine(handle)
         let h = abs(hasher.finalize())
@@ -842,7 +852,7 @@ struct EditableGoalStatusPill: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .panelPopover(isPresented: $isPresented) {
             GoalStatusPickerView(
                 current: value,
                 onSelect: { newValue in
@@ -920,6 +930,7 @@ struct GoalStatusPickerView: View {
         }
         .frame(width: 240)
         .background(BVColor.bgElev)
+
         .onAppear { searchFocused = true }
     }
 }
@@ -942,7 +953,7 @@ struct EditableOwnerChip: View {
             }
         }
         .buttonStyle(.plain)
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .panelPopover(isPresented: $isPresented) {
             OwnerPickerView(
                 current: rawValue,
                 slugs: peopleSlugs,
@@ -997,10 +1008,7 @@ struct EditableOwnerChip: View {
     }
 
     private func colorFor(handle: String) -> Color {
-        var hasher = Hasher(); hasher.combine(handle)
-        let h = abs(hasher.finalize())
-        let hue = Double(h % 360) / 360.0
-        return Color(hue: hue, saturation: 0.55, brightness: 0.78)
+        BrainPersonColor.color(for: handle)
     }
 }
 
@@ -1099,18 +1107,27 @@ struct OwnerPickerView: View {
                 }
                 .padding(.vertical, 4)
             }
-            .frame(maxHeight: 240)
+            .frame(height: scrollHeight)
         }
         .frame(width: 240)
         .background(BVColor.bgElev)
         .onAppear { searchFocused = true }
     }
 
+    /// Explicit height so NSHostingController.fittingSize reports the real
+    /// content size to NSPanel. `maxHeight:` alone collapses to 0 in the
+    /// initial layout pass, which makes the panel render as an empty sliver.
+    private var scrollHeight: CGFloat {
+        let rowHeight: CGFloat = 26
+        // Rows: Unassigned + divider + either "No matches" or filtered slugs.
+        let bodyRows = filtered.isEmpty ? 1 : filtered.count
+        let totalRows = 1 + bodyRows
+        let estimated = CGFloat(totalRows) * rowHeight + 8 + 1 // +divider +vpad
+        return min(estimated, 240)
+    }
+
     private func slugColor(_ slug: String) -> Color {
-        var hasher = Hasher(); hasher.combine(slug)
-        let h = abs(hasher.finalize())
-        let hue = Double(h % 360) / 360.0
-        return Color(hue: hue, saturation: 0.55, brightness: 0.78)
+        BrainPersonColor.color(for: slug)
     }
 }
 
@@ -1153,7 +1170,7 @@ struct EditableDateBadge: View {
             }
         }
         .buttonStyle(.plain)
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .panelPopover(isPresented: $isPresented) {
             DatePickerPopover(
                 current: value?.date,
                 onSelect: { newDate in
@@ -1207,6 +1224,7 @@ private struct DatePickerPopover: View {
         }
         .fixedSize()
         .background(BVColor.bg)
+
     }
 }
 
@@ -1224,6 +1242,7 @@ private struct GraphicalDatePickerRepresentable: NSViewRepresentable {
         picker.drawsBackground = false
         picker.isBezeled = false
         picker.isBordered = false
+        picker.focusRingType = .none
         picker.dateValue = date
         picker.target = context.coordinator
         picker.action = #selector(Coordinator.dateChanged(_:))
@@ -1298,7 +1317,7 @@ struct EditableCadencePill: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .panelPopover(isPresented: $isPresented) {
             CadencePickerView(
                 current: current,
                 onSelect: { newValue in
@@ -1352,6 +1371,7 @@ struct CadencePickerView: View {
         }
         .frame(width: 200)
         .background(BVColor.bgElev)
+
     }
 }
 
@@ -1363,5 +1383,244 @@ private struct EditablePickerRowHoverBackground: View {
         Rectangle()
             .fill(hovering ? BVColor.bgHover : Color.clear)
             .onHover { hovering = $0 }
+    }
+}
+
+// MARK: - PanelPopover: borderless NSPanel as a popover replacement
+
+/// SwiftUI's `.popover` wraps NSPopover, whose rounded corners and arrow
+/// are drawn by a private frame view we cannot override. `.panelPopover`
+/// replaces it with a borderless NSPanel — we draw the chrome ourselves
+/// (sharp corners, custom background, no arrow), and the content stays
+/// SwiftUI. Behaves like a popover: anchored to a view, dismisses on
+/// outside click or Escape, transient.
+extension View {
+    /// Drop-in replacement for `.popover(isPresented:arrowEdge:)` that
+    /// uses a borderless NSPanel instead of NSPopover.
+    func panelPopover<Content: View>(
+        isPresented: Binding<Bool>,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        // `.background` (no frame override) so the presenter spans the
+        // full pill — `anchor.bounds` then equals the visible pill rect,
+        // not a zero-size point.
+        background(PanelPopoverPresenter(isPresented: isPresented, content: content))
+    }
+}
+
+/// NSPanel subclass that can take key focus while still letting the parent
+/// app stay active. Standard pop-up-menu pattern — the inner TextField /
+/// NSDatePicker become firstResponder, but the underlying app window
+/// keeps its main/active status.
+private final class PickerPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
+    @Binding var isPresented: Bool
+    let content: () -> Content
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        context.coordinator.anchorView = view
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.anchorView = nsView
+        context.coordinator.update(content: content(), isPresented: isPresented)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.dismiss()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isPresented: $isPresented)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        @Binding var isPresented: Bool
+        weak var anchorView: NSView?
+
+        private var panel: PickerPanel?
+        private var hostingController: NSHostingController<AnyView>?
+        private var localMonitor: Any?
+        private var globalMonitor: Any?
+        private var trackingObservers: [NSObjectProtocol] = []
+
+        init(isPresented: Binding<Bool>) {
+            _isPresented = isPresented
+        }
+
+        func update(content: Content, isPresented presented: Bool) {
+            if presented {
+                present(content: AnyView(content))
+            } else {
+                dismiss()
+            }
+        }
+
+        func present(content: AnyView) {
+            guard let anchorView, let anchorWindow = anchorView.window else { return }
+
+            if let hosting = hostingController {
+                hosting.rootView = content
+                hosting.view.layoutSubtreeIfNeeded()
+                resizeAndReposition()
+                return
+            }
+
+            let hosting = NSHostingController(rootView: content)
+            hosting.view.layoutSubtreeIfNeeded()
+            hostingController = hosting
+
+            let panel = PickerPanel(
+                contentRect: NSRect(origin: .zero, size: hosting.view.fittingSize),
+                styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered,
+                defer: false
+            )
+            panel.isFloatingPanel = true
+            panel.hidesOnDeactivate = false
+            panel.becomesKeyOnlyIfNeeded = false
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = true
+            panel.level = .popUpMenu
+            panel.animationBehavior = .utilityWindow
+            panel.contentViewController = hosting
+            self.panel = panel
+
+            positionPanel(anchoredTo: anchorView, in: anchorWindow)
+            panel.makeKeyAndOrderFront(nil)
+
+            installEventMonitors()
+            installAnchorTracking(for: anchorView, window: anchorWindow)
+        }
+
+        func dismiss() {
+            guard panel != nil else { return }
+            removeEventMonitors()
+            panel?.orderOut(nil)
+            panel = nil
+            hostingController = nil
+            // Sync binding synchronously so a fresh open in the same
+            // runloop tick isn't clobbered by a delayed `false` write.
+            if isPresented {
+                isPresented = false
+            }
+        }
+
+        // MARK: Positioning
+
+        private func resizeAndReposition() {
+            guard let hosting = hostingController, let panel else { return }
+            let size = hosting.view.fittingSize
+            var frame = panel.frame
+            frame.size = size
+            panel.setFrame(frame, display: true)
+            if let anchorView, let anchorWindow = anchorView.window {
+                positionPanel(anchoredTo: anchorView, in: anchorWindow)
+            }
+        }
+
+        private func positionPanel(anchoredTo anchor: NSView, in anchorWindow: NSWindow) {
+            guard let panel, let hosting = hostingController else { return }
+            let size = hosting.view.fittingSize
+            let anchorRectInWindow = anchor.convert(anchor.bounds, to: nil)
+            let anchorRectInScreen = anchorWindow.convertToScreen(anchorRectInWindow)
+
+            // Default: below the anchor, horizontally centered, 6pt gap.
+            var origin = NSPoint(
+                x: anchorRectInScreen.midX - size.width / 2,
+                y: anchorRectInScreen.minY - size.height - 6
+            )
+
+            // Find the screen that actually contains the anchor's midpoint
+            // (not the anchor window's "dominant" screen, which can be on
+            // the wrong display when the window spans monitors).
+            let anchorMid = NSPoint(x: anchorRectInScreen.midX, y: anchorRectInScreen.midY)
+            let screen = NSScreen.screens.first { $0.frame.contains(anchorMid) }
+                ?? anchorWindow.screen
+                ?? NSScreen.main
+            if let visible = screen?.visibleFrame {
+                origin.x = max(visible.minX + 4, min(origin.x, visible.maxX - size.width - 4))
+                if origin.y < visible.minY + 4 {
+                    origin.y = anchorRectInScreen.maxY + 6
+                }
+                origin.y = max(visible.minY + 4, min(origin.y, visible.maxY - size.height - 4))
+            }
+            panel.setFrameOrigin(origin)
+        }
+
+        // MARK: Event monitors
+
+        private func installEventMonitors() {
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
+                guard let self else { return event }
+                if event.type == .keyDown && event.keyCode == 53 {
+                    self.dismiss()
+                    return nil
+                }
+                if event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .otherMouseDown {
+                    if event.window !== self.panel {
+                        self.dismiss()
+                    }
+                }
+                return event
+            }
+            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+                self?.dismiss()
+            }
+        }
+
+        private func removeEventMonitors() {
+            if let m = localMonitor { NSEvent.removeMonitor(m); localMonitor = nil }
+            if let m = globalMonitor { NSEvent.removeMonitor(m); globalMonitor = nil }
+            for obs in trackingObservers {
+                NotificationCenter.default.removeObserver(obs)
+            }
+            trackingObservers.removeAll()
+        }
+
+        // MARK: Anchor tracking
+
+        /// Re-position the panel whenever the anchor's screen location
+        /// might change: window move/resize, plus any enclosing scroll
+        /// view scrolling.
+        private func installAnchorTracking(for anchor: NSView, window: NSWindow) {
+            let nc = NotificationCenter.default
+            let reposition: (Notification) -> Void = { [weak self] _ in
+                guard let self, let anchor = self.anchorView,
+                      let win = anchor.window else { return }
+                self.positionPanel(anchoredTo: anchor, in: win)
+            }
+
+            trackingObservers.append(nc.addObserver(
+                forName: NSWindow.didMoveNotification, object: window, queue: .main, using: reposition))
+            trackingObservers.append(nc.addObserver(
+                forName: NSWindow.didResizeNotification, object: window, queue: .main, using: reposition))
+
+            // Enclosing scroll views: bounds change fires on every scroll.
+            // Walk the responder chain for NSScrollView ancestors and
+            // observe their content view bounds.
+            var node: NSView? = anchor
+            while let v = node {
+                if let scroll = v as? NSScrollView {
+                    let cv = scroll.contentView
+                    cv.postsBoundsChangedNotifications = true
+                    trackingObservers.append(nc.addObserver(
+                        forName: NSView.boundsDidChangeNotification,
+                        object: cv,
+                        queue: .main,
+                        using: reposition))
+                }
+                node = v.superview
+            }
+        }
     }
 }
