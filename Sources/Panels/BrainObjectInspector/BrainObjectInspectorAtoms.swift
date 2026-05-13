@@ -214,6 +214,8 @@ struct PropertyRow<Value: View>: View {
             Text(label)
                 .font(.system(size: 11.5))
                 .foregroundColor(BVColor.fgMute)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
     }
 }

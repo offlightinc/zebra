@@ -258,32 +258,13 @@ struct DocInspectorView: View {
             InspectorHeader(tag: .document, title: note.title)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    InspectorSection {
-                        PropertyRow(label: String(localized: "brain.row.created", defaultValue: "Created"), icon: "calendar") {
-                            DateBadgeView(date: note.created, kind: .meta)
-                        }
-                        PropertyRow(label: String(localized: "brain.row.updated", defaultValue: "Updated"), icon: "calendar") {
-                            DateBadgeView(date: note.updated, kind: .meta)
-                        }
-                        if !note.aliases.isEmpty {
-                            PropertyRow(label: String(localized: "brain.row.aliases", defaultValue: "Aliases"), icon: "link", layout: .stack) {
-                                BrainInspectorFlowLayout(spacing: 4) {
-                                    ForEach(note.aliases, id: \.self) { a in
-                                        Text(a)
-                                            .font(.system(size: 10.5, design: .monospaced))
-                                            .foregroundColor(BVColor.fgMute)
-                                            .padding(.horizontal, 5).frame(height: 18)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 3)
-                                                    .fill(BVColor.bgInput)
-                                                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(BVColor.border))
-                                            )
-                                    }
+                    if !note.frontmatter.isEmpty {
+                        InspectorSection {
+                            ForEach(note.frontmatter, id: \.key) { field in
+                                PropertyRow(label: field.key, icon: icon(for: field.key)) {
+                                    FrontmatterValueView(value: field.value)
                                 }
                             }
-                        }
-                        PropertyRow(label: String(localized: "brain.row.tags", defaultValue: "Tags"), icon: "number", layout: .stack) {
-                            TagFlow(tags: note.tags)
                         }
                     }
 
@@ -351,9 +332,85 @@ struct DocInspectorView: View {
                             }
                         }
                     }
+
                 }
             }
         }
+    }
+
+    private func icon(for key: String) -> String {
+        switch key {
+        case "aliases": return "link"
+        case "tags": return "number"
+        case "created", "updated", "date": return "calendar"
+        default: return "doc.text"
+        }
+    }
+}
+
+private struct FrontmatterValueView: View {
+    let value: BrainFrontmatterValue
+
+    var body: some View {
+        switch value {
+        case .null:
+            EmptyValue()
+        case .scalar(let value):
+            Text(value)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundColor(BVColor.fg)
+                .lineLimit(3)
+                .truncationMode(.tail)
+                .textSelection(.enabled)
+        case .array(let values):
+            let items = values.map(Self.flatString)
+            if items.isEmpty {
+                EmptyValue()
+            } else {
+                BrainInspectorFlowLayout(spacing: 4) {
+                    ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                        FrontmatterChip(text: item)
+                    }
+                }
+            }
+        case .map:
+            Text(Self.flatString(value))
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundColor(BVColor.fg)
+                .lineLimit(3)
+                .truncationMode(.tail)
+                .textSelection(.enabled)
+        }
+    }
+
+    private static func flatString(_ value: BrainFrontmatterValue) -> String {
+        switch value {
+        case .null:
+            return "—"
+        case .scalar(let string):
+            return string
+        case .array(let values):
+            return "[" + values.map(flatString).joined(separator: ", ") + "]"
+        case .map(let pairs):
+            return "{" + pairs.map { "\($0.key): \(flatString($0.value))" }.joined(separator: ", ") + "}"
+        }
+    }
+}
+
+private struct FrontmatterChip: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10.5, design: .monospaced))
+            .foregroundColor(BVColor.fgMute)
+            .padding(.horizontal, 5)
+            .frame(height: 18)
+            .background(
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(BVColor.bgInput)
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(BVColor.border))
+            )
     }
 }
 

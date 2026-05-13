@@ -53,14 +53,25 @@ struct GoalObject {
 
 struct NoteObject {
     var title: String
-    var aliases: [String]
-    var tags: [String]
-    var created: BrainDate?
-    var updated: BrainDate?
+    /// All parsed frontmatter in source order. Generic documents should not
+    /// need per-key presets to expose metadata.
+    var frontmatter: [BrainFrontmatterField]
     var headings: [String]
     var seeAlso: [BrainObjectRef]
     var referencedIn: [BrainObjectRef]
     var backlinks: Int?
+}
+
+struct BrainFrontmatterField {
+    var key: String
+    var value: BrainFrontmatterValue
+}
+
+indirect enum BrainFrontmatterValue {
+    case null
+    case scalar(String)
+    case array([BrainFrontmatterValue])
+    case map([(key: String, value: BrainFrontmatterValue)])
 }
 
 struct UnknownObject {
@@ -489,14 +500,10 @@ extension BrainObjectParser {
     }
 
     fileprivate static func buildNote(pairs: [(String, YamlValue)], title: String, body: String) -> NoteObject {
-        let dict = Dictionary(uniqueKeysWithValues: pairs.map { ($0.0, $0.1) })
         let referencedIn = extractReferencedIn(body)
         return NoteObject(
             title: title,
-            aliases: stringList(dict["aliases"]),
-            tags: stringList(dict["tags"]),
-            created: dict["created"]?.scalar.flatMap(parseDate(_:)),
-            updated: dict["updated"]?.scalar.flatMap(parseDate(_:)),
+            frontmatter: pairs.map { BrainFrontmatterField(key: $0.0, value: $0.1.frontmatterValue) },
             headings: extractH2Outline(body),
             seeAlso: extractSeeAlso(body),
             referencedIn: referencedIn,
@@ -761,6 +768,19 @@ fileprivate indirect enum YamlValue {
             return "[" + a.map { $0.debugFlat }.joined(separator: ", ") + "]"
         case .map(let m):
             return "{" + m.map { "\($0.0): \($0.1.debugFlat)" }.joined(separator: ", ") + "}"
+        }
+    }
+
+    var frontmatterValue: BrainFrontmatterValue {
+        switch self {
+        case .null:
+            return .null
+        case .scalar(let s):
+            return .scalar(s)
+        case .array(let values):
+            return .array(values.map { $0.frontmatterValue })
+        case .map(let pairs):
+            return .map(pairs.map { (key: $0.0, value: $0.1.frontmatterValue) })
         }
     }
 }
