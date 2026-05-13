@@ -328,25 +328,23 @@ struct DocInspectorView: View {
                         }
                     }
 
-                    if !note.referencedIn.isEmpty {
-                        InspectorSection(
-                            title: String(localized: "brain.section.referencedIn", defaultValue: "Referenced in"),
-                            count: note.referencedIn.count
-                        ) {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(note.referencedIn, id: \.self) { r in
-                                    RelationRowView(ref: r, onActivate: onActivateRelation)
-                                }
-                            }
-                        }
-                    }
-
                     InspectorSection(title: String(localized: "brain.section.meta", defaultValue: "Meta")) {
                         if let n = note.backlinks {
-                            PropertyRow(label: String(localized: "brain.row.backlinks", defaultValue: "Backlinks"), icon: "link") {
-                                Text(String(localized: "brain.row.backlinksValue", defaultValue: "\(n) references"))
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundColor(BVColor.fgMute)
+                            VStack(alignment: .leading, spacing: 0) {
+                                PropertyRow(label: String(localized: "brain.row.backlinks", defaultValue: "Backlinks"), icon: "link") {
+                                    Text(String(localized: "brain.row.backlinksValue", defaultValue: "\(n) references"))
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundColor(BVColor.fgMute)
+                                }
+                                if !note.referencedIn.isEmpty {
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        ForEach(note.referencedIn, id: \.self) { r in
+                                            RelationRowView(ref: r, onActivate: onActivateRelation)
+                                        }
+                                    }
+                                    .padding(.leading, 24)
+                                    .padding(.top, 2)
+                                }
                             }
                         } else {
                             PropertyRow(label: String(localized: "brain.row.backlinks", defaultValue: "Backlinks"), icon: "link") {
