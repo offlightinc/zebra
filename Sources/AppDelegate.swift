@@ -6978,6 +6978,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let verticalTabsSidebarModeState = VerticalTabsSidebarModeState()
         let verticalTabsSidebarVaultState = VerticalTabsSidebarVaultState()
         let markdownFileListStore = MarkdownFileListStore()
+        let goalFileListStore = GoalFileListStore()
+        let goalsViewState = GoalsViewState()
 
         let root = ContentView(updateViewModel: updateViewModel, windowId: windowId)
             .environmentObject(tabManager)
@@ -6989,6 +6991,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             .environmentObject(verticalTabsSidebarModeState)
             .environmentObject(verticalTabsSidebarVaultState)
             .environmentObject(markdownFileListStore)
+            .environmentObject(goalFileListStore)
+            .environmentObject(goalsViewState)
 
         // Use the current key window's size for new windows so Cmd+Shift+N
         // creates a window matching the previous one's dimensions.

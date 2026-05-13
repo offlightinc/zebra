@@ -2,13 +2,15 @@ import SwiftUI
 
 struct VerticalTabsSidebarGoalsContent: View {
     @ObservedObject var state: VerticalTabsSidebarModeState
-    @ObservedObject var store: MarkdownFileListStore
+    @ObservedObject var goalsStore: GoalFileListStore
+    @ObservedObject var viewState: GoalsViewState
     let onSelectFile: (String) -> Void
 
     var body: some View {
-        VerticalTabsSidebarMarkdownListView(
-            store: store,
-            state: state,
+        GoalsListView(
+            store: goalsStore,
+            modeState: state,
+            viewState: viewState,
             onSelectFile: onSelectFile
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
