@@ -87,51 +87,14 @@ struct GoalCadenceRow: View, Equatable {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 8) {
-                Text(displayName)
-                    .font(.system(size: GoalsDesignTokens.rowFontSize, weight: .regular))
-                    .foregroundStyle(isCompleted ? Color(nsColor: .secondaryLabelColor) : Color(nsColor: .labelColor))
-                    .strikethrough(isCompleted, color: Color(nsColor: .secondaryLabelColor))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                goalRowTitle(displayName, isCompleted: isCompleted)
                 Spacer(minLength: 0)
-                duePill
+                goalDuePill(due)
             }
-            .padding(.leading, GoalsDesignTokens.rowHorizontalPadding + GoalsDesignTokens.flatRowLeadingInset)
-            .padding(.trailing, GoalsDesignTokens.rowHorizontalPadding)
-            .frame(height: GoalsDesignTokens.rowHeight)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                isSelected ? Color.accentColor.opacity(GoalsDesignTokens.selectionAlpha) : Color.clear
-            )
-            .contentShape(Rectangle())
+            .modifier(GoalFlatRowChrome(isSelected: isSelected))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("VerticalTabsSidebar.Goals.cadenceRow")
-    }
-
-    @ViewBuilder
-    private var duePill: some View {
-        let (fg, bg) = pillColors(for: due.kind)
-        Text(due.label)
-            .font(.system(size: GoalsDesignTokens.metaFontSize, weight: .regular))
-            .foregroundStyle(fg)
-            .padding(.horizontal, GoalsDesignTokens.metaPillHorizontalPadding)
-            .padding(.vertical, GoalsDesignTokens.metaPillVerticalPadding)
-            .background(
-                RoundedRectangle(cornerRadius: GoalsDesignTokens.metaPillCornerRadius, style: .continuous)
-                    .fill(bg)
-            )
-    }
-
-    private func pillColors(for kind: GoalDuePillKind) -> (Color, Color) {
-        switch kind {
-        case .neutral:
-            return (Color(nsColor: .secondaryLabelColor), Color(nsColor: .tertiarySystemFill))
-        case .warn:
-            return (Color(nsColor: .systemOrange), Color(nsColor: .systemOrange).opacity(0.18))
-        case .danger:
-            return (Color(nsColor: .systemRed), Color(nsColor: .systemRed).opacity(0.18))
-        }
     }
 }
 
@@ -154,18 +117,63 @@ struct GoalStatusRow: View, Equatable {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 8) {
-                Text(displayName)
-                    .font(.system(size: GoalsDesignTokens.rowFontSize, weight: .regular))
-                    .foregroundStyle(isCompleted ? Color(nsColor: .secondaryLabelColor) : Color(nsColor: .labelColor))
-                    .strikethrough(isCompleted, color: Color(nsColor: .secondaryLabelColor))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                goalRowTitle(displayName, isCompleted: isCompleted)
                 Spacer(minLength: 0)
                 Text("\(milestoneDone)/\(milestoneTotal)")
                     .font(.system(size: GoalsDesignTokens.metaFontSize, weight: .regular))
                     .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                     .monospacedDigit()
             }
+            .modifier(GoalFlatRowChrome(isSelected: isSelected))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("VerticalTabsSidebar.Goals.statusRow")
+    }
+}
+
+// Shared row title + flat-row chrome used by GoalCadenceRow and GoalStatusRow.
+// Keep these file-private so they stay coupled to the row consumers above.
+
+@ViewBuilder
+private func goalRowTitle(_ displayName: String, isCompleted: Bool) -> some View {
+    Text(displayName)
+        .font(.system(size: GoalsDesignTokens.rowFontSize, weight: .regular))
+        .foregroundStyle(isCompleted ? Color(nsColor: .secondaryLabelColor) : Color(nsColor: .labelColor))
+        .strikethrough(isCompleted, color: Color(nsColor: .secondaryLabelColor))
+        .lineLimit(1)
+        .truncationMode(.tail)
+}
+
+@ViewBuilder
+private func goalDuePill(_ due: GoalDueDescriptor) -> some View {
+    let (fg, bg) = goalDuePillColors(for: due.kind)
+    Text(due.label)
+        .font(.system(size: GoalsDesignTokens.metaFontSize, weight: .regular))
+        .foregroundStyle(fg)
+        .padding(.horizontal, GoalsDesignTokens.metaPillHorizontalPadding)
+        .padding(.vertical, GoalsDesignTokens.metaPillVerticalPadding)
+        .background(
+            RoundedRectangle(cornerRadius: GoalsDesignTokens.metaPillCornerRadius, style: .continuous)
+                .fill(bg)
+        )
+}
+
+private func goalDuePillColors(for kind: GoalDuePillKind) -> (Color, Color) {
+    switch kind {
+    case .neutral:
+        return (Color(nsColor: .secondaryLabelColor), Color(nsColor: .tertiarySystemFill))
+    case .warn:
+        return (Color(nsColor: .systemOrange), Color(nsColor: .systemOrange).opacity(0.18))
+    case .danger:
+        return (Color(nsColor: .systemRed), Color(nsColor: .systemRed).opacity(0.18))
+    }
+}
+
+private struct GoalFlatRowChrome: ViewModifier {
+    let isSelected: Bool
+
+    func body(content: Content) -> some View {
+        content
             .padding(.leading, GoalsDesignTokens.rowHorizontalPadding + GoalsDesignTokens.flatRowLeadingInset)
             .padding(.trailing, GoalsDesignTokens.rowHorizontalPadding)
             .frame(height: GoalsDesignTokens.rowHeight)
@@ -174,9 +182,6 @@ struct GoalStatusRow: View, Equatable {
                 isSelected ? Color.accentColor.opacity(GoalsDesignTokens.selectionAlpha) : Color.clear
             )
             .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("VerticalTabsSidebar.Goals.statusRow")
     }
 }
 
