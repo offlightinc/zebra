@@ -342,7 +342,6 @@ struct DocInspectorView: View {
                                             RelationRowView(ref: r, onActivate: onActivateRelation)
                                         }
                                     }
-                                    .padding(.leading, 24)
                                     .padding(.top, 2)
                                 }
                             }

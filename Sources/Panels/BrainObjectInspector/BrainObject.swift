@@ -650,12 +650,17 @@ extension BrainObjectParser {
     /// rows when present. A later graph index should replace this with actual
     /// inbound link computation across the vault.
     fileprivate static func extractReferencedIn(_ body: String) -> [BrainObjectRef] {
-        body.components(separatedBy: "\n").compactMap { line in
+        var seen = Set<BrainObjectRef>()
+        return body.components(separatedBy: "\n").compactMap { line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("- "), trimmed.localizedStandardContains("Referenced in") else {
                 return nil
             }
-            return referencedInRef(from: trimmed)
+            guard let ref = referencedInRef(from: trimmed), !seen.contains(ref) else {
+                return nil
+            }
+            seen.insert(ref)
+            return ref
         }
     }
 
