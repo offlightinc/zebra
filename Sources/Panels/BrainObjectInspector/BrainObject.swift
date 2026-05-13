@@ -643,10 +643,16 @@ extension BrainObjectParser {
             }
             guard inSection else { continue }
             if t.hasPrefix("- ") || t.hasPrefix("* ") {
-                var raw = String(t.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-                raw = raw.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
-                if !raw.isEmpty {
-                    seeAlso.append(BrainObjectRef(raw: raw))
+                let raw = String(t.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if let wiki = firstWikiLink(in: raw) {
+                    seeAlso.append(BrainObjectRef(raw: wiki))
+                } else if let md = firstMarkdownLinkTarget(in: raw) {
+                    seeAlso.append(BrainObjectRef(raw: normalizedBrainPath(md)))
+                } else {
+                    let fallback = raw.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+                    if !fallback.isEmpty {
+                        seeAlso.append(BrainObjectRef(raw: fallback))
+                    }
                 }
             }
         }

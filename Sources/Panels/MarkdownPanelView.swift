@@ -1,10 +1,13 @@
 import AppKit
 import SwiftUI
 import MarkdownUI
+import Bonsplit
 
 /// SwiftUI view that renders a MarkdownPanel's content using MarkdownUI.
 struct MarkdownPanelView: View {
     @ObservedObject var panel: MarkdownPanel
+    let workspace: Workspace
+    let paneId: PaneID
     let isFocused: Bool
     let isVisibleInUI: Bool
     let portalPriority: Int
@@ -13,6 +16,7 @@ struct MarkdownPanelView: View {
     @State private var focusFlashOpacity: Double = 0.0
     @State private var focusFlashAnimationGeneration: Int = 0
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var markdownFileListStore: MarkdownFileListStore
 
     var body: some View {
         Group {
@@ -54,7 +58,7 @@ struct MarkdownPanelView: View {
                 .frame(minWidth: 360)
 
             if panel.showsInspector {
-                BrainObjectInspectorView(parse: panel.parse)
+                BrainObjectInspectorView(parse: panel.parse, onActivateRelation: activateRelation)
                     .frame(minWidth: 280, idealWidth: 320, maxWidth: 420)
             }
         }
@@ -115,6 +119,18 @@ struct MarkdownPanelView: View {
             Spacer()
             inspectorToggle
         }
+    }
+
+    private func activateRelation(_ ref: BrainObjectRef) {
+        guard let filePath = BrainObjectLinkResolver.resolve(
+            ref: ref,
+            vaultRoot: markdownFileListStore.rootPath,
+            markdownFiles: markdownFileListStore.mdFiles
+        ) else {
+            return
+        }
+
+        _ = workspace.openOrFocusMarkdownSurface(inPane: paneId, filePath: filePath)
     }
 
     /// Chevron that hides/shows the right-pane inspector. The icon
@@ -454,5 +470,85 @@ final class MarkdownPanelPointerObserverView: NSView {
         let point = contentView.convert(event.locationInWindow, from: nil)
         let target = contentView.hitTest(point)
         return target === self ? nil : target
+    }
+}
+
+private enum BrainObjectLinkResolver {
+    static func resolve(
+        ref: BrainObjectRef,
+        vaultRoot: String?,
+        markdownFiles: [MarkdownFileEntry]
+    ) -> String? {
+        let raw = normalizedRaw(ref.raw)
+        guard !raw.isEmpty else { return nil }
+
+        if raw.hasPrefix("/") {
+            return existingMarkdownPath(raw)
+        }
+
+        if raw.contains("/"), let direct = resolveRelativePath(raw, vaultRoot: vaultRoot) {
+            return direct
+        }
+
+        return resolveFromScannedFiles(raw, markdownFiles: markdownFiles)
+    }
+
+    private static func normalizedRaw(_ raw: String) -> String {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let pipeIndex = value.firstIndex(of: "|") {
+            value = String(value[..<pipeIndex])
+        }
+        if let headingIndex = value.firstIndex(of: "#") {
+            value = String(value[..<headingIndex])
+        }
+        while value.hasPrefix("./") {
+            value = String(value.dropFirst(2))
+        }
+        while value.hasPrefix("../") {
+            value = String(value.dropFirst(3))
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func resolveRelativePath(_ raw: String, vaultRoot: String?) -> String? {
+        guard let vaultRoot, !vaultRoot.isEmpty else { return nil }
+        let base = (vaultRoot as NSString).appendingPathComponent(raw)
+        for candidate in markdownCandidates(for: base) {
+            if let path = existingMarkdownPath(candidate) {
+                return path
+            }
+        }
+        return nil
+    }
+
+    private static func resolveFromScannedFiles(_ raw: String, markdownFiles: [MarkdownFileEntry]) -> String? {
+        let wanted = stripMarkdownExtension(raw).lowercased()
+        let matches = markdownFiles.filter { entry in
+            let relative = stripMarkdownExtension(entry.relativeParentPath + entry.displayName).lowercased()
+            let filename = stripMarkdownExtension(entry.displayName).lowercased()
+            return relative == wanted || filename == wanted
+        }
+        return matches.count == 1 ? matches[0].absolutePath : nil
+    }
+
+    private static func markdownCandidates(for path: String) -> [String] {
+        let ext = (path as NSString).pathExtension.lowercased()
+        if ext == "md" || ext == "markdown" {
+            return [path]
+        }
+        return [path + ".md", path + ".markdown"]
+    }
+
+    private static func existingMarkdownPath(_ path: String) -> String? {
+        let ext = (path as NSString).pathExtension.lowercased()
+        guard ext == "md" || ext == "markdown" else { return nil }
+        return FileManager.default.fileExists(atPath: path) ? path : nil
+    }
+
+    private static func stripMarkdownExtension(_ value: String) -> String {
+        let ns = value as NSString
+        let ext = ns.pathExtension.lowercased()
+        guard ext == "md" || ext == "markdown" else { return value }
+        return ns.deletingPathExtension
     }
 }

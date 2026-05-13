@@ -255,7 +255,6 @@ struct DocInspectorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            InspectorHeader(tag: .document, title: note.title)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if !note.frontmatter.isEmpty {

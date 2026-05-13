@@ -603,6 +603,7 @@ struct RelationRowView: View {
     let ref: BrainObjectRef
     var statusOverride: BrainTaskStatus? = nil
     var onActivate: ((BrainObjectRef) -> Void)? = nil
+    @State private var isHovering = false
 
     var body: some View {
         Button(action: { onActivate?(ref) }) {
@@ -623,15 +624,34 @@ struct RelationRowView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 6)
-                Text(ref.displayMeta)
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundColor(BVColor.fgFaint)
+                if let meta = compactMeta {
+                    Text(meta)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundColor(BVColor.fgFaint)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
             .padding(.horizontal, 16)
             .frame(minHeight: 24)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            guard hovering != isHovering else { return }
+            isHovering = hovering
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .onDisappear {
+            if isHovering {
+                NSCursor.pop()
+                isHovering = false
+            }
+        }
     }
 
     private var inferredSymbol: String {
@@ -639,6 +659,13 @@ struct RelationRowView: View {
         if r.hasPrefix("tasks/") { return "checkmark.square" }
         if r.hasPrefix("goals/") || ref.looksLikeId { return "scope" }
         return "doc.text"
+    }
+
+    private var compactMeta: String? {
+        let meta = ref.displayMeta.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !meta.isEmpty, meta != ref.raw else { return nil }
+        guard meta.count <= 24, !meta.contains(" "), !meta.contains("\n") else { return nil }
+        return meta
     }
 }
 

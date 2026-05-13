@@ -5,6 +5,7 @@ import Bonsplit
 /// View that renders the appropriate panel view based on panel type
 struct PanelContentView: View {
     let panel: any Panel
+    let workspace: Workspace
     let workspaceId: UUID
     let paneId: PaneID
     let isFocused: Bool
@@ -58,6 +59,8 @@ struct PanelContentView: View {
             if let markdownPanel = panel as? MarkdownPanel {
                 MarkdownPanelView(
                     panel: markdownPanel,
+                    workspace: workspace,
+                    paneId: paneId,
                     isFocused: isFocused,
                     isVisibleInUI: isVisibleInUI,
                     portalPriority: portalPriority,
