@@ -15,6 +15,7 @@ enum GoalFrontmatterParser {
         guard let head = readHead(path: filePath, bytes: headBytes) else { return nil }
         guard let raw = extractFrontmatterBlock(from: head) else { return nil }
         let kv = parseFlatKeyValues(raw)
+        guard kv["type"]?.trimmedUnquoted.lowercased() == "goal" else { return nil }
         let milestones = parseMilestones(raw)
 
         let displayNameFallback = (filePath as NSString).lastPathComponent
