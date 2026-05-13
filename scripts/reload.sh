@@ -438,6 +438,12 @@ fi
 if [[ "${CMUX_SKIP_ZIG_BUILD:-}" == "1" ]]; then
   XCODEBUILD_ARGS+=(CMUX_SKIP_ZIG_BUILD=1)
 fi
+# Local ad-hoc signing override (fork uses cmux team ID we don't have certs for).
+XCODEBUILD_ARGS+=(
+  CODE_SIGN_IDENTITY="-"
+  CODE_SIGN_STYLE=Manual
+  DEVELOPMENT_TEAM=""
+)
 XCODEBUILD_ARGS+=(build)
 
 XCODEBUILD_LOCK="${TMPDIR:-/tmp}/cmux-xcodebuild-$(id -u).lock"
