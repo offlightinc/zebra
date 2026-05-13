@@ -131,6 +131,7 @@
 		BCB10001 /* Panels/BrainObjectInspector/BrainObject.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB10002 /* Panels/BrainObjectInspector/BrainObject.swift */; };
 		BCB10003 /* Panels/BrainObjectInspector/BrainObjectInspectorAtoms.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB10004 /* Panels/BrainObjectInspector/BrainObjectInspectorAtoms.swift */; };
 		BCB10005 /* Panels/BrainObjectInspector/BrainObjectInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB10006 /* Panels/BrainObjectInspector/BrainObjectInspectorView.swift */; };
+		BCB10007 /* Panels/BrainObjectInspector/BrainFrontmatterWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB10008 /* Panels/BrainObjectInspector/BrainFrontmatterWriter.swift */; };
 		A5001422 /* Panels/FilePreviewPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001423 /* Panels/FilePreviewPanel.swift */; };
 		A5001425 /* Panels/PDFPreviewChromeDebugWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001424 /* Panels/PDFPreviewChromeDebugWindowController.swift */; };
 		A5001427 /* Panels/FilePreviewPDFSizing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001426 /* Panels/FilePreviewPDFSizing.swift */; };
@@ -652,6 +653,7 @@
 		BCB10002 /* Panels/BrainObjectInspector/BrainObject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/BrainObjectInspector/BrainObject.swift; sourceTree = "<group>"; };
 		BCB10004 /* Panels/BrainObjectInspector/BrainObjectInspectorAtoms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/BrainObjectInspector/BrainObjectInspectorAtoms.swift; sourceTree = "<group>"; };
 		BCB10006 /* Panels/BrainObjectInspector/BrainObjectInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/BrainObjectInspector/BrainObjectInspectorView.swift; sourceTree = "<group>"; };
+		BCB10008 /* Panels/BrainObjectInspector/BrainFrontmatterWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/BrainObjectInspector/BrainFrontmatterWriter.swift; sourceTree = "<group>"; };
 		A5001423 /* Panels/FilePreviewPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewPanel.swift; sourceTree = "<group>"; };
 		A5001424 /* Panels/PDFPreviewChromeDebugWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/PDFPreviewChromeDebugWindowController.swift; sourceTree = "<group>"; };
 		A5001426 /* Panels/FilePreviewPDFSizing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/FilePreviewPDFSizing.swift; sourceTree = "<group>"; };
@@ -1314,6 +1316,7 @@
 				A5001418 /* Panels/MarkdownPanel.swift */,
 				A5001419 /* Panels/MarkdownPanelView.swift */,
 				BCB10002 /* Panels/BrainObjectInspector/BrainObject.swift */,
+				BCB10008 /* Panels/BrainObjectInspector/BrainFrontmatterWriter.swift */,
 				BCB10004 /* Panels/BrainObjectInspector/BrainObjectInspectorAtoms.swift */,
 				BCB10006 /* Panels/BrainObjectInspector/BrainObjectInspectorView.swift */,
 				A5001423 /* Panels/FilePreviewPanel.swift */,
@@ -1988,6 +1991,7 @@
 				A5001420 /* Panels/MarkdownPanel.swift in Sources */,
 				A5001421 /* Panels/MarkdownPanelView.swift in Sources */,
 				BCB10001 /* Panels/BrainObjectInspector/BrainObject.swift in Sources */,
+				BCB10007 /* Panels/BrainObjectInspector/BrainFrontmatterWriter.swift in Sources */,
 				BCB10003 /* Panels/BrainObjectInspector/BrainObjectInspectorAtoms.swift in Sources */,
 				BCB10005 /* Panels/BrainObjectInspector/BrainObjectInspectorView.swift in Sources */,
 				A5001422 /* Panels/FilePreviewPanel.swift in Sources */,

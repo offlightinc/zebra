@@ -785,3 +785,583 @@ struct MilestoneRowView: View {
         return f.string(from: d)
     }
 }
+
+// MARK: - Editable Goal status pill
+
+/// Visual glyph for a `GoalStatus`. Reuses `StatusGlyph`'s `BrainTaskStatus`
+/// rendering via a small mapping so the editable Goal pill matches the
+/// read-only Task pill style.
+private func glyphMapping(_ s: GoalStatus) -> BrainTaskStatus {
+    switch s {
+    case .active: return .active
+    case .blocked: return .blocked
+    case .draft: return .todo
+    case .completed: return .completed
+    }
+}
+
+private func goalStatusLabel(_ s: GoalStatus) -> String {
+    switch s {
+    case .active: return String(localized: "brain.goal.status.active", defaultValue: "Active")
+    case .blocked: return String(localized: "brain.goal.status.blocked", defaultValue: "Blocked")
+    case .draft: return String(localized: "brain.goal.status.draft", defaultValue: "Draft")
+    case .completed: return String(localized: "brain.goal.status.completed", defaultValue: "Completed")
+    }
+}
+
+struct EditableGoalStatusPill: View {
+    let value: GoalStatus?
+    let onChange: (GoalStatus?) -> Void
+
+    @State private var isPresented = false
+
+    var body: some View {
+        Button(action: { isPresented = true }) {
+            HStack(spacing: 5) {
+                if let value {
+                    StatusGlyph(status: glyphMapping(value)).frame(width: 12, height: 12)
+                    Text(goalStatusLabel(value))
+                        .font(.system(size: 11.5))
+                        .foregroundColor(BVColor.fg)
+                } else {
+                    Circle()
+                        .strokeBorder(BVColor.fgFaint, style: StrokeStyle(lineWidth: 1, dash: [2, 1.4]))
+                        .frame(width: 12, height: 12)
+                    Text(String(localized: "brain.editable.setStatus", defaultValue: "Set status..."))
+                        .font(.system(size: 11.5).italic())
+                        .foregroundColor(BVColor.fgFaint)
+                }
+            }
+            .padding(.horizontal, 7)
+            .frame(height: 20)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(BVColor.bgInput)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(BVColor.border))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            GoalStatusPickerView(
+                current: value,
+                onSelect: { newValue in
+                    if newValue != value {
+                        onChange(newValue)
+                    }
+                    isPresented = false
+                }
+            )
+        }
+        .accessibilityLabel(Text(value.map(goalStatusLabel) ?? String(localized: "brain.editable.setStatus", defaultValue: "Set status...")))
+    }
+}
+
+struct GoalStatusPickerView: View {
+    let current: GoalStatus?
+    let onSelect: (GoalStatus?) -> Void
+
+    @State private var query: String = ""
+    @FocusState private var searchFocused: Bool
+
+    private var filtered: [GoalStatus] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        if q.isEmpty { return GoalStatus.allCases }
+        return GoalStatus.allCases.filter { goalStatusLabel($0).lowercased().hasPrefix(q) }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TextField(String(localized: "brain.editable.changeStatus", defaultValue: "Change status..."), text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .focused($searchFocused)
+                .onSubmit {
+                    if let first = filtered.first { onSelect(first) }
+                }
+            Divider()
+            VStack(spacing: 0) {
+                ForEach(Array(filtered.enumerated()), id: \.element) { idx, status in
+                    Button(action: { onSelect(status) }) {
+                        HStack(spacing: 8) {
+                            StatusGlyph(status: glyphMapping(status)).frame(width: 14, height: 14)
+                            Text(goalStatusLabel(status))
+                                .font(.system(size: 12))
+                                .foregroundColor(BVColor.fg)
+                            Spacer()
+                            if current == status {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(BVColor.fgMute)
+                            }
+                            Text("\(idx + 1)")
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundColor(BVColor.fgFaint)
+                                .frame(minWidth: 14, alignment: .trailing)
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(height: 26)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(EditablePickerRowHoverBackground())
+                    .keyboardShortcut(KeyEquivalent(Character("\(idx + 1)")), modifiers: [])
+                }
+                if filtered.isEmpty {
+                    Text(String(localized: "brain.editable.noMatches", defaultValue: "No matches"))
+                        .font(.system(size: 11).italic())
+                        .foregroundColor(BVColor.fgFaint)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10).padding(.vertical, 8)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .frame(width: 240)
+        .background(BVColor.bgElev)
+        .onAppear { searchFocused = true }
+    }
+}
+
+// MARK: - Editable owner chip
+
+struct EditableOwnerChip: View {
+    let rawValue: String?
+    let peopleSlugs: [String]
+    let onChange: (String?) -> Void
+
+    @State private var isPresented = false
+
+    var body: some View {
+        Button(action: { isPresented = true }) {
+            if let display = displayHandle(from: rawValue), !display.isEmpty {
+                ownerChipView(handle: display)
+            } else {
+                placeholderView
+            }
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            OwnerPickerView(
+                current: rawValue,
+                slugs: peopleSlugs,
+                onSelect: { newValue in
+                    if newValue != rawValue {
+                        onChange(newValue)
+                    }
+                    isPresented = false
+                }
+            )
+        }
+    }
+
+    private func ownerChipView(handle: String) -> some View {
+        let initial = String(handle.prefix(1)).uppercased()
+        let color = colorFor(handle: handle)
+        return HStack(spacing: 6) {
+            Text(initial)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 16, height: 16)
+                .background(Circle().fill(color))
+            Text(handle)
+                .font(.system(size: 11.5))
+                .foregroundColor(BVColor.fg)
+        }
+        .padding(.leading, 3).padding(.trailing, 7)
+        .frame(height: 20)
+        .background(
+            Capsule().fill(BVColor.bgInput)
+                .overlay(Capsule().stroke(BVColor.border))
+        )
+        .contentShape(Rectangle())
+    }
+
+    private var placeholderView: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "person.circle.dashed")
+                .font(.system(size: 11))
+                .foregroundColor(BVColor.fgFaint)
+            Text(String(localized: "brain.editable.setOwner", defaultValue: "Set owner..."))
+                .font(.system(size: 11.5).italic())
+                .foregroundColor(BVColor.fgFaint)
+        }
+        .padding(.horizontal, 7)
+        .frame(height: 20)
+        .background(
+            Capsule().fill(BVColor.bgInput)
+                .overlay(Capsule().stroke(BVColor.border))
+        )
+        .contentShape(Rectangle())
+    }
+
+    private func colorFor(handle: String) -> Color {
+        var hasher = Hasher(); hasher.combine(handle)
+        let h = abs(hasher.finalize())
+        let hue = Double(h % 360) / 360.0
+        return Color(hue: hue, saturation: 0.55, brightness: 0.78)
+    }
+}
+
+/// Extracts the display slug from a raw owner string. `people/foo` → `foo`,
+/// `foo` → `foo`. Returns nil if input is nil/empty.
+private func displayHandle(from raw: String?) -> String? {
+    guard let raw, !raw.isEmpty else { return nil }
+    if raw.hasPrefix("people/") {
+        let slug = String(raw.dropFirst("people/".count))
+        return slug.isEmpty ? nil : slug
+    }
+    return raw
+}
+
+struct OwnerPickerView: View {
+    let current: String?
+    let slugs: [String]
+    let onSelect: (String?) -> Void
+
+    @State private var query: String = ""
+    @FocusState private var searchFocused: Bool
+
+    private var filtered: [String] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        if q.isEmpty { return slugs }
+        return slugs.filter { $0.lowercased().contains(q) }
+    }
+
+    private var currentSlug: String? { displayHandle(from: current) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TextField(String(localized: "brain.editable.changeOwner", defaultValue: "Change owner..."), text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .focused($searchFocused)
+            Divider()
+            ScrollView {
+                VStack(spacing: 0) {
+                    Button(action: { onSelect(nil) }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "person.slash")
+                                .font(.system(size: 11))
+                                .foregroundColor(BVColor.fgMute)
+                            Text(String(localized: "brain.editable.unassigned", defaultValue: "Unassigned"))
+                                .font(.system(size: 12))
+                                .foregroundColor(BVColor.fg)
+                            Spacer()
+                            if current == nil {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(BVColor.fgMute)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(height: 26)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(EditablePickerRowHoverBackground())
+                    Divider()
+                    if filtered.isEmpty {
+                        Text(String(localized: "brain.editable.noMatches", defaultValue: "No matches"))
+                            .font(.system(size: 11).italic())
+                            .foregroundColor(BVColor.fgFaint)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 10).padding(.vertical, 8)
+                    } else {
+                        ForEach(filtered, id: \.self) { slug in
+                            Button(action: { onSelect("people/\(slug)") }) {
+                                HStack(spacing: 8) {
+                                    Text(String(slug.prefix(1)).uppercased())
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundColor(.white)
+                                        .frame(width: 14, height: 14)
+                                        .background(Circle().fill(slugColor(slug)))
+                                    Text(slug)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(BVColor.fg)
+                                    Spacer()
+                                    if currentSlug == slug {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(BVColor.fgMute)
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                                .frame(height: 26)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .background(EditablePickerRowHoverBackground())
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .frame(maxHeight: 240)
+        }
+        .frame(width: 240)
+        .background(BVColor.bgElev)
+        .onAppear { searchFocused = true }
+    }
+
+    private func slugColor(_ slug: String) -> Color {
+        var hasher = Hasher(); hasher.combine(slug)
+        let h = abs(hasher.finalize())
+        let hue = Double(h % 360) / 360.0
+        return Color(hue: hue, saturation: 0.55, brightness: 0.78)
+    }
+}
+
+// MARK: - Editable date badge
+
+struct EditableDateBadge: View {
+    let value: BrainDate?
+    let onChange: (Date?) -> Void
+
+    @State private var isPresented = false
+
+    var body: some View {
+        Button(action: { isPresented = true }) {
+            if let value {
+                let days = Calendar(identifier: .gregorian).dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: value.date)).day ?? 0
+                let overdue = days < 0
+                let soon = days >= 0 && days <= 3
+                let color: Color = overdue ? BVColor.priorityUrgent : (soon ? BVColor.priorityHigh : BVColor.fg)
+                HStack(spacing: 5) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 10))
+                        .foregroundColor(color.opacity(0.7))
+                    Text(absoluteString(value.date))
+                        .font(.system(size: 11.5).monospacedDigit())
+                        .foregroundColor(color)
+                }
+                .padding(.horizontal, 5).frame(height: 20)
+                .contentShape(Rectangle())
+            } else {
+                HStack(spacing: 5) {
+                    Image(systemName: "calendar.badge.plus")
+                        .font(.system(size: 10))
+                        .foregroundColor(BVColor.fgFaint)
+                    Text(String(localized: "brain.editable.setDate", defaultValue: "Set date..."))
+                        .font(.system(size: 11.5).italic())
+                        .foregroundColor(BVColor.fgFaint)
+                }
+                .padding(.horizontal, 5).frame(height: 20)
+                .contentShape(Rectangle())
+            }
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            DatePickerPopover(
+                current: value?.date,
+                onSelect: { newDate in
+                    onChange(newDate)
+                    isPresented = false
+                }
+            )
+        }
+    }
+
+    private func absoluteString(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d, yyyy"
+        return f.string(from: d)
+    }
+}
+
+private struct DatePickerPopover: View {
+    let current: Date?
+    let onSelect: (Date?) -> Void
+
+    @State private var selected: Date
+
+    init(current: Date?, onSelect: @escaping (Date?) -> Void) {
+        self.current = current
+        self.onSelect = onSelect
+        _selected = State(initialValue: current ?? Date())
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            GraphicalDatePickerRepresentable(date: $selected)
+                .padding(.horizontal, 6).padding(.top, 6).padding(.bottom, 4)
+            Divider()
+            HStack {
+                Button(String(localized: "brain.editable.clear", defaultValue: "Clear")) {
+                    onSelect(nil)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(BVColor.fgMute)
+                .font(.system(size: 11.5))
+                Spacer(minLength: 8)
+                Button(String(localized: "brain.editable.set", defaultValue: "Set")) {
+                    onSelect(selected)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(BVColor.accent)
+                .font(.system(size: 11.5, weight: .semibold))
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+        }
+        .fixedSize()
+        .background(BVColor.bg)
+    }
+}
+
+/// NSDatePicker wrapped so we can disable the system-drawn background.
+/// SwiftUI's `DatePicker(.graphical)` paints its own chrome that doesn't
+/// match the surrounding popover background; this lets the popover color
+/// show through the calendar's padding region.
+private struct GraphicalDatePickerRepresentable: NSViewRepresentable {
+    @Binding var date: Date
+
+    func makeNSView(context: Context) -> NSDatePicker {
+        let picker = NSDatePicker()
+        picker.datePickerStyle = .clockAndCalendar
+        picker.datePickerElements = .yearMonthDay
+        picker.drawsBackground = false
+        picker.isBezeled = false
+        picker.isBordered = false
+        picker.dateValue = date
+        picker.target = context.coordinator
+        picker.action = #selector(Coordinator.dateChanged(_:))
+        return picker
+    }
+
+    func updateNSView(_ nsView: NSDatePicker, context: Context) {
+        if abs(nsView.dateValue.timeIntervalSince(date)) > 0.5 {
+            nsView.dateValue = date
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject {
+        var parent: GraphicalDatePickerRepresentable
+        init(_ parent: GraphicalDatePickerRepresentable) { self.parent = parent }
+        @objc func dateChanged(_ sender: NSDatePicker) {
+            parent.date = sender.dateValue
+        }
+    }
+}
+
+// MARK: - Editable cadence pill
+
+private func goalCadenceLabel(_ c: GoalCadence) -> String {
+    switch c {
+    case .daily: return String(localized: "brain.cadence.daily", defaultValue: "Daily")
+    case .weekly: return String(localized: "brain.cadence.weekly", defaultValue: "Weekly")
+    case .monthly: return String(localized: "brain.cadence.monthly", defaultValue: "Monthly")
+    case .quarterly: return String(localized: "brain.cadence.quarterly", defaultValue: "Quarterly")
+    }
+}
+
+struct EditableCadencePill: View {
+    let rawValue: String?
+    let onChange: (GoalCadence?) -> Void
+
+    @State private var isPresented = false
+
+    private var current: GoalCadence? {
+        guard let rawValue else { return nil }
+        return GoalCadence(rawValue: rawValue.lowercased())
+    }
+
+    var body: some View {
+        Button(action: { isPresented = true }) {
+            HStack(spacing: 5) {
+                if let cadence = current {
+                    Image(systemName: "clock")
+                        .font(.system(size: 10))
+                        .foregroundColor(BVColor.fgMute.opacity(0.8))
+                    Text(goalCadenceLabel(cadence))
+                        .font(.system(size: 11.5))
+                        .foregroundColor(BVColor.fg)
+                } else {
+                    Image(systemName: "clock")
+                        .font(.system(size: 10))
+                        .foregroundColor(BVColor.fgFaint)
+                    Text(String(localized: "brain.editable.setCadence", defaultValue: "Set cadence..."))
+                        .font(.system(size: 11.5).italic())
+                        .foregroundColor(BVColor.fgFaint)
+                }
+            }
+            .padding(.horizontal, 7)
+            .frame(height: 20)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(BVColor.bgInput)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(BVColor.border))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            CadencePickerView(
+                current: current,
+                onSelect: { newValue in
+                    if newValue != current {
+                        onChange(newValue)
+                    }
+                    isPresented = false
+                }
+            )
+        }
+    }
+}
+
+struct CadencePickerView: View {
+    let current: GoalCadence?
+    let onSelect: (GoalCadence?) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                ForEach(Array(GoalCadence.allCases.enumerated()), id: \.element) { idx, cadence in
+                    Button(action: { onSelect(cadence) }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "clock")
+                                .font(.system(size: 11))
+                                .foregroundColor(BVColor.fgMute)
+                            Text(goalCadenceLabel(cadence))
+                                .font(.system(size: 12))
+                                .foregroundColor(BVColor.fg)
+                            Spacer()
+                            if current == cadence {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(BVColor.fgMute)
+                            }
+                            Text("\(idx + 1)")
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundColor(BVColor.fgFaint)
+                                .frame(minWidth: 14, alignment: .trailing)
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(height: 26)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(EditablePickerRowHoverBackground())
+                    .keyboardShortcut(KeyEquivalent(Character("\(idx + 1)")), modifiers: [])
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .frame(width: 200)
+        .background(BVColor.bgElev)
+    }
+}
+
+// MARK: - Shared hover
+
+private struct EditablePickerRowHoverBackground: View {
+    @State private var hovering = false
+    var body: some View {
+        Rectangle()
+            .fill(hovering ? BVColor.bgHover : Color.clear)
+            .onHover { hovering = $0 }
+    }
+}

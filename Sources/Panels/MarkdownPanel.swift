@@ -127,6 +127,23 @@ final class MarkdownPanel: Panel, ObservableObject {
         UserDefaults.standard.set(showsInspector, forKey: MarkdownPanel.inspectorVisibilityKey)
     }
 
+    /// Write a single frontmatter key back to disk. `value == nil` removes
+    /// the key. The file watcher will pick up the change and re-parse, but
+    /// we also do an optimistic local update so the UI snaps before the
+    /// watcher round-trip completes.
+    func updateFrontmatter(key: String, value: String?) {
+        let snapshot = content
+        let newText = BrainFrontmatterWriter.setScalar(key, to: value, in: snapshot)
+        guard newText != snapshot else { return }
+        do {
+            try newText.write(toFile: filePath, atomically: true, encoding: .utf8)
+            content = newText
+            scheduleParse()
+        } catch {
+            NSLog("MarkdownPanel.updateFrontmatter failed for key=\(key): \(error)")
+        }
+    }
+
     private static func loadInspectorVisibility() -> Bool {
         if UserDefaults.standard.object(forKey: inspectorVisibilityKey) == nil {
             // Inspector ships visible by default — that's the whole point

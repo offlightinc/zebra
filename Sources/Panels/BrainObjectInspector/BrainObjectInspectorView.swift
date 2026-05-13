@@ -9,6 +9,9 @@ struct BrainObjectInspectorView: View {
     /// Best-effort link routing. v0.1 stubs this — the design contract says
     /// rows stay clickable even when the target cannot be resolved.
     var onActivateRelation: ((BrainObjectRef) -> Void)? = nil
+    /// Frontmatter mutation. Called when the user edits an inline pill.
+    /// `value == nil` removes the key.
+    var onUpdateFrontmatter: ((String, String?) -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,7 +29,7 @@ struct BrainObjectInspectorView: View {
         case .some(.success(let object)):
             switch object {
             case .task(let t): TaskInspectorView(task: t, onActivateRelation: onActivateRelation)
-            case .goal(let g): GoalInspectorView(goal: g, onActivateRelation: onActivateRelation)
+            case .goal(let g): GoalInspectorView(goal: g, onActivateRelation: onActivateRelation, onUpdateFrontmatter: onUpdateFrontmatter)
             case .note(let n): DocInspectorView(note: n, onActivateRelation: onActivateRelation)
             case .unknown(let u): UnknownInspectorView(unknown: u)
             }
@@ -143,6 +146,27 @@ struct TaskInspectorView: View {
 struct GoalInspectorView: View {
     let goal: GoalObject
     var onActivateRelation: ((BrainObjectRef) -> Void)? = nil
+    var onUpdateFrontmatter: ((String, String?) -> Void)? = nil
+
+    @EnvironmentObject private var markdownFileListStore: MarkdownFileListStore
+
+    private var peopleSlugs: [String] {
+        markdownFileListStore.mdFiles
+            .filter { $0.relativeParentPath == "people/" }
+            .map { entry -> String in
+                let name = entry.displayName
+                return name.hasSuffix(".md") ? String(name.dropLast(3)) : name
+            }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private static let isoDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -150,21 +174,24 @@ struct GoalInspectorView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     InspectorSection {
                         PropertyRow(label: String(localized: "brain.row.status", defaultValue: "Status"), icon: "circle.dotted") {
-                            StatusPillView(status: goal.status)
+                            EditableGoalStatusPill(value: goal.status) { newStatus in
+                                onUpdateFrontmatter?("status", newStatus?.rawValue)
+                            }
                         }
                         PropertyRow(label: String(localized: "brain.row.owner", defaultValue: "Owner"), icon: "person") {
-                            PersonChipView(handle: goal.owner)
+                            EditableOwnerChip(rawValue: goal.owner, peopleSlugs: peopleSlugs) { newOwner in
+                                onUpdateFrontmatter?("owner", newOwner)
+                            }
                         }
                         PropertyRow(label: String(localized: "brain.row.target", defaultValue: "Target"), icon: "calendar") {
-                            DateBadgeView(date: goal.targetDate, kind: .due)
+                            EditableDateBadge(value: goal.targetDate) { newDate in
+                                let serialized = newDate.map { Self.isoDateFormatter.string(from: $0) }
+                                onUpdateFrontmatter?("target_date", serialized)
+                            }
                         }
                         PropertyRow(label: String(localized: "brain.row.cadence", defaultValue: "Cadence"), icon: "clock") {
-                            if let c = goal.reviewCadence {
-                                Text(c.capitalized)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(BVColor.fg)
-                            } else {
-                                EmptyValue()
+                            EditableCadencePill(rawValue: goal.reviewCadence) { newCadence in
+                                onUpdateFrontmatter?("review_cadence", newCadence?.rawValue)
                             }
                         }
                         if let parent = goal.parentGoal {

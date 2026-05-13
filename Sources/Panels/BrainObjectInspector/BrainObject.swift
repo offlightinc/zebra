@@ -35,7 +35,7 @@ struct TaskObject {
 struct GoalObject {
     var title: String
     var goalId: String?
-    var status: BrainTaskStatus?
+    var status: GoalStatus?
     var owner: String?
     var targetDate: BrainDate?
     var reviewCadence: String?
@@ -482,7 +482,7 @@ extension BrainObjectParser {
         return GoalObject(
             title: title,
             goalId: dict["goal_id"]?.scalar,
-            status: dict["status"]?.scalar.flatMap(parseStatus(_:)),
+            status: dict["status"]?.scalar.flatMap { GoalStatus(rawValue: $0.lowercased()) },
             owner: dict["owner"]?.scalar,
             targetDate: dict["target_date"]?.scalar.flatMap(parseDate(_:)),
             reviewCadence: dict["review_cadence"]?.scalar,

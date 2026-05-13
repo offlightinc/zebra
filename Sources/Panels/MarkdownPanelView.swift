@@ -15,6 +15,14 @@ struct MarkdownPanelView: View {
 
     @State private var focusFlashOpacity: Double = 0.0
     @State private var focusFlashAnimationGeneration: Int = 0
+    // Pins the inspector pane to its default width on the very first layout pass.
+    // HSplitView/NSSplitView's initial distribution clamps to a child's max bound
+    // instead of honoring SwiftUI's idealWidth proposal, so opening the panel
+    // would otherwise land at maxWidth (420). We collapse min/max to 300 for the
+    // first pass and relax them back to 280/420 right after appear via .task —
+    // HSplitView keeps the seated width when the cap widens, so the user retains
+    // the full drag range afterwards.
+    @State private var inspectorDidLayout: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var markdownFileListStore: MarkdownFileListStore
 
@@ -58,8 +66,19 @@ struct MarkdownPanelView: View {
                 .frame(minWidth: 360)
 
             if panel.showsInspector {
-                BrainObjectInspectorView(parse: panel.parse, onActivateRelation: activateRelation)
-                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 420)
+                BrainObjectInspectorView(
+                    parse: panel.parse,
+                    onActivateRelation: activateRelation,
+                    onUpdateFrontmatter: { key, value in
+                        panel.updateFrontmatter(key: key, value: value)
+                    }
+                )
+                    .frame(
+                        minWidth: inspectorDidLayout ? 280 : 300,
+                        idealWidth: 300,
+                        maxWidth: inspectorDidLayout ? 420 : 300
+                    )
+                    .task { inspectorDidLayout = true }
             }
         }
     }
