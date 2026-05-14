@@ -15,14 +15,9 @@ struct MarkdownPanelView: View {
 
     @State private var focusFlashOpacity: Double = 0.0
     @State private var focusFlashAnimationGeneration: Int = 0
-    // Pins the inspector pane to its default width on the very first layout pass.
-    // HSplitView/NSSplitView's initial distribution clamps to a child's max bound
-    // instead of honoring SwiftUI's idealWidth proposal, so opening the panel
-    // would otherwise land at maxWidth (420). We collapse min/max to 300 for the
-    // first pass and relax them back to 280/420 right after appear via .task —
-    // HSplitView keeps the seated width when the cap widens, so the user retains
-    // the full drag range afterwards.
-    @State private var inspectorDidLayout: Bool = false
+    @AppStorage("cmux.brainViewer.inspectorWidth") private var storedInspectorWidth: Double = 300
+    @State private var inspectorWidth: Double?
+    @State private var inspectorDragStartWidth: Double?
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var markdownFileListStore: MarkdownFileListStore
 
@@ -53,19 +48,63 @@ struct MarkdownPanelView: View {
         .onChange(of: panel.focusFlashToken) { _ in
             triggerFocusFlashAnimation()
         }
+        .onAppear {
+            inspectorWidth = clampedInspectorWidth(storedInspectorWidth, containerWidth: .infinity)
+        }
     }
 
     // MARK: - Content
 
-    /// Top-level split: markdown body on the left, brain-object inspector
-    /// on the right. The inspector hides via a chevron in the header and
-    /// the split collapses on its own.
-    private var splitContentView: some View {
-        HSplitView {
-            markdownContentView
-                .frame(minWidth: 360)
+    private enum InspectorSplitMetrics {
+        static let markdownMinWidth: CGFloat = 360
+        static let minInspectorWidth: Double = 280
+        static let maxInspectorWidth: Double = 420
+        static let dividerWidth: CGFloat = 1
+    }
 
-            if panel.showsInspector {
+    @ViewBuilder
+    private var splitContentView: some View {
+        if !isVisibleInUI {
+            Color.clear
+        } else if panel.showsInspector {
+            markdownInspectorSplitView
+        } else {
+            markdownContentView
+        }
+    }
+
+    private var markdownInspectorSplitView: some View {
+        GeometryReader { proxy in
+            let resolvedInspectorWidth = clampedInspectorWidth(
+                currentInspectorWidth,
+                containerWidth: proxy.size.width
+            )
+
+            HStack(spacing: 0) {
+                markdownContentView
+                    .frame(minWidth: InspectorSplitMetrics.markdownMinWidth)
+
+                MarkdownInspectorResizeHandle(
+                    dividerWidth: InspectorSplitMetrics.dividerWidth,
+                    onDragStart: {
+                        inspectorDragStartWidth = currentInspectorWidth
+                    },
+                    onDragChanged: { translation in
+                        let startWidth = inspectorDragStartWidth ?? currentInspectorWidth
+                        let nextWidth = startWidth - Double(translation)
+                        withTransaction(Transaction(animation: nil)) {
+                            inspectorWidth = clampedInspectorWidth(nextWidth, containerWidth: proxy.size.width)
+                        }
+                    },
+                    onDragEnd: {
+                        storedInspectorWidth = clampedInspectorWidth(currentInspectorWidth, containerWidth: proxy.size.width)
+                        inspectorDragStartWidth = nil
+                    },
+                    onCancel: {
+                        inspectorDragStartWidth = nil
+                    }
+                )
+
                 BrainObjectInspectorView(
                     parse: panel.parse,
                     onActivateRelation: activateRelation,
@@ -73,14 +112,33 @@ struct MarkdownPanelView: View {
                         panel.updateFrontmatter(key: key, value: value)
                     }
                 )
-                    .frame(
-                        minWidth: inspectorDidLayout ? 280 : 300,
-                        idealWidth: 300,
-                        maxWidth: inspectorDidLayout ? 420 : 300
-                    )
-                    .task { inspectorDidLayout = true }
+                .frame(width: CGFloat(resolvedInspectorWidth))
+            }
+            .transaction { tx in
+                tx.animation = nil
             }
         }
+    }
+
+    private var currentInspectorWidth: Double {
+        inspectorWidth ?? storedInspectorWidth
+    }
+
+    private func clampedInspectorWidth(_ width: Double, containerWidth: CGFloat) -> Double {
+        guard containerWidth.isFinite else {
+            return min(
+                max(width, InspectorSplitMetrics.minInspectorWidth),
+                InspectorSplitMetrics.maxInspectorWidth
+            )
+        }
+
+        let availableWidth = max(
+            0,
+            Double(containerWidth - InspectorSplitMetrics.markdownMinWidth - InspectorSplitMetrics.dividerWidth)
+        )
+        let minWidth = min(InspectorSplitMetrics.minInspectorWidth, availableWidth)
+        let maxWidth = max(minWidth, min(InspectorSplitMetrics.maxInspectorWidth, availableWidth))
+        return min(max(width, minWidth), maxWidth)
     }
 
     /// Markdown body uses the stripped body when frontmatter parsed
@@ -393,6 +451,100 @@ private struct MarkdownPointerObserver: NSViewRepresentable {
 
     func updateNSView(_ nsView: MarkdownPanelPointerObserverView, context: Context) {
         nsView.onPointerDown = onPointerDown
+    }
+}
+
+private struct MarkdownInspectorResizeHandle: View {
+    let dividerWidth: CGFloat
+    let onDragStart: () -> Void
+    let onDragChanged: (CGFloat) -> Void
+    let onDragEnd: () -> Void
+    let onCancel: () -> Void
+
+    @State private var isHovering = false
+    @State private var isDragging = false
+    @State private var cursorReleaseWorkItem: DispatchWorkItem?
+
+    var body: some View {
+        Rectangle()
+            .fill(Color(nsColor: .separatorColor))
+            .frame(width: dividerWidth)
+            .frame(maxHeight: .infinity)
+            .overlay {
+                Color.clear
+                    .frame(width: SidebarResizeInteraction.totalHitWidth)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        isHovering = hovering
+                        if hovering {
+                            activateResizeCursor()
+                        } else if CGEventSource.buttonState(.combinedSessionState, button: .left) {
+                            activateResizeCursor()
+                        } else {
+                            scheduleCursorRelease(delay: 0.05)
+                        }
+                    }
+                    .onDisappear {
+                        cancelDragIfNeeded()
+                        scheduleCursorRelease(force: true)
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                            .onChanged { value in
+                                if !isDragging {
+                                    TerminalWindowPortalRegistry.beginInteractiveGeometryResize()
+                                    isDragging = true
+                                    onDragStart()
+                                }
+                                activateResizeCursor()
+                                onDragChanged(value.translation.width)
+                            }
+                            .onEnded { _ in
+                                if isDragging {
+                                    TerminalWindowPortalRegistry.endInteractiveGeometryResize()
+                                    isDragging = false
+                                    onDragEnd()
+                                }
+                                activateResizeCursor()
+                                scheduleCursorRelease()
+                            }
+                    )
+            }
+    }
+
+    private func activateResizeCursor() {
+        cursorReleaseWorkItem?.cancel()
+        cursorReleaseWorkItem = nil
+        NSCursor.resizeLeftRight.set()
+    }
+
+    private func scheduleCursorRelease(force: Bool = false, delay: TimeInterval = 0) {
+        cursorReleaseWorkItem?.cancel()
+        let workItem = DispatchWorkItem {
+            cursorReleaseWorkItem = nil
+            releaseResizeCursorIfNeeded(force: force)
+        }
+        cursorReleaseWorkItem = workItem
+        if delay > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+        } else {
+            DispatchQueue.main.async(execute: workItem)
+        }
+    }
+
+    private func releaseResizeCursorIfNeeded(force: Bool = false) {
+        let isLeftMouseButtonDown = CGEventSource.buttonState(.combinedSessionState, button: .left)
+        guard force || (!isDragging && !isHovering && !isLeftMouseButtonDown) else { return }
+        NSCursor.arrow.set()
+    }
+
+    private func cancelDragIfNeeded() {
+        if isDragging {
+            TerminalWindowPortalRegistry.endInteractiveGeometryResize()
+            isDragging = false
+        }
+        onCancel()
     }
 }
 
