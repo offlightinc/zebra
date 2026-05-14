@@ -71,6 +71,11 @@
 		5B5B0043A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0043A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */; };
 		5B5B0044A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0044A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */; };
 		5B5B0045A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0045A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */; };
+		5B5B0050A1B2C3D4E5F60711 /* VerticalTabsSidebar/People/PersonEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0050A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonEntry.swift */; };
+		5B5B0051A1B2C3D4E5F60711 /* VerticalTabsSidebar/People/PersonFrontmatterParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0051A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonFrontmatterParser.swift */; };
+		5B5B0052A1B2C3D4E5F60711 /* VerticalTabsSidebar/People/PersonFileListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0052A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonFileListStore.swift */; };
+		5B5B0053A1B2C3D4E5F60711 /* VerticalTabsSidebar/FrontmatterUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0053A1B2C3D4E5F60710 /* VerticalTabsSidebar/FrontmatterUtils.swift */; };
+		5B5B0054A1B2C3D4E5F60711 /* VerticalTabsSidebar/MarkdownVaultSubdirStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0054A1B2C3D4E5F60710 /* VerticalTabsSidebar/MarkdownVaultSubdirStore.swift */; };
 		5C3E0454B6C24B02A2F091A8 /* App/ShortcutRoutingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B42A82C6AA614E74873D9A5F /* App/ShortcutRoutingSupport.swift */; };
 		5EDB6027B346C46521A93C74 /* CMUXAuthCore in Frameworks */ = {isa = PBXBuildFile; productRef = 29813FE5A6CBC1019289A251 /* CMUXAuthCore */; };
 		619D509BC9B1EA946CBD6A8A /* App/WorkspaceRuntimeSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9960CC3992F3C44489E7627C /* App/WorkspaceRuntimeSettings.swift */; };
@@ -609,6 +614,11 @@
 		5B5B0043A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift; sourceTree = "<group>"; };
 		5B5B0044A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift; sourceTree = "<group>"; };
 		5B5B0045A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift; sourceTree = "<group>"; };
+		5B5B0050A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/People/PersonEntry.swift; sourceTree = "<group>"; };
+		5B5B0051A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonFrontmatterParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/People/PersonFrontmatterParser.swift; sourceTree = "<group>"; };
+		5B5B0052A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonFileListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/People/PersonFileListStore.swift; sourceTree = "<group>"; };
+		5B5B0053A1B2C3D4E5F60710 /* VerticalTabsSidebar/FrontmatterUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/FrontmatterUtils.swift; sourceTree = "<group>"; };
+		5B5B0054A1B2C3D4E5F60710 /* VerticalTabsSidebar/MarkdownVaultSubdirStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/MarkdownVaultSubdirStore.swift; sourceTree = "<group>"; };
 		6083A7DAD962E287FC2FFE94 /* ShortcutAndCommandPaletteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutAndCommandPaletteTests.swift; sourceTree = "<group>"; };
 		610008EA5E3744DDBE05C8E2 /* Sidebar/InternalTabDragConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sidebar/InternalTabDragConfiguration.swift; sourceTree = "<group>"; };
 		61A19A4145F034965110CF87 /* AuthCallbackRouter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthCallbackRouter.swift; sourceTree = "<group>"; };
@@ -1233,6 +1243,11 @@
 				5B5B0043A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */,
 				5B5B0044A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */,
 				5B5B0045A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */,
+				5B5B0050A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonEntry.swift */,
+				5B5B0051A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonFrontmatterParser.swift */,
+				5B5B0052A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonFileListStore.swift */,
+				5B5B0053A1B2C3D4E5F60710 /* VerticalTabsSidebar/FrontmatterUtils.swift */,
+				5B5B0054A1B2C3D4E5F60710 /* VerticalTabsSidebar/MarkdownVaultSubdirStore.swift */,
 				5B5B0014A1B2C3D4E5F60710 /* VerticalTabsSidebar/ActiveMarkdownPathsObserver.swift */,
 				38A09EB2E92203B2E95923A7 /* CommandPalette/CommandPaletteSearch.swift */,
 				9DAB808A8EC74C40B95F7672 /* App/GhosttySurfaceConfigurationRefresh.swift */,
@@ -1920,6 +1935,11 @@
 				5B5B0043A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift in Sources */,
 				5B5B0044A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift in Sources */,
 				5B5B0045A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift in Sources */,
+				5B5B0050A1B2C3D4E5F60711 /* VerticalTabsSidebar/People/PersonEntry.swift in Sources */,
+				5B5B0051A1B2C3D4E5F60711 /* VerticalTabsSidebar/People/PersonFrontmatterParser.swift in Sources */,
+				5B5B0052A1B2C3D4E5F60711 /* VerticalTabsSidebar/People/PersonFileListStore.swift in Sources */,
+				5B5B0053A1B2C3D4E5F60711 /* VerticalTabsSidebar/FrontmatterUtils.swift in Sources */,
+				5B5B0054A1B2C3D4E5F60711 /* VerticalTabsSidebar/MarkdownVaultSubdirStore.swift in Sources */,
 				5B5B0014A1B2C3D4E5F60711 /* VerticalTabsSidebar/ActiveMarkdownPathsObserver.swift in Sources */,
 				A8CBA43C2DA5AB9E3A1E65A4 /* CommandPalette/CommandPaletteSearch.swift in Sources */,
 				B84BD7AD94EE485B8DDAB6FF /* App/GhosttySurfaceConfigurationRefresh.swift in Sources */,

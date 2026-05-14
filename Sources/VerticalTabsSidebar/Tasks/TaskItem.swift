@@ -1,6 +1,6 @@
 import Foundation
 
-struct TaskItem: Identifiable, Hashable, Sendable {
+struct TaskItem: VaultSubdirEntry {
     let absolutePath: String
     let displayName: String
     let title: String

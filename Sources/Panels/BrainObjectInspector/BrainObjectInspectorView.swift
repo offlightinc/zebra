@@ -148,16 +148,10 @@ struct GoalInspectorView: View {
     var onActivateRelation: ((BrainObjectRef) -> Void)? = nil
     var onUpdateFrontmatter: ((String, String?) -> Void)? = nil
 
-    @EnvironmentObject private var markdownFileListStore: MarkdownFileListStore
+    @EnvironmentObject private var personFileListStore: PersonFileListStore
 
     private var peopleSlugs: [String] {
-        markdownFileListStore.mdFiles
-            .filter { $0.relativeParentPath == "people/" }
-            .map { entry -> String in
-                let name = entry.displayName
-                return name.hasSuffix(".md") ? String(name.dropLast(3)) : name
-            }
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        personFileListStore.people.map(\.slug)
     }
 
     private static let isoDateFormatter: DateFormatter = {

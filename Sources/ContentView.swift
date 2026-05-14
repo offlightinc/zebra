@@ -1059,6 +1059,7 @@ struct ContentView: View {
     @EnvironmentObject var markdownFileListStore: MarkdownFileListStore
     @EnvironmentObject var goalFileListStore: GoalFileListStore
     @EnvironmentObject var taskFileListStore: TaskFileListStore
+    @EnvironmentObject var personFileListStore: PersonFileListStore
     @EnvironmentObject var goalsViewState: GoalsViewState
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("titlebarControlsStyle") private var titlebarControlsStyleRawValue = TitlebarControlsStyle.classic.rawValue
@@ -2503,6 +2504,10 @@ struct ContentView: View {
         taskFileListStore.bind(vaultRoot: verticalTabsSidebarVaultState.selectedVault?.path)
     }
 
+    private func syncPersonFileListStoreDirectory() {
+        personFileListStore.bind(vaultRoot: verticalTabsSidebarVaultState.selectedVault?.path)
+    }
+
     private func syncFileExplorerDirectory() {
         guard let selectedId = tabManager.selectedTabId,
               let tab = tabManager.tabs.first(where: { $0.id == selectedId }) else {
@@ -2664,6 +2669,7 @@ struct ContentView: View {
             syncMarkdownFileListStoreDirectory()
             syncGoalFileListStoreDirectory()
             syncTaskFileListStoreDirectory()
+            syncPersonFileListStoreDirectory()
             tabManager.applyWindowBackgroundForSelectedTab()
             reconcileMountedWorkspaceIds()
             previousSelectedWorkspaceId = tabManager.selectedTabId
@@ -2773,6 +2779,7 @@ struct ContentView: View {
             syncMarkdownFileListStoreDirectory()
             syncGoalFileListStoreDirectory()
             syncTaskFileListStoreDirectory()
+            syncPersonFileListStoreDirectory()
         })
 
         view = AnyView(view.onChange(of: activeMarkdownPathsObserver.paths) { newPaths in

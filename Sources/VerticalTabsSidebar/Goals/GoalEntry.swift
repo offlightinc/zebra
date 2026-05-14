@@ -40,7 +40,7 @@ enum GoalCadence: String, Codable, CaseIterable, Sendable {
     }
 }
 
-struct GoalEntry: Identifiable, Hashable, Sendable {
+struct GoalEntry: VaultSubdirEntry {
     let absolutePath: String
     let displayName: String
     let goalId: String

@@ -4,10 +4,10 @@ enum TaskFrontmatterParser {
     /// Parses a `.md` file's YAML frontmatter into a TaskItem.
     /// Reads only the head of the file (frontmatter is at the top).
     /// Returns nil if the file has no frontmatter or `type: task` marker.
-    static func parse(filePath: String, headBytes: Int = 4096) -> TaskItem? {
-        guard let head = readHead(path: filePath, bytes: headBytes) else { return nil }
-        guard let raw = extractFrontmatterBlock(from: head) else { return nil }
-        let kv = parseFlatKeyValues(raw)
+    static func parse(filePath: String, headBytes: Int = FrontmatterUtils.defaultHeadBytes) -> TaskItem? {
+        guard let head = FrontmatterUtils.readHead(path: filePath, bytes: headBytes) else { return nil }
+        guard let raw = FrontmatterUtils.extractFrontmatterBlock(from: head) else { return nil }
+        let kv = FrontmatterUtils.parseFlatKeyValues(raw)
         guard kv["type"]?.trimmedUnquoted.lowercased() == "task" else { return nil }
 
         let displayNameFallback = (filePath as NSString).lastPathComponent
@@ -77,43 +77,6 @@ enum TaskFrontmatterParser {
         )
     }
 
-    private static func readHead(path: String, bytes: Int) -> String? {
-        guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? fh.close() }
-        let data = (try? fh.read(upToCount: bytes)) ?? Data()
-        return String(data: data, encoding: .utf8)
-    }
-
-    private static func extractFrontmatterBlock(from text: String) -> String? {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard !lines.isEmpty, lines[0].trimmingCharacters(in: .whitespaces) == "---" else { return nil }
-        var body: [String] = []
-        for i in 1..<lines.count {
-            if lines[i].trimmingCharacters(in: .whitespaces) == "---" {
-                return body.joined(separator: "\n")
-            }
-            body.append(lines[i])
-        }
-        return nil
-    }
-
-    private static func parseFlatKeyValues(_ block: String) -> [String: String] {
-        var result: [String: String] = [:]
-        for line in block.split(separator: "\n", omittingEmptySubsequences: false) {
-            let raw = String(line)
-            if raw.hasPrefix("  ") || raw.hasPrefix("\t") || raw.hasPrefix("-") {
-                continue
-            }
-            guard let colonIdx = raw.firstIndex(of: ":") else { continue }
-            let key = raw[..<colonIdx].trimmingCharacters(in: .whitespaces)
-            let value = raw[raw.index(after: colonIdx)...].trimmingCharacters(in: .whitespaces)
-            guard !key.isEmpty else { continue }
-            if value.isEmpty { continue }
-            result[key] = value
-        }
-        return result
-    }
-
     /// Parses YAML list items under `key:` (one per line, `  - item`).
     private static func parseListItems(block: String, key: String) -> [String] {
         let lines = block.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -159,15 +122,5 @@ enum TaskFrontmatterParser {
         df.dateFormat = "yyyy-MM-dd"
         df.timeZone = TimeZone(identifier: "UTC")
         return df.date(from: stripped)
-    }
-}
-
-private extension String {
-    var trimmedUnquoted: String {
-        var s = self.trimmingCharacters(in: .whitespacesAndNewlines)
-        if (s.hasPrefix("\"") && s.hasSuffix("\"")) || (s.hasPrefix("'") && s.hasSuffix("'")) {
-            if s.count >= 2 { s.removeFirst(); s.removeLast() }
-        }
-        return s
     }
 }
