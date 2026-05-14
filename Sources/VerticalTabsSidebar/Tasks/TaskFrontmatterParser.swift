@@ -14,30 +14,19 @@ enum TaskFrontmatterParser {
         let title = kv["title"]?.trimmedUnquoted
         let displayName = title?.isEmpty == false ? title! : displayNameFallback
 
+        // status/priority 매핑(legacy alias 포함)은 enum의 parseFrontmatter에서
+        // 단일 소스로 관리한다. 인식 못한 status는 raw 그대로 보존(빨간 ? 칩 렌더).
         let statusRaw = kv["status"]?.trimmedUnquoted.lowercased() ?? ""
         let (status, unrecognized): (BrainTaskStatus?, String?) = {
             if statusRaw.isEmpty { return (nil, nil) }
-            // HTML schema canonical + legacy alias 흡수
-            switch statusRaw {
-            case "backlog":    return (.backlog, nil)
-            case "todo":       return (.todo, nil)
-            case "inprogress": return (.inprogress, nil)
-            case "doing":      return (.inprogress, nil)   // legacy alias
-            case "blocked":    return (.blocked, nil)
-            case "waiting":    return (.waiting, nil)
-            case "done":       return (.done, nil)
-            case "completed":  return (.done, nil)         // legacy alias
-            case "canceled":   return (.canceled, nil)
-            default:           return (nil, statusRaw)
+            if let parsed = BrainTaskStatus.parseFrontmatter(statusRaw) {
+                return (parsed, nil)
             }
+            return (nil, statusRaw)
         }()
 
         let priorityRaw = kv["priority"]?.trimmedUnquoted.lowercased() ?? ""
-        let priority: BrainPriority? = {
-            // legacy "normal" → .medium 흡수
-            if priorityRaw == "normal" { return .medium }
-            return BrainPriority(rawValue: priorityRaw)
-        }()
+        let priority = BrainPriority.parseFrontmatter(priorityRaw)
 
         let ownerRaw = kv["owner"]?.trimmedUnquoted
         let ownerSlug: String? = {

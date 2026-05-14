@@ -299,13 +299,12 @@ struct StatusGlyph: View {
 
     private func nsColor(for status: BrainTaskStatus) -> Color {
         switch status {
-        case .backlog: return BVColor.statusTodo
-        case .todo: return BVColor.statusTodo
-        case .inprogress: return BVColor.statusDoing
-        case .blocked: return BVColor.statusBlocked
-        case .waiting: return BVColor.statusWaiting
-        case .done: return BVColor.statusCompleted
-        case .canceled: return BVColor.statusCanceled
+        case .backlog, .todo: return BVColor.statusTodo
+        case .inprogress:     return BVColor.statusDoing
+        case .blocked:        return BVColor.statusBlocked
+        case .waiting:        return BVColor.statusWaiting
+        case .done:           return BVColor.statusCompleted
+        case .canceled:       return BVColor.statusCanceled
         }
     }
 }

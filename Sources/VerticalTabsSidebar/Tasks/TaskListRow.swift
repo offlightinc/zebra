@@ -33,10 +33,11 @@ struct TaskListRow: View, Equatable {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if !isCompleted, let due = task.dueDate {
+                let presentation = duePresentation(due)
                 Button(action: { showDuePicker = true }) {
-                    Text(dueLabel(due))
-                        .font(.system(size: 11, weight: dueWeight(due)).monospacedDigit())
-                        .foregroundColor(dueColor(due))
+                    Text(presentation.label)
+                        .font(.system(size: 11, weight: presentation.weight).monospacedDigit())
+                        .foregroundColor(presentation.color)
                 }
                 .buttonStyle(.plain)
                 .panelPopover(isPresented: $showDuePicker) {
@@ -45,9 +46,6 @@ struct TaskListRow: View, Equatable {
                         showDuePicker = false
                     }
                 }
-            } else if task.dueDate != nil {
-                // Done: empty slot, keep priority anchor stable
-                Spacer().frame(width: 0)
             }
             priorityButton
             if let raw = task.unrecognizedStatusRaw {
@@ -162,37 +160,22 @@ struct TaskListRow: View, Equatable {
         }
     }
 
-    private func dueLabel(_ d: Date) -> String {
+    /// Due 값 하나로부터 label/weight/color를 단번에 계산. 호출부에서 days 계산이
+    /// 세 번 반복되지 않도록 묶었다. HTML CSS `.due.over` (음수)와 `.due.soon` (0–1d)
+    /// 매핑은 여기 한 곳.
+    private func duePresentation(_ d: Date) -> (label: String, weight: Font.Weight, color: Color) {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let target = cal.startOfDay(for: d)
         let days = cal.dateComponents([.day], from: today, to: target).day ?? 0
-        if abs(days) >= 7 {
-            let w = days / 7
-            return "\(w)w"
-        }
-        return "\(days)d"
-    }
 
-    private func dueWeight(_ d: Date) -> Font.Weight {
-        // HTML: .due.over (음수 days) = weight 600. .due.soon (0–1d) = weight 500.
-        // 그 외 default. status에 따른 분기 아님 — over면 status 무관 다 볼드.
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let target = cal.startOfDay(for: d)
-        let days = cal.dateComponents([.day], from: today, to: target).day ?? 0
-        return days < 0 ? .semibold : .regular
-    }
-
-    private func dueColor(_ d: Date) -> Color {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let target = cal.startOfDay(for: d)
-        let days = cal.dateComponents([.day], from: today, to: target).day ?? 0
-        // HTML 디자인: 0–1d "soon" 과 -d "over" 모두 빨강. 두 경우 모두 priorityUrgent.
-        // 굵기는 dueLabel 호출부에서 분기.
-        if days <= 1 { return BVColor.priorityUrgent }
-        return BVColor.fgFaint
+        let label: String = {
+            if abs(days) >= 7 { return "\(days / 7)w" }
+            return "\(days)d"
+        }()
+        let weight: Font.Weight = days < 0 ? .semibold : .regular
+        let color: Color = days <= 1 ? BVColor.priorityUrgent : BVColor.fgFaint
+        return (label, weight, color)
     }
 }
 
