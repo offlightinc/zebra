@@ -9,7 +9,12 @@ enum FrontmatterUtils {
         guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? fh.close() }
         let data = (try? fh.read(upToCount: bytes)) ?? Data()
-        return String(data: data, encoding: .utf8)
+        // Lossy UTF-8 decoding: a read that lands mid-codepoint (common when
+        // the head boundary falls inside a Korean character body, e.g.
+        // 홍남호.md at byte 4094) must not nil out the whole file. Frontmatter
+        // is at the top with ASCII keys, so invalid bytes near the clipped
+        // tail are U+FFFD'd and ignored by the key/value parser.
+        return String(decoding: data, as: UTF8.self)
     }
 
     static func extractFrontmatterBlock(from text: String) -> String? {
