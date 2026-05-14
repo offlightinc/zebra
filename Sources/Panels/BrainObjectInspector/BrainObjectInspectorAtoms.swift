@@ -149,9 +149,9 @@ struct InspectorSection<Content: View>: View {
                             .foregroundColor(BVColor.fgMute)
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(
-                                RoundedRectangle(cornerRadius: 3)
+                                RoundedRectangle(cornerRadius: 4)
                                     .fill(BVColor.bgInput)
-                                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(BVColor.border))
+                                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(BVColor.border))
                             )
                     }
                 }
@@ -238,9 +238,11 @@ struct EmptyValue: View {
 // MARK: - Status glyph
 
 /// Linear-style status disc. Each state gets a distinct silhouette so
-/// status is legible at 12pt even without color.
+/// status is legible at 12pt even without color. `status: nil`은 frontmatter에
+/// 값이 있지만 canonical raw가 아닐 때(예: 필터의 `__unrecognized__` 행)용 —
+/// fgFaint outlined circle 한 모양으로 통일.
 struct StatusGlyph: View {
-    let status: BrainTaskStatus
+    let status: BrainTaskStatus?
 
     var body: some View {
         Canvas { ctx, size in
@@ -248,6 +250,12 @@ struct StatusGlyph: View {
             let r = s / 2
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
             let circleRect = CGRect(x: center.x - r + 1, y: center.y - r + 1, width: s - 2, height: s - 2)
+
+            guard let status else {
+                ctx.stroke(Path(ellipseIn: circleRect), with: .color(BVColor.fgFaint), lineWidth: 1.2)
+                return
+            }
+
             let color = nsColor(for: status)
 
             switch status {
@@ -421,9 +429,9 @@ struct TagChipView: View {
         .padding(.horizontal, 5)
         .frame(height: 18)
         .background(
-            RoundedRectangle(cornerRadius: 3)
+            RoundedRectangle(cornerRadius: 4)
                 .fill(BVColor.bgInput)
-                .overlay(RoundedRectangle(cornerRadius: 3).stroke(BVColor.border))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(BVColor.border))
         )
     }
 }
@@ -583,9 +591,9 @@ struct ProgressBarView: View {
         HStack(spacing: 8) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
+                    RoundedRectangle(cornerRadius: 4)
                         .fill(Color.white.opacity(0.06))
-                    RoundedRectangle(cornerRadius: 3)
+                    RoundedRectangle(cornerRadius: 4)
                         .fill(BVColor.statusDoing)
                         .frame(width: geo.size.width * CGFloat(max(0, min(1, fraction))))
                 }
@@ -763,12 +771,13 @@ struct EditableGoalStatusPill: View {
         }
         .buttonStyle(.plain)
         .panelPopover(isPresented: $isPresented) {
-            BrainOptionPicker(
-                items: BrainGoalStatus.allCases,
+            OptionPicker(
                 current: value,
+                ordered: BrainGoalStatus.allCases,
+                title: String(localized: "task.picker.status.title", defaultValue: "Change status"),
                 label: { goalStatusLabel($0) },
                 glyph: { status in
-                    StatusGlyph(status: glyphMapping(status)).frame(width: 14, height: 14)
+                    StatusGlyph(status: glyphMapping(status))
                 },
                 onSelect: { selected in
                     if let selected, selected != value {
@@ -817,23 +826,17 @@ struct EditableOwnerChip: View {
     private func ownerChipView(handle: String) -> some View {
         let initial = String(handle.prefix(1)).uppercased()
         let color = colorFor(handle: handle)
-        return HStack(spacing: 6) {
+        return HStack(spacing: 5) {
             Text(initial)
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundColor(.white)
-                .frame(width: 16, height: 16)
+                .frame(width: 14, height: 14)
                 .background(Circle().fill(color))
             Text(handle)
                 .font(.system(size: 11.5))
                 .foregroundColor(BVColor.fg)
         }
-        .padding(.leading, 3).padding(.trailing, 7)
-        .frame(height: 20)
-        .background(
-            Capsule().fill(BVColor.bgInput)
-                .overlay(Capsule().stroke(BVColor.border))
-        )
-        .contentShape(Rectangle())
+        .inspectorPillChrome()
     }
 
     private var placeholderView: some View {
@@ -845,13 +848,7 @@ struct EditableOwnerChip: View {
                 .font(.system(size: 11.5).italic())
                 .foregroundColor(BVColor.fgFaint)
         }
-        .padding(.horizontal, 7)
-        .frame(height: 20)
-        .background(
-            Capsule().fill(BVColor.bgInput)
-                .overlay(Capsule().stroke(BVColor.border))
-        )
-        .contentShape(Rectangle())
+        .inspectorPillChrome()
     }
 
     private func colorFor(handle: String) -> Color {
@@ -896,28 +893,19 @@ struct OwnerPickerView: View {
             Divider()
             ScrollView {
                 VStack(spacing: 0) {
-                    Button(action: { onSelect(nil) }) {
-                        HStack(spacing: 8) {
+                    PickerRow(
+                        glyph: {
                             Image(systemName: "person.slash")
                                 .font(.system(size: 11))
                                 .foregroundColor(BVColor.fgMute)
-                            Text(String(localized: "brain.editable.unassigned", defaultValue: "Unassigned"))
-                                .font(.system(size: 12))
-                                .foregroundColor(BVColor.fg)
-                            Spacer()
-                            if current == nil {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(BVColor.fgMute)
-                            }
-                        }
-                        .padding(.horizontal, 10)
-                        .frame(height: 26)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .background(EditablePickerRowHoverBackground())
+                        },
+                        label: String(localized: "brain.editable.unassigned", defaultValue: "Unassigned"),
+                        isCurrent: current == nil,
+                        keyLabel: nil,
+                        action: { onSelect(nil) }
+                    )
                     Divider()
+                        .padding(.vertical, 4)
                     if filtered.isEmpty {
                         Text(String(localized: "brain.editable.noMatches", defaultValue: "No matches"))
                             .font(.system(size: 11).italic())
@@ -926,29 +914,19 @@ struct OwnerPickerView: View {
                             .padding(.horizontal, 10).padding(.vertical, 8)
                     } else {
                         ForEach(filtered, id: \.self) { slug in
-                            Button(action: { onSelect("people/\(slug)") }) {
-                                HStack(spacing: 8) {
+                            PickerRow(
+                                glyph: {
                                     Text(String(slug.prefix(1)).uppercased())
                                         .font(.system(size: 9, weight: .semibold))
                                         .foregroundColor(.white)
                                         .frame(width: 14, height: 14)
                                         .background(Circle().fill(slugColor(slug)))
-                                    Text(slug)
-                                        .font(.system(size: 12))
-                                        .foregroundColor(BVColor.fg)
-                                    Spacer()
-                                    if currentSlug == slug {
-                                        Image(systemName: "checkmark")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundColor(BVColor.fgMute)
-                                    }
-                                }
-                                .padding(.horizontal, 10)
-                                .frame(height: 26)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .background(EditablePickerRowHoverBackground())
+                                },
+                                label: slug,
+                                isCurrent: currentSlug == slug,
+                                keyLabel: nil,
+                                action: { onSelect("people/\(slug)") }
+                            )
                         }
                     }
                 }
@@ -957,7 +935,14 @@ struct OwnerPickerView: View {
             .frame(height: scrollHeight)
         }
         .frame(width: 240)
-        .background(BVColor.bgElev)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(BVColor.bgElev)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(BVColor.borderStrong, lineWidth: 1)
+        )
         .onAppear { searchFocused = true }
     }
 
@@ -1001,8 +986,7 @@ struct EditableDateBadge: View {
                         .font(.system(size: 11.5).monospacedDigit())
                         .foregroundColor(color)
                 }
-                .padding(.horizontal, 5).frame(height: 20)
-                .contentShape(Rectangle())
+                .inspectorPillChrome()
             } else {
                 HStack(spacing: 5) {
                     Image(systemName: "calendar.badge.plus")
@@ -1012,8 +996,7 @@ struct EditableDateBadge: View {
                         .font(.system(size: 11.5).italic())
                         .foregroundColor(BVColor.fgFaint)
                 }
-                .padding(.horizontal, 5).frame(height: 20)
-                .contentShape(Rectangle())
+                .inspectorPillChrome()
             }
         }
         .buttonStyle(.plain)
@@ -1049,8 +1032,8 @@ private struct DatePickerPopover: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            GraphicalDatePickerRepresentable(date: $selected)
-                .padding(.horizontal, 6).padding(.top, 6).padding(.bottom, 4)
+            CompactMonthCalendar(date: $selected)
+                .padding(.bottom, 4)
             Divider()
             HStack {
                 Button(String(localized: "brain.editable.clear", defaultValue: "Clear")) {
@@ -1070,8 +1053,14 @@ private struct DatePickerPopover: View {
             .padding(.horizontal, 10).padding(.vertical, 7)
         }
         .fixedSize()
-        .background(BVColor.bg)
-
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(BVColor.bgElev)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(BVColor.borderStrong, lineWidth: 1)
+        )
     }
 }
 
@@ -1158,11 +1147,19 @@ struct EditableCadencePill: View {
         }
         .buttonStyle(.plain)
         .panelPopover(isPresented: $isPresented) {
-            CadencePickerView(
+            OptionPicker(
                 current: current,
-                onSelect: { newValue in
-                    if newValue != current {
-                        onChange(newValue)
+                ordered: GoalCadence.allCases,
+                title: String(localized: "task.picker.cadence.title", defaultValue: "Change cadence"),
+                label: { goalCadenceLabel($0) },
+                glyph: { _ in
+                    Image(systemName: "clock")
+                        .font(.system(size: 11))
+                        .foregroundColor(BVColor.fgMute)
+                },
+                onSelect: { selected in
+                    if let selected, selected != current {
+                        onChange(selected)
                     }
                     isPresented = false
                 }
@@ -1171,60 +1168,7 @@ struct EditableCadencePill: View {
     }
 }
 
-struct CadencePickerView: View {
-    let current: GoalCadence?
-    let onSelect: (GoalCadence?) -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                ForEach(Array(GoalCadence.allCases.enumerated()), id: \.element) { idx, cadence in
-                    Button(action: { onSelect(cadence) }) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "clock")
-                                .font(.system(size: 11))
-                                .foregroundColor(BVColor.fgMute)
-                            Text(goalCadenceLabel(cadence))
-                                .font(.system(size: 12))
-                                .foregroundColor(BVColor.fg)
-                            Spacer()
-                            if current == cadence {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(BVColor.fgMute)
-                            }
-                            Text("\(idx + 1)")
-                                .font(.system(size: 10.5, design: .monospaced))
-                                .foregroundColor(BVColor.fgFaint)
-                                .frame(minWidth: 14, alignment: .trailing)
-                        }
-                        .padding(.horizontal, 10)
-                        .frame(height: 26)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .background(EditablePickerRowHoverBackground())
-                    .keyboardShortcut(KeyEquivalent(Character("\(idx + 1)")), modifiers: [])
-                }
-            }
-            .padding(.vertical, 4)
-        }
-        .frame(width: 200)
-        .background(BVColor.bgElev)
-
-    }
-}
-
-// MARK: - Shared hover
-
-struct EditablePickerRowHoverBackground: View {
-    @State private var hovering = false
-    var body: some View {
-        Rectangle()
-            .fill(hovering ? BVColor.bgHover : Color.clear)
-            .onHover { hovering = $0 }
-    }
-}
+// Shared hover helper lives in Sources/Pickers/PickerContainer.swift.
 
 // MARK: - PanelPopover: borderless NSPanel as a popover replacement
 

@@ -1,36 +1,25 @@
 import SwiftUI
 
+/// 사이드바 Tasks priority 픽커. generic `OptionPicker`에 도메인 파라미터만
+/// 주입하는 얇은 어댑터. 키 0 → "No priority"(nil), 1–4 → urgent/high/normal/low.
 struct TaskPriorityPicker: View {
     let current: BrainPriority?
     let onSelect: (BrainPriority?) -> Void
 
-    /// Display order. nil = "No priority" (key 0), then urgent/high/normal/low (1–4).
     private static let ordered: [BrainPriority] = [.urgent, .high, .medium, .low]
 
     var body: some View {
-        TaskPickerContainer(
+        OptionPicker(
+            current: current,
+            ordered: Self.ordered,
             title: String(localized: "task.picker.priority.title", defaultValue: "Change priority"),
-            width: 200
-        ) {
-            TaskPickerRow(
-                glyph: { TaskNoPriorityGlyph() },
+            label: { $0.localizedLabel },
+            glyph: { TaskPriorityIcon(priority: $0) },
+            noneRow: .init(
                 label: String(localized: "task.priority.none", defaultValue: "No priority"),
-                isCurrent: current == nil,
-                keyLabel: "0",
-                action: { onSelect(nil) }
-            )
-            .keyboardShortcut(KeyEquivalent("0"), modifiers: [])
-
-            ForEach(Array(Self.ordered.enumerated()), id: \.element) { idx, p in
-                TaskPickerRow(
-                    glyph: { TaskPriorityIcon(priority: p) },
-                    label: p.localizedLabel,
-                    isCurrent: current == p,
-                    keyLabel: "\(idx + 1)",
-                    action: { onSelect(p) }
-                )
-                .keyboardShortcut(KeyEquivalent(Character("\(idx + 1)")), modifiers: [])
-            }
-        }
+                glyph: AnyView(TaskNoPriorityGlyph())
+            ),
+            onSelect: onSelect
+        )
     }
 }

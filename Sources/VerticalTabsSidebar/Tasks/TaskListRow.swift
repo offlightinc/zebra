@@ -194,10 +194,8 @@ struct TaskDuePopover: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            DatePicker("", selection: $selected, displayedComponents: .date)
-                .datePickerStyle(.graphical)
-                .labelsHidden()
-                .padding(.horizontal, 6).padding(.top, 6).padding(.bottom, 4)
+            CompactMonthCalendar(date: $selected)
+                .padding(.bottom, 4)
             Divider()
             HStack {
                 Button(String(localized: "task.due.clear", defaultValue: "Clear")) {
@@ -217,6 +215,13 @@ struct TaskDuePopover: View {
             .padding(.horizontal, 10).padding(.vertical, 7)
         }
         .fixedSize()
-        .background(BVColor.bg)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(BVColor.bgElev)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(BVColor.borderStrong, lineWidth: 1)
+        )
     }
 }

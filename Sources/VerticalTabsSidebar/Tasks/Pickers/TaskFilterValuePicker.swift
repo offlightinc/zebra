@@ -27,9 +27,9 @@ struct TaskFilterValuePicker: View {
     }
 
     var body: some View {
-        TaskPickerContainer(
+        PickerContainer(
             title: "\(field.label) \(workingOp.symbol)",
-            width: 220
+            width: 200
         ) {
             valueRows
 
@@ -88,19 +88,52 @@ struct TaskFilterValuePicker: View {
         }
     }
 
+    @ViewBuilder
     private func row(raw: String, label: String) -> some View {
         let selected = workingValues.contains(raw)
-        return TaskPickerRow(
-            glyph: {
-                Image(systemName: selected ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 12))
-                    .foregroundColor(selected ? BVColor.accent : BVColor.fgFaint)
-            },
+        PickerRow(
+            glyph: { glyphView(raw: raw) },
             label: label,
             isCurrent: selected,
             keyLabel: nil,
-            action: { toggle(raw) }
+            action: { toggle(raw) },
+            multiSelectChecked: selected
         )
+    }
+
+    /// HTML 디자인의 svgMap 대응. status는 StatusGlyph, priority는 TaskPriorityIcon,
+    /// owner는 첫 글자 아바타. pseudo-option(`__unrecognized__` / `__none__` /
+    /// `__unassigned__`)은 fallback glyph로 처리.
+    @ViewBuilder
+    private func glyphView(raw: String) -> some View {
+        switch field {
+        case .status:
+            // `__unrecognized__`처럼 rawValue 매핑 실패하면 nil → StatusGlyph가
+            // fgFaint outlined circle로 fallback 렌더.
+            StatusGlyph(status: BrainTaskStatus(rawValue: raw))
+        case .priority:
+            if raw == "__none__" {
+                TaskNoPriorityGlyph()
+            } else if let priority = BrainPriority(rawValue: raw) {
+                TaskPriorityIcon(priority: priority)
+            } else {
+                EmptyView()
+            }
+        case .owner:
+            if raw == "__unassigned__" {
+                Image(systemName: "person.slash")
+                    .font(.system(size: 11))
+                    .foregroundColor(BVColor.fgMute)
+            } else {
+                // PickerRow의 outer 14×14 frame은 슬롯 크기만 잡고 child를 늘리지 않으므로,
+                // Text+Circle background 조합은 inner frame으로 자체 크기 보장해야 함.
+                Text(String(raw.prefix(1)).uppercased())
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 14, height: 14)
+                    .background(Circle().fill(BrainPersonColor.color(for: raw)))
+            }
+        }
     }
 
     private func toggle(_ raw: String) {

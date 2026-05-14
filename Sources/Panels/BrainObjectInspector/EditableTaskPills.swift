@@ -31,11 +31,12 @@ struct EditableTaskStatusPill: View {
         }
         .buttonStyle(.plain)
         .panelPopover(isPresented: $isPresented) {
-            BrainOptionPicker(
-                items: BrainTaskStatus.allCases,
+            OptionPicker(
                 current: value,
+                ordered: BrainTaskStatus.primaryCases,
+                title: String(localized: "task.picker.status.title", defaultValue: "Change status"),
                 label: { $0.localizedLabel },
-                glyph: { StatusGlyph(status: $0).frame(width: 14, height: 14) },
+                glyph: { StatusGlyph(status: $0) },
                 onSelect: { selected in
                     if let selected, selected != value {
                         onChange(selected)
@@ -76,21 +77,22 @@ struct EditableTaskPriorityPill: View {
         }
         .buttonStyle(.plain)
         .panelPopover(isPresented: $isPresented) {
-            BrainOptionPicker(
-                items: BrainPriority.allCases,
+            OptionPicker(
                 current: value,
+                ordered: [.urgent, .high, .medium, .low],
+                title: String(localized: "task.picker.priority.title", defaultValue: "Change priority"),
                 label: { $0.localizedLabel },
-                glyph: { TaskPriorityIcon(priority: $0).frame(width: 14, height: 14) },
+                glyph: { TaskPriorityIcon(priority: $0) },
+                noneRow: .init(
+                    label: String(localized: "task.priority.none", defaultValue: "No priority"),
+                    glyph: AnyView(TaskNoPriorityGlyph())
+                ),
                 onSelect: { selected in
                     if selected != value {
                         onChange(selected)
                     }
                     isPresented = false
-                },
-                noneOption: .init(
-                    label: String(localized: "task.priority.none", defaultValue: "No priority"),
-                    glyph: AnyView(TaskNoPriorityGlyph().frame(width: 14, height: 14))
-                )
+                }
             )
         }
         .accessibilityLabel(Text(value.map { $0.localizedLabel } ?? String(localized: "brain.editable.setPriority", defaultValue: "Set priority...")))
