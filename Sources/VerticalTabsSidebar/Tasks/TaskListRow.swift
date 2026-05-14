@@ -22,7 +22,6 @@ struct TaskListRow: View, Equatable {
     var body: some View {
         HStack(spacing: 8) {
             statusButton
-                .frame(width: 14, height: 14)
             Text(task.title)
                 .font(.system(size: 13))
                 .foregroundColor(isCompleted ? BVColor.fgMute : BVColor.fg)
@@ -48,7 +47,6 @@ struct TaskListRow: View, Equatable {
                 Spacer().frame(width: 0)
             }
             priorityButton
-                .frame(width: 14, height: 14)
             if let raw = task.unrecognizedStatusRaw {
                 Text("?\(raw)")
                     .font(.system(size: 9.5).monospaced())
@@ -62,6 +60,23 @@ struct TaskListRow: View, Equatable {
         .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture { onOpen(task) }
+        // Anchor status/priority pickers to the full row (not the tiny
+        // icon buttons) and align to the row's leading edge — the picker
+        // then opens from the listView's left edge regardless of which
+        // icon was clicked, so it stays inside a narrow sidebar instead
+        // of spilling past the right edge into the editor area.
+        .panelPopover(isPresented: $showStatusPicker, alignment: .leading) {
+            TaskStatusPicker(current: task.status) { newStatus in
+                onChangeStatus(task, newStatus)
+                showStatusPicker = false
+            }
+        }
+        .panelPopover(isPresented: $showPriorityPicker, alignment: .leading) {
+            TaskPriorityPicker(current: task.priority) { newPriority in
+                onChangePriority(task, newPriority)
+                showPriorityPicker = false
+            }
+        }
         .contextMenu {
             Button(String(localized: "task.row.open", defaultValue: "Open")) {
                 onOpen(task)
@@ -80,37 +95,35 @@ struct TaskListRow: View, Equatable {
 
     @ViewBuilder
     private var statusButton: some View {
+        // Group + frame + contentShape makes the full 14×14 box hit-testable.
+        // Without contentShape, Button's plain hit region is the glyph's
+        // visible shape — stroked-outline statuses (todo) and the thin
+        // PriorityBars expose only a few points of tappable area.
         Button(action: { showStatusPicker = true }) {
-            if let status = task.status {
-                StatusGlyph(status: status)
-            } else if task.unrecognizedStatusRaw != nil {
-                unknownGlyph
-            } else {
-                Circle()
-                    .strokeBorder(BVColor.fgFaint, style: StrokeStyle(lineWidth: 1, dash: [2, 1.4]))
+            Group {
+                if let status = task.status {
+                    StatusGlyph(status: status)
+                } else if task.unrecognizedStatusRaw != nil {
+                    unknownGlyph
+                } else {
+                    Circle()
+                        .strokeBorder(BVColor.fgFaint, style: StrokeStyle(lineWidth: 1, dash: [2, 1.4]))
+                }
             }
+            .frame(width: 14, height: 14)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .panelPopover(isPresented: $showStatusPicker) {
-            TaskStatusPicker(current: task.status) { newStatus in
-                onChangeStatus(task, newStatus)
-                showStatusPicker = false
-            }
-        }
     }
 
     @ViewBuilder
     private var priorityButton: some View {
         Button(action: { showPriorityPicker = true }) {
             TaskPriorityIcon(priority: task.priority)
+                .frame(width: 14, height: 14)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .panelPopover(isPresented: $showPriorityPicker) {
-            TaskPriorityPicker(current: task.priority) { newPriority in
-                onChangePriority(task, newPriority)
-                showPriorityPicker = false
-            }
-        }
     }
 
     private var unknownGlyph: some View {
