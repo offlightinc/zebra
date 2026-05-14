@@ -14,7 +14,7 @@ struct TaskStatusPicker: View {
                 Button(action: { onSelect(status) }) {
                     HStack(spacing: 8) {
                         StatusGlyph(status: status).frame(width: 14, height: 14)
-                        Text(TaskListViewModel.statusLabel(status))
+                        Text(status.localizedLabel)
                             .font(.system(size: 12))
                             .foregroundColor(BVColor.fg)
                         Spacer()

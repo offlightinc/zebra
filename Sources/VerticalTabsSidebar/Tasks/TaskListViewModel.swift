@@ -123,7 +123,7 @@ final class TaskListViewModel: ObservableObject {
             ]
         case .status:
             return groupBySingleKey(tasks, order: statusOrder) { task in
-                if let s = task.status { return (s.rawValue, statusLabel(s)) }
+                if let s = task.status { return (s.rawValue, s.localizedLabel) }
                 if task.unrecognizedStatusRaw != nil {
                     return ("__unrecognized__", String(localized: "task.group.unrecognized", defaultValue: "Unrecognized"))
                 }
@@ -135,7 +135,7 @@ final class TaskListViewModel: ObservableObject {
                 if let s = task.status, s == .completed || s == .canceled {
                     return ("__done__", String(localized: "task.group.done", defaultValue: "Done"))
                 }
-                if let p = task.priority { return (p.rawValue, priorityLabel(p)) }
+                if let p = task.priority { return (p.rawValue, p.localizedLabel) }
                 return ("__none__", String(localized: "task.priority.none", defaultValue: "No priority"))
             }
         case .owner:
@@ -231,23 +231,4 @@ final class TaskListViewModel: ObservableObject {
         }
     }
 
-    static func statusLabel(_ s: BrainTaskStatus) -> String {
-        switch s {
-        case .todo:      return String(localized: "task.status.todo", defaultValue: "Todo")
-        case .doing:     return String(localized: "task.status.doing", defaultValue: "In progress")
-        case .blocked:   return String(localized: "task.status.blocked", defaultValue: "Blocked")
-        case .waiting:   return String(localized: "task.status.waiting", defaultValue: "Waiting")
-        case .completed: return String(localized: "task.status.completed", defaultValue: "Completed")
-        case .canceled:  return String(localized: "task.status.canceled", defaultValue: "Canceled")
-        }
-    }
-
-    static func priorityLabel(_ p: BrainPriority) -> String {
-        switch p {
-        case .urgent: return String(localized: "task.priority.urgent", defaultValue: "Urgent")
-        case .high:   return String(localized: "task.priority.high", defaultValue: "High")
-        case .normal: return String(localized: "task.priority.normal", defaultValue: "Normal")
-        case .low:    return String(localized: "task.priority.low", defaultValue: "Low")
-        }
-    }
 }

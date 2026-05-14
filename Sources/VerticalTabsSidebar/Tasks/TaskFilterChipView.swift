@@ -54,12 +54,12 @@ struct TaskFilterChipView: View {
             if raw == "__unrecognized__" {
                 return String(localized: "task.group.unrecognized", defaultValue: "Unrecognized")
             }
-            return BrainTaskStatus(rawValue: raw).map { TaskListViewModel.statusLabel($0) } ?? raw
+            return BrainTaskStatus(rawValue: raw).map { $0.localizedLabel } ?? raw
         case .priority:
             if raw == "__none__" {
                 return String(localized: "task.priority.none", defaultValue: "No priority")
             }
-            return BrainPriority(rawValue: raw).map { TaskListViewModel.priorityLabel($0) } ?? raw
+            return BrainPriority(rawValue: raw).map { $0.localizedLabel } ?? raw
         case .owner:
             if raw == "__unassigned__" {
                 return String(localized: "task.group.unassigned", defaultValue: "Unassigned")

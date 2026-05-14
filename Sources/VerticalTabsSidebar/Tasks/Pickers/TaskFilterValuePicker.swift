@@ -63,12 +63,12 @@ struct TaskFilterValuePicker: View {
         switch field {
         case .status:
             let opts: [(String, String)] = [
-                (BrainTaskStatus.todo.rawValue,      TaskListViewModel.statusLabel(.todo)),
-                (BrainTaskStatus.doing.rawValue,     TaskListViewModel.statusLabel(.doing)),
-                (BrainTaskStatus.blocked.rawValue,   TaskListViewModel.statusLabel(.blocked)),
-                (BrainTaskStatus.waiting.rawValue,   TaskListViewModel.statusLabel(.waiting)),
-                (BrainTaskStatus.completed.rawValue, TaskListViewModel.statusLabel(.completed)),
-                (BrainTaskStatus.canceled.rawValue,  TaskListViewModel.statusLabel(.canceled)),
+                (BrainTaskStatus.todo.rawValue,      BrainTaskStatus.todo.localizedLabel),
+                (BrainTaskStatus.doing.rawValue,     BrainTaskStatus.doing.localizedLabel),
+                (BrainTaskStatus.blocked.rawValue,   BrainTaskStatus.blocked.localizedLabel),
+                (BrainTaskStatus.waiting.rawValue,   BrainTaskStatus.waiting.localizedLabel),
+                (BrainTaskStatus.completed.rawValue, BrainTaskStatus.completed.localizedLabel),
+                (BrainTaskStatus.canceled.rawValue,  BrainTaskStatus.canceled.localizedLabel),
                 ("__unrecognized__", String(localized: "task.group.unrecognized", defaultValue: "Unrecognized")),
             ]
             ForEach(opts, id: \.0) { (raw, label) in
@@ -76,10 +76,10 @@ struct TaskFilterValuePicker: View {
             }
         case .priority:
             let opts: [(String, String)] = [
-                (BrainPriority.urgent.rawValue, TaskListViewModel.priorityLabel(.urgent)),
-                (BrainPriority.high.rawValue,   TaskListViewModel.priorityLabel(.high)),
-                (BrainPriority.normal.rawValue, TaskListViewModel.priorityLabel(.normal)),
-                (BrainPriority.low.rawValue,    TaskListViewModel.priorityLabel(.low)),
+                (BrainPriority.urgent.rawValue, BrainPriority.urgent.localizedLabel),
+                (BrainPriority.high.rawValue,   BrainPriority.high.localizedLabel),
+                (BrainPriority.normal.rawValue, BrainPriority.normal.localizedLabel),
+                (BrainPriority.low.rawValue,    BrainPriority.low.localizedLabel),
                 ("__none__", String(localized: "task.priority.none", defaultValue: "No priority")),
             ]
             ForEach(opts, id: \.0) { (raw, label) in

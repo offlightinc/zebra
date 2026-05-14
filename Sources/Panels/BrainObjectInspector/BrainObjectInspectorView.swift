@@ -28,7 +28,7 @@ struct BrainObjectInspectorView: View {
             LoadingInspectorView()
         case .some(.success(let object)):
             switch object {
-            case .task(let t): TaskInspectorView(task: t, onActivateRelation: onActivateRelation)
+            case .task(let t): TaskInspectorView(task: t, onActivateRelation: onActivateRelation, onUpdateFrontmatter: onUpdateFrontmatter)
             case .goal(let g): GoalInspectorView(goal: g, onActivateRelation: onActivateRelation, onUpdateFrontmatter: onUpdateFrontmatter)
             case .note(let n): DocInspectorView(note: n, onActivateRelation: onActivateRelation)
             case .unknown(let u): UnknownInspectorView(unknown: u)
@@ -44,95 +44,118 @@ struct BrainObjectInspectorView: View {
 struct TaskInspectorView: View {
     let task: TaskObject
     var onActivateRelation: ((BrainObjectRef) -> Void)? = nil
+    var onUpdateFrontmatter: ((String, String?) -> Void)? = nil
+
+    @EnvironmentObject private var personFileListStore: PersonFileListStore
+
+    private var peopleSlugs: [String] {
+        personFileListStore.people.map(\.slug)
+    }
+
+    private static let isoDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            InspectorHeader(tag: .task, title: task.title)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // identity → state → progress → impediments → relations → meta
-                    InspectorSection {
-                        PropertyRow(label: String(localized: "brain.row.status", defaultValue: "Status"), icon: "circle.dotted") {
-                            StatusPillView(status: task.status)
-                        }
-                        PropertyRow(label: String(localized: "brain.row.priority", defaultValue: "Priority"), icon: "flag") {
-                            PriorityPillView(priority: task.priority)
-                        }
-                        PropertyRow(label: String(localized: "brain.row.owner", defaultValue: "Owner"), icon: "person") {
-                            PersonChipView(handle: task.owner)
-                        }
-                        PropertyRow(label: String(localized: "brain.row.reviewer", defaultValue: "Reviewer"), icon: "person.crop.circle") {
-                            PersonChipView(handle: task.reviewer)
-                        }
-                        PropertyRow(label: String(localized: "brain.row.due", defaultValue: "Due"), icon: "calendar") {
-                            DateBadgeView(date: task.due, kind: .due)
-                        }
-                        PropertyRow(label: String(localized: "brain.row.tags", defaultValue: "Tags"), icon: "number", layout: .stack) {
-                            TagFlow(tags: task.tags)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                // identity → state → progress → impediments → relations → meta
+                InspectorSection {
+                    PropertyRow(label: String(localized: "brain.row.status", defaultValue: "Status"), icon: "circle.dotted") {
+                        EditableTaskStatusPill(value: task.status) { newStatus in
+                            onUpdateFrontmatter?("status", newStatus?.rawValue)
                         }
                     }
+                    PropertyRow(label: String(localized: "brain.row.priority", defaultValue: "Priority"), icon: "flag") {
+                        EditableTaskPriorityPill(value: task.priority) { newPriority in
+                            onUpdateFrontmatter?("priority", newPriority?.rawValue)
+                        }
+                    }
+                    PropertyRow(label: String(localized: "brain.row.owner", defaultValue: "Owner"), icon: "person") {
+                        EditableOwnerChip(rawValue: task.owner, peopleSlugs: peopleSlugs) { newOwner in
+                            onUpdateFrontmatter?("owner", newOwner)
+                        }
+                    }
+                    PropertyRow(label: String(localized: "brain.row.reviewer", defaultValue: "Reviewer"), icon: "person.crop.circle") {
+                        EditableOwnerChip(rawValue: task.reviewer, peopleSlugs: peopleSlugs) { newReviewer in
+                            onUpdateFrontmatter?("reviewer", newReviewer)
+                        }
+                    }
+                    PropertyRow(label: String(localized: "brain.row.due", defaultValue: "Due"), icon: "calendar") {
+                        EditableDateBadge(value: task.due) { newDate in
+                            let serialized = newDate.map { Self.isoDateFormatter.string(from: $0) }
+                            onUpdateFrontmatter?("due", serialized)
+                        }
+                    }
+                    PropertyRow(label: String(localized: "brain.row.tags", defaultValue: "Tags"), icon: "number") {
+                        TagFlow(tags: task.tags, singleLine: true)
+                    }
+                }
 
-                    if let cl = task.checklist {
-                        InspectorSection(title: String(localized: "brain.section.progress", defaultValue: "Progress")) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ProgressBarView(fraction: Double(cl.done) / Double(max(1, cl.total)), trailing: "\(cl.done)/\(cl.total)")
-                                Text("\(cl.total - cl.done) open · \(cl.done) done")
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundColor(BVColor.fgFaint)
+                if let cl = task.checklist {
+                    InspectorSection(title: String(localized: "brain.section.progress", defaultValue: "Progress")) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ProgressBarView(fraction: Double(cl.done) / Double(max(1, cl.total)), trailing: "\(cl.done)/\(cl.total)")
+                            Text("\(cl.total - cl.done) open · \(cl.done) done")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(BVColor.fgFaint)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                if !task.blockedBy.isEmpty {
+                    InspectorSection(
+                        title: String(localized: "brain.section.blockedBy", defaultValue: "Blocked by"),
+                        count: task.blockedBy.count
+                    ) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(task.blockedBy, id: \.self) { r in
+                                RelationRowView(ref: r, showsTrailingMeta: false, onActivate: onActivateRelation)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 4)
-                        }
-                    }
-
-                    if !task.blockedBy.isEmpty {
-                        InspectorSection(
-                            title: String(localized: "brain.section.blockedBy", defaultValue: "Blocked by"),
-                            count: task.blockedBy.count
-                        ) {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(task.blockedBy, id: \.self) { r in
-                                    RelationRowView(ref: r, onActivate: onActivateRelation)
+                            if let reason = task.blockedReason {
+                                HStack(alignment: .top, spacing: 6) {
+                                    Image(systemName: "minus.circle")
+                                        .foregroundColor(BVColor.priorityUrgent)
+                                        .font(.system(size: 11))
+                                    Text(reason)
+                                        .font(.system(size: 11).italic())
+                                        .foregroundColor(BVColor.fgMute)
                                 }
-                                if let reason = task.blockedReason {
-                                    HStack(alignment: .top, spacing: 6) {
-                                        Image(systemName: "minus.circle")
-                                            .foregroundColor(BVColor.priorityUrgent)
-                                            .font(.system(size: 11))
-                                        Text(reason)
-                                            .font(.system(size: 11).italic())
-                                            .foregroundColor(BVColor.fgMute)
-                                    }
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 6)
-                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 6)
                             }
                         }
                     }
+                }
 
-                    if !task.related.isEmpty {
-                        InspectorSection(
-                            title: String(localized: "brain.section.related", defaultValue: "Related"),
-                            count: task.related.count
-                        ) {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(task.related, id: \.self) { r in
-                                    RelationRowView(ref: r, onActivate: onActivateRelation)
-                                }
+                if !task.related.isEmpty {
+                    InspectorSection(
+                        title: String(localized: "brain.section.related", defaultValue: "Related"),
+                        count: task.related.count
+                    ) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(task.related, id: \.self) { r in
+                                RelationRowView(ref: r, showsTrailingMeta: false, onActivate: onActivateRelation)
                             }
                         }
                     }
+                }
 
-                    InspectorSection(title: String(localized: "brain.section.meta", defaultValue: "Meta")) {
-                        PropertyRow(label: String(localized: "brain.row.updated", defaultValue: "Updated"), icon: "calendar") {
-                            DateBadgeView(date: task.lastUpdated, kind: .meta)
-                        }
-                        if let n = task.backlinks {
-                            PropertyRow(label: String(localized: "brain.row.backlinks", defaultValue: "Backlinks"), icon: "link") {
-                                Text(String(localized: "brain.row.backlinksValue", defaultValue: "\(n) references"))
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundColor(BVColor.fgMute)
-                            }
+                InspectorSection(title: String(localized: "brain.section.meta", defaultValue: "Meta")) {
+                    PropertyRow(label: String(localized: "brain.row.updated", defaultValue: "Updated"), icon: "calendar") {
+                        DateBadgeView(date: task.lastUpdated, kind: .meta)
+                    }
+                    if let n = task.backlinks {
+                        PropertyRow(label: String(localized: "brain.row.backlinks", defaultValue: "Backlinks"), icon: "link") {
+                            Text(String(localized: "brain.row.backlinksValue", defaultValue: "\(n) references"))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(BVColor.fgMute)
                         }
                     }
                 }

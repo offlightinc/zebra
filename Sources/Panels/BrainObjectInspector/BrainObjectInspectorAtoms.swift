@@ -230,44 +230,7 @@ struct EmptyValue: View {
     }
 }
 
-// MARK: - Status pill
-
-struct StatusPillView: View {
-    let status: BrainTaskStatus?
-
-    var body: some View {
-        guard let status else {
-            return AnyView(EmptyValue())
-        }
-        return AnyView(
-            HStack(spacing: 5) {
-                StatusGlyph(status: status).frame(width: 12, height: 12)
-                Text(label)
-                    .font(.system(size: 11.5))
-                    .foregroundColor(BVColor.fg)
-            }
-            .padding(.horizontal, 7)
-            .frame(height: 20)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(BVColor.bgInput)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(BVColor.border))
-            )
-            .accessibilityLabel(Text(label))
-        )
-    }
-
-    private var label: String {
-        switch status! {
-        case .todo: return String(localized: "brain.status.todo", defaultValue: "Todo")
-        case .doing: return String(localized: "brain.status.doing", defaultValue: "In progress")
-        case .blocked: return String(localized: "brain.status.blocked", defaultValue: "Blocked")
-        case .waiting: return String(localized: "brain.status.waiting", defaultValue: "Waiting")
-        case .completed: return String(localized: "brain.status.completed", defaultValue: "Completed")
-        case .canceled: return String(localized: "brain.status.canceled", defaultValue: "Canceled")
-        }
-    }
-}
+// MARK: - Status glyph
 
 /// Linear-style status disc. Each state gets a distinct silhouette so
 /// status is legible at 12pt even without color.
@@ -339,60 +302,7 @@ struct StatusGlyph: View {
     }
 }
 
-// MARK: - Priority pill
-
-struct PriorityPillView: View {
-    let priority: BrainPriority?
-
-    var body: some View {
-        guard let priority else {
-            return AnyView(EmptyValue())
-        }
-        let color = color(for: priority)
-        return AnyView(
-            HStack(spacing: 5) {
-                if priority == .urgent {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(color)
-                } else {
-                    PriorityBars(level: barLevel(for: priority), color: color)
-                }
-                Text(label(for: priority))
-                    .font(.system(size: 11.5))
-                    .foregroundColor(BVColor.fg)
-            }
-            .padding(.horizontal, 7)
-            .frame(height: 20)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(BVColor.bgInput)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(BVColor.border))
-            )
-            .accessibilityLabel(Text(label(for: priority)))
-        )
-    }
-
-    private func barLevel(for p: BrainPriority) -> Int {
-        switch p { case .urgent: return 3; case .high: return 3; case .normal: return 2; case .low: return 1 }
-    }
-    private func color(for p: BrainPriority) -> Color {
-        switch p {
-        case .urgent: return BVColor.priorityUrgent
-        case .high: return BVColor.priorityHigh
-        case .normal: return BVColor.priorityNormal
-        case .low: return BVColor.priorityLow
-        }
-    }
-    private func label(for p: BrainPriority) -> String {
-        switch p {
-        case .urgent: return String(localized: "brain.priority.urgent", defaultValue: "Urgent")
-        case .high: return String(localized: "brain.priority.high", defaultValue: "High")
-        case .normal: return String(localized: "brain.priority.normal", defaultValue: "Normal")
-        case .low: return String(localized: "brain.priority.low", defaultValue: "Low")
-        }
-    }
-}
+// MARK: - Priority bars
 
 /// Three vertical bars, low → high, lit up to `level`. Mirrors the
 /// `.bv-priority-icon` CSS in the prototype.
@@ -415,49 +325,11 @@ struct PriorityBars: View {
     }
 }
 
-// MARK: - Person chip
-
-struct PersonChipView: View {
-    let handle: String?
-
-    var body: some View {
-        guard let handle, !handle.isEmpty else {
-            return AnyView(EmptyValue())
-        }
-        let initial = String(handle.prefix(1)).uppercased()
-        let color = colorFor(handle: handle)
-        return AnyView(
-            HStack(spacing: 6) {
-                Text(initial)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 16, height: 16)
-                    .background(Circle().fill(color))
-                Text(handle)
-                    .font(.system(size: 11.5))
-                    .foregroundColor(BVColor.fg)
-            }
-            .padding(.leading, 3).padding(.trailing, 7)
-            .frame(height: 20)
-            .background(
-                Capsule().fill(BVColor.bgInput)
-                    .overlay(Capsule().stroke(BVColor.border))
-            )
-            .accessibilityLabel(Text(handle))
-        )
-    }
-
-    /// Stable per-handle color, matching the prototype's hard-coded
-    /// PERSON_COLORS map for the common handles and falling back to a
-    /// hash-derived hue for everyone else.
-    private func colorFor(handle: String) -> Color {
-        BrainPersonColor.color(for: handle)
-    }
-}
+// MARK: - Person color
 
 /// Single source of truth for per-handle avatar color. Centralizes the
-/// known-handle palette and hash-derived fallback that used to live in
-/// three places (`PersonChipView`, `EditableOwnerChip`, `OwnerPickerView`).
+/// known-handle palette and hash-derived fallback used by
+/// `EditableOwnerChip` and `OwnerPickerView`.
 enum BrainPersonColor {
     private static let known: [String: Color] = [
         "dan": Color(nsColor: NSColor(srgbRed: 0x5b / 255, green: 0x9d / 255, blue: 0xf9 / 255, alpha: 1)),
@@ -551,9 +423,21 @@ struct TagChipView: View {
 
 struct TagFlow: View {
     let tags: [String]
+    /// When true, render as a single horizontal row (chips that overflow the
+    /// available width are clipped). When false (default), wrap onto multiple
+    /// rows via `BrainInspectorFlowLayout`. Inline rows in property tables
+    /// generally want `true`; standalone tag clouds want `false`.
+    var singleLine: Bool = false
+
     var body: some View {
         if tags.isEmpty {
             EmptyValue()
+        } else if singleLine {
+            HStack(spacing: 4) {
+                ForEach(tags, id: \.self) { TagChipView(tag: $0) }
+            }
+            .lineLimit(1)
+            .clipped()
         } else {
             BrainInspectorFlowLayout(spacing: 4) {
                 ForEach(tags, id: \.self) { TagChipView(tag: $0) }
@@ -794,6 +678,32 @@ struct MilestoneRowView: View {
     }
 }
 
+// MARK: - Pill chrome
+
+/// 20pt rounded-rectangle pill chrome shared by inspector inline-editable
+/// controls (status / priority / cadence). The caller supplies the inner
+/// glyph + label `HStack`; this modifier adds the 7pt horizontal padding,
+/// fixed height, `bgInput` background, border, and click hit shape.
+struct InspectorPillChrome: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 7)
+            .frame(height: 20)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(BVColor.bgInput)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(BVColor.border))
+            )
+            .contentShape(Rectangle())
+    }
+}
+
+extension View {
+    func inspectorPillChrome() -> some View {
+        modifier(InspectorPillChrome())
+    }
+}
+
 // MARK: - Editable Goal status pill
 
 /// Visual glyph for a `BrainGoalStatus`. Reuses `StatusGlyph`'s `BrainTaskStatus`
@@ -840,96 +750,26 @@ struct EditableGoalStatusPill: View {
                         .foregroundColor(BVColor.fgFaint)
                 }
             }
-            .padding(.horizontal, 7)
-            .frame(height: 20)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(BVColor.bgInput)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(BVColor.border))
-            )
-            .contentShape(Rectangle())
+            .inspectorPillChrome()
         }
         .buttonStyle(.plain)
         .panelPopover(isPresented: $isPresented) {
-            GoalStatusPickerView(
+            BrainOptionPicker(
+                items: BrainGoalStatus.allCases,
                 current: value,
-                onSelect: { newValue in
-                    if newValue != value {
-                        onChange(newValue)
+                label: { goalStatusLabel($0) },
+                glyph: { status in
+                    StatusGlyph(status: glyphMapping(status)).frame(width: 14, height: 14)
+                },
+                onSelect: { selected in
+                    if let selected, selected != value {
+                        onChange(selected)
                     }
                     isPresented = false
                 }
             )
         }
         .accessibilityLabel(Text(value.map(goalStatusLabel) ?? String(localized: "brain.editable.setStatus", defaultValue: "Set status...")))
-    }
-}
-
-struct GoalStatusPickerView: View {
-    let current: BrainGoalStatus?
-    let onSelect: (BrainGoalStatus?) -> Void
-
-    @State private var query: String = ""
-    @FocusState private var searchFocused: Bool
-
-    private var filtered: [BrainGoalStatus] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        if q.isEmpty { return BrainGoalStatus.allCases }
-        return BrainGoalStatus.allCases.filter { goalStatusLabel($0).lowercased().hasPrefix(q) }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            TextField(String(localized: "brain.editable.changeStatus", defaultValue: "Change status..."), text: $query)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .padding(.horizontal, 10).padding(.vertical, 8)
-                .focused($searchFocused)
-                .onSubmit {
-                    if let first = filtered.first { onSelect(first) }
-                }
-            Divider()
-            VStack(spacing: 0) {
-                ForEach(Array(filtered.enumerated()), id: \.element) { idx, status in
-                    Button(action: { onSelect(status) }) {
-                        HStack(spacing: 8) {
-                            StatusGlyph(status: glyphMapping(status)).frame(width: 14, height: 14)
-                            Text(goalStatusLabel(status))
-                                .font(.system(size: 12))
-                                .foregroundColor(BVColor.fg)
-                            Spacer()
-                            if current == status {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(BVColor.fgMute)
-                            }
-                            Text("\(idx + 1)")
-                                .font(.system(size: 10.5, design: .monospaced))
-                                .foregroundColor(BVColor.fgFaint)
-                                .frame(minWidth: 14, alignment: .trailing)
-                        }
-                        .padding(.horizontal, 10)
-                        .frame(height: 26)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .background(EditablePickerRowHoverBackground())
-                    .keyboardShortcut(KeyEquivalent(Character("\(idx + 1)")), modifiers: [])
-                }
-                if filtered.isEmpty {
-                    Text(String(localized: "brain.editable.noMatches", defaultValue: "No matches"))
-                        .font(.system(size: 11).italic())
-                        .foregroundColor(BVColor.fgFaint)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10).padding(.vertical, 8)
-                }
-            }
-            .padding(.vertical, 4)
-        }
-        .frame(width: 240)
-        .background(BVColor.bgElev)
-
-        .onAppear { searchFocused = true }
     }
 }
 
@@ -1305,14 +1145,7 @@ struct EditableCadencePill: View {
                         .foregroundColor(BVColor.fgFaint)
                 }
             }
-            .padding(.horizontal, 7)
-            .frame(height: 20)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(BVColor.bgInput)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(BVColor.border))
-            )
-            .contentShape(Rectangle())
+            .inspectorPillChrome()
         }
         .buttonStyle(.plain)
         .panelPopover(isPresented: $isPresented) {
@@ -1375,7 +1208,7 @@ struct CadencePickerView: View {
 
 // MARK: - Shared hover
 
-private struct EditablePickerRowHoverBackground: View {
+struct EditablePickerRowHoverBackground: View {
     @State private var hovering = false
     var body: some View {
         Rectangle()

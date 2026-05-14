@@ -85,10 +85,30 @@ struct UnknownObject {
 
 enum BrainTaskStatus: String, CaseIterable {
     case todo, doing, blocked, waiting, completed, canceled
+
+    var localizedLabel: String {
+        switch self {
+        case .todo:      return String(localized: "task.status.todo", defaultValue: "Todo")
+        case .doing:     return String(localized: "task.status.doing", defaultValue: "In progress")
+        case .blocked:   return String(localized: "task.status.blocked", defaultValue: "Blocked")
+        case .waiting:   return String(localized: "task.status.waiting", defaultValue: "Waiting")
+        case .completed: return String(localized: "task.status.completed", defaultValue: "Completed")
+        case .canceled:  return String(localized: "task.status.canceled", defaultValue: "Canceled")
+        }
+    }
 }
 
 enum BrainPriority: String, CaseIterable {
     case urgent, high, normal, low
+
+    var localizedLabel: String {
+        switch self {
+        case .urgent: return String(localized: "task.priority.urgent", defaultValue: "Urgent")
+        case .high:   return String(localized: "task.priority.high", defaultValue: "High")
+        case .normal: return String(localized: "task.priority.normal", defaultValue: "Normal")
+        case .low:    return String(localized: "task.priority.low", defaultValue: "Low")
+        }
+    }
 }
 
 /// A relation to another object in the vault. The target may or may not

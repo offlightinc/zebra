@@ -37,7 +37,7 @@ struct TaskPriorityPicker: View {
                 Button(action: { onSelect(p) }) {
                     HStack(spacing: 8) {
                         priorityIcon(p).frame(width: 14, height: 14)
-                        Text(TaskListViewModel.priorityLabel(p))
+                        Text(p.localizedLabel)
                             .font(.system(size: 12))
                             .foregroundColor(BVColor.fg)
                         Spacer()
