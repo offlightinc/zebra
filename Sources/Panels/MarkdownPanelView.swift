@@ -110,6 +110,7 @@ struct MarkdownPanelView: View {
                     onActivateRelation: activateRelation,
                     onUpdateFrontmatter: { key, value in
                         panel.updateFrontmatter(key: key, value: value)
+                        markdownFileListStore.refreshVaultIndex(reason: "markdownPanel.frontmatter")
                     }
                 )
                 .frame(width: CGFloat(resolvedInspectorWidth))

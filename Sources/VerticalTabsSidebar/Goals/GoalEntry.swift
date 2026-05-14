@@ -5,6 +5,7 @@ enum BrainGoalStatus: String, Codable, CaseIterable, Sendable {
     case blocked
     case draft
     case completed
+    case archived
 
     var label: String {
         switch self {
@@ -16,6 +17,8 @@ enum BrainGoalStatus: String, Codable, CaseIterable, Sendable {
             return String(localized: "verticalTabsSidebar.goals.status.draft", defaultValue: "DRAFT")
         case .completed:
             return String(localized: "verticalTabsSidebar.goals.status.completed", defaultValue: "COMPLETED")
+        case .archived:
+            return String(localized: "verticalTabsSidebar.goals.status.archived", defaultValue: "ARCHIVED")
         }
     }
 }

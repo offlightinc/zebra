@@ -11,8 +11,9 @@ protocol VaultSubdirEntry: Identifiable, Hashable, Sendable {
 /// (e.g. `<vault>/goals/`, `<vault>/tasks/`, `<vault>/people/`).
 ///
 /// Lifecycle: `bind(vaultRoot:)` resolves `<vault>/<subdir>/` and starts a
-/// directory watcher; file changes trigger a background rescan that parses
-/// every `.md` file head and rebuilds the `entries` array on the main actor.
+/// recursive directory watcher; file changes trigger a debounced background
+/// rescan that parses every `.md` file head and rebuilds the `entries` array on
+/// the main actor.
 ///
 /// Subclasses are expected to be thin wrappers that pin `Entry`, `subdirName`,
 /// `parse`, and `sortKey`, and expose a domain-named alias property
@@ -32,8 +33,9 @@ class MarkdownVaultSubdirStore<Entry: VaultSubdirEntry>: ObservableObject {
     private let parse: @Sendable (String) -> Entry?
     private let sortKey: @Sendable (Entry) -> String
 
-    private var watcher: FileExplorerDirectoryWatcher?
+    private var watcher: VaultRecursiveFileWatcher?
     private var scanTask: Task<Void, Never>?
+    private var rescanWorkItem: DispatchWorkItem?
 
     init(
         subdirName: String,
@@ -47,6 +49,7 @@ class MarkdownVaultSubdirStore<Entry: VaultSubdirEntry>: ObservableObject {
 
     deinit {
         scanTask?.cancel()
+        rescanWorkItem?.cancel()
         watcher?.stop()
     }
 
@@ -80,23 +83,43 @@ class MarkdownVaultSubdirStore<Entry: VaultSubdirEntry>: ObservableObject {
         watcher = nil
         guard let path = resolved else {
             scanTask?.cancel()
+            rescanWorkItem?.cancel()
             scanTask = nil
+            rescanWorkItem = nil
             entries = []
             isScanning = false
             lastError = nil
             return
         }
-        let nextWatcher = FileExplorerDirectoryWatcher(onChange: { [weak self] in
-            Task { @MainActor in self?.scheduleRescan() }
+        let nextWatcher = VaultRecursiveFileWatcher(onChange: { [weak self] in
+            Task { @MainActor in self?.scheduleRescan(debounce: true) }
         })
         nextWatcher.watch(path: path)
         watcher = nextWatcher
-        scheduleRescan()
+        scheduleRescan(debounce: false)
     }
 
-    private func scheduleRescan() {
+    private func scheduleRescan(debounce: Bool) {
+        rescanWorkItem?.cancel()
         scanTask?.cancel()
         guard let path = rootPath else { return }
+        if debounce {
+            let work = DispatchWorkItem { [weak self] in
+                Task { @MainActor in
+                    self?.startScan(root: path)
+                }
+            }
+            rescanWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+            return
+        }
+        startScan(root: path)
+    }
+
+    private func startScan(root path: String) {
+        rescanWorkItem?.cancel()
+        rescanWorkItem = nil
+        scanTask?.cancel()
         isScanning = true
         lastError = nil
         let snapshotRoot = path

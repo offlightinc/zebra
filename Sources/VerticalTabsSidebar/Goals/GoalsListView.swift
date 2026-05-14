@@ -45,7 +45,7 @@ private struct GoalsListBody: View {
 
     @State private var collapsedOutlineIds: Set<String> = []
     @State private var collapsedCadenceSections: Set<GoalCadence> = []
-    @State private var collapsedStatusSections: Set<BrainGoalStatus> = []
+    @State private var collapsedStatusSections: Set<BrainGoalStatus> = [.archived]
 
     var body: some View {
         // Collapse-all sits as the first row at the very top of the sidebar
@@ -77,9 +77,11 @@ private struct GoalsListBody: View {
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if snapshot.entries.isEmpty {
+        } else if visibleEntries.isEmpty {
             placeholder(
-                String(localized: "verticalTabsSidebar.goals.empty.noGoals", defaultValue: "No goals in vault")
+                snapshot.entries.isEmpty
+                    ? String(localized: "verticalTabsSidebar.goals.empty.noGoals", defaultValue: "No goals in vault")
+                    : String(localized: "verticalTabsSidebar.goals.empty.noUnarchivedGoals", defaultValue: "No unarchived goals")
             )
         } else {
             ScrollView {
@@ -97,7 +99,7 @@ private struct GoalsListBody: View {
     // goals modes share visual rhythm with the titlebar trailing buttons.
     // Button only enables when there is something to collapse.
     private var collapseAllToolbar: some View {
-        let canCollapse = snapshot.hasRoot && !snapshot.entries.isEmpty
+        let canCollapse = snapshot.hasRoot && !visibleEntries.isEmpty
         return HStack(spacing: 0) {
             Spacer(minLength: 0)
             Button {
@@ -128,7 +130,7 @@ private struct GoalsListBody: View {
         switch snapshot.picker {
         case .outline:
             var ids: Set<String> = []
-            let tree = GoalOutlineTree.build(entries: snapshot.entries)
+            let tree = GoalOutlineTree.build(entries: visibleEntries)
             collectAllOutlineIds(nodes: tree.roots, into: &ids)
             collapsedOutlineIds = ids
         case .cadence:
@@ -156,7 +158,7 @@ private struct GoalsListBody: View {
         switch snapshot.picker {
         case .outline:
             OutlineLayout(
-                entries: snapshot.entries,
+                entries: visibleEntries,
                 activePaths: snapshot.activePaths,
                 collapsedIds: $collapsedOutlineIds,
                 onSelectFile: onSelectFile
@@ -164,7 +166,7 @@ private struct GoalsListBody: View {
             .equatable()
         case .cadence:
             CadenceLayout(
-                entries: snapshot.entries,
+                entries: visibleEntries,
                 activePaths: snapshot.activePaths,
                 collapsedSections: $collapsedCadenceSections,
                 onSelectFile: onSelectFile
@@ -178,6 +180,15 @@ private struct GoalsListBody: View {
                 onSelectFile: onSelectFile
             )
             .equatable()
+        }
+    }
+
+    private var visibleEntries: [GoalEntry] {
+        switch snapshot.picker {
+        case .status:
+            return snapshot.entries
+        case .outline, .cadence:
+            return snapshot.entries.filter { $0.status != .archived }
         }
     }
 

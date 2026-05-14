@@ -715,6 +715,7 @@ private func glyphMapping(_ s: BrainGoalStatus) -> BrainTaskStatus {
     case .blocked: return .blocked
     case .draft: return .todo
     case .completed: return .completed
+    case .archived: return .canceled
     }
 }
 
@@ -724,6 +725,7 @@ private func goalStatusLabel(_ s: BrainGoalStatus) -> String {
     case .blocked: return String(localized: "brain.goal.status.blocked", defaultValue: "Blocked")
     case .draft: return String(localized: "brain.goal.status.draft", defaultValue: "Draft")
     case .completed: return String(localized: "brain.goal.status.completed", defaultValue: "Completed")
+    case .archived: return String(localized: "brain.goal.status.archived", defaultValue: "Archived")
     }
 }
 
