@@ -84,28 +84,45 @@ struct UnknownObject {
 // MARK: - Property value types
 
 enum BrainTaskStatus: String, CaseIterable {
-    case todo, doing, blocked, waiting, completed, canceled
+    // HTML 디자인(zebra/project/Zebra - Linear style.html)의 5개 상태가 canonical:
+    // backlog → todo → inprogress → blocked → done.
+    // `waiting`, `canceled`는 기존 vault 호환 위해 case는 유지하되 신규 picker
+    // UI에서는 노출하지 않는다.
+    //
+    // raw value(= frontmatter에 직렬화되는 문자열)는 HTML schema와 동일:
+    //   backlog / todo / inprogress / blocked / waiting / done / canceled
+    // legacy alias(doing → inprogress, completed → done, normal → medium)는
+    // parser쪽에서 read-only로 흡수하고, writer는 항상 canonical로 저장한다.
+    case backlog, todo, inprogress, blocked, waiting, done, canceled
+
+    /// HTML 5개 상태 — picker/필터 노출용. waiting/canceled 제외.
+    static var primaryCases: [BrainTaskStatus] {
+        [.backlog, .todo, .inprogress, .blocked, .done]
+    }
 
     var localizedLabel: String {
         switch self {
-        case .todo:      return String(localized: "task.status.todo", defaultValue: "Todo")
-        case .doing:     return String(localized: "task.status.doing", defaultValue: "In progress")
-        case .blocked:   return String(localized: "task.status.blocked", defaultValue: "Blocked")
-        case .waiting:   return String(localized: "task.status.waiting", defaultValue: "Waiting")
-        case .completed: return String(localized: "task.status.completed", defaultValue: "Completed")
-        case .canceled:  return String(localized: "task.status.canceled", defaultValue: "Canceled")
+        case .backlog:    return String(localized: "task.status.backlog", defaultValue: "Backlog")
+        case .todo:       return String(localized: "task.status.todo", defaultValue: "Todo")
+        case .inprogress: return String(localized: "task.status.inprogress", defaultValue: "In progress")
+        case .blocked:    return String(localized: "task.status.blocked", defaultValue: "Blocked")
+        case .waiting:    return String(localized: "task.status.waiting", defaultValue: "Waiting")
+        case .done:       return String(localized: "task.status.done", defaultValue: "Done")
+        case .canceled:   return String(localized: "task.status.canceled", defaultValue: "Canceled")
         }
     }
 }
 
 enum BrainPriority: String, CaseIterable {
-    case urgent, high, normal, low
+    // HTML: none / urgent / high / medium / low. `none`은 nil로 표현하므로 enum엔
+    // 4개만. legacy `normal`은 parser에서 .medium으로 읽고, writer는 "medium"으로 저장.
+    case urgent, high, medium, low
 
     var localizedLabel: String {
         switch self {
         case .urgent: return String(localized: "task.priority.urgent", defaultValue: "Urgent")
         case .high:   return String(localized: "task.priority.high", defaultValue: "High")
-        case .normal: return String(localized: "task.priority.normal", defaultValue: "Normal")
+        case .medium: return String(localized: "task.priority.medium", defaultValue: "Medium")
         case .low:    return String(localized: "task.priority.low", defaultValue: "Low")
         }
     }
@@ -544,16 +561,31 @@ extension BrainObjectParser {
     }
 
     fileprivate static func parseStatus(_ s: String) -> BrainTaskStatus? {
-        // Schema(tasks/README.md) 정식 표기만 인정. legacy alias는 받지 않고
-        // 호출부에서 raw 보존 + Unrecognized로 노출.
+        // HTML schema canonical + legacy alias 흡수:
+        //   doing → inprogress, completed → done
+        // Writer는 항상 canonical raw value(.rawValue)로 저장.
         switch s.lowercased() {
-        case "todo":      return .todo
-        case "doing":     return .doing
-        case "blocked":   return .blocked
-        case "waiting":   return .waiting
-        case "completed": return .completed
-        case "canceled":  return .canceled
-        default:          return nil
+        case "backlog":    return .backlog
+        case "todo":       return .todo
+        case "inprogress": return .inprogress
+        case "doing":      return .inprogress   // legacy alias
+        case "blocked":    return .blocked
+        case "waiting":    return .waiting
+        case "done":       return .done
+        case "completed":  return .done         // legacy alias
+        case "canceled":   return .canceled
+        default:           return nil
+        }
+    }
+
+    fileprivate static func parsePriority(_ s: String) -> BrainPriority? {
+        switch s.lowercased() {
+        case "urgent": return .urgent
+        case "high":   return .high
+        case "medium": return .medium
+        case "normal": return .medium   // legacy alias
+        case "low":    return .low
+        default:       return nil
         }
     }
 

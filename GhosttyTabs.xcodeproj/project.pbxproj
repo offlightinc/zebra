@@ -70,6 +70,7 @@
 		5B5B0042A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0042A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift */; };
 		5B5B0043A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0043A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */; };
 		5B5B0044A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0044A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */; };
+		5B5B0046A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskPickerContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0046A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskPickerContainer.swift */; };
 		5B5B0045A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0045A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */; };
 		5B5B0050A1B2C3D4E5F60711 /* VerticalTabsSidebar/People/PersonEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0050A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonEntry.swift */; };
 		5B5B0051A1B2C3D4E5F60711 /* VerticalTabsSidebar/People/PersonFrontmatterParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0051A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonFrontmatterParser.swift */; };
@@ -615,6 +616,7 @@
 		5B5B0042A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift; sourceTree = "<group>"; };
 		5B5B0043A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift; sourceTree = "<group>"; };
 		5B5B0044A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift; sourceTree = "<group>"; };
+		5B5B0046A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskPickerContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/Pickers/TaskPickerContainer.swift; sourceTree = "<group>"; };
 		5B5B0045A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift; sourceTree = "<group>"; };
 		5B5B0050A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/People/PersonEntry.swift; sourceTree = "<group>"; };
 		5B5B0051A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonFrontmatterParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/People/PersonFrontmatterParser.swift; sourceTree = "<group>"; };
@@ -1246,6 +1248,7 @@
 				5B5B0042A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift */,
 				5B5B0043A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */,
 				5B5B0044A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */,
+				5B5B0046A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskPickerContainer.swift */,
 				5B5B0045A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */,
 				5B5B0050A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonEntry.swift */,
 				5B5B0051A1B2C3D4E5F60710 /* VerticalTabsSidebar/People/PersonFrontmatterParser.swift */,
@@ -1940,6 +1943,7 @@
 				5B5B0042A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift in Sources */,
 				5B5B0043A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift in Sources */,
 				5B5B0044A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift in Sources */,
+				5B5B0046A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskPickerContainer.swift in Sources */,
 				5B5B0045A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift in Sources */,
 				5B5B0050A1B2C3D4E5F60711 /* VerticalTabsSidebar/People/PersonEntry.swift in Sources */,
 				5B5B0051A1B2C3D4E5F60711 /* VerticalTabsSidebar/People/PersonFrontmatterParser.swift in Sources */,

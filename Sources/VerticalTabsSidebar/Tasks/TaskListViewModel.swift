@@ -132,7 +132,7 @@ final class TaskListViewModel: ObservableObject {
         case .priority:
             // Linear convention: completed/canceled bucketed into "Done" (priority irrelevant).
             return groupBySingleKey(tasks, order: priorityOrder) { task in
-                if let s = task.status, s == .completed || s == .canceled {
+                if let s = task.status, s == .done || s == .canceled {
                     return ("__done__", String(localized: "task.group.done", defaultValue: "Done"))
                 }
                 if let p = task.priority { return (p.rawValue, p.localizedLabel) }
@@ -207,15 +207,18 @@ final class TaskListViewModel: ObservableObject {
     }
 
     private static func statusOrder(_ raw: String) -> Int {
+        // HTML group order: inprogress → todo → blocked → backlog → done.
+        // waiting/canceled는 보존 호환 — done 다음에 둔다.
         switch raw {
-        case BrainTaskStatus.doing.rawValue: return 0
+        case BrainTaskStatus.inprogress.rawValue: return 0
         case BrainTaskStatus.todo.rawValue: return 1
         case BrainTaskStatus.blocked.rawValue: return 2
-        case BrainTaskStatus.waiting.rawValue: return 3
-        case BrainTaskStatus.completed.rawValue: return 4
-        case BrainTaskStatus.canceled.rawValue: return 5
-        case "__unrecognized__": return 6
-        default: return 7
+        case BrainTaskStatus.backlog.rawValue: return 3
+        case BrainTaskStatus.done.rawValue: return 4
+        case BrainTaskStatus.waiting.rawValue: return 5
+        case BrainTaskStatus.canceled.rawValue: return 6
+        case "__unrecognized__": return 7
+        default: return 8
         }
     }
 
@@ -223,7 +226,7 @@ final class TaskListViewModel: ObservableObject {
         switch raw {
         case BrainPriority.urgent.rawValue: return 0
         case BrainPriority.high.rawValue: return 1
-        case BrainPriority.normal.rawValue: return 2
+        case BrainPriority.medium.rawValue: return 2
         case BrainPriority.low.rawValue: return 3
         case "__none__": return 4
         case "__done__": return 5

@@ -21,11 +21,16 @@ enum BVColor {
     static let accent = Color(nsColor: NSColor(srgbRed: 0, green: 145 / 255.0, blue: 1.0, alpha: 1.0))
 
     // Status hues match the Linear-inspired palette in notes.jsx §3.
-    static let statusTodo = Color(nsColor: NSColor(srgbRed: 0x8a / 255.0, green: 0x8a / 255.0, blue: 0x8a / 255.0, alpha: 1.0))
-    static let statusDoing = Color(nsColor: NSColor(srgbRed: 0x4e / 255.0, green: 0xa8 / 255.0, blue: 0xff / 255.0, alpha: 1.0))
-    static let statusBlocked = Color(nsColor: NSColor(srgbRed: 0xef / 255.0, green: 0x5a / 255.0, blue: 0x5a / 255.0, alpha: 1.0))
+    // HTML 디자인 (zebra/project/Zebra - Linear style.html) 기준 팔레트.
+    // backlog/todo: 회색 stroke (dash vs solid 글리프 차이)
+    // inprogress(doing): amber #f59e0b
+    // blocked: red #ef4444
+    // done(completed): blue #2563eb
+    static let statusTodo = Color(nsColor: NSColor(srgbRed: 0x9c / 255.0, green: 0xa3 / 255.0, blue: 0xaf / 255.0, alpha: 1.0))
+    static let statusDoing = Color(nsColor: NSColor(srgbRed: 0xf5 / 255.0, green: 0x9e / 255.0, blue: 0x0b / 255.0, alpha: 1.0))
+    static let statusBlocked = Color(nsColor: NSColor(srgbRed: 0xef / 255.0, green: 0x44 / 255.0, blue: 0x44 / 255.0, alpha: 1.0))
     static let statusWaiting = Color(nsColor: NSColor(srgbRed: 0xe0 / 255.0, green: 0xb3 / 255.0, blue: 0x41 / 255.0, alpha: 1.0))
-    static let statusCompleted = Color(nsColor: NSColor(srgbRed: 0x54 / 255.0, green: 0xc0 / 255.0, blue: 0x71 / 255.0, alpha: 1.0))
+    static let statusCompleted = Color(nsColor: NSColor(srgbRed: 0x25 / 255.0, green: 0x63 / 255.0, blue: 0xeb / 255.0, alpha: 1.0))
     static let statusCanceled = Color(nsColor: NSColor(srgbRed: 0x6e / 255.0, green: 0x6e / 255.0, blue: 0x6e / 255.0, alpha: 1.0))
 
     static let priorityUrgent = statusBlocked
@@ -246,11 +251,14 @@ struct StatusGlyph: View {
             let color = nsColor(for: status)
 
             switch status {
+            case .backlog:
+                // HTML: stroke gray dasharray 2 2 — "아직 시작 전" 의미.
+                ctx.stroke(Path(ellipseIn: circleRect), with: .color(color),
+                           style: StrokeStyle(lineWidth: 1.2, dash: [2, 2]))
             case .todo:
-                var path = Path(ellipseIn: circleRect)
-                ctx.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.2, dash: [2, 1.4]))
-                _ = path
-            case .doing:
+                // HTML: solid gray stroke 원. 점선이 아니다.
+                ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
+            case .inprogress:
                 ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
                 var fill = Path()
                 fill.move(to: center)
@@ -270,13 +278,14 @@ struct StatusGlyph: View {
                     let dot = CGRect(x: center.x + CGFloat(dx) - 0.8, y: center.y - 0.8, width: 1.6, height: 1.6)
                     ctx.fill(Path(ellipseIn: dot), with: .color(Color(nsColor: .black).opacity(0.85)))
                 }
-            case .completed:
+            case .done:
+                // HTML: fill blue + 흰색 체크. 어두운 체크 X.
                 ctx.fill(Path(ellipseIn: circleRect), with: .color(color))
                 var check = Path()
                 check.move(to: CGPoint(x: center.x - 2.4, y: center.y + 0.0))
                 check.addLine(to: CGPoint(x: center.x - 0.8, y: center.y + 1.6))
                 check.addLine(to: CGPoint(x: center.x + 2.4, y: center.y - 1.6))
-                ctx.stroke(check, with: .color(Color(nsColor: NSColor(srgbRed: 0.05, green: 0.13, blue: 0.08, alpha: 1.0))),
+                ctx.stroke(check, with: .color(.white),
                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
             case .canceled:
                 ctx.fill(Path(ellipseIn: circleRect), with: .color(color))
@@ -290,11 +299,12 @@ struct StatusGlyph: View {
 
     private func nsColor(for status: BrainTaskStatus) -> Color {
         switch status {
+        case .backlog: return BVColor.statusTodo
         case .todo: return BVColor.statusTodo
-        case .doing: return BVColor.statusDoing
+        case .inprogress: return BVColor.statusDoing
         case .blocked: return BVColor.statusBlocked
         case .waiting: return BVColor.statusWaiting
-        case .completed: return BVColor.statusCompleted
+        case .done: return BVColor.statusCompleted
         case .canceled: return BVColor.statusCanceled
         }
     }
@@ -709,10 +719,10 @@ extension View {
 /// read-only Task pill style.
 private func glyphMapping(_ s: BrainGoalStatus) -> BrainTaskStatus {
     switch s {
-    case .active: return .doing
+    case .active: return .inprogress
     case .blocked: return .blocked
     case .draft: return .todo
-    case .completed: return .completed
+    case .completed: return .done
     case .archived: return .canceled
     }
 }
@@ -1312,6 +1322,11 @@ private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
             }
 
             let hosting = NSHostingController(rootView: content)
+            // wantsLayer = true 가 없으면 NSPanel.hasShadow가 panel frame을
+            // 따라 사각 그림자를 그려서 rounded SwiftUI content와 어긋난다
+            // (사용자가 본 "사다리꼴 그림자"의 원인). 레이어 백킹을 켜면
+            // 시스템이 contentView 알파 마스크 형태대로 native shadow를 그린다.
+            hosting.view.wantsLayer = true
             hosting.view.layoutSubtreeIfNeeded()
             hostingController = hosting
 
@@ -1411,6 +1426,19 @@ private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
                 }
                 if event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .otherMouseDown {
                     if event.window !== self.panel {
+                        // Anchor view 영역에 떨어진 mouseDown은 이벤트를 소비한다.
+                        // 그렇지 않으면 dismiss → isPresented=false 직후 같은 클릭이
+                        // Button.action까지 흘러가 다시 isPresented=true로 토글되어
+                        // popover가 끊임없이 다시 열리는 버그가 생긴다. anchor 클릭은
+                        // 명시적 토글 동작이므로 dismiss만 하고 이벤트는 흡수.
+                        if let anchor = self.anchorView,
+                           event.window === anchor.window {
+                            let anchorRectInWindow = anchor.convert(anchor.bounds, to: nil)
+                            if anchorRectInWindow.contains(event.locationInWindow) {
+                                self.dismiss()
+                                return nil
+                            }
+                        }
                         self.dismiss()
                     }
                 }
@@ -1419,6 +1447,16 @@ private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
             globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
                 self?.dismiss()
             }
+            // 앱 비활성화(Cmd-Tab 등) 시 popover가 다른 앱 위에 떠 있는 채로
+            // 남는 버그를 방지. panel.hidesOnDeactivate=false로 두는 이유는
+            // 잠깐 NSEvent.modifierFlagsChanged 같은 상황까지 다 닫지 않기
+            // 위한 것인데, 앱 자체가 비활성화되면 사용자 의도가 명확하다.
+            trackingObservers.append(NotificationCenter.default.addObserver(
+                forName: NSApplication.willResignActiveNotification,
+                object: nil,
+                queue: .main,
+                using: { [weak self] _ in self?.dismiss() }
+            ))
         }
 
         private func removeEventMonitors() {

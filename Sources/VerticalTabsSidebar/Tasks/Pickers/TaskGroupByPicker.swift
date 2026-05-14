@@ -5,30 +5,20 @@ struct TaskGroupByPicker: View {
     let onSelect: (TaskGroupBy) -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
+        TaskPickerContainer(
+            title: String(localized: "task.picker.groupBy.title", defaultValue: "Group by"),
+            width: 200
+        ) {
             ForEach(Array(TaskGroupBy.allCases.enumerated()), id: \.element) { idx, opt in
-                Button(action: { onSelect(opt) }) {
-                    HStack(spacing: 8) {
-                        Text(opt.label)
-                            .font(.system(size: 12))
-                            .foregroundColor(BVColor.fg)
-                        Spacer()
-                        if current == opt {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(BVColor.fgMute)
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(height: 26)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                TaskPickerRow(
+                    glyph: { EmptyView() },
+                    label: opt.label,
+                    isCurrent: current == opt,
+                    keyLabel: nil,
+                    action: { onSelect(opt) }
+                )
                 .keyboardShortcut(KeyEquivalent(Character("\(idx + 1)")), modifiers: [])
             }
         }
-        .padding(.vertical, 4)
-        .frame(width: 200)
-        .background(BVColor.bgElev)
     }
 }

@@ -17,19 +17,27 @@ enum TaskFrontmatterParser {
         let statusRaw = kv["status"]?.trimmedUnquoted.lowercased() ?? ""
         let (status, unrecognized): (BrainTaskStatus?, String?) = {
             if statusRaw.isEmpty { return (nil, nil) }
+            // HTML schema canonical + legacy alias 흡수
             switch statusRaw {
-            case "todo":      return (.todo, nil)
-            case "doing":     return (.doing, nil)
-            case "blocked":   return (.blocked, nil)
-            case "waiting":   return (.waiting, nil)
-            case "completed": return (.completed, nil)
-            case "canceled":  return (.canceled, nil)
-            default:          return (nil, statusRaw)
+            case "backlog":    return (.backlog, nil)
+            case "todo":       return (.todo, nil)
+            case "inprogress": return (.inprogress, nil)
+            case "doing":      return (.inprogress, nil)   // legacy alias
+            case "blocked":    return (.blocked, nil)
+            case "waiting":    return (.waiting, nil)
+            case "done":       return (.done, nil)
+            case "completed":  return (.done, nil)         // legacy alias
+            case "canceled":   return (.canceled, nil)
+            default:           return (nil, statusRaw)
             }
         }()
 
         let priorityRaw = kv["priority"]?.trimmedUnquoted.lowercased() ?? ""
-        let priority = BrainPriority(rawValue: priorityRaw)
+        let priority: BrainPriority? = {
+            // legacy "normal" → .medium 흡수
+            if priorityRaw == "normal" { return .medium }
+            return BrainPriority(rawValue: priorityRaw)
+        }()
 
         let ownerRaw = kv["owner"]?.trimmedUnquoted
         let ownerSlug: String? = {
@@ -53,11 +61,21 @@ enum TaskFrontmatterParser {
             return raw
         }()
 
+        // `related: - projects/xxx` (실제 vault schema) 와 단일 scalar `project: xxx`
+        // (HTML prototype style) 둘 다 지원. 중복 슬러그는 제거.
         let relatedItems = parseListItems(block: raw, key: "related")
-        let relatedProjects = relatedItems.compactMap { item -> String? in
+        var relatedProjects = relatedItems.compactMap { item -> String? in
             guard item.hasPrefix("projects/") else { return nil }
             let slug = String(item.dropFirst("projects/".count))
             return slug.isEmpty ? nil : slug
+        }
+        if let scalar = kv["project"]?.trimmedUnquoted, !scalar.isEmpty {
+            let slug = scalar.hasPrefix("projects/")
+                ? String(scalar.dropFirst("projects/".count))
+                : scalar
+            if !slug.isEmpty, !relatedProjects.contains(slug) {
+                relatedProjects.append(slug)
+            }
         }
 
         let tags = parseInlineList(kv["tags"]?.trimmedUnquoted)

@@ -14,6 +14,9 @@ struct TaskListRow: View, Equatable {
     @State private var showStatusPicker = false
     @State private var showPriorityPicker = false
     @State private var showDuePicker = false
+    @State private var statusHover = false
+    @State private var priorityHover = false
+    @State private var rowHover = false
 
     static func == (lhs: TaskListRow, rhs: TaskListRow) -> Bool {
         lhs.task == rhs.task && lhs.isSelected == rhs.isSelected
@@ -32,7 +35,7 @@ struct TaskListRow: View, Equatable {
             if !isCompleted, let due = task.dueDate {
                 Button(action: { showDuePicker = true }) {
                     Text(dueLabel(due))
-                        .font(.system(size: 11).monospacedDigit())
+                        .font(.system(size: 11, weight: dueWeight(due)).monospacedDigit())
                         .foregroundColor(dueColor(due))
                 }
                 .buttonStyle(.plain)
@@ -57,26 +60,22 @@ struct TaskListRow: View, Equatable {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 5)
-        .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+        .background(rowBackground)
+        .overlay(alignment: .leading) {
+            if isSelected {
+                Rectangle()
+                    .fill(BVColor.accent)
+                    .frame(width: 2)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture { onOpen(task) }
-        // Anchor status/priority pickers to the full row (not the tiny
-        // icon buttons) and align to the row's leading edge — the picker
-        // then opens from the listView's left edge regardless of which
-        // icon was clicked, so it stays inside a narrow sidebar instead
-        // of spilling past the right edge into the editor area.
-        .panelPopover(isPresented: $showStatusPicker, alignment: .leading) {
-            TaskStatusPicker(current: task.status) { newStatus in
-                onChangeStatus(task, newStatus)
-                showStatusPicker = false
-            }
-        }
-        .panelPopover(isPresented: $showPriorityPicker, alignment: .leading) {
-            TaskPriorityPicker(current: task.priority) { newPriority in
-                onChangePriority(task, newPriority)
-                showPriorityPicker = false
-            }
-        }
+        .onHover { rowHover = $0 }
+        // HTML positionPopover:
+        //   state(status) → anchor `.ind`, left = r.left (아이콘 left edge)
+        //   priority      → anchor `.pri`, left = r.right - er.width (아이콘 right)
+        // 둘 다 row가 아니라 각 아이콘 버튼 자체가 anchor. 각 button에 직접
+        // .panelPopover를 붙여 그렇게 동작한다.
         .contextMenu {
             Button(String(localized: "task.row.open", defaultValue: "Open")) {
                 onOpen(task)
@@ -88,9 +87,18 @@ struct TaskListRow: View, Equatable {
         }
     }
 
+    private var rowBackground: Color {
+        // HTML: `.item.selected { background: selected-bg; }`
+        //       `.item:hover { background: rgba(0,0,0,0.025); }`
+        // selected가 hover보다 우선.
+        if isSelected { return BVColor.accent.opacity(0.18) }
+        if rowHover { return BVColor.bgHover }
+        return Color.clear
+    }
+
     private var isCompleted: Bool {
         guard let s = task.status else { return false }
-        return s == .completed || s == .canceled
+        return s == .done || s == .canceled
     }
 
     @ViewBuilder
@@ -111,9 +119,17 @@ struct TaskListRow: View, Equatable {
                 }
             }
             .frame(width: 14, height: 14)
+            .scaleEffect(statusHover ? 1.08 : 1.0)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { statusHover = $0 }
+        .panelPopover(isPresented: $showStatusPicker, alignment: .leading) {
+            TaskStatusPicker(current: task.status) { newStatus in
+                onChangeStatus(task, newStatus)
+                showStatusPicker = false
+            }
+        }
     }
 
     @ViewBuilder
@@ -121,9 +137,20 @@ struct TaskListRow: View, Equatable {
         Button(action: { showPriorityPicker = true }) {
             TaskPriorityIcon(priority: task.priority)
                 .frame(width: 14, height: 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(priorityHover ? BVColor.bgHover : Color.clear)
+                )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { priorityHover = $0 }
+        .panelPopover(isPresented: $showPriorityPicker, alignment: .trailing) {
+            TaskPriorityPicker(current: task.priority) { newPriority in
+                onChangePriority(task, newPriority)
+                showPriorityPicker = false
+            }
+        }
     }
 
     private var unknownGlyph: some View {
@@ -147,13 +174,24 @@ struct TaskListRow: View, Equatable {
         return "\(days)d"
     }
 
+    private func dueWeight(_ d: Date) -> Font.Weight {
+        // HTML: .due.over (음수 days) = weight 600. .due.soon (0–1d) = weight 500.
+        // 그 외 default. status에 따른 분기 아님 — over면 status 무관 다 볼드.
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let target = cal.startOfDay(for: d)
+        let days = cal.dateComponents([.day], from: today, to: target).day ?? 0
+        return days < 0 ? .semibold : .regular
+    }
+
     private func dueColor(_ d: Date) -> Color {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let target = cal.startOfDay(for: d)
         let days = cal.dateComponents([.day], from: today, to: target).day ?? 0
-        if days < 0 { return BVColor.priorityUrgent }
-        if days <= 1 { return BVColor.priorityHigh }
+        // HTML 디자인: 0–1d "soon" 과 -d "over" 모두 빨강. 두 경우 모두 priorityUrgent.
+        // 굵기는 dueLabel 호출부에서 분기.
+        if days <= 1 { return BVColor.priorityUrgent }
         return BVColor.fgFaint
     }
 }

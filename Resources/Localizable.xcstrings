@@ -115081,7 +115081,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "\"is\" 연산자 사용"
+            "value": "Use \"is\" 연산자"
           }
         }
       }
@@ -115103,7 +115103,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "\"is not\" 연산자 사용"
+            "value": "Use \"is not\" 연산자"
           }
         }
       }
@@ -115526,18 +115526,18 @@
         }
       }
     },
-    "task.priority.normal": {
+    "task.priority.medium": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Normal"
+            "value": "Medium"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "通常"
+            "value": "中"
           }
         },
         "ko": {
@@ -115680,12 +115680,12 @@
         }
       }
     },
-    "task.status.completed": {
+    "task.status.done": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Completed"
+            "value": "Done"
           }
         },
         "ja": {
@@ -115702,7 +115702,7 @@
         }
       }
     },
-    "task.status.doing": {
+    "task.status.inprogress": {
       "localizations": {
         "en": {
           "stringUnit": {
@@ -115720,6 +115720,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "진행 중"
+          }
+        }
+      }
+    },
+    "task.status.backlog": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Backlog"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックログ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백로그"
           }
         }
       }
@@ -115742,6 +115764,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "할 일"
+          }
+        }
+      }
+    },
+    "task.filter.edit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編集"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "편집"
           }
         }
       }

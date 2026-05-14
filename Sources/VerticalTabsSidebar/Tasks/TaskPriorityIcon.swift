@@ -27,7 +27,7 @@ struct TaskPriorityIcon: View {
     }
 
     static func level(_ p: BrainPriority) -> Int {
-        switch p { case .urgent: return 3; case .high: return 3; case .normal: return 2; case .low: return 1 }
+        switch p { case .urgent: return 3; case .high: return 3; case .medium: return 2; case .low: return 1 }
     }
 }
 

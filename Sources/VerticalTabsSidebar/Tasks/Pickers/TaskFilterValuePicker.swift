@@ -27,20 +27,20 @@ struct TaskFilterValuePicker: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Text("\(field.label) \(workingOp.symbol)")
-                .font(.system(size: 10.5))
-                .fontWeight(.semibold)
-                .foregroundColor(BVColor.fgFaint)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
-
+        TaskPickerContainer(
+            title: "\(field.label) \(workingOp.symbol)",
+            width: 220
+        ) {
             valueRows
 
             Divider()
+                .padding(.vertical, 4)
 
             Button(action: toggleOp) {
                 HStack {
+                    // ko/ja 번역은 xcstrings에 들어있다 (task.filter.useIs 등).
+                    // defaultValue는 영어 표준 — 런타임에 시스템 언어에 맞춰
+                    // 적절한 번역으로 치환된다.
                     Text(workingOp == .is
                         ? String(localized: "task.filter.useIsNot", defaultValue: "Use \"is not\" operator")
                         : String(localized: "task.filter.useIs", defaultValue: "Use \"is\" operator"))
@@ -48,29 +48,22 @@ struct TaskFilterValuePicker: View {
                         .foregroundColor(BVColor.fgMute)
                     Spacer()
                 }
-                .padding(.horizontal, 10).frame(height: 26)
+                .padding(.horizontal, 8).frame(height: 24)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .padding(.horizontal, 4)
         }
-        .padding(.vertical, 4)
-        .frame(width: 200)
-        .background(BVColor.bgElev)
     }
 
     @ViewBuilder
     private var valueRows: some View {
         switch field {
         case .status:
-            let opts: [(String, String)] = [
-                (BrainTaskStatus.todo.rawValue,      BrainTaskStatus.todo.localizedLabel),
-                (BrainTaskStatus.doing.rawValue,     BrainTaskStatus.doing.localizedLabel),
-                (BrainTaskStatus.blocked.rawValue,   BrainTaskStatus.blocked.localizedLabel),
-                (BrainTaskStatus.waiting.rawValue,   BrainTaskStatus.waiting.localizedLabel),
-                (BrainTaskStatus.completed.rawValue, BrainTaskStatus.completed.localizedLabel),
-                (BrainTaskStatus.canceled.rawValue,  BrainTaskStatus.canceled.localizedLabel),
-                ("__unrecognized__", String(localized: "task.group.unrecognized", defaultValue: "Unrecognized")),
-            ]
+            // HTML 디자인 filter 옵션: backlog/todo/inprogress/blocked/done 5개만.
+            let opts: [(String, String)] = BrainTaskStatus.primaryCases.map {
+                ($0.rawValue, $0.localizedLabel)
+            } + [("__unrecognized__", String(localized: "task.group.unrecognized", defaultValue: "Unrecognized"))]
             ForEach(opts, id: \.0) { (raw, label) in
                 row(raw: raw, label: label)
             }
@@ -78,7 +71,7 @@ struct TaskFilterValuePicker: View {
             let opts: [(String, String)] = [
                 (BrainPriority.urgent.rawValue, BrainPriority.urgent.localizedLabel),
                 (BrainPriority.high.rawValue,   BrainPriority.high.localizedLabel),
-                (BrainPriority.normal.rawValue, BrainPriority.normal.localizedLabel),
+                (BrainPriority.medium.rawValue, BrainPriority.medium.localizedLabel),
                 (BrainPriority.low.rawValue,    BrainPriority.low.localizedLabel),
                 ("__none__", String(localized: "task.priority.none", defaultValue: "No priority")),
             ]
@@ -97,20 +90,17 @@ struct TaskFilterValuePicker: View {
 
     private func row(raw: String, label: String) -> some View {
         let selected = workingValues.contains(raw)
-        return Button(action: { toggle(raw) }) {
-            HStack(spacing: 8) {
+        return TaskPickerRow(
+            glyph: {
                 Image(systemName: selected ? "checkmark.square.fill" : "square")
                     .font(.system(size: 12))
                     .foregroundColor(selected ? BVColor.accent : BVColor.fgFaint)
-                Text(label)
-                    .font(.system(size: 12))
-                    .foregroundColor(BVColor.fg)
-                Spacer()
-            }
-            .padding(.horizontal, 10).frame(height: 26)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+            },
+            label: label,
+            isCurrent: selected,
+            keyLabel: nil,
+            action: { toggle(raw) }
+        )
     }
 
     private func toggle(_ raw: String) {

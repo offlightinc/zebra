@@ -6,35 +6,25 @@ struct TaskFilterFieldPicker: View {
     let onSelect: (TaskFilterField) -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Text(String(localized: "task.filter.addHeader", defaultValue: "Add filter"))
-                .font(.system(size: 10.5))
-                .fontWeight(.semibold)
-                .foregroundColor(BVColor.fgFaint)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
+        TaskPickerContainer(
+            title: String(localized: "task.filter.addHeader", defaultValue: "Add filter"),
+            width: 220
+        ) {
             ForEach(TaskFilterField.allCases, id: \.self) { field in
-                Button(action: { onSelect(field) }) {
-                    HStack(spacing: 8) {
-                        Text(field.label)
-                            .font(.system(size: 12))
-                            .foregroundColor(BVColor.fg)
-                        Spacer()
-                        if existingFields.contains(field) {
-                            Text(String(localized: "task.filter.edit", defaultValue: "Edit"))
-                                .font(.system(size: 10.5))
-                                .foregroundColor(BVColor.fgMute)
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(height: 26)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                let existing = existingFields.contains(field)
+                TaskPickerRow(
+                    glyph: { EmptyView() },
+                    label: field.label,
+                    isCurrent: existing,
+                    // HTML prototype: 기존 필드 옆에 "편집" 텍스트 힌트. 새 필드와
+                    // 클릭 동작은 같지만(둘 다 step 2로 진행) 사용자가 기존 필터를
+                    // 수정하러 가는 거라는 신호.
+                    keyLabel: existing
+                        ? String(localized: "task.filter.edit", defaultValue: "편집")
+                        : nil,
+                    action: { onSelect(field) }
+                )
             }
         }
-        .padding(.bottom, 4)
-        .frame(width: 200)
-        .background(BVColor.bgElev)
     }
 }

@@ -91,18 +91,19 @@ struct TaskListView: View {
     }
 
     private var chipRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 5) {
-                ForEach(viewModel.filters) { f in
-                    TaskFilterChipView(
-                        filter: f,
-                        onEdit: { filterStep = .value(f.field) },
-                        onRemove: { viewModel.removeFilter(field: f.field) }
-                    )
-                }
+        // HTML: `.chiprow { display: flex; flex-wrap: wrap; gap: 5px; }`
+        // 칩이 컨테이너 너비를 넘으면 줄바꿈된다 (가로 스크롤 X).
+        TaskChipFlowLayout(spacing: 5) {
+            ForEach(viewModel.filters) { f in
+                TaskFilterChipView(
+                    filter: f,
+                    onEdit: { filterStep = .value(f.field) },
+                    onRemove: { viewModel.removeFilter(field: f.field) }
+                )
             }
-            .padding(.horizontal, 10).padding(.vertical, 6)
         }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(BVColor.bg)
         .overlay(alignment: .bottom) {
             Rectangle().fill(BVColor.border).frame(height: 1)
