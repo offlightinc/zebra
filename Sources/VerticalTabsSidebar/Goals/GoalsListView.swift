@@ -45,7 +45,7 @@ private struct GoalsListBody: View {
 
     @State private var collapsedOutlineIds: Set<String> = []
     @State private var collapsedCadenceSections: Set<GoalCadence> = []
-    @State private var collapsedStatusSections: Set<GoalStatus> = []
+    @State private var collapsedStatusSections: Set<BrainGoalStatus> = []
 
     var body: some View {
         // Collapse-all sits as the first row at the very top of the sidebar
@@ -134,7 +134,7 @@ private struct GoalsListBody: View {
         case .cadence:
             collapsedCadenceSections = Set(GoalCadence.allCases)
         case .status:
-            collapsedStatusSections = Set(GoalStatus.allCases)
+            collapsedStatusSections = Set(BrainGoalStatus.allCases)
         }
     }
 
@@ -453,7 +453,7 @@ private struct CadenceLayout: View, Equatable {
 private struct StatusLayout: View, Equatable {
     let entries: [GoalEntry]
     let activePaths: Set<String>
-    @Binding var collapsedSections: Set<GoalStatus>
+    @Binding var collapsedSections: Set<BrainGoalStatus>
     let onSelectFile: (String) -> Void
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -464,7 +464,7 @@ private struct StatusLayout: View, Equatable {
 
     var body: some View {
         let buckets = bucketize(entries: entries)
-        ForEach(GoalStatus.allCases, id: \.self) { status in
+        ForEach(BrainGoalStatus.allCases, id: \.self) { status in
             let bucket = buckets[status] ?? []
             let isExpanded = !collapsedSections.contains(status)
             GoalCollapsibleHeader(
@@ -492,7 +492,7 @@ private struct StatusLayout: View, Equatable {
         }
     }
 
-    private func toggle(_ status: GoalStatus) {
+    private func toggle(_ status: BrainGoalStatus) {
         if collapsedSections.contains(status) {
             collapsedSections.remove(status)
         } else {
@@ -500,8 +500,8 @@ private struct StatusLayout: View, Equatable {
         }
     }
 
-    private func bucketize(entries: [GoalEntry]) -> [GoalStatus: [GoalEntry]] {
-        var dict: [GoalStatus: [GoalEntry]] = [:]
+    private func bucketize(entries: [GoalEntry]) -> [BrainGoalStatus: [GoalEntry]] {
+        var dict: [BrainGoalStatus: [GoalEntry]] = [:]
         for entry in entries {
             dict[entry.status, default: []].append(entry)
         }

@@ -1,6 +1,6 @@
 import Foundation
 
-enum GoalStatus: String, Codable, CaseIterable, Sendable {
+enum BrainGoalStatus: String, Codable, CaseIterable, Sendable {
     case active
     case blocked
     case draft
@@ -45,7 +45,7 @@ struct GoalEntry: Identifiable, Hashable, Sendable {
     let displayName: String
     let goalId: String
     let parentGoalId: String?
-    let status: GoalStatus
+    let status: BrainGoalStatus
     let cadence: GoalCadence
     let targetDate: Date?
     let milestoneDone: Int

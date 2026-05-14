@@ -1058,6 +1058,7 @@ struct ContentView: View {
     @EnvironmentObject var verticalTabsSidebarVaultState: VerticalTabsSidebarVaultState
     @EnvironmentObject var markdownFileListStore: MarkdownFileListStore
     @EnvironmentObject var goalFileListStore: GoalFileListStore
+    @EnvironmentObject var taskFileListStore: TaskFileListStore
     @EnvironmentObject var goalsViewState: GoalsViewState
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("titlebarControlsStyle") private var titlebarControlsStyleRawValue = TitlebarControlsStyle.classic.rawValue
@@ -2498,6 +2499,10 @@ struct ContentView: View {
         goalFileListStore.bind(vaultRoot: verticalTabsSidebarVaultState.selectedVault?.path)
     }
 
+    private func syncTaskFileListStoreDirectory() {
+        taskFileListStore.bind(vaultRoot: verticalTabsSidebarVaultState.selectedVault?.path)
+    }
+
     private func syncFileExplorerDirectory() {
         guard let selectedId = tabManager.selectedTabId,
               let tab = tabManager.tabs.first(where: { $0.id == selectedId }) else {
@@ -2658,6 +2663,7 @@ struct ContentView: View {
             verticalTabsSidebarModeState.activeMarkdownFilePaths = activeMarkdownPathsObserver.paths
             syncMarkdownFileListStoreDirectory()
             syncGoalFileListStoreDirectory()
+            syncTaskFileListStoreDirectory()
             tabManager.applyWindowBackgroundForSelectedTab()
             reconcileMountedWorkspaceIds()
             previousSelectedWorkspaceId = tabManager.selectedTabId
@@ -2766,6 +2772,7 @@ struct ContentView: View {
         view = AnyView(view.onChange(of: verticalTabsSidebarVaultState.selectedVaultPath) { _ in
             syncMarkdownFileListStoreDirectory()
             syncGoalFileListStoreDirectory()
+            syncTaskFileListStoreDirectory()
         })
 
         view = AnyView(view.onChange(of: activeMarkdownPathsObserver.paths) { newPaths in
@@ -9067,6 +9074,7 @@ struct VerticalTabsSidebar: View {
     @EnvironmentObject var verticalTabsSidebarVaultState: VerticalTabsSidebarVaultState
     @EnvironmentObject var markdownFileListStore: MarkdownFileListStore
     @EnvironmentObject var goalFileListStore: GoalFileListStore
+    @EnvironmentObject var taskFileListStore: TaskFileListStore
     @EnvironmentObject var goalsViewState: GoalsViewState
     @Binding var selection: SidebarSelection
     @Binding var selectedTabIds: Set<UUID>
@@ -9330,7 +9338,7 @@ struct VerticalTabsSidebar: View {
             verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .tasks && verticalTabsSidebarModeState.listVisible) {
                 VerticalTabsSidebarTasksContent(
                     state: verticalTabsSidebarModeState,
-                    store: markdownFileListStore,
+                    taskStore: taskFileListStore,
                     onSelectFile: openVerticalTabsSidebarMarkdownFile
                 )
             }

@@ -1,0 +1,253 @@
+import Foundation
+import Combine
+
+enum TaskGroupBy: String, CaseIterable, Hashable, Sendable {
+    case status
+    case priority
+    case owner
+    case project
+    case goal
+    case none
+
+    var label: String {
+        switch self {
+        case .status:   return String(localized: "task.groupBy.status", defaultValue: "Status")
+        case .priority: return String(localized: "task.groupBy.priority", defaultValue: "Priority")
+        case .owner:    return String(localized: "task.groupBy.owner", defaultValue: "Owner")
+        case .project:  return String(localized: "task.groupBy.project", defaultValue: "Project")
+        case .goal:     return String(localized: "task.groupBy.goal", defaultValue: "Goal")
+        case .none:     return String(localized: "task.groupBy.none", defaultValue: "No grouping")
+        }
+    }
+}
+
+enum TaskFilterField: String, CaseIterable, Hashable, Sendable {
+    case status, priority, owner
+
+    var label: String {
+        switch self {
+        case .status:   return String(localized: "task.filter.field.status", defaultValue: "Status")
+        case .priority: return String(localized: "task.filter.field.priority", defaultValue: "Priority")
+        case .owner:    return String(localized: "task.filter.field.owner", defaultValue: "Owner")
+        }
+    }
+}
+
+enum TaskFilterOp: Hashable, Sendable {
+    case `is`
+    case isNot
+
+    var symbol: String { self == .is ? "=" : "≠" }
+}
+
+/// One filter chip = one field, one operator, multiple selected values.
+struct TaskFilter: Hashable, Sendable, Identifiable {
+    let field: TaskFilterField
+    var op: TaskFilterOp
+    /// Values are raw strings. Interpretation per field:
+    /// - status: BrainTaskStatus rawValue, or "__unrecognized__"
+    /// - priority: BrainPriority rawValue, or "__none__"
+    /// - owner: owner slug, or "__unassigned__"
+    var values: [String]
+
+    var id: TaskFilterField { field }
+}
+
+/// Group key for layout. Stable identity for SwiftUI ForEach.
+struct TaskGroupKey: Hashable, Sendable {
+    let raw: String
+    let label: String
+    let order: Int
+}
+
+struct TaskGroup: Identifiable, Sendable {
+    let key: TaskGroupKey
+    let items: [TaskItem]
+
+    var id: String { key.raw }
+}
+
+@MainActor
+final class TaskListViewModel: ObservableObject {
+    @Published var groupBy: TaskGroupBy = .status
+    @Published var filters: [TaskFilter] = []
+    @Published var collapsedSections: Set<String> = []
+
+    func setFilter(_ filter: TaskFilter) {
+        if let idx = filters.firstIndex(where: { $0.field == filter.field }) {
+            filters[idx] = filter
+        } else {
+            filters.append(filter)
+        }
+    }
+
+    func removeFilter(field: TaskFilterField) {
+        filters.removeAll { $0.field == field }
+    }
+
+    /// Filter chain: 필드 내 OR (values 배열 포함), 필드 간 AND (every).
+    static func applyFilters(_ tasks: [TaskItem], _ filters: [TaskFilter]) -> [TaskItem] {
+        guard !filters.isEmpty else { return tasks }
+        return tasks.filter { task in
+            filters.allSatisfy { f in
+                if f.values.isEmpty { return true }
+                let v = currentValue(for: task, field: f.field)
+                let inSet = f.values.contains(v)
+                return f.op == .is ? inSet : !inSet
+            }
+        }
+    }
+
+    private static func currentValue(for task: TaskItem, field: TaskFilterField) -> String {
+        switch field {
+        case .status:
+            if let s = task.status { return s.rawValue }
+            return task.unrecognizedStatusRaw != nil ? "__unrecognized__" : "__none__"
+        case .priority:
+            return task.priority?.rawValue ?? "__none__"
+        case .owner:
+            return task.ownerSlug ?? "__unassigned__"
+        }
+    }
+
+    /// Groups tasks for display. `.project` is multi-group (a single task with
+    /// `relatedProjects: [A, B]` appears in both A and B sections).
+    static func groupTasks(_ tasks: [TaskItem], by mode: TaskGroupBy) -> [TaskGroup] {
+        switch mode {
+        case .none:
+            return [
+                TaskGroup(
+                    key: TaskGroupKey(raw: "all", label: String(localized: "task.group.all", defaultValue: "All"), order: 0),
+                    items: tasks
+                )
+            ]
+        case .status:
+            return groupBySingleKey(tasks, order: statusOrder) { task in
+                if let s = task.status { return (s.rawValue, statusLabel(s)) }
+                if task.unrecognizedStatusRaw != nil {
+                    return ("__unrecognized__", String(localized: "task.group.unrecognized", defaultValue: "Unrecognized"))
+                }
+                return ("__none__", String(localized: "task.group.noStatus", defaultValue: "No status"))
+            }
+        case .priority:
+            // Linear convention: completed/canceled bucketed into "Done" (priority irrelevant).
+            return groupBySingleKey(tasks, order: priorityOrder) { task in
+                if let s = task.status, s == .completed || s == .canceled {
+                    return ("__done__", String(localized: "task.group.done", defaultValue: "Done"))
+                }
+                if let p = task.priority { return (p.rawValue, priorityLabel(p)) }
+                return ("__none__", String(localized: "task.priority.none", defaultValue: "No priority"))
+            }
+        case .owner:
+            return groupBySingleKey(tasks, order: { _ in 99 }) { task in
+                if let slug = task.ownerSlug { return (slug, slug) }
+                return ("__unassigned__", String(localized: "task.group.unassigned", defaultValue: "Unassigned"))
+            }
+        case .goal:
+            return groupBySingleKey(tasks, order: { _ in 99 }) { task in
+                if let slug = task.goalSlug { return (slug, slug) }
+                return ("__none__", String(localized: "task.group.noGoal", defaultValue: "No goal"))
+            }
+        case .project:
+            return groupMulti(tasks)
+        }
+    }
+
+    private static func groupBySingleKey(
+        _ tasks: [TaskItem],
+        order: (String) -> Int,
+        keyOf: (TaskItem) -> (String, String)
+    ) -> [TaskGroup] {
+        var buckets: [String: (label: String, order: Int, items: [TaskItem])] = [:]
+        for task in tasks {
+            let (raw, label) = keyOf(task)
+            let ord = order(raw)
+            if buckets[raw] != nil {
+                buckets[raw]!.items.append(task)
+            } else {
+                buckets[raw] = (label, ord, [task])
+            }
+        }
+        return buckets.map { (raw, v) in
+            TaskGroup(
+                key: TaskGroupKey(raw: raw, label: v.label, order: v.order),
+                items: v.items
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.key.order != rhs.key.order { return lhs.key.order < rhs.key.order }
+            return lhs.key.label.localizedCaseInsensitiveCompare(rhs.key.label) == .orderedAscending
+        }
+    }
+
+    /// Multi-group: a task with N relatedProjects appears in N sections.
+    /// Tasks without any project go into "No project".
+    private static func groupMulti(_ tasks: [TaskItem]) -> [TaskGroup] {
+        var buckets: [String: (label: String, items: [TaskItem])] = [:]
+        let noKey = "__none__"
+        for task in tasks {
+            if task.relatedProjects.isEmpty {
+                buckets[noKey, default: (String(localized: "task.group.noProject", defaultValue: "No project"), [])].items.append(task)
+            } else {
+                for slug in task.relatedProjects {
+                    buckets[slug, default: (slug, [])].items.append(task)
+                }
+            }
+        }
+        return buckets.map { (raw, v) in
+            TaskGroup(
+                key: TaskGroupKey(raw: raw, label: v.label, order: raw == noKey ? 99 : 0),
+                items: v.items
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.key.order != rhs.key.order { return lhs.key.order < rhs.key.order }
+            return lhs.key.label.localizedCaseInsensitiveCompare(rhs.key.label) == .orderedAscending
+        }
+    }
+
+    private static func statusOrder(_ raw: String) -> Int {
+        switch raw {
+        case BrainTaskStatus.doing.rawValue: return 0
+        case BrainTaskStatus.todo.rawValue: return 1
+        case BrainTaskStatus.blocked.rawValue: return 2
+        case BrainTaskStatus.waiting.rawValue: return 3
+        case BrainTaskStatus.completed.rawValue: return 4
+        case BrainTaskStatus.canceled.rawValue: return 5
+        case "__unrecognized__": return 6
+        default: return 7
+        }
+    }
+
+    private static func priorityOrder(_ raw: String) -> Int {
+        switch raw {
+        case BrainPriority.urgent.rawValue: return 0
+        case BrainPriority.high.rawValue: return 1
+        case BrainPriority.normal.rawValue: return 2
+        case BrainPriority.low.rawValue: return 3
+        case "__none__": return 4
+        case "__done__": return 5
+        default: return 9
+        }
+    }
+
+    static func statusLabel(_ s: BrainTaskStatus) -> String {
+        switch s {
+        case .todo:      return String(localized: "task.status.todo", defaultValue: "Todo")
+        case .doing:     return String(localized: "task.status.doing", defaultValue: "In progress")
+        case .blocked:   return String(localized: "task.status.blocked", defaultValue: "Blocked")
+        case .waiting:   return String(localized: "task.status.waiting", defaultValue: "Waiting")
+        case .completed: return String(localized: "task.status.completed", defaultValue: "Completed")
+        case .canceled:  return String(localized: "task.status.canceled", defaultValue: "Canceled")
+        }
+    }
+
+    static func priorityLabel(_ p: BrainPriority) -> String {
+        switch p {
+        case .urgent: return String(localized: "task.priority.urgent", defaultValue: "Urgent")
+        case .high:   return String(localized: "task.priority.high", defaultValue: "High")
+        case .normal: return String(localized: "task.priority.normal", defaultValue: "Normal")
+        case .low:    return String(localized: "task.priority.low", defaultValue: "Low")
+        }
+    }
+}

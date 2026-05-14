@@ -35,7 +35,7 @@ struct TaskObject {
 struct GoalObject {
     var title: String
     var goalId: String?
-    var status: GoalStatus?
+    var status: BrainGoalStatus?
     var owner: String?
     var targetDate: BrainDate?
     var reviewCadence: String?
@@ -84,7 +84,7 @@ struct UnknownObject {
 // MARK: - Property value types
 
 enum BrainTaskStatus: String, CaseIterable {
-    case todo, doing, active, blocked, waiting, completed, canceled
+    case todo, doing, blocked, waiting, completed, canceled
 }
 
 enum BrainPriority: String, CaseIterable {
@@ -482,7 +482,7 @@ extension BrainObjectParser {
         return GoalObject(
             title: title,
             goalId: dict["goal_id"]?.scalar,
-            status: dict["status"]?.scalar.flatMap { GoalStatus(rawValue: $0.lowercased()) },
+            status: dict["status"]?.scalar.flatMap { BrainGoalStatus(rawValue: $0.lowercased()) },
             owner: dict["owner"]?.scalar,
             targetDate: dict["target_date"]?.scalar.flatMap(parseDate(_:)),
             reviewCadence: dict["review_cadence"]?.scalar,
@@ -524,23 +524,16 @@ extension BrainObjectParser {
     }
 
     fileprivate static func parseStatus(_ s: String) -> BrainTaskStatus? {
+        // Schema(tasks/README.md) 정식 표기만 인정. legacy alias는 받지 않고
+        // 호출부에서 raw 보존 + Unrecognized로 노출.
         switch s.lowercased() {
-        case "todo", "pending", "open":
-            return .todo
-        case "doing", "in_progress", "in-progress":
-            return .doing
-        case "active":
-            return .active
-        case "blocked":
-            return .blocked
-        case "waiting":
-            return .waiting
-        case "completed", "complete", "done":
-            return .completed
-        case "canceled", "cancelled":
-            return .canceled
-        default:
-            return nil
+        case "todo":      return .todo
+        case "doing":     return .doing
+        case "blocked":   return .blocked
+        case "waiting":   return .waiting
+        case "completed": return .completed
+        case "canceled":  return .canceled
+        default:          return nil
         }
     }
 

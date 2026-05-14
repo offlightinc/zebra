@@ -26,7 +26,7 @@ enum GoalFrontmatterParser {
         let goalId = stem
         let parentRaw = kv["parent_goal"]?.trimmedUnquoted
         let parent = parentRaw.map { goalIdStem(from: $0) }
-        let status = GoalStatus(rawValue: (kv["status"]?.trimmedUnquoted ?? "").lowercased()) ?? .draft
+        let status = BrainGoalStatus(rawValue: (kv["status"]?.trimmedUnquoted ?? "").lowercased()) ?? .draft
         let cadenceRaw = kv["review_cadence"]?.trimmedUnquoted ?? ""
         let cadence = GoalCadence(rawValue: cadenceRaw.lowercased()) ?? .weekly
         let targetDate = parseTargetDate(kv["target_date"]?.trimmedUnquoted)

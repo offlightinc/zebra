@@ -56,6 +56,21 @@
 		5B5B0024A1B2C3D4E5F60711 /* VerticalTabsSidebar/Goals/GoalsViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0024A1B2C3D4E5F60710 /* VerticalTabsSidebar/Goals/GoalsViewState.swift */; };
 		5B5B0025A1B2C3D4E5F60711 /* VerticalTabsSidebar/Goals/GoalRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0025A1B2C3D4E5F60710 /* VerticalTabsSidebar/Goals/GoalRow.swift */; };
 		5B5B0026A1B2C3D4E5F60711 /* VerticalTabsSidebar/Goals/GoalsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0026A1B2C3D4E5F60710 /* VerticalTabsSidebar/Goals/GoalsListView.swift */; };
+		5B5B0030A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0030A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskItem.swift */; };
+		5B5B0031A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0031A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift */; };
+		5B5B0032A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskFileListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0032A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFileListStore.swift */; };
+		5B5B0033A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0033A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListViewModel.swift */; };
+		5B5B0034A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0034A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListRow.swift */; };
+		5B5B0035A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskGroupHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0035A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskGroupHeader.swift */; };
+		5B5B0036A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0036A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListToolbar.swift */; };
+		5B5B0037A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskFilterChipView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0037A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFilterChipView.swift */; };
+		5B5B0038A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0038A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListView.swift */; };
+		5B5B0040A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0040A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift */; };
+		5B5B0041A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0041A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift */; };
+		5B5B0042A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0042A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift */; };
+		5B5B0043A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0043A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */; };
+		5B5B0044A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0044A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */; };
+		5B5B0045A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0045A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */; };
 		5C3E0454B6C24B02A2F091A8 /* App/ShortcutRoutingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B42A82C6AA614E74873D9A5F /* App/ShortcutRoutingSupport.swift */; };
 		5EDB6027B346C46521A93C74 /* CMUXAuthCore in Frameworks */ = {isa = PBXBuildFile; productRef = 29813FE5A6CBC1019289A251 /* CMUXAuthCore */; };
 		619D509BC9B1EA946CBD6A8A /* App/WorkspaceRuntimeSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9960CC3992F3C44489E7627C /* App/WorkspaceRuntimeSettings.swift */; };
@@ -579,6 +594,21 @@
 		5B5B0024A1B2C3D4E5F60710 /* VerticalTabsSidebar/Goals/GoalsViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Goals/GoalsViewState.swift; sourceTree = "<group>"; };
 		5B5B0025A1B2C3D4E5F60710 /* VerticalTabsSidebar/Goals/GoalRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Goals/GoalRow.swift; sourceTree = "<group>"; };
 		5B5B0026A1B2C3D4E5F60710 /* VerticalTabsSidebar/Goals/GoalsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Goals/GoalsListView.swift; sourceTree = "<group>"; };
+		5B5B0030A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskItem.swift; sourceTree = "<group>"; };
+		5B5B0031A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift; sourceTree = "<group>"; };
+		5B5B0032A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFileListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskFileListStore.swift; sourceTree = "<group>"; };
+		5B5B0033A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskListViewModel.swift; sourceTree = "<group>"; };
+		5B5B0034A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskListRow.swift; sourceTree = "<group>"; };
+		5B5B0035A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskGroupHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskGroupHeader.swift; sourceTree = "<group>"; };
+		5B5B0036A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskListToolbar.swift; sourceTree = "<group>"; };
+		5B5B0037A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFilterChipView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskFilterChipView.swift; sourceTree = "<group>"; };
+		5B5B0038A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskListView.swift; sourceTree = "<group>"; };
+		5B5B0040A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift; sourceTree = "<group>"; };
+		5B5B0041A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift; sourceTree = "<group>"; };
+		5B5B0042A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift; sourceTree = "<group>"; };
+		5B5B0043A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift; sourceTree = "<group>"; };
+		5B5B0044A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift; sourceTree = "<group>"; };
+		5B5B0045A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift; sourceTree = "<group>"; };
 		6083A7DAD962E287FC2FFE94 /* ShortcutAndCommandPaletteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutAndCommandPaletteTests.swift; sourceTree = "<group>"; };
 		610008EA5E3744DDBE05C8E2 /* Sidebar/InternalTabDragConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sidebar/InternalTabDragConfiguration.swift; sourceTree = "<group>"; };
 		61A19A4145F034965110CF87 /* AuthCallbackRouter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthCallbackRouter.swift; sourceTree = "<group>"; };
@@ -1188,6 +1218,21 @@
 				5B5B0024A1B2C3D4E5F60710 /* VerticalTabsSidebar/Goals/GoalsViewState.swift */,
 				5B5B0025A1B2C3D4E5F60710 /* VerticalTabsSidebar/Goals/GoalRow.swift */,
 				5B5B0026A1B2C3D4E5F60710 /* VerticalTabsSidebar/Goals/GoalsListView.swift */,
+				5B5B0030A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskItem.swift */,
+				5B5B0031A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift */,
+				5B5B0032A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFileListStore.swift */,
+				5B5B0033A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListViewModel.swift */,
+				5B5B0034A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListRow.swift */,
+				5B5B0035A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskGroupHeader.swift */,
+				5B5B0036A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListToolbar.swift */,
+				5B5B0037A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFilterChipView.swift */,
+				5B5B0038A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListView.swift */,
+				5B5B0040A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift */,
+				5B5B0041A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift */,
+				5B5B0042A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift */,
+				5B5B0043A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */,
+				5B5B0044A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */,
+				5B5B0045A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */,
 				5B5B0014A1B2C3D4E5F60710 /* VerticalTabsSidebar/ActiveMarkdownPathsObserver.swift */,
 				38A09EB2E92203B2E95923A7 /* CommandPalette/CommandPaletteSearch.swift */,
 				9DAB808A8EC74C40B95F7672 /* App/GhosttySurfaceConfigurationRefresh.swift */,
@@ -1860,6 +1905,21 @@
 				5B5B0024A1B2C3D4E5F60711 /* VerticalTabsSidebar/Goals/GoalsViewState.swift in Sources */,
 				5B5B0025A1B2C3D4E5F60711 /* VerticalTabsSidebar/Goals/GoalRow.swift in Sources */,
 				5B5B0026A1B2C3D4E5F60711 /* VerticalTabsSidebar/Goals/GoalsListView.swift in Sources */,
+				5B5B0030A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskItem.swift in Sources */,
+				5B5B0031A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift in Sources */,
+				5B5B0032A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskFileListStore.swift in Sources */,
+				5B5B0033A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListViewModel.swift in Sources */,
+				5B5B0034A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListRow.swift in Sources */,
+				5B5B0035A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskGroupHeader.swift in Sources */,
+				5B5B0036A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListToolbar.swift in Sources */,
+				5B5B0037A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskFilterChipView.swift in Sources */,
+				5B5B0038A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListView.swift in Sources */,
+				5B5B0040A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift in Sources */,
+				5B5B0041A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift in Sources */,
+				5B5B0042A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift in Sources */,
+				5B5B0043A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift in Sources */,
+				5B5B0044A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift in Sources */,
+				5B5B0045A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift in Sources */,
 				5B5B0014A1B2C3D4E5F60711 /* VerticalTabsSidebar/ActiveMarkdownPathsObserver.swift in Sources */,
 				A8CBA43C2DA5AB9E3A1E65A4 /* CommandPalette/CommandPaletteSearch.swift in Sources */,
 				B84BD7AD94EE485B8DDAB6FF /* App/GhosttySurfaceConfigurationRefresh.swift in Sources */,

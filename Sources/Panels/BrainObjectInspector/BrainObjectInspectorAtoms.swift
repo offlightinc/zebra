@@ -261,7 +261,6 @@ struct StatusPillView: View {
         switch status! {
         case .todo: return String(localized: "brain.status.todo", defaultValue: "Todo")
         case .doing: return String(localized: "brain.status.doing", defaultValue: "In progress")
-        case .active: return String(localized: "brain.status.active", defaultValue: "Active")
         case .blocked: return String(localized: "brain.status.blocked", defaultValue: "Blocked")
         case .waiting: return String(localized: "brain.status.waiting", defaultValue: "Waiting")
         case .completed: return String(localized: "brain.status.completed", defaultValue: "Completed")
@@ -288,7 +287,7 @@ struct StatusGlyph: View {
                 var path = Path(ellipseIn: circleRect)
                 ctx.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.2, dash: [2, 1.4]))
                 _ = path
-            case .doing, .active:
+            case .doing:
                 ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
                 var fill = Path()
                 fill.move(to: center)
@@ -332,7 +331,6 @@ struct StatusGlyph: View {
         switch status {
         case .todo: return BVColor.statusTodo
         case .doing: return BVColor.statusDoing
-        case .active: return BVColor.statusCompleted
         case .blocked: return BVColor.statusBlocked
         case .waiting: return BVColor.statusWaiting
         case .completed: return BVColor.statusCompleted
@@ -798,19 +796,19 @@ struct MilestoneRowView: View {
 
 // MARK: - Editable Goal status pill
 
-/// Visual glyph for a `GoalStatus`. Reuses `StatusGlyph`'s `BrainTaskStatus`
+/// Visual glyph for a `BrainGoalStatus`. Reuses `StatusGlyph`'s `BrainTaskStatus`
 /// rendering via a small mapping so the editable Goal pill matches the
 /// read-only Task pill style.
-private func glyphMapping(_ s: GoalStatus) -> BrainTaskStatus {
+private func glyphMapping(_ s: BrainGoalStatus) -> BrainTaskStatus {
     switch s {
-    case .active: return .active
+    case .active: return .doing
     case .blocked: return .blocked
     case .draft: return .todo
     case .completed: return .completed
     }
 }
 
-private func goalStatusLabel(_ s: GoalStatus) -> String {
+private func goalStatusLabel(_ s: BrainGoalStatus) -> String {
     switch s {
     case .active: return String(localized: "brain.goal.status.active", defaultValue: "Active")
     case .blocked: return String(localized: "brain.goal.status.blocked", defaultValue: "Blocked")
@@ -820,8 +818,8 @@ private func goalStatusLabel(_ s: GoalStatus) -> String {
 }
 
 struct EditableGoalStatusPill: View {
-    let value: GoalStatus?
-    let onChange: (GoalStatus?) -> Void
+    let value: BrainGoalStatus?
+    let onChange: (BrainGoalStatus?) -> Void
 
     @State private var isPresented = false
 
@@ -868,16 +866,16 @@ struct EditableGoalStatusPill: View {
 }
 
 struct GoalStatusPickerView: View {
-    let current: GoalStatus?
-    let onSelect: (GoalStatus?) -> Void
+    let current: BrainGoalStatus?
+    let onSelect: (BrainGoalStatus?) -> Void
 
     @State private var query: String = ""
     @FocusState private var searchFocused: Bool
 
-    private var filtered: [GoalStatus] {
+    private var filtered: [BrainGoalStatus] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        if q.isEmpty { return GoalStatus.allCases }
-        return GoalStatus.allCases.filter { goalStatusLabel($0).lowercased().hasPrefix(q) }
+        if q.isEmpty { return BrainGoalStatus.allCases }
+        return BrainGoalStatus.allCases.filter { goalStatusLabel($0).lowercased().hasPrefix(q) }
     }
 
     var body: some View {
@@ -1394,17 +1392,19 @@ private struct EditablePickerRowHoverBackground: View {
 /// (sharp corners, custom background, no arrow), and the content stays
 /// SwiftUI. Behaves like a popover: anchored to a view, dismisses on
 /// outside click or Escape, transient.
+enum PanelPopoverAlignment {
+    case center, leading, trailing
+}
+
 extension View {
     /// Drop-in replacement for `.popover(isPresented:arrowEdge:)` that
     /// uses a borderless NSPanel instead of NSPopover.
     func panelPopover<Content: View>(
         isPresented: Binding<Bool>,
+        alignment: PanelPopoverAlignment = .center,
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
-        // `.background` (no frame override) so the presenter spans the
-        // full pill — `anchor.bounds` then equals the visible pill rect,
-        // not a zero-size point.
-        background(PanelPopoverPresenter(isPresented: isPresented, content: content))
+        background(PanelPopoverPresenter(isPresented: isPresented, alignment: alignment, content: content))
     }
 }
 
@@ -1419,17 +1419,20 @@ private final class PickerPanel: NSPanel {
 
 private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
+    let alignment: PanelPopoverAlignment
     let content: () -> Content
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         view.translatesAutoresizingMaskIntoConstraints = false
         context.coordinator.anchorView = view
+        context.coordinator.alignment = alignment
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.anchorView = nsView
+        context.coordinator.alignment = alignment
         context.coordinator.update(content: content(), isPresented: isPresented)
     }
 
@@ -1445,6 +1448,7 @@ private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
     final class Coordinator: NSObject {
         @Binding var isPresented: Bool
         weak var anchorView: NSView?
+        var alignment: PanelPopoverAlignment = .center
 
         private var panel: PickerPanel?
         private var hostingController: NSHostingController<AnyView>?
@@ -1534,9 +1538,15 @@ private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
             let anchorRectInWindow = anchor.convert(anchor.bounds, to: nil)
             let anchorRectInScreen = anchorWindow.convertToScreen(anchorRectInWindow)
 
-            // Default: below the anchor, horizontally centered, 6pt gap.
+            // Default: below the anchor, with horizontal alignment per option.
+            let xOrigin: CGFloat
+            switch alignment {
+            case .center:   xOrigin = anchorRectInScreen.midX - size.width / 2
+            case .leading:  xOrigin = anchorRectInScreen.minX
+            case .trailing: xOrigin = anchorRectInScreen.maxX - size.width
+            }
             var origin = NSPoint(
-                x: anchorRectInScreen.midX - size.width / 2,
+                x: xOrigin,
                 y: anchorRectInScreen.minY - size.height - 6
             )
 
