@@ -9,11 +9,17 @@ struct TaskPriorityIcon: View {
     var body: some View {
         if let p = priority {
             if p == .urgent {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(BVColor.priorityUrgent)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 2.5)
+                        .fill(BVColor.priorityUrgent)
+                    Image(systemName: "exclamationmark")
+                        .font(.system(size: 9, weight: .heavy))
+                        .foregroundColor(.white)
+                        .offset(y: -1)
+                }
+                .frame(width: 12, height: 12)
             } else {
-                PriorityBars(level: Self.level(p), color: Self.color(p))
+                PriorityBars(level: Self.level(p), color: BVColor.fgMute)
             }
         } else {
             TaskNoPriorityGlyph()
@@ -22,15 +28,6 @@ struct TaskPriorityIcon: View {
 
     static func level(_ p: BrainPriority) -> Int {
         switch p { case .urgent: return 3; case .high: return 3; case .normal: return 2; case .low: return 1 }
-    }
-
-    static func color(_ p: BrainPriority) -> Color {
-        switch p {
-        case .urgent: return BVColor.priorityUrgent
-        case .high:   return BVColor.priorityHigh
-        case .normal: return BVColor.priorityNormal
-        case .low:    return BVColor.priorityLow
-        }
     }
 }
 

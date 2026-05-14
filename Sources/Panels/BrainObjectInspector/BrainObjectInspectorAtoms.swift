@@ -258,14 +258,12 @@ struct StatusGlyph: View {
                 fill.closeSubpath()
                 ctx.fill(fill, with: .color(color))
             case .blocked:
-                ctx.fill(Path(ellipseIn: circleRect), with: .color(color))
-                var x = Path()
+                ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
+                var line = Path()
                 let inset: CGFloat = 3
-                x.move(to: CGPoint(x: circleRect.minX + inset, y: circleRect.minY + inset))
-                x.addLine(to: CGPoint(x: circleRect.maxX - inset, y: circleRect.maxY - inset))
-                x.move(to: CGPoint(x: circleRect.maxX - inset, y: circleRect.minY + inset))
-                x.addLine(to: CGPoint(x: circleRect.minX + inset, y: circleRect.maxY - inset))
-                ctx.stroke(x, with: .color(Color(nsColor: .black).opacity(0.85)), style: StrokeStyle(lineWidth: 1.3, lineCap: .round))
+                line.move(to: CGPoint(x: circleRect.minX + inset, y: center.y))
+                line.addLine(to: CGPoint(x: circleRect.maxX - inset, y: center.y))
+                ctx.stroke(line, with: .color(color), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
             case .waiting:
                 ctx.fill(Path(ellipseIn: circleRect), with: .color(color))
                 for dx in [-2.4, 0.0, 2.4] {
