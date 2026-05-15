@@ -471,6 +471,14 @@ struct MarkdownChatPill: View {
         // @State `text` directly from the NSTextView, then re-evaluate
         // the action on the next runloop tick so the slash-mode / submit
         // gate sees the post-commit string.
+        //
+        // POLICY: one Enter == commit-and-submit. We intentionally do *not*
+        // adopt the native-macOS "first Enter commits, second Enter
+        // submits" pattern (Slack/Discord-style). Most pill traffic is
+        // one-shot prompts where the user types and immediately wants to
+        // send — making them press Enter twice is friction. If we ever
+        // want the two-step variant, return `.handled` from the IME
+        // branch without scheduling `runEnterAction()`.
         .onKeyPress(.return) {
             if commitIMECompositionIfNeeded() {
                 DispatchQueue.main.async { _ = runEnterAction() }
