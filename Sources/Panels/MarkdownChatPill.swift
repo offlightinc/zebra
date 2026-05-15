@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // Floating chat pill overlay for MarkdownPanelView.
@@ -86,11 +87,12 @@ enum MarkdownChatPillCommand {
     static func shellStartupLine(
         agent: MarkdownPillAgent,
         markdownFilePath: String,
-        userPrompt: String
+        userPrompt: String,
+        selection: MarkdownChatPillSelection? = nil
     ) -> String {
         let parent = (markdownFilePath as NSString).deletingLastPathComponent
         let cwd = parent.isEmpty ? "/" : parent
-        return "\(invocation(agent: agent, cwd: cwd, markdownFilePath: markdownFilePath, prompt: userPrompt))\r"
+        return "\(invocation(agent: agent, cwd: cwd, markdownFilePath: markdownFilePath, prompt: userPrompt, selection: selection))\r"
     }
 
     /// Per-agent CLI invocation tuned to keep the initial prompt on the agent
@@ -102,11 +104,23 @@ enum MarkdownChatPillCommand {
         agent: MarkdownPillAgent,
         cwd: String,
         markdownFilePath: String,
-        prompt: String
+        prompt: String,
+        selection: MarkdownChatPillSelection?
     ) -> String {
         let promptArgument = singleLineShellArgument(prompt)
-        let visibleContextPrompt = "Use this markdown file as context: \(markdownFilePath). \(promptArgument)"
-        let hiddenContextInstruction = "Use this markdown file as context: \(markdownFilePath)"
+        let fileContext = "Use this markdown file as context: \(markdownFilePath)"
+        let selectionContext = selection.map { selectionNote(for: $0) }
+        // Visible context = what we want the agent to *see in the user message*
+        // (file + optional selection + user's question). Compressed to one
+        // line so shell single-quoting is straightforward.
+        let visibleParts: [String] = [fileContext + ".", selectionContext.map { $0 + "." }, promptArgument]
+            .compactMap { $0 }
+        let visibleContextPrompt = visibleParts.joined(separator: " ")
+        // Hidden system-prompt variant for claude's --append-system-prompt:
+        // same file + selection note, but without the user message tacked on
+        // (claude takes the user prompt separately).
+        let hiddenParts: [String] = [fileContext, selectionContext].compactMap { $0 }
+        let hiddenContextInstruction = hiddenParts.joined(separator: ". ")
         switch agent {
         case .codex:
             let override = "projects.\"\(cwd)\".trust_level=\"trusted\""
@@ -116,6 +130,17 @@ enum MarkdownChatPillCommand {
         case .gemini:
             return "cd \(shellQuote(cwd)) && gemini --skip-trust --prompt-interactive \(shellQuote(visibleContextPrompt))"
         }
+    }
+
+    /// One-line sentence describing the user's excerpt selection — used both
+    /// as the visible context (codex/gemini) and the system-prompt note
+    /// (claude). Heading is included when we managed to back-resolve it.
+    private static func selectionNote(for selection: MarkdownChatPillSelection) -> String {
+        let excerpt = selection.fullExcerpt
+        if let heading = selection.heading {
+            return "The user selected this excerpt from the section titled \u{201C}\(heading)\u{201D}: \u{201C}\(excerpt)\u{201D}"
+        }
+        return "The user selected this excerpt from the markdown: \u{201C}\(excerpt)\u{201D}"
     }
 
     /// Follow-up text for an already-running session. Do not append Return:
@@ -174,6 +199,90 @@ enum MarkdownChatPillCommand {
     }
 }
 
+/// A snapshot of the user's text selection inside the markdown body, used to
+/// drive the yellow selection chip in the pill and to embed an excerpt /
+/// heading hint into the agent's first prompt.
+///
+/// Designed as a pure value type so the parent (`MarkdownPanelView`) can
+/// build/replace/clear instances when its NSTextView selection observer fires,
+/// without the pill needing to know about NSTextView at all.
+struct MarkdownChatPillSelection: Equatable {
+    /// Whitespace-collapsed, single-line text, truncated to <= 500 chars with
+    /// an ellipsis. This is the form we embed in the CLI prompt argument so
+    /// the agent gets the excerpt verbatim regardless of original newlines.
+    let fullExcerpt: String
+    /// Original character count of the raw selection (before truncation /
+    /// whitespace collapse). Shown in the chip label as "N chars".
+    let chars: Int
+    /// Number of newline-separated lines in the raw selection.
+    let lines: Int
+    /// Nearest preceding markdown heading (`## State`, `### ...`) of the
+    /// selection's location in the source — nil when the selection sits
+    /// above all headings, or when the heading lookup fails (e.g., the
+    /// rendered text doesn't match the source verbatim).
+    let heading: String?
+
+    /// Build a snapshot from raw selected text and the panel's source. Returns
+    /// nil when the selection is too short (< 3 chars after a whitespace
+    /// trim) — matches the mockup's behavior (mouseup with < 3 chars is a
+    /// stray click, not a meaningful selection).
+    static func capture(rawText: String, in panelContent: String) -> MarkdownChatPillSelection? {
+        let collapsed = rawText
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .components(separatedBy: .whitespaces)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard collapsed.count >= 3 else { return nil }
+
+        let chars = rawText.count
+        let lines = rawText
+            .components(separatedBy: CharacterSet.newlines)
+            .count
+        let heading = nearestPrecedingHeading(of: rawText, in: panelContent)
+        let excerptCap = 500
+        let fullExcerpt = collapsed.count > excerptCap
+            ? String(collapsed.prefix(excerptCap - 1)) + "\u{2026}"
+            : collapsed
+        return .init(
+            fullExcerpt: fullExcerpt,
+            chars: chars,
+            lines: lines,
+            heading: heading
+        )
+    }
+
+    /// Shorter form used in the chip UI (italic quote). The mockup caps the
+    /// chip excerpt at 110 chars; the full 500-char form is reserved for the
+    /// prompt that actually reaches the agent.
+    var displayExcerpt: String {
+        let cap = 110
+        guard fullExcerpt.count > cap else { return fullExcerpt }
+        return String(fullExcerpt.prefix(cap - 2)) + "\u{2026}"
+    }
+
+    /// Walk back from the selection's substring start in the source content
+    /// to find the most recent `#` / `##` / ... line. Best-effort — if the
+    /// rendered selection text doesn't appear verbatim in the source (e.g.,
+    /// MarkdownUI stripped emphasis markers) we just return nil and the chip
+    /// renders without a heading.
+    private static func nearestPrecedingHeading(of selection: String, in content: String) -> String? {
+        let trimmedSelection = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSelection.isEmpty,
+              let range = content.range(of: trimmedSelection) else { return nil }
+        let prefix = content[..<range.lowerBound]
+        for line in prefix.split(separator: "\n", omittingEmptySubsequences: false).reversed() {
+            let stripped = line.trimmingCharacters(in: .whitespaces)
+            guard stripped.hasPrefix("#") else { continue }
+            let title = stripped.drop(while: { $0 == "#" })
+                .trimmingCharacters(in: .whitespaces)
+            if !title.isEmpty { return title }
+        }
+        return nil
+    }
+}
+
 struct MarkdownPillAgentDot: View {
     let agent: MarkdownPillAgent
     var size: CGFloat = 14
@@ -213,22 +322,87 @@ struct MarkdownChatPill: View {
     /// Drives the collapsed "session · agent · Follow up…" rendering and
     /// is set by the parent after a submit kicks off a split pane.
     let activeAgent: MarkdownPillAgent?
+    /// Non-nil when the user has highlighted a chunk of the markdown body.
+    /// Drives the yellow selection chip + placeholder swap to "Ask about
+    /// this selection". Cleared via `onClearSelection` when the user hits
+    /// the chip's × button.
+    let activeSelection: MarkdownChatPillSelection?
     /// Parent handles the actual newTerminalSplit / sendText routing.
-    /// The pill just emits the user's intent.
+    /// The pill just emits the user's intent (and the active selection).
     let onSubmit: (_ text: String, _ agent: MarkdownPillAgent) -> Void
+    /// Invoked when the user clicks the × on the selection chip. Parent
+    /// drops the selection snapshot; the underlying NSTextView highlight is
+    /// intentionally left alone (plan §C).
+    let onClearSelection: () -> Void
 
     @State private var isExpanded: Bool = false
     @State private var text: String = ""
     @State private var agent: MarkdownPillAgent = .codex
     @State private var agentMenuOpen: Bool = false
+    /// Cached gbrain skill list, loaded lazily on first slash. nil means
+    /// "didn't try yet" — empty array means we tried and gbrain isn't
+    /// installed (picker stays hidden).
+    @State private var skillsCache: [BrainSkillsManifest.Skill]?
+    /// Currently highlighted row in the slash picker for ↑↓ keyboard
+    /// navigation. Reset to 0 whenever the filter changes so the top match
+    /// is always the default selection.
+    @State private var skillsSelectedIndex: Int = 0
+    /// NSEvent monitor token used to intercept ↑/↓/⏎ ahead of the
+    /// focused TextField while the slash picker is open. SwiftUI's
+    /// `.onKeyPress(.upArrow)` on an outer container is preempted by the
+    /// focused TextField's caret-movement handling, so we run the monitor
+    /// at the local NSEvent level instead. Lifecycle is tied to the pill
+    /// existing in the view tree.
+    @State private var slashKeyMonitor: Any?
     @FocusState private var textFieldFocused: Bool
 
     private var hasActiveSession: Bool { activeAgent != nil }
+
+    /// True while the user is mid-slash — input begins with `/` and has no
+    /// whitespace yet, so we can offer skill completions. Once they type a
+    /// space the slash command is "committed" and the picker hides.
+    private var isSlashMode: Bool {
+        guard text.hasPrefix("/") else { return false }
+        return !text.contains(" ")
+    }
+
+    /// `/foo` → `foo`. Empty filter (bare `/`) shows the full list.
+    private var slashFilter: String {
+        guard text.hasPrefix("/") else { return "" }
+        return String(text.dropFirst())
+    }
+
+    /// Skills matching the current slash filter, case-insensitive, on name
+    /// or description. Returns nil when manifest hasn't been loaded yet or
+    /// gbrain isn't installed.
+    private var matchingSkills: [BrainSkillsManifest.Skill]? {
+        guard let skills = skillsCache else { return nil }
+        let q = slashFilter.lowercased()
+        guard !q.isEmpty else { return skills }
+        return skills.filter { skill in
+            skill.name.lowercased().contains(q) || skill.description.lowercased().contains(q)
+        }
+    }
+
+    /// Insert the picked skill into the textfield as `/skill-name ` so the
+    /// user can keep typing arguments. The trailing space also commits the
+    /// slash command (isSlashMode goes false) which auto-closes the picker.
+    private func pickSkill(_ skill: BrainSkillsManifest.Skill) {
+        text = "/\(skill.name) "
+        DispatchQueue.main.async { textFieldFocused = true }
+    }
+    private var hasActiveSelection: Bool { activeSelection != nil }
     private var contextChipTitle: String {
         displayTitle.isEmpty
             ? String(localized: "markdownChat.pill.chip.thisDoc", defaultValue: "this doc")
             : displayTitle
     }
+    private var placeholderText: String {
+        hasActiveSelection
+            ? String(localized: "markdownChat.pill.placeholder.selection", defaultValue: "Ask about this selection")
+            : String(localized: "markdownChat.pill.placeholder.doc", defaultValue: "Ask about this doc")
+    }
+    private static let selectionTint = Color(red: 232.0 / 255, green: 183.0 / 255, blue: 92.0 / 255)
 
     var body: some View {
         Group {
@@ -249,6 +423,28 @@ struct MarkdownChatPill: View {
         .animation(.easeOut(duration: 0.22), value: isExpanded)
         .animation(.easeOut(duration: 0.22), value: hasActiveSession)
         .frame(maxWidth: 720)
+        // Drag-to-expand: when a brand-new selection arrives from the
+        // markdown body, automatically open the pill and put focus into the
+        // text field so the user can type their question immediately — same
+        // behavior as the mockup's mouseup → pill expand flow.
+        .onChange(of: activeSelection) { _, newValue in
+            guard newValue != nil, !isExpanded else { return }
+            isExpanded = true
+            DispatchQueue.main.async { textFieldFocused = true }
+        }
+        // Lazy-load the gbrain manifest the first time the user types a
+        // slash. Empty array is a valid result (gbrain not installed) — it
+        // still satisfies "cached", so we won't keep retrying every
+        // keystroke.
+        .onChange(of: text) { _, newValue in
+            if newValue.hasPrefix("/"), skillsCache == nil {
+                skillsCache = BrainSkillsManifest.skills() ?? []
+            }
+            // Filter changed → reset selection to the top match.
+            skillsSelectedIndex = 0
+        }
+        .onAppear { installSlashKeyMonitor() }
+        .onDisappear { removeSlashKeyMonitor() }
     }
 
     private func expandFromCollapsed() {
@@ -271,6 +467,45 @@ struct MarkdownChatPill: View {
         textFieldFocused = false
     }
 
+    // MARK: - Slash key monitor
+
+    /// Register a local NSEvent monitor so ↑/↓/⏎ go to the slash picker
+    /// instead of the focused TextField while the slash menu is open. We
+    /// fall back to passing the event through whenever the picker is not
+    /// active so normal typing (caret movement, newline) keeps working.
+    private func installSlashKeyMonitor() {
+        guard slashKeyMonitor == nil else { return }
+        slashKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard isExpanded,
+                  isSlashMode,
+                  let skills = matchingSkills,
+                  !skills.isEmpty else {
+                return event
+            }
+            switch event.keyCode {
+            case 126: // up arrow
+                skillsSelectedIndex = max(0, skillsSelectedIndex - 1)
+                return nil
+            case 125: // down arrow
+                skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
+                return nil
+            case 36, 76: // return / numpad enter
+                let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
+                pickSkill(skills[safeIndex])
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeSlashKeyMonitor() {
+        if let monitor = slashKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            slashKeyMonitor = nil
+        }
+    }
+
     // MARK: - Collapsed (idle)
 
     private var collapsedView: some View {
@@ -286,7 +521,7 @@ struct MarkdownChatPill: View {
             // agent button keep their intrinsic widths, and "Ask about this
             // doc" truncates aggressively (eventually to nothing) before the
             // agent label is forced to wrap.
-            Text(String(localized: "markdownChat.pill.placeholder.doc", defaultValue: "Ask about this doc"))
+            Text(placeholderText)
                 .font(.system(size: 13.5))
                 .foregroundColor(MarkdownPillPalette.textDim)
                 .lineLimit(1)
@@ -294,6 +529,9 @@ struct MarkdownChatPill: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(-1)
 
+            if let selection = activeSelection {
+                collapsedSelectionChip(chars: selection.chars)
+            }
             agentSelectorButton(compact: true)
             sendButton(enabled: false)
         }
@@ -350,8 +588,11 @@ struct MarkdownChatPill: View {
 
     private var expandedView: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
                 contextChip(label: contextChipTitle)
+                if let selection = activeSelection {
+                    expandedSelectionChip(selection)
+                }
                 Text(String(localized: "markdownChat.pill.context.auto", defaultValue: "· auto"))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(MarkdownPillPalette.textDim)
@@ -381,11 +622,15 @@ struct MarkdownChatPill: View {
                     .frame(maxWidth: .infinity, alignment: .topLeading)
 
                 if text.isEmpty {
-                    Text(String(localized: "markdownChat.pill.placeholder.doc", defaultValue: "Ask about this doc"))
+                    Text(placeholderText)
                         .font(.system(size: 14))
                         .foregroundColor(MarkdownPillPalette.textDim)
                         .allowsHitTesting(false)
                 }
+            }
+
+            if isSlashMode, let skills = matchingSkills {
+                skillsPicker(skills: skills)
             }
 
             Rectangle()
@@ -429,11 +674,29 @@ struct MarkdownChatPill: View {
             }
             return .ignored
         }
+        // ↑/↓ navigate the slash picker; Enter picks. Outside slash mode they
+        // pass through to the textfield (newline / caret movement).
+        .onKeyPress(.upArrow) {
+            guard isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return .ignored }
+            skillsSelectedIndex = max(0, skillsSelectedIndex - 1)
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            guard isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return .ignored }
+            skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
+            return .handled
+        }
         // TextField(axis: .vertical) treats Enter as newline by default.
         // Plain ⏎ submits, ⇧⏎ keeps the newline behavior (the field uses
         // its built-in shift-modified handling so we only need to intercept
-        // the un-shifted case).
+        // the un-shifted case). When the slash picker is open, ⏎ picks the
+        // highlighted skill instead of submitting.
         .onKeyPress(.return) {
+            if isSlashMode, let skills = matchingSkills, !skills.isEmpty {
+                let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
+                pickSkill(skills[safeIndex])
+                return .handled
+            }
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 submit()
                 return .handled
@@ -463,6 +726,99 @@ struct MarkdownChatPill: View {
             Capsule().stroke(MarkdownPillPalette.accent.opacity(0.25), lineWidth: 1)
         )
         .clipShape(Capsule())
+    }
+
+    /// Compact "N chars selected" chip for the collapsed pill row. mockup
+    /// uses this in the resting state when a selection exists; it stays
+    /// short so the placeholder text still has room next to it.
+    private func collapsedSelectionChip(chars: Int) -> some View {
+        let tint = Self.selectionTint
+        return HStack(spacing: 6) {
+            Image(systemName: "number")
+                .font(.system(size: 10))
+                .foregroundColor(tint)
+            Text(String(format: String(localized: "markdownChat.pill.chip.selection.chars",
+                                       defaultValue: "%d chars"), chars))
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundColor(MarkdownPillPalette.text)
+            Button(action: onClearSelection) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(MarkdownPillPalette.textMuted)
+                    .padding(2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(String(localized: "markdownChat.pill.chip.selection.clear.a11y",
+                                            defaultValue: "Clear selection")))
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
+        .background(tint.opacity(0.13))
+        .overlay(Capsule().stroke(tint.opacity(0.35), lineWidth: 1))
+        .clipShape(Capsule())
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Richer chip used inside the expanded pill — mirrors mockup
+    /// `SelectionChip`: hash + uppercase label row (SELECTION · # Heading ·
+    /// N chars) plus a 2-line italic quote of the excerpt, with the same
+    /// × button to clear.
+    private func expandedSelectionChip(_ selection: MarkdownChatPillSelection) -> some View {
+        let tint = Self.selectionTint
+        return HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "number")
+                .font(.system(size: 11))
+                .foregroundColor(tint)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(String(localized: "markdownChat.pill.chip.selection.label",
+                                defaultValue: "SELECTION"))
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundColor(tint)
+                        .kerning(0.8)
+                    if let heading = selection.heading {
+                        Text("·")
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundColor(MarkdownPillPalette.textMuted)
+                        Text(heading)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundColor(MarkdownPillPalette.textMuted)
+                            .lineLimit(1)
+                    }
+                    Text("·")
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundColor(MarkdownPillPalette.textDim)
+                    Text(String(format: String(localized: "markdownChat.pill.chip.selection.chars",
+                                                defaultValue: "%d chars"), selection.chars))
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundColor(MarkdownPillPalette.textDim)
+                }
+                Text("\u{201C}\(selection.displayExcerpt)\u{201D}")
+                    .font(.system(size: 11.5).italic())
+                    .foregroundColor(MarkdownPillPalette.text)
+                    .lineLimit(2)
+                    .frame(maxWidth: 320, alignment: .leading)
+            }
+            Button(action: onClearSelection) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(MarkdownPillPalette.textMuted)
+                    .padding(2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(String(localized: "markdownChat.pill.chip.selection.clear.a11y",
+                                            defaultValue: "Clear selection")))
+        }
+        .padding(.leading, 9)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
+        .background(tint.opacity(0.10))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(tint.opacity(0.30), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func agentSelectorButton(compact: Bool) -> some View {
@@ -529,6 +885,126 @@ struct MarkdownChatPill: View {
         }
         .help(compact ? agent.label : "\(agent.label) (\(agent.shortcutHint))")
         .accessibilityLabel(Text(String(localized: "markdownChat.pill.agent.a11y", defaultValue: "Choose CLI agent")))
+    }
+
+    /// Glyph pool from mockup `md-app.jsx::SKILLS`. gbrain's manifest doesn't
+    /// ship per-skill glyphs, so we deterministically hash the skill name to
+    /// a glyph for stable visuals across launches.
+    private static let skillGlyphs: [String] = ["✦", "◐", "◇", "▲", "★", "✓", "↗"]
+
+    private func glyph(for skillName: String) -> String {
+        let bucket = abs(skillName.hashValue) % Self.skillGlyphs.count
+        return Self.skillGlyphs[bucket]
+    }
+
+    @ViewBuilder
+    private func skillsPicker(skills: [BrainSkillsManifest.Skill]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header: ✨ BRAIN SKILLS · N         ↑↓ ↵
+            // `sparkles` is the closest SF Symbol to the mockup's `spark`
+            // icon (a big + small star pair). The single-star `sparkle`
+            // doesn't capture the two-star silhouette.
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11))
+                    .foregroundColor(MarkdownPillPalette.accent)
+                Text(String(localized: "markdownChat.pill.skills.header",
+                            defaultValue: "BRAIN SKILLS"))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(MarkdownPillPalette.textDim)
+                    .kerning(1.0)
+                Text("· \(skills.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(MarkdownPillPalette.textDim)
+                Spacer(minLength: 4)
+                kbdLabel("↑↓")
+                kbdLabel("↵")
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+
+            if skills.isEmpty {
+                HStack(spacing: 4) {
+                    Text(String(localized: "markdownChat.pill.skills.empty",
+                                defaultValue: "No skills match"))
+                    Text("/\(slashFilter)")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(MarkdownPillPalette.textMuted)
+                }
+                .font(.system(size: 12))
+                .foregroundColor(MarkdownPillPalette.textDim)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(skills.enumerated()), id: \.element.id) { index, skill in
+                            skillRow(skill: skill, isSelected: index == skillsSelectedIndex)
+                        }
+                    }
+                }
+                .frame(maxHeight: 200)
+            }
+        }
+        .padding(4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.03))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(MarkdownPillPalette.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func skillRow(skill: BrainSkillsManifest.Skill, isSelected: Bool) -> some View {
+        // mockup's `SKILLS` data ships per-row scope; the project rows use a
+        // warm yellow (#e8b75c) for both the glyph tile and the badge. gbrain
+        // doesn't carry a scope so we surface every row in the yellow tone —
+        // matches the visual reference the user is comparing against
+        // (mockup screenshot of /plan-pr, /ship-checklist, /sync-linear).
+        let tint = Self.selectionTint
+        return Button {
+            pickSkill(skill)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Text(glyph(for: skill.name))
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .foregroundColor(tint)
+                    .frame(width: 22, height: 22)
+                    .background(tint.opacity(0.13))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text("/\(skill.name)")
+                            .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                            .foregroundColor(MarkdownPillPalette.text)
+                        Text(String(localized: "markdownChat.pill.skills.badge",
+                                    defaultValue: "brain"))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(tint)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(tint.opacity(0.13))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                    if !skill.description.isEmpty {
+                        Text(skill.description)
+                            .font(.system(size: 11.5))
+                            .foregroundColor(MarkdownPillPalette.textMuted)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? tint.opacity(0.10) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var skillsButtonPlaceholder: some View {

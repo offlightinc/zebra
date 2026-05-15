@@ -29,6 +29,13 @@ struct MarkdownPanelView: View {
     /// and replaces this state.
     @State private var pillSession: MarkdownChatPillSessionRef?
 
+    /// Latest selection snapshot from the markdown body (yellow chip in
+    /// pill). Cleared when the user hits the chip's × — the underlying
+    /// NSTextView selection is intentionally left alone (plan §C). Set by
+    /// the embedded `MarkdownSelectionObserver` whenever the user changes
+    /// the highlight inside the rendered body.
+    @State private var pillSelection: MarkdownChatPillSelection?
+
     var body: some View {
         Group {
             if panel.isFileUnavailable {
@@ -197,13 +204,22 @@ struct MarkdownPanelView: View {
             MarkdownChatPill(
                 displayTitle: panel.displayTitle,
                 activeAgent: pillActiveAgent,
+                activeSelection: pillSelection,
                 onSubmit: { text, agent in
                     handlePillSubmit(text: text, agent: agent)
-                }
+                },
+                onClearSelection: { pillSelection = nil }
             )
             .padding(.horizontal, 24)
             .padding(.bottom, 22)
         }
+        .background(MarkdownSelectionObserver(panelContent: panel.content) { snapshot in
+            // Only update on a meaningful change to avoid pill re-renders
+            // for every NSTextView selection-change tick during a drag.
+            if snapshot != pillSelection {
+                pillSelection = snapshot
+            }
+        })
     }
 
     private var filePathHeader: some View {
@@ -517,6 +533,10 @@ struct MarkdownPanelView: View {
             agent: agent,
             markdownFilePath: panel.filePath,
             userPrompt: text,
+            // Selection (when present) is embedded only into the first
+            // prompt of a fresh session. Follow-up sendInput calls do NOT
+            // re-attach it — the agent already has the excerpt from turn 1.
+            selection: pillSelection
         )
         sendStartupSequence(
             startup: startupLine,
