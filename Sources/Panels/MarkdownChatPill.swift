@@ -937,14 +937,29 @@ struct MarkdownChatPill: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
             } else {
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(skills.enumerated()), id: \.element.id) { index, skill in
-                            skillRow(skill: skill, isSelected: index == skillsSelectedIndex)
+                // ScrollViewReader so ↑/↓ keyboard navigation keeps the
+                // highlighted row visible. Each row carries `.id(index)`,
+                // and we scroll-to the selected index on every change.
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(skills.enumerated()), id: \.element.id) { index, skill in
+                                skillRow(skill: skill, isSelected: index == skillsSelectedIndex)
+                                    .id(index)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 200)
+                    .onChange(of: skillsSelectedIndex) { _, newIndex in
+                        // No `anchor:` → ScrollViewProxy scrolls the
+                        // minimum amount needed to bring the target into
+                        // view. With `.center`, every keystroke would jerk
+                        // an already-visible row toward the middle.
+                        withAnimation(.linear(duration: 0.08)) {
+                            proxy.scrollTo(newIndex)
                         }
                     }
                 }
-                .frame(maxHeight: 200)
             }
         }
         .padding(4)
