@@ -11,6 +11,21 @@ enum BrainFrontmatterWriter {
     /// Returns the full file text with `key:` set to `value`. `value == nil`
     /// removes the matching line. If the key does not exist, a new line is
     /// inserted before the closing `---`.
+    /// Read the file at `filePath`, apply `setScalar(key, to: value, in:)`,
+    /// then atomic-write back. Silent no-op on read/decode/write failure —
+    /// callers that need diagnostics should use `setScalar` directly.
+    /// Sidebar 전용 (Task/Goal). MarkdownPanel 처럼 in-memory snapshot 을
+    ///쥐고 있는 호출자는 `setScalar` 만 사용하고 자체 IO 흐름을 유지한다.
+    static func applyScalar(at filePath: String, key: String, value: String?) {
+        let url = URL(fileURLWithPath: filePath)
+        guard let data = try? Data(contentsOf: url),
+              let content = String(data: data, encoding: .utf8) else { return }
+        let updated = setScalar(key, to: value, in: content)
+        guard updated != content,
+              let newData = updated.data(using: .utf8) else { return }
+        try? newData.write(to: url, options: .atomic)
+    }
+
     static func setScalar(_ key: String, to value: String?, in source: String) -> String {
         let newline = detectNewline(in: source)
         let lines = source.components(separatedBy: newline)

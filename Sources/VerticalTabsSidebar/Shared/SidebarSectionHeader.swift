@@ -1,14 +1,18 @@
 import SwiftUI
 
-/// Collapsible section header. Snapshot-only — receives label/count/collapsed
-/// state + a toggle closure. No store reference.
-struct TaskGroupHeader: View, Equatable {
+/// 사이드바 (Tasks / Goals) 의 collapsible section 헤더. 도메인-중립.
+/// `onToggle: {}` + `isCollapsed: false` 로 호출하면 비-collapsible (구조 모드
+/// 의 "Goals · N" 같은 정적 헤더) 로도 사용 가능.
+///
+/// Snapshot-only — receives label/count/collapsed state + a toggle closure.
+/// No store reference.
+struct SidebarSectionHeader: View, Equatable {
     let label: String
     let count: Int
     let isCollapsed: Bool
     let onToggle: () -> Void
 
-    static func == (lhs: TaskGroupHeader, rhs: TaskGroupHeader) -> Bool {
+    static func == (lhs: SidebarSectionHeader, rhs: SidebarSectionHeader) -> Bool {
         lhs.label == rhs.label && lhs.count == rhs.count && lhs.isCollapsed == rhs.isCollapsed
     }
 

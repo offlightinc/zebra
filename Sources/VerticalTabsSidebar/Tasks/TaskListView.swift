@@ -116,7 +116,7 @@ struct TaskListView: View {
         return ScrollView {
             LazyVStack(spacing: 0, pinnedViews: []) {
                 ForEach(groups) { group in
-                    TaskGroupHeader(
+                    SidebarSectionHeader(
                         label: group.key.label,
                         count: group.items.count,
                         isCollapsed: viewModel.collapsedSections.contains(group.key.raw),
@@ -185,13 +185,7 @@ struct TaskListView: View {
     }
 
     private func applyFrontmatter(task: TaskItem, key: String, value: String?) {
-        let url = URL(fileURLWithPath: task.absolutePath)
-        guard let data = try? Data(contentsOf: url),
-              let content = String(data: data, encoding: .utf8) else { return }
-        let updated = BrainFrontmatterWriter.setScalar(key, to: value, in: content)
-        guard updated != content,
-              let newData = updated.data(using: .utf8) else { return }
-        try? newData.write(to: url, options: .atomic)
+        BrainFrontmatterWriter.applyScalar(at: task.absolutePath, key: key, value: value)
         // File watcher in TaskFileListStore picks the change up and reparses.
     }
 }

@@ -11,7 +11,7 @@ struct GoalDueDescriptor: Equatable {
     let kind: GoalDuePillKind
 }
 
-struct GoalOutlineRow: View, Equatable {
+struct GoalOutlineRow: View {
     let displayName: String
     let depth: Int
     let hasChildren: Bool
@@ -21,113 +21,138 @@ struct GoalOutlineRow: View, Equatable {
     let onChevronTap: () -> Void
     let onRowTap: () -> Void
 
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.displayName == rhs.displayName
-            && lhs.depth == rhs.depth
-            && lhs.hasChildren == rhs.hasChildren
-            && lhs.expanded == rhs.expanded
-            && lhs.isCompleted == rhs.isCompleted
-            && lhs.isSelected == rhs.isSelected
-    }
+    @State private var rowHover = false
 
     var body: some View {
-        Button(action: onRowTap) {
-            HStack(spacing: 0) {
-                ZStack {
-                    if hasChildren {
-                        Button(action: onChevronTap) {
-                            Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                                .frame(width: GoalsDesignTokens.outlineChevronColumnWidth, height: GoalsDesignTokens.rowHeight)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        Color.clear
+        HStack(spacing: 0) {
+            ZStack {
+                if hasChildren {
+                    Button(action: onChevronTap) {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                             .frame(width: GoalsDesignTokens.outlineChevronColumnWidth, height: GoalsDesignTokens.rowHeight)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                } else {
+                    Color.clear
+                        .frame(width: GoalsDesignTokens.outlineChevronColumnWidth, height: GoalsDesignTokens.rowHeight)
                 }
-                Text(displayName)
-                    .font(.system(size: GoalsDesignTokens.rowFontSize, weight: .regular))
-                    .foregroundStyle(isCompleted ? Color(nsColor: .secondaryLabelColor) : Color(nsColor: .labelColor))
-                    .strikethrough(isCompleted, color: Color(nsColor: .secondaryLabelColor))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 0)
             }
-            .padding(.leading, GoalsDesignTokens.rowHorizontalPadding + CGFloat(depth) * GoalsDesignTokens.outlineIndentPerLevel)
-            .padding(.trailing, GoalsDesignTokens.rowHorizontalPadding)
-            .frame(height: GoalsDesignTokens.rowHeight)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                isSelected ? Color.accentColor.opacity(GoalsDesignTokens.selectionAlpha) : Color.clear
-            )
-            .contentShape(Rectangle())
+            goalRowTitle(displayName, isCompleted: isCompleted)
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
+        .padding(.leading, GoalsDesignTokens.rowHorizontalPadding + CGFloat(depth) * GoalsDesignTokens.outlineIndentPerLevel)
+        .padding(.trailing, GoalsDesignTokens.rowHorizontalPadding)
+        .frame(height: GoalsDesignTokens.rowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .sidebarRowChrome(isSelected: isSelected, isHovered: rowHover)
+        .onTapGesture { onRowTap() }
+        .onHover { rowHover = $0 }
         .accessibilityIdentifier("VerticalTabsSidebar.Goals.outlineRow")
     }
 }
 
-struct GoalCadenceRow: View, Equatable {
+struct GoalCadenceRow: View {
     let displayName: String
     let due: GoalDueDescriptor
     let isCompleted: Bool
     let isSelected: Bool
     let onTap: () -> Void
 
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.displayName == rhs.displayName
-            && lhs.due == rhs.due
-            && lhs.isCompleted == rhs.isCompleted
-            && lhs.isSelected == rhs.isSelected
-    }
+    @State private var rowHover = false
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 8) {
-                goalRowTitle(displayName, isCompleted: isCompleted)
-                Spacer(minLength: 0)
-                goalDuePill(due)
-            }
-            .modifier(GoalFlatRowChrome(isSelected: isSelected))
+        HStack(spacing: 8) {
+            goalRowTitle(displayName, isCompleted: isCompleted)
+            Spacer(minLength: 0)
+            goalDuePill(due)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, GoalsDesignTokens.rowHorizontalPadding)
+        .frame(height: GoalsDesignTokens.rowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .sidebarRowChrome(isSelected: isSelected, isHovered: rowHover)
+        .onTapGesture { onTap() }
+        .onHover { rowHover = $0 }
         .accessibilityIdentifier("VerticalTabsSidebar.Goals.cadenceRow")
     }
 }
 
-struct GoalStatusRow: View, Equatable {
+struct GoalStatusRow: View {
+    let status: BrainGoalStatus?
+    let unrecognizedStatusRaw: String?
     let displayName: String
     let milestoneDone: Int
     let milestoneTotal: Int
     let isCompleted: Bool
     let isSelected: Bool
     let onTap: () -> Void
+    let onChangeStatus: (BrainGoalStatus) -> Void
 
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.displayName == rhs.displayName
-            && lhs.milestoneDone == rhs.milestoneDone
-            && lhs.milestoneTotal == rhs.milestoneTotal
-            && lhs.isCompleted == rhs.isCompleted
-            && lhs.isSelected == rhs.isSelected
-    }
+    @State private var rowHover = false
+    @State private var statusHover = false
+    @State private var showStatusPicker = false
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 8) {
-                goalRowTitle(displayName, isCompleted: isCompleted)
-                Spacer(minLength: 0)
-                Text("\(milestoneDone)/\(milestoneTotal)")
-                    .font(.system(size: GoalsDesignTokens.metaFontSize, weight: .regular))
-                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                    .monospacedDigit()
+        HStack(spacing: 8) {
+            statusButton
+            goalRowTitle(displayName, isCompleted: isCompleted)
+            Spacer(minLength: 0)
+            Text("\(milestoneDone)/\(milestoneTotal)")
+                .font(.system(size: GoalsDesignTokens.metaFontSize, weight: .regular))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .monospacedDigit()
+        }
+        .padding(.horizontal, GoalsDesignTokens.rowHorizontalPadding)
+        .frame(height: GoalsDesignTokens.rowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .sidebarRowChrome(isSelected: isSelected, isHovered: rowHover)
+        .onTapGesture { onTap() }
+        .onHover { rowHover = $0 }
+        .accessibilityIdentifier("VerticalTabsSidebar.Goals.statusRow")
+    }
+
+    @ViewBuilder
+    private var statusButton: some View {
+        // Task 와 동일 3분기 패턴 (status / unrecognized / nil).
+        Button(action: { showStatusPicker = true }) {
+            Group {
+                if let status {
+                    StatusGlyph(shape: status.glyphShape)
+                } else if unrecognizedStatusRaw != nil {
+                    unknownGlyph
+                } else {
+                    Circle()
+                        .strokeBorder(BVColor.fgFaint, style: StrokeStyle(lineWidth: 1, dash: [2, 1.4]))
+                }
             }
-            .modifier(GoalFlatRowChrome(isSelected: isSelected))
+            .statusGlyphHitBox(hover: statusHover)
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("VerticalTabsSidebar.Goals.statusRow")
+        .onHover { statusHover = $0 }
+        .panelPopover(isPresented: $showStatusPicker, alignment: .leading) {
+            OptionPicker(
+                current: status,
+                ordered: BrainGoalStatus.allCases,
+                title: String(localized: "task.picker.status.title", defaultValue: "Change status"),
+                label: { $0.localizedLabel },
+                glyph: { StatusGlyph(shape: $0.glyphShape) },
+                onSelect: { selected in
+                    if let selected { onChangeStatus(selected) }
+                    showStatusPicker = false
+                }
+            )
+        }
+    }
+
+    private var unknownGlyph: some View {
+        ZStack {
+            Circle().fill(BVColor.fgFaint.opacity(0.3))
+            Text("?")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(BVColor.fgMute)
+        }
     }
 }
 
@@ -166,83 +191,6 @@ private func goalDuePillColors(for kind: GoalDuePillKind) -> (Color, Color) {
         return (Color(nsColor: .systemOrange), Color(nsColor: .systemOrange).opacity(0.18))
     case .danger:
         return (Color(nsColor: .systemRed), Color(nsColor: .systemRed).opacity(0.18))
-    }
-}
-
-private struct GoalFlatRowChrome: ViewModifier {
-    let isSelected: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .padding(.leading, GoalsDesignTokens.rowHorizontalPadding + GoalsDesignTokens.flatRowLeadingInset)
-            .padding(.trailing, GoalsDesignTokens.rowHorizontalPadding)
-            .frame(height: GoalsDesignTokens.rowHeight)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                isSelected ? Color.accentColor.opacity(GoalsDesignTokens.selectionAlpha) : Color.clear
-            )
-            .contentShape(Rectangle())
-    }
-}
-
-struct GoalCollapsibleHeader: View, Equatable {
-    let title: String
-    let count: Int
-    let isExpanded: Bool
-    let onToggle: () -> Void
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.title == rhs.title && lhs.count == rhs.count && lhs.isExpanded == rhs.isExpanded
-    }
-
-    var body: some View {
-        Button(action: onToggle) {
-            HStack(spacing: GoalsDesignTokens.groupHeaderCountSpacing) {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                    .frame(width: 10)
-                Text(title)
-                    .font(.system(size: GoalsDesignTokens.groupHeaderFontSize, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                    .textCase(.uppercase)
-                Text("\(count)")
-                    .font(.system(size: GoalsDesignTokens.groupHeaderFontSize, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                    .monospacedDigit()
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, GoalsDesignTokens.groupHeaderHorizontalPadding)
-            .padding(.top, GoalsDesignTokens.groupHeaderTopPadding)
-            .padding(.bottom, GoalsDesignTokens.groupHeaderBottomPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("VerticalTabsSidebar.Goals.sectionHeader")
-    }
-}
-
-struct GoalGroupHeader: View, Equatable {
-    let title: String
-    let count: Int
-
-    var body: some View {
-        HStack(spacing: GoalsDesignTokens.groupHeaderCountSpacing) {
-            Text(title)
-                .font(.system(size: GoalsDesignTokens.groupHeaderFontSize, weight: .semibold))
-                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                .textCase(.uppercase)
-            Text("\(count)")
-                .font(.system(size: GoalsDesignTokens.groupHeaderFontSize, weight: .semibold))
-                .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                .monospacedDigit()
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, GoalsDesignTokens.groupHeaderHorizontalPadding)
-        .padding(.top, GoalsDesignTokens.groupHeaderTopPadding)
-        .padding(.bottom, GoalsDesignTokens.groupHeaderBottomPadding)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

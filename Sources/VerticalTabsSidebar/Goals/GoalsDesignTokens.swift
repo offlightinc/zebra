@@ -27,7 +27,6 @@ enum GoalsDesignTokens {
 
     static let outlineChevronColumnWidth: CGFloat = 16
     static let outlineIndentPerLevel: CGFloat = 16
-    static let flatRowLeadingInset: CGFloat = 16
 
     static let selectionAlpha: Double = 0.18
 

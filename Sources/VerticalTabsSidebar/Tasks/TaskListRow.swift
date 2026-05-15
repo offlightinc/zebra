@@ -58,15 +58,7 @@ struct TaskListRow: View, Equatable {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 5)
-        .background(rowBackground)
-        .overlay(alignment: .leading) {
-            if isSelected {
-                Rectangle()
-                    .fill(BVColor.accent)
-                    .frame(width: 2)
-            }
-        }
-        .contentShape(Rectangle())
+        .sidebarRowChrome(isSelected: isSelected, isHovered: rowHover)
         .onTapGesture { onOpen(task) }
         .onHover { rowHover = $0 }
         // HTML positionPopover:
@@ -83,15 +75,6 @@ struct TaskListRow: View, Equatable {
                 showPriorityPicker = true
             }
         }
-    }
-
-    private var rowBackground: Color {
-        // HTML: `.item.selected { background: selected-bg; }`
-        //       `.item:hover { background: rgba(0,0,0,0.025); }`
-        // selected가 hover보다 우선.
-        if isSelected { return BVColor.accent.opacity(0.18) }
-        if rowHover { return BVColor.bgHover }
-        return Color.clear
     }
 
     private var isCompleted: Bool {
@@ -116,9 +99,7 @@ struct TaskListRow: View, Equatable {
                         .strokeBorder(BVColor.fgFaint, style: StrokeStyle(lineWidth: 1, dash: [2, 1.4]))
                 }
             }
-            .frame(width: 14, height: 14)
-            .scaleEffect(statusHover ? 1.08 : 1.0)
-            .contentShape(Rectangle())
+            .statusGlyphHitBox(hover: statusHover)
         }
         .buttonStyle(.plain)
         .onHover { statusHover = $0 }

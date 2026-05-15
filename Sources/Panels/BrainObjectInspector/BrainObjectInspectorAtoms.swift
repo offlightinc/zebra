@@ -237,12 +237,22 @@ struct EmptyValue: View {
 
 // MARK: - Status glyph
 
-/// Linear-style status disc. Each state gets a distinct silhouette so
-/// status is legible at 12pt even without color. `status: nil`은 frontmatter에
-/// 값이 있지만 canonical raw가 아닐 때(예: 필터의 `__unrecognized__` 행)용 —
-/// fgFaint outlined circle 한 모양으로 통일.
+/// Linear-style status disc. 시각은 `StatusGlyphShape` 가 결정 — 도메인
+/// (Task / Goal) 은 자기 `glyphShape` 로 변환해서 넘겨준다. `shape == .unknown`
+/// 은 schema 위반값 / 키 누락 placeholder.
 struct StatusGlyph: View {
-    let status: BrainTaskStatus?
+    let shape: StatusGlyphShape
+
+    init(shape: StatusGlyphShape) {
+        self.shape = shape
+    }
+
+    /// 호환성 init — 기존 `StatusGlyph(status:)` 호출처를 한꺼번에 안 바꿔도
+    /// 동작하도록 두 시그너처 유지. 점진적으로 호출부가 shape 기반으로 전환되면
+    /// 이 init 삭제 가능.
+    init(status: BrainTaskStatus?) {
+        self.shape = status?.glyphShape ?? .unknown
+    }
 
     var body: some View {
         Canvas { ctx, size in
@@ -250,44 +260,37 @@ struct StatusGlyph: View {
             let r = s / 2
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
             let circleRect = CGRect(x: center.x - r + 1, y: center.y - r + 1, width: s - 2, height: s - 2)
+            let color = shape.tint
 
-            guard let status else {
-                ctx.stroke(Path(ellipseIn: circleRect), with: .color(BVColor.fgFaint), lineWidth: 1.2)
-                return
-            }
-
-            let color = nsColor(for: status)
-
-            switch status {
-            case .backlog:
-                // HTML: stroke gray dasharray 2 2 — "아직 시작 전" 의미.
+            switch shape {
+            case .unknown:
+                ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
+            case .dashedCircle:
                 ctx.stroke(Path(ellipseIn: circleRect), with: .color(color),
                            style: StrokeStyle(lineWidth: 1.2, dash: [2, 2]))
-            case .todo:
-                // HTML: solid gray stroke 원. 점선이 아니다.
+            case .openCircle:
                 ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
-            case .inprogress:
+            case .halfFilled:
                 ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
                 var fill = Path()
                 fill.move(to: center)
                 fill.addArc(center: center, radius: r - 1, startAngle: .degrees(-90), endAngle: .degrees(90), clockwise: false)
                 fill.closeSubpath()
                 ctx.fill(fill, with: .color(color))
-            case .blocked:
+            case .blockedCircle:
                 ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
                 var line = Path()
                 let inset: CGFloat = 3
                 line.move(to: CGPoint(x: circleRect.minX + inset, y: center.y))
                 line.addLine(to: CGPoint(x: circleRect.maxX - inset, y: center.y))
                 ctx.stroke(line, with: .color(color), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
-            case .waiting:
+            case .waitingDots:
                 ctx.fill(Path(ellipseIn: circleRect), with: .color(color))
                 for dx in [-2.4, 0.0, 2.4] {
                     let dot = CGRect(x: center.x + CGFloat(dx) - 0.8, y: center.y - 0.8, width: 1.6, height: 1.6)
                     ctx.fill(Path(ellipseIn: dot), with: .color(Color(nsColor: .black).opacity(0.85)))
                 }
-            case .done:
-                // HTML: fill blue + 흰색 체크. 어두운 체크 X.
+            case .checkFilled:
                 ctx.fill(Path(ellipseIn: circleRect), with: .color(color))
                 var check = Path()
                 check.move(to: CGPoint(x: center.x - 2.4, y: center.y + 0.0))
@@ -295,24 +298,13 @@ struct StatusGlyph: View {
                 check.addLine(to: CGPoint(x: center.x + 2.4, y: center.y - 1.6))
                 ctx.stroke(check, with: .color(.white),
                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
-            case .canceled:
+            case .canceledBar:
                 ctx.fill(Path(ellipseIn: circleRect), with: .color(color))
                 var line = Path()
                 line.move(to: CGPoint(x: center.x - 2.5, y: center.y))
                 line.addLine(to: CGPoint(x: center.x + 2.5, y: center.y))
                 ctx.stroke(line, with: .color(Color(nsColor: .black).opacity(0.85)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
             }
-        }
-    }
-
-    private func nsColor(for status: BrainTaskStatus) -> Color {
-        switch status {
-        case .backlog, .todo: return BVColor.statusTodo
-        case .inprogress:     return BVColor.statusDoing
-        case .blocked:        return BVColor.statusBlocked
-        case .waiting:        return BVColor.statusWaiting
-        case .done:           return BVColor.statusCompleted
-        case .canceled:       return BVColor.statusCanceled
         }
     }
 }
@@ -721,29 +713,9 @@ extension View {
 
 // MARK: - Editable Goal status pill
 
-/// Visual glyph for a `BrainGoalStatus`. Reuses `StatusGlyph`'s `BrainTaskStatus`
-/// rendering via a small mapping so the editable Goal pill matches the
-/// read-only Task pill style.
-private func glyphMapping(_ s: BrainGoalStatus) -> BrainTaskStatus {
-    switch s {
-    case .active: return .inprogress
-    case .blocked: return .blocked
-    case .draft: return .todo
-    case .completed: return .done
-    case .archived: return .canceled
-    }
-}
-
-private func goalStatusLabel(_ s: BrainGoalStatus) -> String {
-    switch s {
-    case .active: return String(localized: "brain.goal.status.active", defaultValue: "Active")
-    case .blocked: return String(localized: "brain.goal.status.blocked", defaultValue: "Blocked")
-    case .draft: return String(localized: "brain.goal.status.draft", defaultValue: "Draft")
-    case .completed: return String(localized: "brain.goal.status.completed", defaultValue: "Completed")
-    case .archived: return String(localized: "brain.goal.status.archived", defaultValue: "Archived")
-    }
-}
-
+/// `BrainGoalStatus` 의 시각 매핑은 `BrainGoalStatus.glyphShape` 가 책임진다
+/// (`StatusGlyphShape.swift` 참고). 옛 `glyphMapping` private 어댑터는
+/// 옵션 D 채택으로 제거됨 — StatusGlyph 가 shape 를 직접 받는다.
 struct EditableGoalStatusPill: View {
     let value: BrainGoalStatus?
     let onChange: (BrainGoalStatus?) -> Void
@@ -754,8 +726,8 @@ struct EditableGoalStatusPill: View {
         Button(action: { isPresented = true }) {
             HStack(spacing: 5) {
                 if let value {
-                    StatusGlyph(status: glyphMapping(value)).frame(width: 12, height: 12)
-                    Text(goalStatusLabel(value))
+                    StatusGlyph(shape: value.glyphShape).frame(width: 12, height: 12)
+                    Text(value.localizedLabel)
                         .font(.system(size: 11.5))
                         .foregroundColor(BVColor.fg)
                 } else {
@@ -775,9 +747,9 @@ struct EditableGoalStatusPill: View {
                 current: value,
                 ordered: BrainGoalStatus.allCases,
                 title: String(localized: "task.picker.status.title", defaultValue: "Change status"),
-                label: { goalStatusLabel($0) },
+                label: { $0.localizedLabel },
                 glyph: { status in
-                    StatusGlyph(status: glyphMapping(status))
+                    StatusGlyph(shape: status.glyphShape)
                 },
                 onSelect: { selected in
                     if let selected, selected != value {
@@ -787,7 +759,7 @@ struct EditableGoalStatusPill: View {
                 }
             )
         }
-        .accessibilityLabel(Text(value.map(goalStatusLabel) ?? String(localized: "brain.editable.setStatus", defaultValue: "Set status...")))
+        .accessibilityLabel(Text(value?.localizedLabel ?? String(localized: "brain.editable.setStatus", defaultValue: "Set status...")))
     }
 }
 

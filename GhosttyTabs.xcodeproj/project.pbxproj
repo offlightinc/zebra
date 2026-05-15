@@ -61,7 +61,10 @@
 		5B5B0032A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskFileListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0032A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFileListStore.swift */; };
 		5B5B0033A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0033A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListViewModel.swift */; };
 		5B5B0034A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0034A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListRow.swift */; };
-		5B5B0035A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskGroupHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0035A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskGroupHeader.swift */; };
+		5B5B0035A1B2C3D4E5F60711 /* VerticalTabsSidebar/Shared/SidebarSectionHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0035A1B2C3D4E5F60710 /* VerticalTabsSidebar/Shared/SidebarSectionHeader.swift */; };
+		5B5B0055A1B2C3D4E5F60711 /* VerticalTabsSidebar/Shared/SidebarRowChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0055A1B2C3D4E5F60710 /* VerticalTabsSidebar/Shared/SidebarRowChrome.swift */; };
+		5B5B0056A1B2C3D4E5F60711 /* VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0056A1B2C3D4E5F60710 /* VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift */; };
+		5B5B0057A1B2C3D4E5F60711 /* Panels/BrainObjectInspector/StatusGlyphShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0057A1B2C3D4E5F60710 /* Panels/BrainObjectInspector/StatusGlyphShape.swift */; };
 		5B5B0036A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0036A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListToolbar.swift */; };
 		5B5B0037A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskFilterChipView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0037A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFilterChipView.swift */; };
 		5B5B0038A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0038A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListView.swift */; };
@@ -608,7 +611,10 @@
 		5B5B0032A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFileListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskFileListStore.swift; sourceTree = "<group>"; };
 		5B5B0033A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskListViewModel.swift; sourceTree = "<group>"; };
 		5B5B0034A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskListRow.swift; sourceTree = "<group>"; };
-		5B5B0035A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskGroupHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskGroupHeader.swift; sourceTree = "<group>"; };
+		5B5B0035A1B2C3D4E5F60710 /* VerticalTabsSidebar/Shared/SidebarSectionHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Shared/SidebarSectionHeader.swift; sourceTree = "<group>"; };
+		5B5B0055A1B2C3D4E5F60710 /* VerticalTabsSidebar/Shared/SidebarRowChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Shared/SidebarRowChrome.swift; sourceTree = "<group>"; };
+		5B5B0056A1B2C3D4E5F60710 /* VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift; sourceTree = "<group>"; };
+		5B5B0057A1B2C3D4E5F60710 /* Panels/BrainObjectInspector/StatusGlyphShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/BrainObjectInspector/StatusGlyphShape.swift; sourceTree = "<group>"; };
 		5B5B0036A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskListToolbar.swift; sourceTree = "<group>"; };
 		5B5B0037A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFilterChipView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskFilterChipView.swift; sourceTree = "<group>"; };
 		5B5B0038A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/Tasks/TaskListView.swift; sourceTree = "<group>"; };
@@ -1241,7 +1247,10 @@
 				5B5B0032A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFileListStore.swift */,
 				5B5B0033A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListViewModel.swift */,
 				5B5B0034A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListRow.swift */,
-				5B5B0035A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskGroupHeader.swift */,
+				5B5B0035A1B2C3D4E5F60710 /* VerticalTabsSidebar/Shared/SidebarSectionHeader.swift */,
+				5B5B0055A1B2C3D4E5F60710 /* VerticalTabsSidebar/Shared/SidebarRowChrome.swift */,
+				5B5B0056A1B2C3D4E5F60710 /* VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift */,
+				5B5B0057A1B2C3D4E5F60710 /* Panels/BrainObjectInspector/StatusGlyphShape.swift */,
 				5B5B0036A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListToolbar.swift */,
 				5B5B0037A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskFilterChipView.swift */,
 				5B5B0038A1B2C3D4E5F60710 /* VerticalTabsSidebar/Tasks/TaskListView.swift */,
@@ -1937,7 +1946,10 @@
 				5B5B0032A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskFileListStore.swift in Sources */,
 				5B5B0033A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListViewModel.swift in Sources */,
 				5B5B0034A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListRow.swift in Sources */,
-				5B5B0035A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskGroupHeader.swift in Sources */,
+				5B5B0035A1B2C3D4E5F60711 /* VerticalTabsSidebar/Shared/SidebarSectionHeader.swift in Sources */,
+				5B5B0055A1B2C3D4E5F60711 /* VerticalTabsSidebar/Shared/SidebarRowChrome.swift in Sources */,
+				5B5B0056A1B2C3D4E5F60711 /* VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift in Sources */,
+				5B5B0057A1B2C3D4E5F60711 /* Panels/BrainObjectInspector/StatusGlyphShape.swift in Sources */,
 				5B5B0036A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListToolbar.swift in Sources */,
 				5B5B0037A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskFilterChipView.swift in Sources */,
 				5B5B0038A1B2C3D4E5F60711 /* VerticalTabsSidebar/Tasks/TaskListView.swift in Sources */,

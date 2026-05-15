@@ -30,6 +30,18 @@ struct GoalsListView: View {
             onSelectFile: onSelectFile,
             onPickerSelect: { [weak viewState] picker in
                 viewState?.picker = picker
+            },
+            onChangeStatus: { [weak store] entry, newStatus in
+                guard let store else { return }
+                // Optimistic: store 의 entry 를 즉시 갱신 → 사이드바 UI 가 watcher
+                // 재파싱 라운드트립 없이 반영됨. unrecognizedStatusRaw 도 같이
+                // 클리어 (picker 로 선택한 valid 값이라 이전 raw 무효).
+                store.replace(entry.with(status: .some(newStatus), unrecognizedStatusRaw: .some(nil)))
+                BrainFrontmatterWriter.applyScalar(
+                    at: entry.absolutePath,
+                    key: "status",
+                    value: newStatus.rawValue
+                )
             }
         )
     }
@@ -42,6 +54,7 @@ private struct GoalsListBody: View {
     let snapshot: GoalsListSnapshot
     let onSelectFile: (String) -> Void
     let onPickerSelect: (GoalsViewState.Picker) -> Void
+    let onChangeStatus: (GoalEntry, BrainGoalStatus) -> Void
 
     @State private var collapsedOutlineIds: Set<String> = []
     @State private var collapsedCadenceSections: Set<GoalCadence> = []
@@ -177,9 +190,9 @@ private struct GoalsListBody: View {
                 entries: snapshot.entries,
                 activePaths: snapshot.activePaths,
                 collapsedSections: $collapsedStatusSections,
-                onSelectFile: onSelectFile
+                onSelectFile: onSelectFile,
+                onChangeStatus: onChangeStatus
             )
-            .equatable()
         }
     }
 
@@ -296,10 +309,13 @@ private struct OutlineLayout: View, Equatable {
     var body: some View {
         let tree = GoalOutlineTree.build(entries: entries)
         let visibleItems = flatten(tree: tree, collapsedIds: collapsedIds)
-        GoalGroupHeader(
-            title: String(localized: "verticalTabsSidebar.goals.outline.rootTitle", defaultValue: "Goals"),
-            count: entries.count
+        SidebarSectionHeader(
+            label: String(localized: "verticalTabsSidebar.goals.outline.rootTitle", defaultValue: "Goals"),
+            count: entries.count,
+            isCollapsed: false,
+            onToggle: {}
         )
+        .equatable()
         ForEach(visibleItems, id: \.entry.id) { item in
             GoalOutlineRow(
                 displayName: item.entry.displayName,
@@ -315,7 +331,6 @@ private struct OutlineLayout: View, Equatable {
                     onSelectFile(path)
                 }
             )
-            .equatable()
         }
     }
 
@@ -404,10 +419,10 @@ private struct CadenceLayout: View, Equatable {
         ForEach(GoalCadence.allCases, id: \.self) { cadence in
             let bucket = buckets[cadence] ?? []
             let isExpanded = !collapsedSections.contains(cadence)
-            GoalCollapsibleHeader(
-                title: cadence.label,
+            SidebarSectionHeader(
+                label: cadence.label,
                 count: bucket.count,
-                isExpanded: isExpanded,
+                isCollapsed: !isExpanded,
                 onToggle: { toggle(cadence) }
             )
             .equatable()
@@ -422,7 +437,6 @@ private struct CadenceLayout: View, Equatable {
                             onSelectFile(path)
                         }
                     )
-                    .equatable()
                 }
             }
         }
@@ -461,46 +475,69 @@ private struct CadenceLayout: View, Equatable {
 
 // MARK: - Status
 
-private struct StatusLayout: View, Equatable {
+private struct StatusLayout: View {
     let entries: [GoalEntry]
     let activePaths: Set<String>
     @Binding var collapsedSections: Set<BrainGoalStatus>
     let onSelectFile: (String) -> Void
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.entries == rhs.entries
-            && lhs.activePaths == rhs.activePaths
-            && lhs.collapsedSections == rhs.collapsedSections
-    }
+    let onChangeStatus: (GoalEntry, BrainGoalStatus) -> Void
 
     var body: some View {
         let buckets = bucketize(entries: entries)
         ForEach(BrainGoalStatus.allCases, id: \.self) { status in
-            let bucket = buckets[status] ?? []
+            let bucket = buckets.byStatus[status] ?? []
             let isExpanded = !collapsedSections.contains(status)
-            GoalCollapsibleHeader(
-                title: status.label,
+            SidebarSectionHeader(
+                label: status.label,
                 count: bucket.count,
-                isExpanded: isExpanded,
+                isCollapsed: !isExpanded,
                 onToggle: { toggle(status) }
             )
             .equatable()
             if isExpanded {
-                ForEach(bucket, id: \.id) { entry in
-                    GoalStatusRow(
-                        displayName: entry.displayName,
-                        milestoneDone: entry.milestoneDone,
-                        milestoneTotal: entry.milestoneTotal,
-                        isCompleted: entry.status == .completed,
-                        isSelected: activePaths.contains(entry.absolutePath),
-                        onTap: { [path = entry.absolutePath] in
-                            onSelectFile(path)
-                        }
-                    )
-                    .equatable()
+                // id: \.self — entry 의 어떤 필드든 (특히 status) 바뀌면
+                // 새 identity 가 되어 row 가 재생성됨. \.id (= absolutePath) 만
+                // 쓰면 status 변경 후에도 id 동일 → SwiftUI 가 row body re-eval 을
+                // skip → 글리프가 stale. TaskListView 와 동일 패턴.
+                ForEach(bucket, id: \.self) { entry in
+                    statusRow(for: entry)
                 }
             }
         }
+        // UNKNOWN bucket: schema 위반값 (unrecognizedStatusRaw) 또는 키 누락
+        // (entry.status == nil) entry 들. 사용자가 데이터 청소하라는 affordance.
+        // 디자인 결정: 펼침 디폴트, 토글 없음 (비-collapsible header).
+        if !buckets.unknown.isEmpty {
+            SidebarSectionHeader(
+                label: String(localized: "verticalTabsSidebar.goals.status.unknown", defaultValue: "UNKNOWN"),
+                count: buckets.unknown.count,
+                isCollapsed: false,
+                onToggle: {}
+            )
+            .equatable()
+            ForEach(buckets.unknown, id: \.self) { entry in
+                statusRow(for: entry)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func statusRow(for entry: GoalEntry) -> some View {
+        GoalStatusRow(
+            status: entry.status,
+            unrecognizedStatusRaw: entry.unrecognizedStatusRaw,
+            displayName: entry.displayName,
+            milestoneDone: entry.milestoneDone,
+            milestoneTotal: entry.milestoneTotal,
+            isCompleted: entry.status == .completed,
+            isSelected: activePaths.contains(entry.absolutePath),
+            onTap: { [path = entry.absolutePath] in
+                onSelectFile(path)
+            },
+            onChangeStatus: { newStatus in
+                onChangeStatus(entry, newStatus)
+            }
+        )
     }
 
     private func toggle(_ status: BrainGoalStatus) {
@@ -511,12 +548,21 @@ private struct StatusLayout: View, Equatable {
         }
     }
 
-    private func bucketize(entries: [GoalEntry]) -> [BrainGoalStatus: [GoalEntry]] {
-        var dict: [BrainGoalStatus: [GoalEntry]] = [:]
+    private struct BucketizedStatus {
+        var byStatus: [BrainGoalStatus: [GoalEntry]] = [:]
+        var unknown: [GoalEntry] = []
+    }
+
+    private func bucketize(entries: [GoalEntry]) -> BucketizedStatus {
+        var out = BucketizedStatus()
         for entry in entries {
-            dict[entry.status, default: []].append(entry)
+            if let status = entry.status {
+                out.byStatus[status, default: []].append(entry)
+            } else {
+                out.unknown.append(entry)
+            }
         }
-        return dict
+        return out
     }
 }
 
@@ -530,35 +576,43 @@ private func sampleEntries() -> [GoalEntry] {
     return [
         GoalEntry(absolutePath: "/p/g1.md", displayName: "Product revenue health diagnosis",
                   goalId: "G1", parentGoalId: nil,
-                  status: .active, cadence: .weekly, targetDate: dayOffset(48),
+                  status: .active, unrecognizedStatusRaw: nil,
+                  cadence: .weekly, targetDate: dayOffset(48),
                   milestoneDone: 4, milestoneTotal: 9),
         GoalEntry(absolutePath: "/p/g1-1.md", displayName: "Acquisition health",
                   goalId: "G1-1", parentGoalId: "G1",
-                  status: .active, cadence: .weekly, targetDate: dayOffset(18),
+                  status: .active, unrecognizedStatusRaw: nil,
+                  cadence: .weekly, targetDate: dayOffset(18),
                   milestoneDone: 2, milestoneTotal: 4),
         GoalEntry(absolutePath: "/p/g1-1-1.md", displayName: "Offlight Acquisition 진단",
                   goalId: "G1-1-1", parentGoalId: "G1-1",
-                  status: .completed, cadence: .daily, targetDate: dayOffset(-5),
+                  status: .completed, unrecognizedStatusRaw: nil,
+                  cadence: .daily, targetDate: dayOffset(-5),
                   milestoneDone: 3, milestoneTotal: 3),
         GoalEntry(absolutePath: "/p/g1-1-2.md", displayName: "Signup cliff 가설 검증",
                   goalId: "G1-1-2", parentGoalId: "G1-1",
-                  status: .active, cadence: .daily, targetDate: dayOffset(7),
+                  status: .active, unrecognizedStatusRaw: nil,
+                  cadence: .daily, targetDate: dayOffset(7),
                   milestoneDone: 1, milestoneTotal: 3),
         GoalEntry(absolutePath: "/p/g2.md", displayName: "Hire founding designer",
                   goalId: "G2", parentGoalId: nil,
-                  status: .active, cadence: .weekly, targetDate: dayOffset(93),
+                  status: .active, unrecognizedStatusRaw: nil,
+                  cadence: .weekly, targetDate: dayOffset(93),
                   milestoneDone: 2, milestoneTotal: 6),
         GoalEntry(absolutePath: "/p/g2-1.md", displayName: "포트폴리오 30 개 리뷰",
                   goalId: "G2-1", parentGoalId: "G2",
-                  status: .active, cadence: .weekly, targetDate: dayOffset(63),
+                  status: .active, unrecognizedStatusRaw: nil,
+                  cadence: .weekly, targetDate: dayOffset(63),
                   milestoneDone: 12, milestoneTotal: 30),
         GoalEntry(absolutePath: "/p/g3.md", displayName: "Daily writing habit",
                   goalId: "G3", parentGoalId: nil,
-                  status: .active, cadence: .daily, targetDate: nil,
+                  status: .active, unrecognizedStatusRaw: nil,
+                  cadence: .daily, targetDate: nil,
                   milestoneDone: 11, milestoneTotal: 14),
         GoalEntry(absolutePath: "/p/g4.md", displayName: "Q3 strategy memo",
                   goalId: "G4", parentGoalId: nil,
-                  status: .draft, cadence: .quarterly, targetDate: dayOffset(140),
+                  status: .draft, unrecognizedStatusRaw: nil,
+                  cadence: .quarterly, targetDate: dayOffset(140),
                   milestoneDone: 0, milestoneTotal: 5),
     ]
 }

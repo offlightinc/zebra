@@ -48,11 +48,30 @@ struct GoalEntry: VaultSubdirEntry {
     let displayName: String
     let goalId: String
     let parentGoalId: String?
-    let status: BrainGoalStatus
+    let status: BrainGoalStatus?
+    let unrecognizedStatusRaw: String?
     let cadence: GoalCadence
     let targetDate: Date?
     let milestoneDone: Int
     let milestoneTotal: Int
 
     var id: String { absolutePath }
+
+    func with(
+        status: BrainGoalStatus?? = nil,
+        unrecognizedStatusRaw: String?? = nil
+    ) -> GoalEntry {
+        GoalEntry(
+            absolutePath: absolutePath,
+            displayName: displayName,
+            goalId: goalId,
+            parentGoalId: parentGoalId,
+            status: status ?? self.status,
+            unrecognizedStatusRaw: unrecognizedStatusRaw ?? self.unrecognizedStatusRaw,
+            cadence: cadence,
+            targetDate: targetDate,
+            milestoneDone: milestoneDone,
+            milestoneTotal: milestoneTotal
+        )
+    }
 }

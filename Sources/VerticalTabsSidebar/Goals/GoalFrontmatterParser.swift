@@ -26,7 +26,14 @@ enum GoalFrontmatterParser {
         let goalId = stem
         let parentRaw = kv["parent_goal"]?.trimmedUnquoted
         let parent = parentRaw.map { goalIdStem(from: $0) }
-        let status = BrainGoalStatus(rawValue: (kv["status"]?.trimmedUnquoted ?? "").lowercased()) ?? .draft
+        let statusRaw = kv["status"]?.trimmedUnquoted
+        let statusLower = (statusRaw ?? "").lowercased()
+        let status: BrainGoalStatus? = statusRaw.flatMap { _ in BrainGoalStatus(rawValue: statusLower) }
+        // schema 위반값은 unrecognizedStatusRaw 에 보존. 키 자체가 없으면 raw 도 nil.
+        let unrecognizedStatusRaw: String? = {
+            guard let raw = statusRaw, !raw.isEmpty else { return nil }
+            return status == nil ? raw : nil
+        }()
         let cadenceRaw = kv["review_cadence"]?.trimmedUnquoted ?? ""
         let cadence = GoalCadence(rawValue: cadenceRaw.lowercased()) ?? .weekly
         let targetDate = parseTargetDate(kv["target_date"]?.trimmedUnquoted)
@@ -41,6 +48,7 @@ enum GoalFrontmatterParser {
             goalId: goalId,
             parentGoalId: (parent?.isEmpty == false) ? parent : nil,
             status: status,
+            unrecognizedStatusRaw: unrecognizedStatusRaw,
             cadence: cadence,
             targetDate: targetDate,
             milestoneDone: done,
