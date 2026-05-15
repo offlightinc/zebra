@@ -10,7 +10,7 @@ final class MarkdownPanel: Panel, ObservableObject {
     let panelType: PanelType = .markdown
 
     /// Absolute path to the markdown file being displayed.
-    let filePath: String
+    private(set) var filePath: String
 
     /// The workspace this panel belongs to.
     private(set) var workspaceId: UUID
@@ -103,6 +103,23 @@ final class MarkdownPanel: Panel, ObservableObject {
         _ = reason
         guard NotificationPaneFlashSettings.isEnabled() else { return }
         focusFlashToken += 1
+    }
+
+    func openFile(_ nextFilePath: String) {
+        let canonicalCurrent = (filePath as NSString).resolvingSymlinksInPath
+        let canonicalNext = (nextFilePath as NSString).resolvingSymlinksInPath
+        guard canonicalCurrent != canonicalNext else { return }
+
+        stopFileWatcher()
+        filePath = nextFilePath
+        displayTitle = (nextFilePath as NSString).lastPathComponent
+        parse = nil
+
+        loadFileContent()
+        startFileWatcher()
+        if isFileUnavailable && fileWatchSource == nil {
+            scheduleReattach(attempt: 1)
+        }
     }
 
     // MARK: - File I/O

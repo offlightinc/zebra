@@ -10505,6 +10505,48 @@ final class Workspace: Identifiable, ObservableObject {
         return newMarkdownSurface(inPane: paneId, filePath: filePath, focus: focus)
     }
 
+    /// Open a Markdown file from the vertical sidebar. If the selected tab in
+    /// the focused pane is already a MarkdownPanel, keep that tab and load the
+    /// new file into it. Terminals and other panel kinds still get a new
+    /// Markdown tab so user work is not overwritten.
+    @discardableResult
+    func openMarkdownFromSidebar(
+        inPane paneId: PaneID,
+        filePath: String,
+        focus: Bool = true
+    ) -> MarkdownPanel? {
+        let canonical = (filePath as NSString).resolvingSymlinksInPath
+        for (existingId, panel) in panels {
+            guard let markdown = panel as? MarkdownPanel else { continue }
+            if (markdown.filePath as NSString).resolvingSymlinksInPath == canonical {
+                if focus {
+                    focusPanel(existingId)
+                }
+                return markdown
+            }
+        }
+
+        if let selectedTab = bonsplitController.selectedTab(inPane: paneId),
+           let selectedPanelId = panelIdFromSurfaceId(selectedTab.id),
+           let markdown = panels[selectedPanelId] as? MarkdownPanel {
+            markdown.openFile(filePath)
+            panelTitles[selectedPanelId] = markdown.displayTitle
+            bonsplitController.updateTab(
+                selectedTab.id,
+                title: resolvedPanelTitle(panelId: selectedPanelId, fallback: markdown.displayTitle),
+                hasCustomTitle: panelCustomTitles[selectedPanelId] != nil
+            )
+            if focus {
+                focusPanel(selectedPanelId)
+            } else {
+                objectWillChange.send()
+            }
+            return markdown
+        }
+
+        return newMarkdownSurface(inPane: paneId, filePath: filePath, focus: focus)
+    }
+
     @discardableResult
     func newFilePreviewSurface(
         inPane paneId: PaneID,
