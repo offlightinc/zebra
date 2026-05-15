@@ -21,14 +21,6 @@ struct MarkdownPanelView: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var markdownFileListStore: MarkdownFileListStore
 
-    /// Tracks the chat-pill's active CLI session for this markdown panel.
-    /// Per plan decision #2 (마크다운 1개당 세션 1개) the lifetime is tied to
-    /// this view: when the panel goes away, the session reference is dropped.
-    /// Per plan decision #1 (Hybrid C) follow-ups against the same agent reuse
-    /// this terminal panel via `sendInput`; an agent change spawns a new split
-    /// and replaces this state.
-    @State private var pillSession: MarkdownChatPillSessionRef?
-
     var body: some View {
         Group {
             if panel.isFileUnavailable {
@@ -196,7 +188,7 @@ struct MarkdownPanelView: View {
         .overlay(alignment: .bottom) {
             MarkdownChatPill(
                 displayTitle: panel.displayTitle,
-                activeAgent: pillActiveAgent,
+                hasAgentPane: hasLiveChatCompanionPane,
                 onSubmit: { text, agent in
                     handlePillSubmit(text: text, agent: agent)
                 }
@@ -464,48 +456,15 @@ struct MarkdownPanelView: View {
 
     // MARK: - Chat pill — submit routing
 
-    /// Surface the active session's agent to the pill so it can render the
-    /// `session · <agent> · Follow up…` collapsed state. Returns nil when the
-    /// CLI pane was closed manually (plan decision #6 (a) — pill snaps back
-    /// to idle in that case).
-    fileprivate var pillActiveAgent: MarkdownPillAgent? {
-        guard let session = pillSession,
-              workspace.terminalPanel(for: session.terminalPanelId) != nil else {
-            return nil
-        }
-        return session.agent
+    /// Returns false when the remembered companion pane was closed or merged
+    /// away; submit then lazily recreates it next to this markdown panel.
+    fileprivate var hasLiveChatCompanionPane: Bool {
+        guard let paneId = panel.chatCompanionPaneId else { return false }
+        return workspace.bonsplitController.allPaneIds.contains(paneId)
     }
 
     fileprivate func handlePillSubmit(text: String, agent: MarkdownPillAgent) {
-        // Hybrid C: same agent + live pane → reuse it via sendInput. The text
-        // lands on whatever process owns the PTY (the agent if still running,
-        // otherwise the underlying shell — same as if the user had typed it).
-        // Follow-up intentionally does not append Return; agent TUIs disagree
-        // about whether synthetic Return submits or inserts a newline.
-        if let session = pillSession,
-           session.agent == agent,
-           let existing = workspace.terminalPanel(for: session.terminalPanelId) {
-            // Follow-up = the user's typed text, sent as-is. No trailing
-            // Return: agent TUIs disagree about whether a synthetic \r
-            // submits or inserts a newline, so we let the user press
-            // Enter themselves once it lands in the pane.
-            existing.sendInput(text)
-            return
-        }
-
-        // Open a plain interactive shell pane (no initialCommand) — exactly
-        // what you'd get from `cmd+T` in a regular terminal app. The CLI is
-        // then launched by *typing* into that shell, which means the agent
-        // exits drop the user back at the shell prompt instead of nuking
-        // the entire pane (the prior `initialCommand: "...exec codex"` path
-        // would close the pane the moment codex exited for any reason).
-        guard let newPanel = workspace.newTerminalSplit(
-            from: panel.id,
-            orientation: .horizontal,
-            initialCommand: nil
-        ) else { return }
-
-        pillSession = MarkdownChatPillSessionRef(agent: agent, terminalPanelId: newPanel.id)
+        guard let newPanel = createAgentTerminalTab() else { return }
 
         let launchEnvironmentReady = MarkdownChatPillCommand.prepareLaunchEnvironment(
             agent: agent,
@@ -526,6 +485,29 @@ struct MarkdownPanelView: View {
             startup: startupLine,
             to: newPanel
         )
+    }
+
+    /// Create a fresh agent terminal for every prompt. The first prompt makes
+    /// a companion split; subsequent prompts add tabs to that remembered pane.
+    private func createAgentTerminalTab() -> TerminalPanel? {
+        if let paneId = panel.chatCompanionPaneId,
+           workspace.bonsplitController.allPaneIds.contains(paneId),
+           let panel = workspace.newTerminalSurface(
+               inPane: paneId,
+               focus: true,
+               initialCommand: nil
+           ) {
+            return panel
+        }
+
+        panel.chatCompanionPaneId = nil
+        guard let newPanel = workspace.newTerminalSplit(
+            from: panel.id,
+            orientation: .horizontal,
+            initialCommand: nil
+        ) else { return nil }
+        panel.chatCompanionPaneId = workspace.paneId(forPanelId: newPanel.id)
+        return newPanel
     }
 
     /// Drive the new pane like a fast typist: when the Ghostty surface is
@@ -580,15 +562,6 @@ struct MarkdownPanelView: View {
             #endif
         }
     }
-}
-
-/// Pill-side reference to a live CLI session. `terminalPanelId` points at the
-/// `TerminalPanel` in the workspace registry — we resolve it on every use so
-/// that if the user closes that pane the lookup returns nil and we fall back
-/// to spawning a new split (plan decision #6 (a)).
-fileprivate struct MarkdownChatPillSessionRef: Equatable {
-    let agent: MarkdownPillAgent
-    let terminalPanelId: UUID
 }
 
 private struct MarkdownPointerObserver: NSViewRepresentable {

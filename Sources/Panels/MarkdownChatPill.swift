@@ -3,9 +3,9 @@ import SwiftUI
 
 // Floating chat pill overlay for MarkdownPanelView.
 //
-// Three visual states wired through `isExpanded` × `activeAgent`:
-//   - idle (no session, collapsed): "Ask about this doc"
-//   - session (CLI pane live, collapsed): "session · agent · Follow up…"
+// Three visual states wired through `isExpanded` × `hasAgentPane`:
+//   - idle (no companion pane, collapsed): "Ask about this doc"
+//   - companion (agent pane live, collapsed): "agent pane · New session…"
 //   - expanded: textfield + chips + agent dropdown + slash skills picker
 // Submit / agent change routing is owned by the parent
 // `MarkdownPanelView` via the `onSubmit` closure; the pill stays
@@ -20,10 +20,9 @@ enum MarkdownPillAgent: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// The CLI binary name expected on $PATH. We launch the interactive REPL
-    /// of this binary in the spawned terminal and then inject the user's
-    /// prompt via socket send_text. See `MarkdownChatPillCommand` for the
-    /// full launch + first-prompt protocol.
+    /// The CLI binary name expected on $PATH. See
+    /// `MarkdownChatPillCommand` for the shell launch + first-prompt
+    /// protocol.
     var binaryName: String {
         switch self {
         case .codex: return "codex"
@@ -115,11 +114,11 @@ enum MarkdownPillPalette {
 
 struct MarkdownChatPill: View {
     let displayTitle: String
-    /// Non-nil when a CLI session is currently attached to this markdown.
-    /// Drives the collapsed "session · agent · Follow up…" rendering and
-    /// is set by the parent after a submit kicks off a split pane.
-    let activeAgent: MarkdownPillAgent?
-    /// Parent handles the actual newTerminalSplit / sendText routing.
+    /// True when this markdown already has a companion pane for agent tabs.
+    /// Submit still creates a fresh terminal tab; this only changes the
+    /// collapsed affordance.
+    let hasAgentPane: Bool
+    /// Parent handles the actual split/tab creation and terminal input.
     /// The pill just emits the user's intent.
     let onSubmit: (_ text: String, _ agent: MarkdownPillAgent) -> Void
 
@@ -143,8 +142,6 @@ struct MarkdownChatPill: View {
     /// existing in the view tree.
     @State private var slashKeyMonitor: Any?
     @FocusState private var textFieldFocused: Bool
-
-    private var hasActiveSession: Bool { activeAgent != nil }
 
     /// True while the user is mid-slash — input begins with `/` and has no
     /// whitespace yet, so we can offer skill completions. Once they type a
@@ -195,8 +192,8 @@ struct MarkdownChatPill: View {
                         insertion: .opacity.combined(with: .move(edge: .bottom)),
                         removal: .opacity
                     ))
-            } else if hasActiveSession {
-                sessionView
+            } else if hasAgentPane {
+                companionPaneView
                     .transition(.opacity)
             } else {
                 collapsedView
@@ -204,7 +201,7 @@ struct MarkdownChatPill: View {
             }
         }
         .animation(.easeOut(duration: 0.22), value: isExpanded)
-        .animation(.easeOut(duration: 0.22), value: hasActiveSession)
+        .animation(.easeOut(duration: 0.22), value: hasAgentPane)
         .frame(maxWidth: 720)
         // Lazy-load the gbrain manifest the first time the user types a
         // slash. Empty array is a valid result (gbrain not installed) — it
@@ -219,17 +216,46 @@ struct MarkdownChatPill: View {
         }
         .onAppear { installSlashKeyMonitor() }
         .onDisappear { removeSlashKeyMonitor() }
+        // Outside-click → collapse. We can't intercept the actual mouse
+        // event without bounds gymnastics, so we treat "TextField lost
+        // first-responder" as the proxy. Transient focus loss (agent
+        // popover, skills button re-grabbing focus on the next runloop
+        // tick) is absorbed by deferring 0.08s and re-checking the
+        // current focus + popover state.
+        .onChange(of: textFieldFocused) { _, focused in
+            guard isExpanded, !focused else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                guard isExpanded, !textFieldFocused, !agentMenuOpen else { return }
+                isExpanded = false
+            }
+        }
     }
 
     private func expandFromCollapsed() {
-        // When re-opening after a session is already active, default the
-        // dropdown to the session's agent so a quick follow-up doesn't
-        // accidentally spawn a second split via the agent-change path.
-        if let activeAgent {
-            agent = activeAgent
-        }
         isExpanded = true
-        DispatchQueue.main.async { textFieldFocused = true }
+        DispatchQueue.main.async {
+            textFieldFocused = true
+            // macOS TextField selects-all on first-responder grant; when
+            // we're re-expanding with preserved text the user expects a
+            // caret at the end, not a wholesale selection that the next
+            // keystroke would destroy.
+            DispatchQueue.main.async { moveCaretToEnd() }
+        }
+    }
+
+    /// Move the focused NSTextView's caret to the end of its content,
+    /// collapsing any selection. Safe no-op when our pill isn't the
+    /// first responder.
+    ///
+    /// `textFieldFocused` guards the multi-pill case: if the user
+    /// clicked into a different pill in the same window before our
+    /// deferred dispatch fired, that pill now owns first-responder and
+    /// we'd otherwise mutate its selection.
+    private func moveCaretToEnd() {
+        guard textFieldFocused,
+              let textView = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
+        let end = (textView.string as NSString).length
+        textView.setSelectedRange(NSRange(location: end, length: 0))
     }
 
     private func submit() {
@@ -331,23 +357,17 @@ struct MarkdownChatPill: View {
         .onTapGesture { expandFromCollapsed() }
     }
 
-    // MARK: - Session (collapsed, with active CLI pane)
+    // MARK: - Companion pane (collapsed, with agent tab target)
 
-    private var sessionView: some View {
+    private var companionPaneView: some View {
         HStack(spacing: 10) {
             HStack(spacing: 6) {
                 Circle()
                     .fill(MarkdownPillPalette.accent)
                     .frame(width: 6, height: 6)
-                Text(String(localized: "markdownChat.pill.session.label", defaultValue: "session"))
+                Text(String(localized: "markdownChat.pill.agentPane.label", defaultValue: "agent pane"))
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(MarkdownPillPalette.text)
-                Text("·")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(MarkdownPillPalette.textMuted)
-                Text(activeAgent?.label ?? "")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(MarkdownPillPalette.textMuted)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -355,7 +375,7 @@ struct MarkdownChatPill: View {
             .overlay(Capsule().stroke(MarkdownPillPalette.accent.opacity(0.30), lineWidth: 1))
             .clipShape(Capsule())
 
-            Text(String(localized: "markdownChat.pill.followUpPrompt", defaultValue: "Follow up…"))
+            Text(String(localized: "markdownChat.pill.newSessionPrompt", defaultValue: "New session…"))
                 .font(.system(size: 13.5))
                 .foregroundColor(MarkdownPillPalette.textDim)
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Bonsplit
 
 /// A panel that renders a markdown file with live file-watching.
 /// When the file changes on disk, the content is automatically reloaded.
@@ -33,6 +34,11 @@ final class MarkdownPanel: Panel, ObservableObject {
 
     /// Whether the file has been deleted or is unreadable.
     @Published private(set) var isFileUnavailable: Bool = false
+
+    /// Pane where the markdown chat pill accumulates agent terminal tabs.
+    /// Stored on the panel model instead of the SwiftUI view so split layout
+    /// reparenting does not lose the companion-pane reference.
+    @Published var chatCompanionPaneId: PaneID?
 
     /// Token incremented to trigger focus flash animation.
     @Published private(set) var focusFlashToken: Int = 0
