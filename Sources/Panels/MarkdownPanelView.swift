@@ -503,6 +503,11 @@ struct MarkdownPanelView: View {
 
         pillSession = MarkdownChatPillSessionRef(agent: agent, terminalPanelId: newPanel.id)
 
+        MarkdownChatPillCommand.prepareLaunchEnvironment(
+            agent: agent,
+            markdownFilePath: panel.filePath
+        )
+
         let startupLine = MarkdownChatPillCommand.shellStartupLine(
             agent: agent,
             markdownFilePath: panel.filePath,

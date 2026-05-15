@@ -71,6 +71,19 @@ enum MarkdownChatPillCommand {
     ///
     /// The first prompt is passed through each agent's initial-prompt path
     /// instead of being injected into the agent TUI after startup.
+    static func prepareLaunchEnvironment(agent: MarkdownPillAgent, markdownFilePath: String) {
+        let parent = (markdownFilePath as NSString).deletingLastPathComponent
+        let cwd = parent.isEmpty ? "/" : parent
+        switch agent {
+        case .codex:
+            break
+        case .claude:
+            markClaudeProjectTrusted(cwd: cwd)
+        case .gemini:
+            break
+        }
+    }
+
     static func shellStartupLine(
         agent: MarkdownPillAgent,
         markdownFilePath: String,
@@ -106,7 +119,7 @@ enum MarkdownChatPillCommand {
         case .claude:
             return "cd \(shellQuote(cwd)) && claude --append-system-prompt \(shellQuote(hiddenContextInstruction)) \(shellQuote(promptArgument))"
         case .gemini:
-            return "cd \(shellQuote(cwd)) && gemini --prompt-interactive \(shellQuote(visibleContextPrompt))"
+            return "cd \(shellQuote(cwd)) && gemini --skip-trust --prompt-interactive \(shellQuote(visibleContextPrompt))"
         }
     }
 
@@ -126,6 +139,33 @@ enum MarkdownChatPillCommand {
             .replacingOccurrences(of: "\r\n", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
+    }
+
+    private static func markClaudeProjectTrusted(cwd: String) {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
+        var root = readJSONObject(at: url)
+        var projects = root["projects"] as? [String: Any] ?? [:]
+        var project = projects[cwd] as? [String: Any] ?? [:]
+        project["hasTrustDialogAccepted"] = true
+        projects[cwd] = project
+        root["projects"] = projects
+        writeJSONObject(root, to: url)
+    }
+
+    private static func readJSONObject(at url: URL) -> [String: Any] {
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        return object
+    }
+
+    private static func writeJSONObject(_ object: [String: Any], to url: URL) {
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else {
+            return
+        }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
     }
 }
 
