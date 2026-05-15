@@ -161,12 +161,12 @@ private struct GoalsListBody: View {
         }
     }
 
-    // `.equatable()` lets SwiftUI skip body re-eval (and the build/bucketize work
-    // inside each layout) when the value inputs are unchanged. Mirrors cmux's
-    // existing per-row Equatable shim pattern (see TabItemView in ContentView.swift
-    // and the rows in SessionIndexView.swift). Closures and Bindings stay
-    // capture-by-reference and are excluded from equality on purpose — they only
-    // fire actions, never participate in identity.
+    // Do not wrap whole layout structs in `.equatable()` inside LazyVStack.
+    // On macOS Tahoe 26.4 this caused stale child measurements and visible row
+    // gaps (6~8pt between rows in cadence/outline modes). StatusLayout was the
+    // unaffected mode precisely because it had no `.equatable()` — that
+    // difference, not the ForEach id policy, was the root cause.
+    // Keep EquatableView only on small leaf views such as SidebarSectionHeader.
     @ViewBuilder
     private var layoutBody: some View {
         switch snapshot.picker {
@@ -177,7 +177,6 @@ private struct GoalsListBody: View {
                 collapsedIds: $collapsedOutlineIds,
                 onSelectFile: onSelectFile
             )
-            .equatable()
         case .cadence:
             CadenceLayout(
                 entries: visibleEntries,
@@ -185,7 +184,6 @@ private struct GoalsListBody: View {
                 collapsedSections: $collapsedCadenceSections,
                 onSelectFile: onSelectFile
             )
-            .equatable()
         case .status:
             StatusLayout(
                 entries: snapshot.entries,
