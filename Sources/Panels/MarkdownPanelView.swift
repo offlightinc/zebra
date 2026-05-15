@@ -485,7 +485,11 @@ struct MarkdownPanelView: View {
         if let session = pillSession,
            session.agent == agent,
            let existing = workspace.terminalPanel(for: session.terminalPanelId) {
-            existing.sendInput(MarkdownChatPillCommand.followUpPrompt(userPrompt: text))
+            // Follow-up = the user's typed text, sent as-is. No trailing
+            // Return: agent TUIs disagree about whether a synthetic \r
+            // submits or inserts a newline, so we let the user press
+            // Enter themselves once it lands in the pane.
+            existing.sendInput(text)
             return
         }
 
@@ -564,6 +568,16 @@ struct MarkdownPanelView: View {
             guard !resolved else { return }
             resolved = true
             cleanup()
+            #if DEBUG
+            // 8s without a `terminalSurfaceDidBecomeReady` for this pane
+            // means the startup line never reached the CLI — the prompt is
+            // silently lost without this trace. Log so we can grep for the
+            // pattern in the debug log if a user reports "agent never
+            // answered my first prompt".
+            cmuxDebugLog(
+                "markdown.chatPill.startup.timeout panel=\(terminalPanel.id.uuidString.prefix(5))"
+            )
+            #endif
         }
     }
 }

@@ -2,9 +2,16 @@ import AppKit
 import SwiftUI
 
 // Floating chat pill overlay for MarkdownPanelView.
-// Phase 1: idle ↔ focused state machine only. No submit, no slash menu,
-// no selection capture, no real agent dropdown. Agent button and skills
-// button are visual placeholders.
+//
+// Three visual states wired through `isExpanded` × `activeAgent`:
+//   - idle (no session, collapsed): "Ask about this doc"
+//   - session (CLI pane live, collapsed): "session · agent · Follow up…"
+//   - expanded: textfield + chips + agent dropdown + slash skills picker
+// Submit / agent change routing is owned by the parent
+// `MarkdownPanelView` via the `onSubmit` closure; the pill stays
+// presentational. See `MarkdownChatPillCommand` for the shell-side
+// invocation contract and `MarkdownChatPillSkillsPicker` for the
+// slash-menu UI.
 
 enum MarkdownPillAgent: String, CaseIterable, Identifiable {
     case codex
@@ -419,16 +426,16 @@ struct MarkdownChatPill: View {
                 .padding(.top, 4)
 
             HStack(spacing: 6) {
-                skillsButtonPlaceholder
+                skillsButton
 
                 Spacer(minLength: 0)
 
                 HStack(spacing: 4) {
-                    kbdLabel("↵")
+                    MarkdownPillKbdLabel("↵")
                     Text(String(localized: "markdownChat.pill.footer.run", defaultValue: " run · "))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(MarkdownPillPalette.textDim)
-                    kbdLabel("⇧↵")
+                    MarkdownPillKbdLabel("⇧↵")
                     Text(String(localized: "markdownChat.pill.footer.newline", defaultValue: " newline"))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(MarkdownPillPalette.textDim)
@@ -646,8 +653,15 @@ struct MarkdownChatPill: View {
         .accessibilityLabel(Text(String(localized: "markdownChat.pill.agent.a11y", defaultValue: "Choose CLI agent")))
     }
 
-    private var skillsButtonPlaceholder: some View {
-        Button(action: {}) {
+    private var skillsButton: some View {
+        // Clicking opens the slash skills picker by simulating a `/` press.
+        // Mirrors what typing `/` does, so the button isn't an inert
+        // decoration anymore.
+        Button {
+            text = "/"
+            isExpanded = true
+            DispatchQueue.main.async { textFieldFocused = true }
+        } label: {
             HStack(spacing: 5) {
                 slashGlyph(size: 12)
                 Text(String(localized: "markdownChat.pill.button.skills", defaultValue: "skills"))
@@ -656,8 +670,8 @@ struct MarkdownChatPill: View {
             .foregroundColor(MarkdownPillPalette.textMuted)
         }
         .buttonStyle(.plain)
-        // Phase 1 placeholder — skills picker wired in phase 4.
-        .accessibilityHidden(true)
+        .accessibilityLabel(Text(String(localized: "markdownChat.pill.button.skills.a11y",
+                                        defaultValue: "Open Brain Skills picker")))
     }
 
     // mockup's `slash` icon — rounded square with a diagonal line.
@@ -691,16 +705,4 @@ struct MarkdownChatPill: View {
         .accessibilityLabel(Text(String(localized: "markdownChat.pill.send.a11y", defaultValue: "Send to agent")))
     }
 
-    private func kbdLabel(_ label: String) -> some View {
-        Text(label)
-            .font(.system(size: 10.5, design: .monospaced))
-            .foregroundColor(MarkdownPillPalette.textMuted)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(Color.white.opacity(0.06))
-            .overlay(
-                RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 3))
-    }
 }

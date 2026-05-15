@@ -65,13 +65,6 @@ enum MarkdownChatPillCommand {
         }
     }
 
-    /// Follow-up text for an already-running session. Do not append Return:
-    /// agent TUIs disagree about whether synthetic Return submits or inserts a
-    /// newline, so we only type the text and let the user press Enter.
-    static func followUpPrompt(userPrompt: String) -> String {
-        userPrompt
-    }
-
     private static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }

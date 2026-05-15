@@ -33,8 +33,8 @@ struct MarkdownChatPillSkillsPicker: View {
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(MarkdownPillPalette.textDim)
                 Spacer(minLength: 4)
-                kbdLabel("↑↓")
-                kbdLabel("↵")
+                MarkdownPillKbdLabel("↑↓")
+                MarkdownPillKbdLabel("↵")
             }
             .padding(.horizontal, 8)
             .padding(.top, 6)
@@ -144,19 +144,6 @@ struct MarkdownChatPillSkillsPicker: View {
         .onHover { inside in
             if inside { selectedIndex = index }
         }
-    }
-
-    private func kbdLabel(_ label: String) -> some View {
-        Text(label)
-            .font(.system(size: 10.5, design: .monospaced))
-            .foregroundColor(MarkdownPillPalette.textMuted)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(Color.white.opacity(0.06))
-            .overlay(
-                RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 3))
     }
 
     // MARK: - Glyph hash
