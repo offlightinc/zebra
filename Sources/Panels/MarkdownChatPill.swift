@@ -476,7 +476,15 @@ struct MarkdownChatPill: View {
     private func installSlashKeyMonitor() {
         guard slashKeyMonitor == nil else { return }
         slashKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // `NSEvent.addLocalMonitorForEvents` is process-wide, so we
+            // gate on @FocusState `textFieldFocused` — our TextField has
+            // first-responder ownership only while it's actually focused.
+            // If the user is typing in another textfield (sidebar search,
+            // a different markdown panel's pill, etc.) the event passes
+            // through unmodified. Not a perfect defense (focus state can
+            // momentarily lag) but matches the actual user-intent gate.
             guard isExpanded,
+                  textFieldFocused,
                   isSlashMode,
                   let skills = matchingSkills,
                   !skills.isEmpty else {
@@ -893,7 +901,20 @@ struct MarkdownChatPill: View {
     private static let skillGlyphs: [String] = ["✦", "◐", "◇", "▲", "★", "✓", "↗"]
 
     private func glyph(for skillName: String) -> String {
-        let bucket = abs(skillName.hashValue) % Self.skillGlyphs.count
+        // Swift's `String.hashValue` is randomized per process launch, so the
+        // same skill would draw a different glyph after every restart. Use a
+        // hand-rolled FNV-1a so the mapping stays stable for the lifetime of
+        // the install. UInt arithmetic also dodges the `Int.min.abs` trap
+        // that the previous `abs(hashValue)` form was technically vulnerable
+        // to.
+        let fnvOffset: UInt64 = 0xcbf29ce484222325
+        let fnvPrime: UInt64 = 0x100000001b3
+        var hash = fnvOffset
+        for byte in skillName.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* fnvPrime
+        }
+        let bucket = Int(hash % UInt64(Self.skillGlyphs.count))
         return Self.skillGlyphs[bucket]
     }
 
@@ -944,7 +965,7 @@ struct MarkdownChatPill: View {
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(Array(skills.enumerated()), id: \.element.id) { index, skill in
-                                skillRow(skill: skill, isSelected: index == skillsSelectedIndex)
+                                skillRow(skill: skill, index: index, isSelected: index == skillsSelectedIndex)
                                     .id(index)
                             }
                         }
@@ -969,7 +990,7 @@ struct MarkdownChatPill: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private func skillRow(skill: BrainSkillsManifest.Skill, isSelected: Bool) -> some View {
+    private func skillRow(skill: BrainSkillsManifest.Skill, index: Int, isSelected: Bool) -> some View {
         // mockup's `SKILLS` data ships per-row scope; the project rows use a
         // warm yellow (#e8b75c) for both the glyph tile and the badge. gbrain
         // doesn't carry a scope so we surface every row in the yellow tone —
@@ -1020,6 +1041,12 @@ struct MarkdownChatPill: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Mouse hover should mirror keyboard navigation: whichever row the
+        // pointer is over becomes the highlighted one, so the visual
+        // selection stays in sync regardless of input device.
+        .onHover { inside in
+            if inside { skillsSelectedIndex = index }
+        }
     }
 
     private var skillsButtonPlaceholder: some View {

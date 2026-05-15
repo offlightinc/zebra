@@ -35,18 +35,30 @@ enum BrainSkillsManifest {
     }
 
     // Cached parse — gbrain's manifest changes only when the user updates
-    // gbrain itself; reparsing on every keystroke is wasted IO. If we ever
-    // need hot-reload, swap this for an FSEvents watcher.
-    private static var cached: [Skill]?
+    // gbrain itself; reparsing on every keystroke is wasted IO. Both
+    // success and failure are cached so a gbrain-less environment doesn't
+    // hit disk again every time a new pill instance probes for skills.
+    // (`.success(nil)` would be ambiguous, hence the dedicated enum.)
+    private enum CachedResult {
+        case skills([Skill])
+        case unavailable
+    }
+    private static var cached: CachedResult?
 
     /// Returns all registered gbrain skills, or nil when the manifest can't
     /// be loaded (gbrain not installed, file missing, JSON malformed). nil
     /// is the signal for the pill to keep the slash menu disabled — we'd
     /// rather show nothing than a stale or invented skill list.
     static func skills() -> [Skill]? {
-        if let cached { return cached }
+        if let cached {
+            switch cached {
+            case .skills(let list): return list
+            case .unavailable: return nil
+            }
+        }
         guard let data = try? Data(contentsOf: defaultManifestURL),
               let manifest = try? JSONDecoder().decode(ManifestFile.self, from: data) else {
+            cached = .unavailable
             return nil
         }
         let parsed = manifest.skills.compactMap { entry -> Skill? in
@@ -57,7 +69,7 @@ enum BrainSkillsManifest {
                 description: entry.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             )
         }
-        cached = parsed
+        cached = .skills(parsed)
         return parsed
     }
 }

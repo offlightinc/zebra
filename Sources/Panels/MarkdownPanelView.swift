@@ -493,6 +493,13 @@ struct MarkdownPanelView: View {
     }
 
     fileprivate func handlePillSubmit(text: String, agent: MarkdownPillAgent) {
+        // Selection is one-shot: it embeds into the first prompt of a new
+        // session (below) but not into follow-up sendInput. Either way we
+        // drop the chip now so the visible UI matches what actually went
+        // to the agent — otherwise users see the chip after submit and
+        // assume the selection is still being carried along.
+        defer { pillSelection = nil }
+
         // Hybrid C: same agent + live pane → reuse it via sendInput. The text
         // lands on whatever process owns the PTY (the agent if still running,
         // otherwise the underlying shell — same as if the user had typed it).

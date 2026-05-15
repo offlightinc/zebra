@@ -82,8 +82,15 @@ struct MarkdownSelectionObserver: NSViewRepresentable {
             // `isDescendant(of: hostView)` would always be false. Falling
             // back to window-equality scopes us to the same NSWindow, which
             // matches the current single-markdown-panel-per-window reality.
-            // Multi-panel disambiguation (plan §D1) can revisit by walking
-            // to a shared NSHostingView ancestor.
+            //
+            // KNOWN TECH DEBT: cmux is split-pane. As soon as two markdown
+            // panels live in the same window — or as soon as any other
+            // selectable text view (sidebar search, secondary inspectors)
+            // shares the window — its selection events leak into this
+            // pill's state. The right fix is to walk textView's ancestors
+            // and require a shared NSHostingView with hostView; doing it
+            // safely is more work than the rest of phase 3/4, so we ship
+            // the window-scoped filter with this debt marker.
             guard let window = hostView.window,
                   textView.window === window else { return }
 
