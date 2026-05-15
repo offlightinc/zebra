@@ -66,223 +66,6 @@ enum MarkdownPillAgent: String, CaseIterable, Identifiable {
     }
 }
 
-/// Builds the shell command that drives a chat-pill session.
-enum MarkdownChatPillCommand {
-    /// Prepare any agent-specific launch state that cannot be expressed as a
-    /// safe session-scoped CLI flag. Returns false when preparation failed and
-    /// the agent should fall back to its own first-run prompt.
-    static func prepareLaunchEnvironment(agent: MarkdownPillAgent, markdownFilePath: String) -> Bool {
-        let parent = (markdownFilePath as NSString).deletingLastPathComponent
-        let cwd = parent.isEmpty ? "/" : parent
-        switch agent {
-        case .codex:
-            return true
-        case .claude:
-            return markClaudeProjectTrusted(cwd: cwd)
-        case .gemini:
-            return true
-        }
-    }
-
-    static func shellStartupLine(
-        agent: MarkdownPillAgent,
-        markdownFilePath: String,
-        userPrompt: String,
-        selection: MarkdownChatPillSelection? = nil
-    ) -> String {
-        let parent = (markdownFilePath as NSString).deletingLastPathComponent
-        let cwd = parent.isEmpty ? "/" : parent
-        return "\(invocation(agent: agent, cwd: cwd, markdownFilePath: markdownFilePath, prompt: userPrompt, selection: selection))\r"
-    }
-
-    /// Per-agent CLI invocation tuned to keep the initial prompt on the agent
-    /// path instead of a first-run trust dialog. Codex uses a per-process
-    /// config override, Gemini uses its official session-scoped `--skip-trust`
-    /// flag, and Claude relies on `prepareLaunchEnvironment` to pre-accept the
-    /// current cwd in Claude's project state when that file is writable.
-    private static func invocation(
-        agent: MarkdownPillAgent,
-        cwd: String,
-        markdownFilePath: String,
-        prompt: String,
-        selection: MarkdownChatPillSelection?
-    ) -> String {
-        let promptArgument = singleLineShellArgument(prompt)
-        let fileContext = "Use this markdown file as context: \(markdownFilePath)"
-        let selectionContext = selection.map { selectionNote(for: $0) }
-        // Visible context = what we want the agent to *see in the user message*
-        // (file + optional selection + user's question). Compressed to one
-        // line so shell single-quoting is straightforward.
-        let visibleParts: [String] = [fileContext + ".", selectionContext.map { $0 + "." }, promptArgument]
-            .compactMap { $0 }
-        let visibleContextPrompt = visibleParts.joined(separator: " ")
-        // Hidden system-prompt variant for claude's --append-system-prompt:
-        // same file + selection note, but without the user message tacked on
-        // (claude takes the user prompt separately).
-        let hiddenParts: [String] = [fileContext, selectionContext].compactMap { $0 }
-        let hiddenContextInstruction = hiddenParts.joined(separator: ". ")
-        switch agent {
-        case .codex:
-            let override = "projects.\"\(cwd)\".trust_level=\"trusted\""
-            return "cd \(shellQuote(cwd)) && codex -c \(shellQuote(override)) \(shellQuote(visibleContextPrompt))"
-        case .claude:
-            return "cd \(shellQuote(cwd)) && claude --append-system-prompt \(shellQuote(hiddenContextInstruction)) \(shellQuote(promptArgument))"
-        case .gemini:
-            return "cd \(shellQuote(cwd)) && gemini --skip-trust --prompt-interactive \(shellQuote(visibleContextPrompt))"
-        }
-    }
-
-    /// One-line sentence describing the user's excerpt selection — used both
-    /// as the visible context (codex/gemini) and the system-prompt note
-    /// (claude). Heading is included when we managed to back-resolve it.
-    private static func selectionNote(for selection: MarkdownChatPillSelection) -> String {
-        let excerpt = selection.fullExcerpt
-        if let heading = selection.heading {
-            return "The user selected this excerpt from the section titled \u{201C}\(heading)\u{201D}: \u{201C}\(excerpt)\u{201D}"
-        }
-        return "The user selected this excerpt from the markdown: \u{201C}\(excerpt)\u{201D}"
-    }
-
-    /// Follow-up text for an already-running session. Do not append Return:
-    /// agent TUIs disagree about whether synthetic Return submits or inserts a
-    /// newline, so we only type the text and let the user press Enter.
-    static func followUpPrompt(userPrompt: String) -> String {
-        userPrompt
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    private static func singleLineShellArgument(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\r\n", with: " ")
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\r", with: " ")
-    }
-
-    private static func markClaudeProjectTrusted(cwd: String) -> Bool {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
-        guard var root = readJSONObjectIfPresent(at: url) else {
-            return false
-        }
-        var projects = root["projects"] as? [String: Any] ?? [:]
-        var project = projects[cwd] as? [String: Any] ?? [:]
-        project["hasTrustDialogAccepted"] = true
-        projects[cwd] = project
-        root["projects"] = projects
-        return writeJSONObject(root, to: url)
-    }
-
-    private static func readJSONObjectIfPresent(at url: URL) -> [String: Any]? {
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return [:]
-        }
-        guard let data = try? Data(contentsOf: url),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        return object
-    }
-
-    private static func writeJSONObject(_ object: [String: Any], to url: URL) -> Bool {
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else {
-            return false
-        }
-        do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: url, options: .atomic)
-            return true
-        } catch {
-            return false
-        }
-    }
-}
-
-/// A snapshot of the user's text selection inside the markdown body, used to
-/// drive the yellow selection chip in the pill and to embed an excerpt /
-/// heading hint into the agent's first prompt.
-///
-/// Designed as a pure value type so the parent (`MarkdownPanelView`) can
-/// build/replace/clear instances when its NSTextView selection observer fires,
-/// without the pill needing to know about NSTextView at all.
-struct MarkdownChatPillSelection: Equatable {
-    /// Whitespace-collapsed, single-line text, truncated to <= 500 chars with
-    /// an ellipsis. This is the form we embed in the CLI prompt argument so
-    /// the agent gets the excerpt verbatim regardless of original newlines.
-    let fullExcerpt: String
-    /// Original character count of the raw selection (before truncation /
-    /// whitespace collapse). Shown in the chip label as "N chars".
-    let chars: Int
-    /// Number of newline-separated lines in the raw selection.
-    let lines: Int
-    /// Nearest preceding markdown heading (`## State`, `### ...`) of the
-    /// selection's location in the source — nil when the selection sits
-    /// above all headings, or when the heading lookup fails (e.g., the
-    /// rendered text doesn't match the source verbatim).
-    let heading: String?
-
-    /// Build a snapshot from raw selected text and the panel's source. Returns
-    /// nil when the selection is too short (< 3 chars after a whitespace
-    /// trim) — matches the mockup's behavior (mouseup with < 3 chars is a
-    /// stray click, not a meaningful selection).
-    static func capture(rawText: String, in panelContent: String) -> MarkdownChatPillSelection? {
-        let collapsed = rawText
-            .replacingOccurrences(of: "\r\n", with: " ")
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\r", with: " ")
-            .components(separatedBy: .whitespaces)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        guard collapsed.count >= 3 else { return nil }
-
-        let chars = rawText.count
-        let lines = rawText
-            .components(separatedBy: CharacterSet.newlines)
-            .count
-        let heading = nearestPrecedingHeading(of: rawText, in: panelContent)
-        let excerptCap = 500
-        let fullExcerpt = collapsed.count > excerptCap
-            ? String(collapsed.prefix(excerptCap - 1)) + "\u{2026}"
-            : collapsed
-        return .init(
-            fullExcerpt: fullExcerpt,
-            chars: chars,
-            lines: lines,
-            heading: heading
-        )
-    }
-
-    /// Shorter form used in the chip UI (italic quote). The mockup caps the
-    /// chip excerpt at 110 chars; the full 500-char form is reserved for the
-    /// prompt that actually reaches the agent.
-    var displayExcerpt: String {
-        let cap = 110
-        guard fullExcerpt.count > cap else { return fullExcerpt }
-        return String(fullExcerpt.prefix(cap - 2)) + "\u{2026}"
-    }
-
-    /// Walk back from the selection's substring start in the source content
-    /// to find the most recent `#` / `##` / ... line. Best-effort — if the
-    /// rendered selection text doesn't appear verbatim in the source (e.g.,
-    /// MarkdownUI stripped emphasis markers) we just return nil and the chip
-    /// renders without a heading.
-    private static func nearestPrecedingHeading(of selection: String, in content: String) -> String? {
-        let trimmedSelection = selection.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedSelection.isEmpty,
-              let range = content.range(of: trimmedSelection) else { return nil }
-        let prefix = content[..<range.lowerBound]
-        for line in prefix.split(separator: "\n", omittingEmptySubsequences: false).reversed() {
-            let stripped = line.trimmingCharacters(in: .whitespaces)
-            guard stripped.hasPrefix("#") else { continue }
-            let title = stripped.drop(while: { $0 == "#" })
-                .trimmingCharacters(in: .whitespaces)
-            if !title.isEmpty { return title }
-        }
-        return nil
-    }
-}
-
 struct MarkdownPillAgentDot: View {
     let agent: MarkdownPillAgent
     var size: CGFloat = 14
@@ -300,7 +83,11 @@ struct MarkdownPillAgentDot: View {
 // Palette pulled from mockup MD_PALETTE (md-chat.jsx). Hex values are
 // matched exactly so the pill renders the same warm cream-on-dark tone
 // as the design prototype rather than a colder pure-white-on-dark.
-private enum MarkdownPillPalette {
+//
+// Module-internal (not file-private) so the split-out picker and selection
+// helpers in sibling files can share the exact same palette without
+// duplicating hex constants.
+enum MarkdownPillPalette {
     static let pillBg = Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.92)
     static let pillBgExpanded = Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.96)
     static let text = Color(red: 230.0 / 255, green: 228.0 / 255, blue: 221.0 / 255)
@@ -314,6 +101,9 @@ private enum MarkdownPillPalette {
     // bumping saturation keeps the button visible while still clearly disabled.
     static let sendDim = Color(red: 76.0 / 255, green: 130.0 / 255, blue: 115.0 / 255)
     static let buttonSurface = Color.white.opacity(0.04)
+    /// Warm yellow (mockup `::selection` + project-scope chip) used for
+    /// selection chip + slash skill picker.
+    static let selectionTint = Color(red: 232.0 / 255, green: 183.0 / 255, blue: 92.0 / 255)
 }
 
 struct MarkdownChatPill: View {
@@ -402,8 +192,6 @@ struct MarkdownChatPill: View {
             ? String(localized: "markdownChat.pill.placeholder.selection", defaultValue: "Ask about this selection")
             : String(localized: "markdownChat.pill.placeholder.doc", defaultValue: "Ask about this doc")
     }
-    private static let selectionTint = Color(red: 232.0 / 255, green: 183.0 / 255, blue: 92.0 / 255)
-
     var body: some View {
         Group {
             if isExpanded {
@@ -638,7 +426,12 @@ struct MarkdownChatPill: View {
             }
 
             if isSlashMode, let skills = matchingSkills {
-                skillsPicker(skills: skills)
+                MarkdownChatPillSkillsPicker(
+                    skills: skills,
+                    slashFilter: slashFilter,
+                    selectedIndex: $skillsSelectedIndex,
+                    onPick: pickSkill
+                )
             }
 
             Rectangle()
@@ -740,7 +533,7 @@ struct MarkdownChatPill: View {
     /// uses this in the resting state when a selection exists; it stays
     /// short so the placeholder text still has room next to it.
     private func collapsedSelectionChip(chars: Int) -> some View {
-        let tint = Self.selectionTint
+        let tint = MarkdownPillPalette.selectionTint
         return HStack(spacing: 6) {
             Image(systemName: "number")
                 .font(.system(size: 10))
@@ -774,7 +567,7 @@ struct MarkdownChatPill: View {
     /// N chars) plus a 2-line italic quote of the excerpt, with the same
     /// × button to clear.
     private func expandedSelectionChip(_ selection: MarkdownChatPillSelection) -> some View {
-        let tint = Self.selectionTint
+        let tint = MarkdownPillPalette.selectionTint
         return HStack(alignment: .top, spacing: 8) {
             Image(systemName: "number")
                 .font(.system(size: 11))
@@ -893,160 +686,6 @@ struct MarkdownChatPill: View {
         }
         .help(compact ? agent.label : "\(agent.label) (\(agent.shortcutHint))")
         .accessibilityLabel(Text(String(localized: "markdownChat.pill.agent.a11y", defaultValue: "Choose CLI agent")))
-    }
-
-    /// Glyph pool from mockup `md-app.jsx::SKILLS`. gbrain's manifest doesn't
-    /// ship per-skill glyphs, so we deterministically hash the skill name to
-    /// a glyph for stable visuals across launches.
-    private static let skillGlyphs: [String] = ["✦", "◐", "◇", "▲", "★", "✓", "↗"]
-
-    private func glyph(for skillName: String) -> String {
-        // Swift's `String.hashValue` is randomized per process launch, so the
-        // same skill would draw a different glyph after every restart. Use a
-        // hand-rolled FNV-1a so the mapping stays stable for the lifetime of
-        // the install. UInt arithmetic also dodges the `Int.min.abs` trap
-        // that the previous `abs(hashValue)` form was technically vulnerable
-        // to.
-        let fnvOffset: UInt64 = 0xcbf29ce484222325
-        let fnvPrime: UInt64 = 0x100000001b3
-        var hash = fnvOffset
-        for byte in skillName.utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* fnvPrime
-        }
-        let bucket = Int(hash % UInt64(Self.skillGlyphs.count))
-        return Self.skillGlyphs[bucket]
-    }
-
-    @ViewBuilder
-    private func skillsPicker(skills: [BrainSkillsManifest.Skill]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header: ✨ BRAIN SKILLS · N         ↑↓ ↵
-            // `sparkles` is the closest SF Symbol to the mockup's `spark`
-            // icon (a big + small star pair). The single-star `sparkle`
-            // doesn't capture the two-star silhouette.
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 11))
-                    .foregroundColor(MarkdownPillPalette.accent)
-                Text(String(localized: "markdownChat.pill.skills.header",
-                            defaultValue: "BRAIN SKILLS"))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(MarkdownPillPalette.textDim)
-                    .kerning(1.0)
-                Text("· \(skills.count)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(MarkdownPillPalette.textDim)
-                Spacer(minLength: 4)
-                kbdLabel("↑↓")
-                kbdLabel("↵")
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 6)
-            .padding(.bottom, 4)
-
-            if skills.isEmpty {
-                HStack(spacing: 4) {
-                    Text(String(localized: "markdownChat.pill.skills.empty",
-                                defaultValue: "No skills match"))
-                    Text("/\(slashFilter)")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(MarkdownPillPalette.textMuted)
-                }
-                .font(.system(size: 12))
-                .foregroundColor(MarkdownPillPalette.textDim)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-            } else {
-                // ScrollViewReader so ↑/↓ keyboard navigation keeps the
-                // highlighted row visible. Each row carries `.id(index)`,
-                // and we scroll-to the selected index on every change.
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(skills.enumerated()), id: \.element.id) { index, skill in
-                                skillRow(skill: skill, index: index, isSelected: index == skillsSelectedIndex)
-                                    .id(index)
-                            }
-                        }
-                    }
-                    .frame(maxHeight: 200)
-                    .onChange(of: skillsSelectedIndex) { _, newIndex in
-                        // No `anchor:` → ScrollViewProxy scrolls the
-                        // minimum amount needed to bring the target into
-                        // view. With `.center`, every keystroke would jerk
-                        // an already-visible row toward the middle.
-                        withAnimation(.linear(duration: 0.08)) {
-                            proxy.scrollTo(newIndex)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(4)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.03))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(MarkdownPillPalette.border, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func skillRow(skill: BrainSkillsManifest.Skill, index: Int, isSelected: Bool) -> some View {
-        // mockup's `SKILLS` data ships per-row scope; the project rows use a
-        // warm yellow (#e8b75c) for both the glyph tile and the badge. gbrain
-        // doesn't carry a scope so we surface every row in the yellow tone —
-        // matches the visual reference the user is comparing against
-        // (mockup screenshot of /plan-pr, /ship-checklist, /sync-linear).
-        let tint = Self.selectionTint
-        return Button {
-            pickSkill(skill)
-        } label: {
-            HStack(alignment: .top, spacing: 10) {
-                Text(glyph(for: skill.name))
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
-                    .foregroundColor(tint)
-                    .frame(width: 22, height: 22)
-                    .background(tint.opacity(0.13))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .padding(.top, 1)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text("/\(skill.name)")
-                            .font(.system(size: 12.5, weight: .medium, design: .monospaced))
-                            .foregroundColor(MarkdownPillPalette.text)
-                        Text(String(localized: "markdownChat.pill.skills.badge",
-                                    defaultValue: "brain"))
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(tint)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(tint.opacity(0.13))
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
-                    }
-                    if !skill.description.isEmpty {
-                        Text(skill.description)
-                            .font(.system(size: 11.5))
-                            .foregroundColor(MarkdownPillPalette.textMuted)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? tint.opacity(0.10) : Color.clear)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        // Mouse hover should mirror keyboard navigation: whichever row the
-        // pointer is over becomes the highlighted one, so the visual
-        // selection stays in sync regardless of input device.
-        .onHover { inside in
-            if inside { skillsSelectedIndex = index }
-        }
     }
 
     private var skillsButtonPlaceholder: some View {
