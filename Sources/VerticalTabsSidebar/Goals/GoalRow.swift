@@ -1,16 +1,5 @@
 import SwiftUI
 
-enum GoalDuePillKind: Equatable {
-    case neutral
-    case warn
-    case danger
-}
-
-struct GoalDueDescriptor: Equatable {
-    let label: String
-    let kind: GoalDuePillKind
-}
-
 struct GoalOutlineRow: View {
     let displayName: String
     let depth: Int
@@ -31,13 +20,13 @@ struct GoalOutlineRow: View {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                            .frame(width: GoalsDesignTokens.outlineChevronColumnWidth, height: GoalsDesignTokens.rowHeight)
+                            .frame(width: GoalsDesignTokens.outlineChevronColumnWidth)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 } else {
                     Color.clear
-                        .frame(width: GoalsDesignTokens.outlineChevronColumnWidth, height: GoalsDesignTokens.rowHeight)
+                        .frame(width: GoalsDesignTokens.outlineChevronColumnWidth)
                 }
             }
             goalRowTitle(displayName, isCompleted: isCompleted)
@@ -45,7 +34,7 @@ struct GoalOutlineRow: View {
         }
         .padding(.leading, GoalsDesignTokens.rowHorizontalPadding + CGFloat(depth) * GoalsDesignTokens.outlineIndentPerLevel)
         .padding(.trailing, GoalsDesignTokens.rowHorizontalPadding)
-        .frame(height: GoalsDesignTokens.rowHeight)
+        .padding(.vertical, GoalsDesignTokens.rowVerticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .sidebarRowChrome(isSelected: isSelected, isHovered: rowHover)
         .onTapGesture { onRowTap() }
@@ -56,7 +45,7 @@ struct GoalOutlineRow: View {
 
 struct GoalCadenceRow: View {
     let displayName: String
-    let due: GoalDueDescriptor
+    let due: SidebarDueLabel.Descriptor?
     let isCompleted: Bool
     let isSelected: Bool
     let onTap: () -> Void
@@ -67,10 +56,12 @@ struct GoalCadenceRow: View {
         HStack(spacing: 8) {
             goalRowTitle(displayName, isCompleted: isCompleted)
             Spacer(minLength: 0)
-            goalDuePill(due)
+            if let due {
+                SidebarDueLabelText(descriptor: due)
+            }
         }
         .padding(.horizontal, GoalsDesignTokens.rowHorizontalPadding)
-        .frame(height: GoalsDesignTokens.rowHeight)
+        .padding(.vertical, GoalsDesignTokens.rowVerticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .sidebarRowChrome(isSelected: isSelected, isHovered: rowHover)
         .onTapGesture { onTap() }
@@ -105,7 +96,7 @@ struct GoalStatusRow: View {
                 .monospacedDigit()
         }
         .padding(.horizontal, GoalsDesignTokens.rowHorizontalPadding)
-        .frame(height: GoalsDesignTokens.rowHeight)
+        .padding(.vertical, GoalsDesignTokens.rowVerticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .sidebarRowChrome(isSelected: isSelected, isHovered: rowHover)
         .onTapGesture { onTap() }
@@ -169,60 +160,3 @@ private func goalRowTitle(_ displayName: String, isCompleted: Bool) -> some View
         .truncationMode(.tail)
 }
 
-@ViewBuilder
-private func goalDuePill(_ due: GoalDueDescriptor) -> some View {
-    let (fg, bg) = goalDuePillColors(for: due.kind)
-    Text(due.label)
-        .font(.system(size: GoalsDesignTokens.metaFontSize, weight: .regular))
-        .foregroundStyle(fg)
-        .padding(.horizontal, GoalsDesignTokens.metaPillHorizontalPadding)
-        .padding(.vertical, GoalsDesignTokens.metaPillVerticalPadding)
-        .background(
-            RoundedRectangle(cornerRadius: GoalsDesignTokens.metaPillCornerRadius, style: .continuous)
-                .fill(bg)
-        )
-}
-
-private func goalDuePillColors(for kind: GoalDuePillKind) -> (Color, Color) {
-    switch kind {
-    case .neutral:
-        return (Color(nsColor: .secondaryLabelColor), Color(nsColor: .tertiarySystemFill))
-    case .warn:
-        return (Color(nsColor: .systemOrange), Color(nsColor: .systemOrange).opacity(0.18))
-    case .danger:
-        return (Color(nsColor: .systemRed), Color(nsColor: .systemRed).opacity(0.18))
-    }
-}
-
-enum GoalDueLabelBuilder {
-    static func descriptor(for date: Date?, now: Date = Date()) -> GoalDueDescriptor {
-        guard let date else {
-            return GoalDueDescriptor(
-                label: String(localized: "verticalTabsSidebar.goals.due.noDue", defaultValue: "no due"),
-                kind: .neutral
-            )
-        }
-        let cal = Calendar(identifier: .gregorian)
-        let startOfToday = cal.startOfDay(for: now)
-        let startOfTarget = cal.startOfDay(for: date)
-        let days = cal.dateComponents([.day], from: startOfToday, to: startOfTarget).day ?? 0
-        if days < 0 {
-            let over = -days
-            return GoalDueDescriptor(label: "\(over)d over", kind: .danger)
-        }
-        if days == 0 {
-            return GoalDueDescriptor(
-                label: String(localized: "verticalTabsSidebar.goals.due.today", defaultValue: "today"),
-                kind: .warn
-            )
-        }
-        if days <= 60 {
-            let kind: GoalDuePillKind = days <= 14 ? .warn : .neutral
-            return GoalDueDescriptor(label: "in \(days)d", kind: kind)
-        }
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.dateFormat = "MMM d"
-        return GoalDueDescriptor(label: df.string(from: date), kind: .neutral)
-    }
-}

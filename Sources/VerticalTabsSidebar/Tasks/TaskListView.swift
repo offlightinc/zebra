@@ -15,9 +15,7 @@ struct TaskListView: View {
         // `replace()` did not.
         let tasksSnapshot = store.tasks
         return VStack(spacing: 0) {
-            // Reserve the first-row slot so the toolbar lines up below the
-            // titlebar buttons, matching the Goals/Documents modes.
-            Color.clear.frame(height: SidebarWorkspaceListMetrics.firstRowTopOffset)
+            collapseAllToolbar(tasks: tasksSnapshot)
             TaskListToolbar(
                 groupBy: viewModel.groupBy,
                 existingFilterFields: Set(viewModel.filters.map(\.field)),
@@ -45,12 +43,48 @@ struct TaskListView: View {
                     }
                 }
             )
+            .frame(height: SidebarWorkspaceListMetrics.secondRowHeight)
             if !viewModel.filters.isEmpty {
                 chipRow
             }
             listContent(tasks: tasksSnapshot)
         }
         .background(BVColor.bg)
+    }
+
+    // 같은 위치/모양/단축키 의도로 Goals 의 collapseAllToolbar 와 1:1 — 모드
+    // 전환 시 첫 줄이 정합. canCollapse 조건은 "현재 그룹이 한 개 이상이고 그
+    // 중 펼친 게 한 개라도 있을 때". 그룹이 0개 (no tasks / no grouping=all 만)
+    // 인 경우는 비활성화하지만 자리는 유지 → 첫 줄이 점프 안 함.
+    private func collapseAllToolbar(tasks: [TaskItem]) -> some View {
+        let filtered = TaskListViewModel.applyFilters(tasks, viewModel.filters)
+        let groups = TaskListViewModel.groupTasks(filtered, by: viewModel.groupBy)
+        let allCollapsed = !groups.isEmpty && groups.allSatisfy { viewModel.collapsedSections.contains($0.key.raw) }
+        let canCollapse = store.rootPath != nil && !groups.isEmpty && !allCollapsed
+        return HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            Button {
+                viewModel.collapsedSections = Set(groups.map { $0.key.raw })
+            } label: {
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canCollapse)
+            .opacity(canCollapse ? 1 : 0)
+            .safeHelp(
+                String(localized: "verticalTabsSidebar.tasks.collapseAll.tooltip", defaultValue: "Collapse all")
+            )
+            .accessibilityLabel(
+                String(localized: "verticalTabsSidebar.tasks.collapseAll.accessibilityLabel", defaultValue: "Collapse all")
+            )
+            .accessibilityIdentifier("VerticalTabsSidebar.Tasks.collapseAll")
+        }
+        .padding(.horizontal, 6)
+        .frame(height: SidebarWorkspaceListMetrics.firstRowTopOffset)
     }
 
     @ViewBuilder

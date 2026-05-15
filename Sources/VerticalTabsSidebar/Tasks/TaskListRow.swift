@@ -32,12 +32,11 @@ struct TaskListRow: View, Equatable {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if !isCompleted, let due = task.dueDate {
-                let presentation = duePresentation(due)
+            if !isCompleted,
+               let due = task.dueDate,
+               let descriptor = SidebarDueLabel.descriptor(for: due) {
                 Button(action: { showDuePicker = true }) {
-                    Text(presentation.label)
-                        .font(.system(size: 11, weight: presentation.weight).monospacedDigit())
-                        .foregroundColor(presentation.color)
+                    SidebarDueLabelText(descriptor: descriptor)
                 }
                 .buttonStyle(.plain)
                 .panelPopover(isPresented: $showDuePicker) {
@@ -141,23 +140,6 @@ struct TaskListRow: View, Equatable {
         }
     }
 
-    /// Due 값 하나로부터 label/weight/color를 단번에 계산. 호출부에서 days 계산이
-    /// 세 번 반복되지 않도록 묶었다. HTML CSS `.due.over` (음수)와 `.due.soon` (0–1d)
-    /// 매핑은 여기 한 곳.
-    private func duePresentation(_ d: Date) -> (label: String, weight: Font.Weight, color: Color) {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let target = cal.startOfDay(for: d)
-        let days = cal.dateComponents([.day], from: today, to: target).day ?? 0
-
-        let label: String = {
-            if abs(days) >= 7 { return "\(days / 7)w" }
-            return "\(days)d"
-        }()
-        let weight: Font.Weight = days < 0 ? .semibold : .regular
-        let color: Color = days <= 1 ? BVColor.priorityUrgent : BVColor.fgFaint
-        return (label, weight, color)
-    }
 }
 
 /// Lightweight wrapper around the existing date picker popover for task due dates.

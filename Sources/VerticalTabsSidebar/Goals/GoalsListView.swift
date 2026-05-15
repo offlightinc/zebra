@@ -71,10 +71,11 @@ private struct GoalsListBody: View {
             collapseAllToolbar
             GoalsPicker(selection: snapshot.picker, onSelect: onPickerSelect)
                 .padding(.horizontal, GoalsDesignTokens.pickerOuterHorizontalPadding)
-                .padding(.vertical, GoalsDesignTokens.pickerVerticalPadding)
+                .frame(height: SidebarWorkspaceListMetrics.secondRowHeight)
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(BVColor.bg)
     }
 
     @ViewBuilder
@@ -236,7 +237,6 @@ private struct GoalsPicker: View {
             RoundedRectangle(cornerRadius: GoalsDesignTokens.pickerCornerRadius, style: .continuous)
                 .fill(Color(nsColor: .tertiarySystemFill))
         )
-        .frame(height: GoalsDesignTokens.pickerHeight)
     }
 
     @ViewBuilder
@@ -247,15 +247,16 @@ private struct GoalsPicker: View {
                 onSelect(option)
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 Image(systemName: option.symbolName)
-                    .font(.system(size: 10, weight: .regular))
+                    .font(.system(size: 11, weight: .regular))
                 Text(option.title)
-                    .font(.system(size: GoalsDesignTokens.pickerFontSize, weight: .semibold))
+                    .font(.system(size: GoalsDesignTokens.pickerFontSize, weight: isSelected ? .semibold : .regular))
             }
             .foregroundStyle(isSelected ? Color(nsColor: .labelColor) : Color(nsColor: .secondaryLabelColor))
             .frame(maxWidth: .infinity)
-            .frame(height: GoalsDesignTokens.pickerHeight - 4)
+            .padding(.horizontal, GoalsDesignTokens.pickerSegmentHorizontalPadding)
+            .padding(.vertical, GoalsDesignTokens.pickerSegmentVerticalPadding)
             .background(
                 RoundedRectangle(cornerRadius: GoalsDesignTokens.pickerSegmentCornerRadius, style: .continuous)
                     .fill(isSelected ? Color(nsColor: .controlBackgroundColor) : Color.clear)
@@ -313,7 +314,7 @@ private struct OutlineLayout: View, Equatable {
             label: String(localized: "verticalTabsSidebar.goals.outline.rootTitle", defaultValue: "Goals"),
             count: entries.count,
             isCollapsed: false,
-            onToggle: {}
+            onToggle: nil
         )
         .equatable()
         ForEach(visibleItems, id: \.entry.id) { item in
@@ -430,7 +431,7 @@ private struct CadenceLayout: View, Equatable {
                 ForEach(bucket, id: \.id) { entry in
                     GoalCadenceRow(
                         displayName: entry.displayName,
-                        due: GoalDueLabelBuilder.descriptor(for: entry.targetDate),
+                        due: SidebarDueLabel.descriptor(for: entry.targetDate),
                         isCompleted: entry.status == .completed,
                         isSelected: activePaths.contains(entry.absolutePath),
                         onTap: { [path = entry.absolutePath] in
@@ -512,7 +513,7 @@ private struct StatusLayout: View {
                 label: String(localized: "verticalTabsSidebar.goals.status.unknown", defaultValue: "UNKNOWN"),
                 count: buckets.unknown.count,
                 isCollapsed: false,
-                onToggle: {}
+                onToggle: nil
             )
             .equatable()
             ForEach(buckets.unknown, id: \.self) { entry in
