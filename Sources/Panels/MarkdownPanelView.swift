@@ -188,7 +188,7 @@ struct MarkdownPanelView: View {
         .overlay(alignment: .bottom) {
             MarkdownChatPill(
                 displayTitle: panel.displayTitle,
-                hasAgentPane: hasLiveChatCompanionPane,
+                activeAgent: liveChatCompanionAgent,
                 onSubmit: { text, agent in
                     handlePillSubmit(text: text, agent: agent)
                 }
@@ -456,15 +456,19 @@ struct MarkdownPanelView: View {
 
     // MARK: - Chat pill — submit routing
 
-    /// Returns false when the remembered companion pane was closed or merged
+    /// Returns nil when the remembered companion pane was closed or merged
     /// away; submit then lazily recreates it next to this markdown panel.
-    fileprivate var hasLiveChatCompanionPane: Bool {
-        guard let paneId = panel.chatCompanionPaneId else { return false }
-        return workspace.bonsplitController.allPaneIds.contains(paneId)
+    fileprivate var liveChatCompanionAgent: MarkdownPillAgent? {
+        guard let paneId = panel.chatCompanionPaneId,
+              workspace.bonsplitController.allPaneIds.contains(paneId) else {
+            return nil
+        }
+        return panel.chatCompanionAgent
     }
 
     fileprivate func handlePillSubmit(text: String, agent: MarkdownPillAgent) {
         guard let newPanel = createAgentTerminalTab() else { return }
+        panel.chatCompanionAgent = agent
 
         let launchEnvironmentReady = MarkdownChatPillCommand.prepareLaunchEnvironment(
             agent: agent,

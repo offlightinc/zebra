@@ -3,9 +3,9 @@ import SwiftUI
 
 // Floating chat pill overlay for MarkdownPanelView.
 //
-// Three visual states wired through `isExpanded` × `hasAgentPane`:
+// Three visual states wired through `isExpanded` × `activeAgent`:
 //   - idle (no companion pane, collapsed): "Ask about this doc"
-//   - companion (agent pane live, collapsed): "agent pane · New session…"
+//   - companion (agent pane live, collapsed): "session · <agent> · New session…"
 //   - expanded: textfield + chips + agent dropdown + slash skills picker
 // Submit / agent change routing is owned by the parent
 // `MarkdownPanelView` via the `onSubmit` closure; the pill stays
@@ -13,32 +13,7 @@ import SwiftUI
 // invocation contract and `MarkdownChatPillSkillsPicker` for the
 // slash-menu UI.
 
-enum MarkdownPillAgent: String, CaseIterable, Identifiable {
-    case codex
-    case claude
-    case gemini
-
-    var id: String { rawValue }
-
-    /// The CLI binary name expected on $PATH. See
-    /// `MarkdownChatPillCommand` for the shell launch + first-prompt
-    /// protocol.
-    var binaryName: String {
-        switch self {
-        case .codex: return "codex"
-        case .claude: return "claude"
-        case .gemini: return "gemini"
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .codex: return "codex"
-        case .claude: return "claude"
-        case .gemini: return "gemini"
-        }
-    }
-
+private extension MarkdownPillAgent {
     var shortcutHint: String {
         switch self {
         case .codex: return "⌥1"
@@ -114,10 +89,10 @@ enum MarkdownPillPalette {
 
 struct MarkdownChatPill: View {
     let displayTitle: String
-    /// True when this markdown already has a companion pane for agent tabs.
-    /// Submit still creates a fresh terminal tab; this only changes the
-    /// collapsed affordance.
-    let hasAgentPane: Bool
+    /// Non-nil when this markdown already has a companion pane for agent
+    /// tabs. Submit still creates a fresh terminal tab; this only changes
+    /// the collapsed affordance.
+    let activeAgent: MarkdownPillAgent?
     /// Parent handles the actual split/tab creation and terminal input.
     /// The pill just emits the user's intent.
     let onSubmit: (_ text: String, _ agent: MarkdownPillAgent) -> Void
@@ -141,6 +116,17 @@ struct MarkdownChatPill: View {
     /// at the local NSEvent level instead. Lifecycle is tied to the pill
     /// existing in the view tree.
     @State private var slashKeyMonitor: Any?
+    /// NSEvent monitor for mouse-down events anywhere in our process.
+    /// Detects clicks outside the pill's window-coordinate frame and
+    /// collapses the expanded state. Complements the focus-loss path
+    /// because clicks on non-first-responder views (empty markdown
+    /// background, scroll containers) don't trigger any focus change.
+    @State private var outsideClickMonitor: Any?
+    /// Pill's frame in window coordinates (SwiftUI `.global`, top-left
+    /// origin). Updated by a GeometryReader behind the pill so the
+    /// outside-click monitor can hit-test live geometry without holding
+    /// an NSView reference.
+    @State private var pillFrameInWindow: CGRect = .zero
     @FocusState private var textFieldFocused: Bool
 
     /// True while the user is mid-slash — input begins with `/` and has no
@@ -192,7 +178,7 @@ struct MarkdownChatPill: View {
                         insertion: .opacity.combined(with: .move(edge: .bottom)),
                         removal: .opacity
                     ))
-            } else if hasAgentPane {
+            } else if activeAgent != nil {
                 companionPaneView
                     .transition(.opacity)
             } else {
@@ -201,7 +187,7 @@ struct MarkdownChatPill: View {
             }
         }
         .animation(.easeOut(duration: 0.22), value: isExpanded)
-        .animation(.easeOut(duration: 0.22), value: hasAgentPane)
+        .animation(.easeOut(duration: 0.22), value: activeAgent)
         .frame(maxWidth: 720)
         // Lazy-load the gbrain manifest the first time the user types a
         // slash. Empty array is a valid result (gbrain not installed) — it
@@ -214,14 +200,35 @@ struct MarkdownChatPill: View {
             // Filter changed → reset selection to the top match.
             skillsSelectedIndex = 0
         }
-        .onAppear { installSlashKeyMonitor() }
-        .onDisappear { removeSlashKeyMonitor() }
-        // Outside-click → collapse. We can't intercept the actual mouse
-        // event without bounds gymnastics, so we treat "TextField lost
-        // first-responder" as the proxy. Transient focus loss (agent
-        // popover, skills button re-grabbing focus on the next runloop
-        // tick) is absorbed by deferring 0.08s and re-checking the
-        // current focus + popover state.
+        .background(
+            // Track the pill's live window-coordinate frame so the
+            // mouse-down monitor can decide "inside vs outside" without
+            // an NSView reference. `Color.clear` carries no visual weight
+            // and `GeometryReader` reads the parent's actual rendered
+            // frame regardless of expand/collapse transition.
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { pillFrameInWindow = proxy.frame(in: .global) }
+                    .onChange(of: proxy.frame(in: .global)) { _, frame in
+                        pillFrameInWindow = frame
+                    }
+            }
+        )
+        .onAppear {
+            installSlashKeyMonitor()
+            installOutsideClickMonitor()
+        }
+        .onDisappear {
+            removeSlashKeyMonitor()
+            removeOutsideClickMonitor()
+        }
+        // Focus-loss fallback. Mostly redundant with the mouse-down
+        // monitor below, but catches paths where focus leaves without
+        // a click in our window — app switch (⌘⇥), another textfield
+        // grabbing first-responder programmatically, etc. The mouse-down
+        // monitor handles the empty-background-click case the focus
+        // proxy misses (non-first-responder views don't fire any focus
+        // change).
         .onChange(of: textFieldFocused) { _, focused in
             guard isExpanded, !focused else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
@@ -231,7 +238,53 @@ struct MarkdownChatPill: View {
         }
     }
 
+    // MARK: - Outside-click monitor
+
+    /// Install a process-local mouse-down monitor that collapses the
+    /// expanded pill whenever the click lands outside our frame.
+    /// `agentMenuOpen` short-circuits because the popover lives in a
+    /// separate window and its own dismiss machinery handles closure —
+    /// trying to hit-test those events against our main-window frame
+    /// would always read "outside" and prematurely collapse the pill.
+    private func installOutsideClickMonitor() {
+        guard outsideClickMonitor == nil else { return }
+        outsideClickMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { event in
+            guard isExpanded, !agentMenuOpen,
+                  let window = event.window,
+                  let contentView = window.contentView else {
+                return event
+            }
+            // NSEvent.locationInWindow is AppKit (bottom-left origin);
+            // SwiftUI .global is top-left. Flip y once against the
+            // contentView's height to compare in the same space.
+            let click = CGPoint(
+                x: event.locationInWindow.x,
+                y: contentView.bounds.height - event.locationInWindow.y
+            )
+            if !pillFrameInWindow.contains(click) {
+                isExpanded = false
+                textFieldFocused = false
+            }
+            // Always pass the event through — we only react to it, never
+            // consume it, so the click still reaches whatever was under
+            // the cursor.
+            return event
+        }
+    }
+
+    private func removeOutsideClickMonitor() {
+        if let outsideClickMonitor {
+            NSEvent.removeMonitor(outsideClickMonitor)
+            self.outsideClickMonitor = nil
+        }
+    }
+
     private func expandFromCollapsed() {
+        if let activeAgent {
+            agent = activeAgent
+        }
         isExpanded = true
         DispatchQueue.main.async {
             textFieldFocused = true
@@ -326,10 +379,6 @@ struct MarkdownChatPill: View {
         HStack(spacing: 10) {
             contextChip(label: contextChipTitle)
 
-            // ⌘L kbd hint deferred until phase 3 registers a non-conflicting
-            // shortcut in KeyboardShortcutSettings — zebra's existing ⌘L
-            // already opens a new browser tab.
-            //
             // `.layoutPriority(-1)` makes the placeholder the *first* to give
             // up space when the pill gets narrow — the chip (filename) and
             // agent button keep their intrinsic widths, and "Ask about this
@@ -365,9 +414,15 @@ struct MarkdownChatPill: View {
                 Circle()
                     .fill(MarkdownPillPalette.accent)
                     .frame(width: 6, height: 6)
-                Text(String(localized: "markdownChat.pill.agentPane.label", defaultValue: "agent pane"))
+                Text(String(localized: "markdownChat.pill.session.label", defaultValue: "session"))
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(MarkdownPillPalette.text)
+                Text("·")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(MarkdownPillPalette.textMuted)
+                Text(activeAgent?.label ?? "")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(MarkdownPillPalette.textMuted)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)

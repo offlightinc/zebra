@@ -39,6 +39,7 @@ final class MarkdownPanel: Panel, ObservableObject {
     /// Stored on the panel model instead of the SwiftUI view so split layout
     /// reparenting does not lose the companion-pane reference.
     @Published var chatCompanionPaneId: PaneID?
+    @Published var chatCompanionAgent: MarkdownPillAgent?
 
     /// Token incremented to trigger focus flash animation.
     @Published private(set) var focusFlashToken: Int = 0

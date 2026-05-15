@@ -2,121 +2,121 @@
   "sourceLanguage": "en",
   "version": "1.0",
   "strings": {
-    "markdownChat.pill.agentPane.label": {
+    "markdownChat.pill.session.label": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "da": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "pl": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "bs": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "nb": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "agent pane"
+            "value": "session"
           }
         }
       }
@@ -151,7 +151,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "새 세션…"
+            "value": "New session…"
           }
         },
         "de": {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// `↵` / `↑↓` / `⌘L` 같이 키보드 키를 시각적으로 표시하는 작은 칩.
+/// `↵` / `↑↓` 같이 키보드 키를 시각적으로 표시하는 작은 칩.
 ///
 /// Both `MarkdownChatPill` and `MarkdownChatPillSkillsPicker` used to
 /// carry their own copy of this exact 10-line view; centralising it here
