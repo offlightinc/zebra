@@ -156,10 +156,8 @@
 		A5001420 /* Panels/MarkdownPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001418 /* Panels/MarkdownPanel.swift */; };
 		A5001421 /* Panels/MarkdownPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001419 /* Panels/MarkdownPanelView.swift */; };
 		A500E001 /* Panels/MarkdownChatPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = A500E002 /* Panels/MarkdownChatPill.swift */; };
-		A500E003 /* Panels/MarkdownSelectionObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A500E004 /* Panels/MarkdownSelectionObserver.swift */; };
 		A500E005 /* Panels/BrainSkillsManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = A500E006 /* Panels/BrainSkillsManifest.swift */; };
 		A500E007 /* Panels/MarkdownChatPillCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = A500E008 /* Panels/MarkdownChatPillCommand.swift */; };
-		A500E009 /* Panels/MarkdownChatPillSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A500E00A /* Panels/MarkdownChatPillSelection.swift */; };
 		A500E00B /* Panels/MarkdownChatPillSkillsPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A500E00C /* Panels/MarkdownChatPillSkillsPicker.swift */; };
 		BCB10001 /* Panels/BrainObjectInspector/BrainObject.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB10002 /* Panels/BrainObjectInspector/BrainObject.swift */; };
 		BCB10003 /* Panels/BrainObjectInspector/BrainObjectInspectorAtoms.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB10004 /* Panels/BrainObjectInspector/BrainObjectInspectorAtoms.swift */; };
@@ -712,10 +710,8 @@
 		A5001418 /* Panels/MarkdownPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/MarkdownPanel.swift; sourceTree = "<group>"; };
 		A5001419 /* Panels/MarkdownPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/MarkdownPanelView.swift; sourceTree = "<group>"; };
 		A500E002 /* Panels/MarkdownChatPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/MarkdownChatPill.swift; sourceTree = "<group>"; };
-		A500E004 /* Panels/MarkdownSelectionObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/MarkdownSelectionObserver.swift; sourceTree = "<group>"; };
 		A500E006 /* Panels/BrainSkillsManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/BrainSkillsManifest.swift; sourceTree = "<group>"; };
 		A500E008 /* Panels/MarkdownChatPillCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/MarkdownChatPillCommand.swift; sourceTree = "<group>"; };
-		A500E00A /* Panels/MarkdownChatPillSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/MarkdownChatPillSelection.swift; sourceTree = "<group>"; };
 		A500E00C /* Panels/MarkdownChatPillSkillsPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/MarkdownChatPillSkillsPicker.swift; sourceTree = "<group>"; };
 		BCB10002 /* Panels/BrainObjectInspector/BrainObject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/BrainObjectInspector/BrainObject.swift; sourceTree = "<group>"; };
 		BCB10004 /* Panels/BrainObjectInspector/BrainObjectInspectorAtoms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/BrainObjectInspector/BrainObjectInspectorAtoms.swift; sourceTree = "<group>"; };
@@ -1411,10 +1407,8 @@
 				A5001418 /* Panels/MarkdownPanel.swift */,
 				A5001419 /* Panels/MarkdownPanelView.swift */,
 				A500E002 /* Panels/MarkdownChatPill.swift */,
-				A500E004 /* Panels/MarkdownSelectionObserver.swift */,
 				A500E006 /* Panels/BrainSkillsManifest.swift */,
 				A500E008 /* Panels/MarkdownChatPillCommand.swift */,
-				A500E00A /* Panels/MarkdownChatPillSelection.swift */,
 				A500E00C /* Panels/MarkdownChatPillSkillsPicker.swift */,
 				BCB10002 /* Panels/BrainObjectInspector/BrainObject.swift */,
 				BCB10008 /* Panels/BrainObjectInspector/BrainFrontmatterWriter.swift */,
@@ -2120,10 +2114,8 @@
 				A5001420 /* Panels/MarkdownPanel.swift in Sources */,
 				A5001421 /* Panels/MarkdownPanelView.swift in Sources */,
 				A500E001 /* Panels/MarkdownChatPill.swift in Sources */,
-				A500E003 /* Panels/MarkdownSelectionObserver.swift in Sources */,
 				A500E005 /* Panels/BrainSkillsManifest.swift in Sources */,
 				A500E007 /* Panels/MarkdownChatPillCommand.swift in Sources */,
-				A500E009 /* Panels/MarkdownChatPillSelection.swift in Sources */,
 				A500E00B /* Panels/MarkdownChatPillSkillsPicker.swift in Sources */,
 				BCB10001 /* Panels/BrainObjectInspector/BrainObject.swift in Sources */,
 				BCB10007 /* Panels/BrainObjectInspector/BrainFrontmatterWriter.swift in Sources */,

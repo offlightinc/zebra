@@ -29,13 +29,6 @@ struct MarkdownPanelView: View {
     /// and replaces this state.
     @State private var pillSession: MarkdownChatPillSessionRef?
 
-    /// Latest selection snapshot from the markdown body (yellow chip in
-    /// pill). Cleared when the user hits the chip's × — the underlying
-    /// NSTextView selection is intentionally left alone (plan §C). Set by
-    /// the embedded `MarkdownSelectionObserver` whenever the user changes
-    /// the highlight inside the rendered body.
-    @State private var pillSelection: MarkdownChatPillSelection?
-
     var body: some View {
         Group {
             if panel.isFileUnavailable {
@@ -204,22 +197,13 @@ struct MarkdownPanelView: View {
             MarkdownChatPill(
                 displayTitle: panel.displayTitle,
                 activeAgent: pillActiveAgent,
-                activeSelection: pillSelection,
                 onSubmit: { text, agent in
                     handlePillSubmit(text: text, agent: agent)
-                },
-                onClearSelection: { pillSelection = nil }
+                }
             )
             .padding(.horizontal, 24)
             .padding(.bottom, 22)
         }
-        .background(MarkdownSelectionObserver(panelContent: panel.content) { snapshot in
-            // Only update on a meaningful change to avoid pill re-renders
-            // for every NSTextView selection-change tick during a drag.
-            if snapshot != pillSelection {
-                pillSelection = snapshot
-            }
-        })
     }
 
     private var filePathHeader: some View {
@@ -493,13 +477,6 @@ struct MarkdownPanelView: View {
     }
 
     fileprivate func handlePillSubmit(text: String, agent: MarkdownPillAgent) {
-        // Selection is one-shot: it embeds into the first prompt of a new
-        // session (below) but not into follow-up sendInput. Either way we
-        // drop the chip now so the visible UI matches what actually went
-        // to the agent — otherwise users see the chip after submit and
-        // assume the selection is still being carried along.
-        defer { pillSelection = nil }
-
         // Hybrid C: same agent + live pane → reuse it via sendInput. The text
         // lands on whatever process owns the PTY (the agent if still running,
         // otherwise the underlying shell — same as if the user had typed it).
@@ -539,11 +516,7 @@ struct MarkdownPanelView: View {
         let startupLine = MarkdownChatPillCommand.shellStartupLine(
             agent: agent,
             markdownFilePath: panel.filePath,
-            userPrompt: text,
-            // Selection (when present) is embedded only into the first
-            // prompt of a fresh session. Follow-up sendInput calls do NOT
-            // re-attach it — the agent already has the excerpt from turn 1.
-            selection: pillSelection
+            userPrompt: text
         )
         sendStartupSequence(
             startup: startupLine,

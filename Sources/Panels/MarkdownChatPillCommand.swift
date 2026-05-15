@@ -27,12 +27,11 @@ enum MarkdownChatPillCommand {
     static func shellStartupLine(
         agent: MarkdownPillAgent,
         markdownFilePath: String,
-        userPrompt: String,
-        selection: MarkdownChatPillSelection? = nil
+        userPrompt: String
     ) -> String {
         let parent = (markdownFilePath as NSString).deletingLastPathComponent
         let cwd = parent.isEmpty ? "/" : parent
-        return "\(invocation(agent: agent, cwd: cwd, markdownFilePath: markdownFilePath, prompt: userPrompt, selection: selection))\r"
+        return "\(invocation(agent: agent, cwd: cwd, markdownFilePath: markdownFilePath, prompt: userPrompt))\r"
     }
 
     /// Per-agent CLI invocation tuned to keep the initial prompt on the agent
@@ -44,23 +43,17 @@ enum MarkdownChatPillCommand {
         agent: MarkdownPillAgent,
         cwd: String,
         markdownFilePath: String,
-        prompt: String,
-        selection: MarkdownChatPillSelection?
+        prompt: String
     ) -> String {
         let promptArgument = singleLineShellArgument(prompt)
         let fileContext = "Use this markdown file as context: \(markdownFilePath)"
-        let selectionContext = selection.map { selectionNote(for: $0) }
-        // Visible context = what we want the agent to *see in the user message*
-        // (file + optional selection + user's question). Compressed to one
-        // line so shell single-quoting is straightforward.
-        let visibleParts: [String] = [fileContext + ".", selectionContext.map { $0 + "." }, promptArgument]
-            .compactMap { $0 }
-        let visibleContextPrompt = visibleParts.joined(separator: " ")
+        // Visible context = what we want the agent to *see in the user
+        // message* (file note + user's question). Compressed to one line so
+        // shell single-quoting is straightforward.
+        let visibleContextPrompt = "\(fileContext). \(promptArgument)"
         // Hidden system-prompt variant for claude's --append-system-prompt:
-        // same file + selection note, but without the user message tacked on
-        // (claude takes the user prompt separately).
-        let hiddenParts: [String] = [fileContext, selectionContext].compactMap { $0 }
-        let hiddenContextInstruction = hiddenParts.joined(separator: ". ")
+        // the file note alone (claude takes the user prompt separately).
+        let hiddenContextInstruction = fileContext
         switch agent {
         case .codex:
             let override = "projects.\"\(cwd)\".trust_level=\"trusted\""
@@ -70,17 +63,6 @@ enum MarkdownChatPillCommand {
         case .gemini:
             return "cd \(shellQuote(cwd)) && gemini --skip-trust --prompt-interactive \(shellQuote(visibleContextPrompt))"
         }
-    }
-
-    /// One-line sentence describing the user's excerpt selection — used both
-    /// as the visible context (codex/gemini) and the system-prompt note
-    /// (claude). Heading is included when we managed to back-resolve it.
-    private static func selectionNote(for selection: MarkdownChatPillSelection) -> String {
-        let excerpt = selection.fullExcerpt
-        if let heading = selection.heading {
-            return "The user selected this excerpt from the section titled \u{201C}\(heading)\u{201D}: \u{201C}\(excerpt)\u{201D}"
-        }
-        return "The user selected this excerpt from the markdown: \u{201C}\(excerpt)\u{201D}"
     }
 
     /// Follow-up text for an already-running session. Do not append Return:

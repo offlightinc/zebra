@@ -112,18 +112,9 @@ struct MarkdownChatPill: View {
     /// Drives the collapsed "session · agent · Follow up…" rendering and
     /// is set by the parent after a submit kicks off a split pane.
     let activeAgent: MarkdownPillAgent?
-    /// Non-nil when the user has highlighted a chunk of the markdown body.
-    /// Drives the yellow selection chip + placeholder swap to "Ask about
-    /// this selection". Cleared via `onClearSelection` when the user hits
-    /// the chip's × button.
-    let activeSelection: MarkdownChatPillSelection?
     /// Parent handles the actual newTerminalSplit / sendText routing.
-    /// The pill just emits the user's intent (and the active selection).
+    /// The pill just emits the user's intent.
     let onSubmit: (_ text: String, _ agent: MarkdownPillAgent) -> Void
-    /// Invoked when the user clicks the × on the selection chip. Parent
-    /// drops the selection snapshot; the underlying NSTextView highlight is
-    /// intentionally left alone (plan §C).
-    let onClearSelection: () -> Void
 
     @State private var isExpanded: Bool = false
     @State private var text: String = ""
@@ -181,16 +172,13 @@ struct MarkdownChatPill: View {
         text = "/\(skill.name) "
         DispatchQueue.main.async { textFieldFocused = true }
     }
-    private var hasActiveSelection: Bool { activeSelection != nil }
     private var contextChipTitle: String {
         displayTitle.isEmpty
             ? String(localized: "markdownChat.pill.chip.thisDoc", defaultValue: "this doc")
             : displayTitle
     }
     private var placeholderText: String {
-        hasActiveSelection
-            ? String(localized: "markdownChat.pill.placeholder.selection", defaultValue: "Ask about this selection")
-            : String(localized: "markdownChat.pill.placeholder.doc", defaultValue: "Ask about this doc")
+        String(localized: "markdownChat.pill.placeholder.doc", defaultValue: "Ask about this doc")
     }
     var body: some View {
         Group {
@@ -211,15 +199,6 @@ struct MarkdownChatPill: View {
         .animation(.easeOut(duration: 0.22), value: isExpanded)
         .animation(.easeOut(duration: 0.22), value: hasActiveSession)
         .frame(maxWidth: 720)
-        // Drag-to-expand: when a brand-new selection arrives from the
-        // markdown body, automatically open the pill and put focus into the
-        // text field so the user can type their question immediately — same
-        // behavior as the mockup's mouseup → pill expand flow.
-        .onChange(of: activeSelection) { _, newValue in
-            guard newValue != nil, !isExpanded else { return }
-            isExpanded = true
-            DispatchQueue.main.async { textFieldFocused = true }
-        }
         // Lazy-load the gbrain manifest the first time the user types a
         // slash. Empty array is a valid result (gbrain not installed) — it
         // still satisfies "cached", so we won't keep retrying every
@@ -286,6 +265,10 @@ struct MarkdownChatPill: View {
                 skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
                 return nil
             case 36, 76: // return / numpad enter
+                // Same IME caveat as the outer `.onKeyPress(.return)` —
+                // let Korean composition commit on the first Enter and
+                // pick the skill only when no marked text is in flight.
+                if isFirstResponderComposingIME() { return event }
                 let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
                 pickSkill(skills[safeIndex])
                 return nil
@@ -325,9 +308,6 @@ struct MarkdownChatPill: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(-1)
 
-            if let selection = activeSelection {
-                collapsedSelectionChip(chars: selection.chars)
-            }
             agentSelectorButton(compact: true)
             sendButton(enabled: false)
         }
@@ -386,9 +366,6 @@ struct MarkdownChatPill: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 6) {
                 contextChip(label: contextChipTitle)
-                if let selection = activeSelection {
-                    expandedSelectionChip(selection)
-                }
                 Text(String(localized: "markdownChat.pill.context.auto", defaultValue: "· auto"))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(MarkdownPillPalette.textDim)
@@ -492,7 +469,19 @@ struct MarkdownChatPill: View {
         // its built-in shift-modified handling so we only need to intercept
         // the un-shifted case). When the slash picker is open, ⏎ picks the
         // highlighted skill instead of submitting.
+        //
+        // IME caveat: when an input method engine is composing (e.g. Korean
+        // Hangul jamo waiting to combine), the first ⏎ should commit the
+        // composition rather than submit. Otherwise the in-flight syllable
+        // never lands in `text` and the agent gets a prompt with the last
+        // character missing. We let the event through whenever the focused
+        // NSTextView reports `hasMarkedText()` — this matches native macOS
+        // input apps (Slack, Discord, Mail) where Korean users press Enter
+        // twice: once to commit, once to send.
         .onKeyPress(.return) {
+            if isFirstResponderComposingIME() {
+                return .ignored
+            }
             if isSlashMode, let skills = matchingSkills, !skills.isEmpty {
                 let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
                 pickSkill(skills[safeIndex])
@@ -504,6 +493,17 @@ struct MarkdownChatPill: View {
             }
             return .ignored
         }
+    }
+
+    /// True when the focused NSTextView in our key window is mid-IME
+    /// composition (marked text not yet committed). Used to defer ⏎
+    /// interception until the IME has finished its own commit.
+    private func isFirstResponderComposingIME() -> Bool {
+        guard textFieldFocused,
+              let textView = NSApp.keyWindow?.firstResponder as? NSTextView else {
+            return false
+        }
+        return textView.hasMarkedText()
     }
 
     // MARK: - Sub-components
@@ -527,99 +527,6 @@ struct MarkdownChatPill: View {
             Capsule().stroke(MarkdownPillPalette.accent.opacity(0.25), lineWidth: 1)
         )
         .clipShape(Capsule())
-    }
-
-    /// Compact "N chars selected" chip for the collapsed pill row. mockup
-    /// uses this in the resting state when a selection exists; it stays
-    /// short so the placeholder text still has room next to it.
-    private func collapsedSelectionChip(chars: Int) -> some View {
-        let tint = MarkdownPillPalette.selectionTint
-        return HStack(spacing: 6) {
-            Image(systemName: "number")
-                .font(.system(size: 10))
-                .foregroundColor(tint)
-            Text(String(format: String(localized: "markdownChat.pill.chip.selection.chars",
-                                       defaultValue: "%d chars"), chars))
-                .font(.system(size: 11.5, design: .monospaced))
-                .foregroundColor(MarkdownPillPalette.text)
-            Button(action: onClearSelection) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(MarkdownPillPalette.textMuted)
-                    .padding(2)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(String(localized: "markdownChat.pill.chip.selection.clear.a11y",
-                                            defaultValue: "Clear selection")))
-        }
-        .padding(.leading, 8)
-        .padding(.trailing, 4)
-        .padding(.vertical, 4)
-        .background(tint.opacity(0.13))
-        .overlay(Capsule().stroke(tint.opacity(0.35), lineWidth: 1))
-        .clipShape(Capsule())
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    /// Richer chip used inside the expanded pill — mirrors mockup
-    /// `SelectionChip`: hash + uppercase label row (SELECTION · # Heading ·
-    /// N chars) plus a 2-line italic quote of the excerpt, with the same
-    /// × button to clear.
-    private func expandedSelectionChip(_ selection: MarkdownChatPillSelection) -> some View {
-        let tint = MarkdownPillPalette.selectionTint
-        return HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "number")
-                .font(.system(size: 11))
-                .foregroundColor(tint)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(String(localized: "markdownChat.pill.chip.selection.label",
-                                defaultValue: "SELECTION"))
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundColor(tint)
-                        .kerning(0.8)
-                    if let heading = selection.heading {
-                        Text("·")
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundColor(MarkdownPillPalette.textMuted)
-                        Text(heading)
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundColor(MarkdownPillPalette.textMuted)
-                            .lineLimit(1)
-                    }
-                    Text("·")
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundColor(MarkdownPillPalette.textDim)
-                    Text(String(format: String(localized: "markdownChat.pill.chip.selection.chars",
-                                                defaultValue: "%d chars"), selection.chars))
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundColor(MarkdownPillPalette.textDim)
-                }
-                Text("\u{201C}\(selection.displayExcerpt)\u{201D}")
-                    .font(.system(size: 11.5).italic())
-                    .foregroundColor(MarkdownPillPalette.text)
-                    .lineLimit(2)
-                    .frame(maxWidth: 320, alignment: .leading)
-            }
-            Button(action: onClearSelection) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(MarkdownPillPalette.textMuted)
-                    .padding(2)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(String(localized: "markdownChat.pill.chip.selection.clear.a11y",
-                                            defaultValue: "Clear selection")))
-        }
-        .padding(.leading, 9)
-        .padding(.trailing, 6)
-        .padding(.vertical, 4)
-        .background(tint.opacity(0.10))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(tint.opacity(0.30), lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func agentSelectorButton(compact: Bool) -> some View {
