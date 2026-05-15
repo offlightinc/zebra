@@ -265,11 +265,14 @@ struct MarkdownChatPill: View {
                 skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
                 return nil
             case 36, 76: // return / numpad enter
-                // Mirror the IME guard from `.onKeyPress(.return)` — never
-                // commit a slash pick while the user is mid-composition.
-                if isFirstResponderComposingIME() { return event }
-                let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
-                pickSkill(skills[safeIndex])
+                // Same commit-then-pick dance as `.onKeyPress(.return)`,
+                // routed through the shared helpers so both paths stay in
+                // lockstep (IME commit + `runEnterAction()` re-evaluation).
+                if commitIMECompositionIfNeeded() {
+                    DispatchQueue.main.async { _ = runEnterAction() }
+                    return nil
+                }
+                _ = runEnterAction()
                 return nil
             default:
                 return event
@@ -463,35 +466,84 @@ struct MarkdownChatPill: View {
             skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
             return .handled
         }
-        // ⏎ submits (or picks a slash skill); ⇧⏎ falls through to insert a
-        // newline. While an IME is composing, swallow ⏎ so we never send a
-        // prompt that's missing the still-uncommitted trailing syllable.
-        // Proper commit-and-submit needs NSTextView ownership — known
-        // limitation tracked outside this file.
+        // ⏎ submits (or picks a slash skill). When an IME is mid-
+        // composition we first force-commit its marked text and sync our
+        // @State `text` directly from the NSTextView, then re-evaluate
+        // the action on the next runloop tick so the slash-mode / submit
+        // gate sees the post-commit string.
         .onKeyPress(.return) {
-            if isFirstResponderComposingIME() {
+            if commitIMECompositionIfNeeded() {
+                DispatchQueue.main.async { _ = runEnterAction() }
                 return .handled
             }
-            if isSlashMode, let skills = matchingSkills, !skills.isEmpty {
-                let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
-                pickSkill(skills[safeIndex])
-                return .handled
-            }
-            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                submit()
-                return .handled
-            }
-            return .ignored
+            return runEnterAction() ? .handled : .ignored
         }
     }
 
-    /// True when the focused NSTextView in our key window has marked text
-    /// (an IME is mid-composition, e.g. Korean Hangul jamo waiting to
-    /// combine). Used as a guard against firing submit on a half-typed
-    /// syllable that hasn't landed in the @State text yet.
+    /// Pick a slash skill if the picker is open, otherwise submit the
+    /// current prompt. Returns `true` when something happened (so the
+    /// caller can mark the key event handled). Hoisted out of the
+    /// `.onKeyPress(.return)` closure so the IME commit path can reuse it
+    /// after deferring one runloop tick.
+    ///
+    /// Re-evaluates `isSlashMode` / `matchingSkills` from current state
+    /// instead of capturing them — the IME commit may have changed the
+    /// text (e.g., committing a space ended slash mode), so the deferred
+    /// caller must see the latest values.
+    private func runEnterAction() -> Bool {
+        if isSlashMode, let skills = matchingSkills, !skills.isEmpty {
+            let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
+            pickSkill(skills[safeIndex])
+            return true
+        }
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            submit()
+            return true
+        }
+        return false
+    }
+
+    /// If the focused NSTextView is mid-IME-composition (marked text not
+    /// yet committed), force-commit it via `unmarkText()` and sync our
+    /// `text` @State directly from the view's storage so the next
+    /// `runEnterAction()` call reads the post-commit string regardless of
+    /// SwiftUI binding propagation timing. Returns `true` when a commit
+    /// happened (caller should defer the follow-up action one tick).
+    @discardableResult
+    private func commitIMECompositionIfNeeded() -> Bool {
+        guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView,
+              isFirstResponderComposingIME() else {
+            return false
+        }
+        textView.unmarkText()
+        // Pull the committed string straight from the text view rather
+        // than waiting for SwiftUI's TextField binding to catch up — the
+        // binding usually propagates on the next runloop, but "usually"
+        // is not "always", and a missed propagation silently loses a
+        // syllable from the prompt.
+        text = textView.string
+        return true
+    }
+
+    /// True when the focused NSTextView is *actively composing inside an
+    /// IME* (Korean Hangul jamo waiting to combine, Pinyin candidate, etc.).
+    /// We only run the commit path in that case — a pure keylayout source
+    /// never produces composition state, and we observed `hasMarkedText()`
+    /// false-positives on English input that swallowed every Enter.
+    ///
+    /// NOTE: the `com.apple.inputmethod.*` substring check is a heuristic
+    /// against a private-ish identifier. Third-party IMEs may use other
+    /// prefixes. The deeper fix is to identify whether the queried
+    /// NSTextView is genuinely ours (responder-chain or hosting-view
+    /// ancestry check) — same multi-panel scoping problem we have in the
+    /// selection observer. Kept as a defensive filter until then.
     private func isFirstResponderComposingIME() -> Bool {
         guard textFieldFocused,
               let textView = NSApp.keyWindow?.firstResponder as? NSTextView else {
+            return false
+        }
+        guard let sourceID = textView.inputContext?.selectedKeyboardInputSource,
+              sourceID.contains("inputmethod") else {
             return false
         }
         return textView.hasMarkedText()
