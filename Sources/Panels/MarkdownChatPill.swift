@@ -67,20 +67,19 @@ enum MarkdownPillAgent: String, CaseIterable, Identifiable {
 
 /// Builds the shell command that drives a chat-pill session.
 enum MarkdownChatPillCommand {
-    /// The text we synthetically type into a freshly-opened shell pane.
-    ///
-    /// The first prompt is passed through each agent's initial-prompt path
-    /// instead of being injected into the agent TUI after startup.
-    static func prepareLaunchEnvironment(agent: MarkdownPillAgent, markdownFilePath: String) {
+    /// Prepare any agent-specific launch state that cannot be expressed as a
+    /// safe session-scoped CLI flag. Returns false when preparation failed and
+    /// the agent should fall back to its own first-run prompt.
+    static func prepareLaunchEnvironment(agent: MarkdownPillAgent, markdownFilePath: String) -> Bool {
         let parent = (markdownFilePath as NSString).deletingLastPathComponent
         let cwd = parent.isEmpty ? "/" : parent
         switch agent {
         case .codex:
-            break
+            return true
         case .claude:
-            markClaudeProjectTrusted(cwd: cwd)
+            return markClaudeProjectTrusted(cwd: cwd)
         case .gemini:
-            break
+            return true
         }
     }
 
@@ -94,15 +93,11 @@ enum MarkdownChatPillCommand {
         return "\(invocation(agent: agent, cwd: cwd, markdownFilePath: markdownFilePath, prompt: userPrompt))\r"
     }
 
-    /// Per-agent CLI invocation tuned to skip first-run interactive prompts
-    /// that would otherwise swallow the auto-injected first message.
-    ///
-    /// codex shows a "Do you trust this directory?" prompt the first time
-    /// it runs in a new cwd; while that prompt is up, anything we send via
-    /// send_text lands on the trust dialog instead of the model. We pre-mark
-    /// the cwd as trusted via a per-invocation `-c` override so the prompt
-    /// never appears. The user's persistent `~/.codex/config.toml` is not
-    /// modified — the override applies only to this process.
+    /// Per-agent CLI invocation tuned to keep the initial prompt on the agent
+    /// path instead of a first-run trust dialog. Codex uses a per-process
+    /// config override, Gemini uses its official session-scoped `--skip-trust`
+    /// flag, and Claude relies on `prepareLaunchEnvironment` to pre-accept the
+    /// current cwd in Claude's project state when that file is writable.
     private static func invocation(
         agent: MarkdownPillAgent,
         cwd: String,
@@ -141,31 +136,41 @@ enum MarkdownChatPillCommand {
             .replacingOccurrences(of: "\r", with: " ")
     }
 
-    private static func markClaudeProjectTrusted(cwd: String) {
+    private static func markClaudeProjectTrusted(cwd: String) -> Bool {
         let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
-        var root = readJSONObject(at: url)
+        guard var root = readJSONObjectIfPresent(at: url) else {
+            return false
+        }
         var projects = root["projects"] as? [String: Any] ?? [:]
         var project = projects[cwd] as? [String: Any] ?? [:]
         project["hasTrustDialogAccepted"] = true
         projects[cwd] = project
         root["projects"] = projects
-        writeJSONObject(root, to: url)
+        return writeJSONObject(root, to: url)
     }
 
-    private static func readJSONObject(at url: URL) -> [String: Any] {
+    private static func readJSONObjectIfPresent(at url: URL) -> [String: Any]? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return [:]
+        }
         guard let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return [:]
+            return nil
         }
         return object
     }
 
-    private static func writeJSONObject(_ object: [String: Any], to url: URL) {
+    private static func writeJSONObject(_ object: [String: Any], to url: URL) -> Bool {
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else {
-            return
+            return false
         }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 }
 

@@ -503,10 +503,15 @@ struct MarkdownPanelView: View {
 
         pillSession = MarkdownChatPillSessionRef(agent: agent, terminalPanelId: newPanel.id)
 
-        MarkdownChatPillCommand.prepareLaunchEnvironment(
+        let launchEnvironmentReady = MarkdownChatPillCommand.prepareLaunchEnvironment(
             agent: agent,
             markdownFilePath: panel.filePath
         )
+        #if DEBUG
+        if !launchEnvironmentReady {
+            cmuxDebugLog("markdown.chatPill.launchEnvironment.failed agent=\(agent.rawValue)")
+        }
+        #endif
 
         let startupLine = MarkdownChatPillCommand.shellStartupLine(
             agent: agent,
