@@ -265,6 +265,9 @@ struct MarkdownChatPill: View {
                 skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
                 return nil
             case 36, 76: // return / numpad enter
+                // Mirror the IME guard from `.onKeyPress(.return)` — never
+                // commit a slash pick while the user is mid-composition.
+                if isFirstResponderComposingIME() { return event }
                 let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
                 pickSkill(skills[safeIndex])
                 return nil
@@ -460,24 +463,15 @@ struct MarkdownChatPill: View {
             skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
             return .handled
         }
-        // TextField(axis: .vertical) treats Enter as newline by default.
-        // Plain ⏎ submits, ⇧⏎ keeps the newline behavior (the field uses
-        // its built-in shift-modified handling so we only need to intercept
-        // the un-shifted case). When the slash picker is open, ⏎ picks the
-        // highlighted skill instead of submitting.
-        //
-        // KNOWN IME LIMITATION: when a Korean (or other CJK) IME is in
-        // the middle of composing a syllable, this ⏎ intercept fires
-        // before the IME has committed, so the still-composing character
-        // never lands in `text` — the agent prompt is missing the final
-        // jamo cluster. Letting ⏎ pass through to the underlying TextField
-        // didn't help (the TextField in axis:.vertical mode doesn't route
-        // it through the IME commit path either). The clean fix needs a
-        // custom NSViewRepresentable that owns the NSTextView. For now,
-        // Korean users have to type the trailing character, wait for IME
-        // to commit (auto-commits when typing the next non-Hangul key, or
-        // when the field loses focus), and then submit.
+        // ⏎ submits (or picks a slash skill); ⇧⏎ falls through to insert a
+        // newline. While an IME is composing, swallow ⏎ so we never send a
+        // prompt that's missing the still-uncommitted trailing syllable.
+        // Proper commit-and-submit needs NSTextView ownership — known
+        // limitation tracked outside this file.
         .onKeyPress(.return) {
+            if isFirstResponderComposingIME() {
+                return .handled
+            }
             if isSlashMode, let skills = matchingSkills, !skills.isEmpty {
                 let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
                 pickSkill(skills[safeIndex])
@@ -489,6 +483,18 @@ struct MarkdownChatPill: View {
             }
             return .ignored
         }
+    }
+
+    /// True when the focused NSTextView in our key window has marked text
+    /// (an IME is mid-composition, e.g. Korean Hangul jamo waiting to
+    /// combine). Used as a guard against firing submit on a half-typed
+    /// syllable that hasn't landed in the @State text yet.
+    private func isFirstResponderComposingIME() -> Bool {
+        guard textFieldFocused,
+              let textView = NSApp.keyWindow?.firstResponder as? NSTextView else {
+            return false
+        }
+        return textView.hasMarkedText()
     }
 
     // MARK: - Sub-components
