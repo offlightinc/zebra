@@ -16,6 +16,7 @@ struct MarkdownPanelViewContext {
     let isFocused: Bool
     let isVisibleInUI: Bool
     let portalPriority: Int
+    let appearance: PanelAppearance
     let onRequestPanelFocus: () -> Void
 }
 

@@ -9544,11 +9544,6 @@ struct VerticalTabsSidebar: View {
         )
         sidebarComposer.compose(slots)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .overlay {
-            FirstMouseGatedHostingOverlay()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityHidden(true)
-        }
         .accessibilityIdentifier("Sidebar")
         .ignoresSafeArea()
         .overlay(alignment: .trailing) {
