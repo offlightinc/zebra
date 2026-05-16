@@ -3,60 +3,7 @@ import Combine
 import SwiftUI
 import MarkdownUI
 import Bonsplit
-
-// MARK: - Protocol seam (Phase 3.2 prototype, inlined to avoid pbxproj churn)
-//
-// Defines the surface ZebraMarkdownPanelView needs from cmux's MarkdownPanel /
-// Workspace / TerminalPanel. The conformances at the bottom of this file are
-// the only place this file names the concrete cmux types — everything inside
-// the view body works through these protocols. Phase 3.3 will lift the
-// protocols out into Packages/ZebraVault/ and the conformances into
-// Sources/Zebra/Adapters/.
-
-@MainActor
-protocol ZebraMarkdownPanelModel: ObservableObject {
-    var id: UUID { get }
-    var filePath: String { get }
-    var displayTitle: String { get }
-    var content: String { get }
-    var isFileUnavailable: Bool { get }
-    /// Bumped each time cmux asks the panel to flash its focus ring.
-    var focusFlashToken: Int { get }
-    func updateFrontmatter(key: String, value: String?)
-}
-
-@MainActor
-protocol ZebraTerminalPanel: AnyObject {
-    var id: UUID { get }
-    func sendInput(_ text: String)
-    /// True once the underlying ghostty surface pointer is non-nil.
-    var isSurfaceReady: Bool { get }
-}
-
-@MainActor
-protocol ZebraMarkdownWorkspace: AnyObject, ObservableObject {
-    var allPaneIds: [PaneID] { get }
-
-    func openOrFocusMarkdownSurface(
-        inPane paneId: PaneID,
-        filePath: String,
-        focus: Bool
-    ) -> (any ZebraMarkdownPanelModel)?
-
-    func newTerminalSurface(
-        inPane paneId: PaneID,
-        focus: Bool?,
-        initialCommand: String?
-    ) -> (any ZebraTerminalPanel)?
-
-    func newTerminalSplit(
-        from panelId: UUID,
-        orientation: SplitOrientation,
-        initialCommand: String?
-    ) -> (any ZebraTerminalPanel)?
-
-    func paneId(forPanelId panelId: UUID) -> PaneID?
-}
+import ZebraVault
 
 /// File-scope so it can hold `static let` constants. Lifted out of the
 /// generic `ZebraMarkdownPanelView` struct because Swift disallows static
@@ -917,65 +864,4 @@ private enum BrainObjectLinkResolver {
     }
 }
 
-// MARK: - Conformances (cmux models → Zebra protocols)
-//
-// MarkdownPanel, TerminalPanel, and Workspace are internal to the cmux
-// target. Because the protocols above are also declared in the cmux module,
-// the conformances stay internal and need no `public` modifier on the cmux
-// side — Phase 3 has not yet split modules. When the view moves into
-// Packages/ZebraVault/ (step 3.3), these `extension` blocks move into
-// Sources/Zebra/Adapters/ on the cmux side, the protocols become `public`
-// in ZebraVault, and the conformances stay internal in cmux.
-
-extension MarkdownPanel: ZebraMarkdownPanelModel {}
-
-extension TerminalPanel: ZebraTerminalPanel {
-    var isSurfaceReady: Bool {
-        surface.surface != nil
-    }
-}
-
-extension Workspace: ZebraMarkdownWorkspace {
-    var allPaneIds: [PaneID] {
-        bonsplitController.allPaneIds
-    }
-
-    func openOrFocusMarkdownSurface(
-        inPane paneId: PaneID,
-        filePath: String,
-        focus: Bool
-    ) -> (any ZebraMarkdownPanelModel)? {
-        let concrete: MarkdownPanel? = openOrFocusMarkdownSurface(
-            inPane: paneId,
-            filePath: filePath,
-            focus: focus
-        )
-        return concrete
-    }
-
-    func newTerminalSurface(
-        inPane paneId: PaneID,
-        focus: Bool?,
-        initialCommand: String?
-    ) -> (any ZebraTerminalPanel)? {
-        let concrete: TerminalPanel? = newTerminalSurface(
-            inPane: paneId,
-            focus: focus,
-            initialCommand: initialCommand
-        )
-        return concrete
-    }
-
-    func newTerminalSplit(
-        from panelId: UUID,
-        orientation: SplitOrientation,
-        initialCommand: String?
-    ) -> (any ZebraTerminalPanel)? {
-        let concrete: TerminalPanel? = newTerminalSplit(
-            from: panelId,
-            orientation: orientation,
-            initialCommand: initialCommand
-        )
-        return concrete
-    }
-}
+// Conformances live in `Sources/Zebra/Adapters/MarkdownPanel+ZebraVault.swift`.

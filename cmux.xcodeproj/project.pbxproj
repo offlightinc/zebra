@@ -312,6 +312,8 @@
 		A5001250 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A5001251 /* Sentry */; };
 		A5001270 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = A5001271 /* PostHog */; };
 		A5001290 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = A5001291 /* MarkdownUI */; };
+		A5C00202A1B2C3D4E5F60718 /* ZebraVault in Frameworks */ = {isa = PBXBuildFile; productRef = A5C00201A1B2C3D4E5F60718 /* ZebraVault */; };
+		A5C00101A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5C00100A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift */; };
 		A50012F1 /* Backport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50012F0 /* Backport.swift */; };
 		A50012F3 /* KeyboardShortcutSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50012F2 /* KeyboardShortcutSettings.swift */; };
 		C1713004C1713004C1713004 /* KeyboardShortcutSettingsLookup.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1713003C1713003C1713003 /* KeyboardShortcutSettingsLookup.swift */; };
@@ -803,6 +805,7 @@
 		268CE15FD4E5691DAB58C8AF /* Zebra/BrainObjectInspector/BrainObjectInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/BrainObjectInspector/BrainObjectInspectorView.swift"; sourceTree = "<group>"; };
 		2EA50197DB068BF261FE3178 /* Zebra/BrainObjectInspector/EditableTaskPills.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/BrainObjectInspector/EditableTaskPills.swift"; sourceTree = "<group>"; };
 		1AD520CC2C6DD547257B9CAC /* Zebra/Environment/ZebraServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Environment/ZebraServices.swift"; sourceTree = "<group>"; };
+		A5C00100A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Adapters/MarkdownPanel+ZebraVault.swift"; sourceTree = "<group>"; };
 		F3307C2A633027B2BCD3A597 /* Zebra/MarkdownChatPill/BrainSkillsManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/MarkdownChatPill/BrainSkillsManifest.swift"; sourceTree = "<group>"; };
 		F6CDA6F635694DC9F8062C46 /* Zebra/MarkdownChatPill/MarkdownChatPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/MarkdownChatPill/MarkdownChatPill.swift"; sourceTree = "<group>"; };
 		6CFBE1FFE852680B43D1909E /* Zebra/MarkdownChatPill/MarkdownChatPillCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/MarkdownChatPill/MarkdownChatPillCommand.swift"; sourceTree = "<group>"; };
@@ -1142,6 +1145,7 @@
 				3069F1D10000000000000005 /* CMUXPasteboardFidelity in Frameworks */,
 				F53000A0A1B2C3D4E5F60718 /* CMUXAgentVault in Frameworks */,
 				A5B00003A1B2C3D4E5F60718 /* CMUXAgentLaunch in Frameworks */,
+				A5C00202A1B2C3D4E5F60718 /* ZebraVault in Frameworks */,
 				F20F85FC5900550685FA33AD /* StackAuth in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1428,6 +1432,7 @@
 				A5001600 /* SentryHelper.swift */,
 				A5001620 /* AppleScriptSupport.swift */,
 				D1320AA0D1320AA0D1320AA4 /* AppIconDockTilePlugin.swift */,
+				A5C00100A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift */,
 				D84041895AB34888931A1073 /* Zebra/BrainObjectInspector/BrainFrontmatterWriter.swift */,
 				37294762FE90D6DE19A6C6DC /* Zebra/BrainObjectInspector/BrainObject.swift */,
 				1704AEE95EB1547F96281FDF /* Zebra/BrainObjectInspector/BrainObjectInspectorAtoms.swift */,
@@ -1815,6 +1820,7 @@
 				F53000A2A1B2C3D4E5F60718 /* CMUXAgentVault */,
 				A5B00002A1B2C3D4E5F60718 /* CMUXAgentLaunch */,
 				A500D013A1B2C3D4E5F60718 /* CMUXDebugLog */,
+				A5C00201A1B2C3D4E5F60718 /* ZebraVault */,
 				A8BD195031FC4B82B4354297 /* StackAuth */,
 			);
 			productName = cmux;
@@ -1945,6 +1951,7 @@
 				F53000A1A1B2C3D4E5F60718 /* XCLocalSwiftPackageReference "CMUXAgentVault" */,
 				A5B00001A1B2C3D4E5F60718 /* XCLocalSwiftPackageReference "CMUXAgentLaunch" */,
 				A500D012A1B2C3D4E5F60718 /* XCLocalSwiftPackageReference "CMUXDebugLog" */,
+				A5C00200A1B2C3D4E5F60718 /* XCLocalSwiftPackageReference "ZebraVault" */,
 				28B798BB9086C8E6B60C3355 /* XCLocalSwiftPackageReference "stack-auth-swift-sdk-prerelease" */,
 			);
 			productRefGroup = A5001042 /* Products */;
@@ -2216,6 +2223,7 @@
 				08976D9C9956FC014A46953A /* Zebra/BrainObjectInspector/BrainObjectInspectorAtoms.swift in Sources */,
 				ED99931FC572143B7C941D33 /* Zebra/BrainObjectInspector/BrainObjectInspectorView.swift in Sources */,
 				BC25D8DD69EB5AA881A7A69D /* Zebra/BrainObjectInspector/EditableTaskPills.swift in Sources */,
+				A5C00101A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift in Sources */,
 				46E0CCF933273FBF602555A3 /* Zebra/Environment/ZebraServices.swift in Sources */,
 				75EA85D08670614EF9607D69 /* Zebra/MarkdownChatPill/BrainSkillsManifest.swift in Sources */,
 				3D4B386DC6234B7115568180 /* Zebra/MarkdownChatPill/MarkdownChatPill.swift in Sources */,
@@ -3016,6 +3024,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/CMUXDebugLog;
 		};
+		A5C00200A1B2C3D4E5F60718 /* XCLocalSwiftPackageReference "ZebraVault" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ZebraVault;
+		};
 		A5001260 /* XCLocalSwiftPackageReference "bonsplit" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = vendor/bonsplit;
@@ -3087,6 +3099,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A500D012A1B2C3D4E5F60718 /* XCLocalSwiftPackageReference "CMUXDebugLog" */;
 			productName = CMUXDebugLog;
+		};
+		A5C00201A1B2C3D4E5F60718 /* ZebraVault */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A5C00200A1B2C3D4E5F60718 /* XCLocalSwiftPackageReference "ZebraVault" */;
+			productName = ZebraVault;
 		};
 		A5001231 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
