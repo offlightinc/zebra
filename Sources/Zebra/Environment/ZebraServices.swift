@@ -25,6 +25,12 @@ struct ZebraServices {
     let people: PersonFileListStore
     let goalsViewState: GoalsViewState
 
+    /// Per-panel side-car controllers for markdown panels. Owner of all
+    /// `MarkdownPanelController` instances — views may only `@ObservedObject`
+    /// them. Lifecycle is driven by `MarkdownPanel.didCloseNotification`
+    /// so the registry survives view churn (split reparent, tab switch).
+    let panelControllers: MarkdownPanelControllerRegistry
+
     /// Build a fresh container with default-initialized stores. Call this once
     /// per main window in `AppDelegate.createMainWindow(...)`.
     static func makeDefault() -> ZebraServices {
@@ -35,7 +41,8 @@ struct ZebraServices {
             goals: GoalFileListStore(),
             tasks: TaskFileListStore(),
             people: PersonFileListStore(),
-            goalsViewState: GoalsViewState()
+            goalsViewState: GoalsViewState(),
+            panelControllers: MarkdownPanelControllerRegistry()
         )
     }
 

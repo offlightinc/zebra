@@ -6,6 +6,7 @@ import Bonsplit
 /// SwiftUI view that renders a MarkdownPanel's content using MarkdownUI.
 struct MarkdownPanelView: View {
     @ObservedObject var panel: MarkdownPanel
+    @ObservedObject var controller: MarkdownPanelController
     let workspace: Workspace
     let paneId: PaneID
     let isFocused: Bool
@@ -66,7 +67,7 @@ struct MarkdownPanelView: View {
     private var splitContentView: some View {
         if !isVisibleInUI {
             Color.clear
-        } else if panel.showsInspector {
+        } else if controller.showsInspector {
             markdownInspectorSplitView
         } else {
             markdownContentView
@@ -106,7 +107,7 @@ struct MarkdownPanelView: View {
                 )
 
                 BrainObjectInspectorView(
-                    parse: panel.parse,
+                    parse: controller.parse,
                     onActivateRelation: activateRelation,
                     onUpdateFrontmatter: { key, value in
                         panel.updateFrontmatter(key: key, value: value)
@@ -146,7 +147,7 @@ struct MarkdownPanelView: View {
     /// cleanly; falls back to the raw content otherwise so a parse
     /// failure never breaks rendering on the left.
     private var renderedMarkdown: String {
-        if let stripped = panel.parse?.strippedBody, !stripped.isEmpty {
+        if let stripped = controller.parse?.strippedBody, !stripped.isEmpty {
             return stripped
         }
         return panel.content
@@ -230,18 +231,18 @@ struct MarkdownPanelView: View {
     /// closed, left when open).
     private var inspectorToggle: some View {
         Button {
-            panel.toggleInspector()
+            controller.toggleInspector()
         } label: {
-            Image(systemName: panel.showsInspector
+            Image(systemName: controller.showsInspector
                   ? "sidebar.right"
                   : "sidebar.right")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(panel.showsInspector ? .primary : .secondary)
+                .foregroundColor(controller.showsInspector ? .primary : .secondary)
                 .padding(4)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(panel.showsInspector
+        .help(controller.showsInspector
               ? String(localized: "brain.toggle.hide", defaultValue: "Hide object inspector")
               : String(localized: "brain.toggle.show", defaultValue: "Show object inspector"))
     }
@@ -459,16 +460,16 @@ struct MarkdownPanelView: View {
     /// Returns nil when the remembered companion pane was closed or merged
     /// away; submit then lazily recreates it next to this markdown panel.
     fileprivate var liveChatCompanionAgent: MarkdownPillAgent? {
-        guard let paneId = panel.chatCompanionPaneId,
+        guard let paneId = controller.chatCompanionPaneId,
               workspace.bonsplitController.allPaneIds.contains(paneId) else {
             return nil
         }
-        return panel.chatCompanionAgent
+        return controller.chatCompanionAgent
     }
 
     fileprivate func handlePillSubmit(text: String, agent: MarkdownPillAgent) {
         guard let newPanel = createAgentTerminalTab() else { return }
-        panel.chatCompanionAgent = agent
+        controller.chatCompanionAgent = agent
 
         let launchEnvironmentReady = MarkdownChatPillCommand.prepareLaunchEnvironment(
             agent: agent,
@@ -494,7 +495,7 @@ struct MarkdownPanelView: View {
     /// Create a fresh agent terminal for every prompt. The first prompt makes
     /// a companion split; subsequent prompts add tabs to that remembered pane.
     private func createAgentTerminalTab() -> TerminalPanel? {
-        if let paneId = panel.chatCompanionPaneId,
+        if let paneId = controller.chatCompanionPaneId,
            workspace.bonsplitController.allPaneIds.contains(paneId),
            let panel = workspace.newTerminalSurface(
                inPane: paneId,
@@ -504,13 +505,13 @@ struct MarkdownPanelView: View {
             return panel
         }
 
-        panel.chatCompanionPaneId = nil
+        controller.chatCompanionPaneId = nil
         guard let newPanel = workspace.newTerminalSplit(
             from: panel.id,
             orientation: .horizontal,
             initialCommand: nil
         ) else { return nil }
-        panel.chatCompanionPaneId = workspace.paneId(forPanelId: newPanel.id)
+        controller.chatCompanionPaneId = workspace.paneId(forPanelId: newPanel.id)
         return newPanel
     }
 

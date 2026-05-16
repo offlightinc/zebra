@@ -1,11 +1,15 @@
 import Foundation
 import Combine
-import Bonsplit
 
 /// A panel that renders a markdown file with live file-watching.
 /// When the file changes on disk, the content is automatically reloaded.
 @MainActor
 final class MarkdownPanel: Panel, ObservableObject {
+    /// Posted by `close()` so Zebra's `MarkdownPanelControllerRegistry`
+    /// can drop the side-car controller for this panel. The `object` is
+    /// the closing panel instance.
+    static let didCloseNotification = Notification.Name("cmux.markdownPanel.didClose")
+
     let id: UUID
     let panelType: PanelType = .markdown
 
@@ -18,14 +22,6 @@ final class MarkdownPanel: Panel, ObservableObject {
     /// Current markdown content read from the file.
     @Published private(set) var content: String = ""
 
-    /// Latest parsed brain object. `nil` while the first parse is in
-    /// flight; the view layer shows the loading skeleton in that window.
-    @Published private(set) var parse: BrainObjectParse?
-
-    /// Whether the right-pane inspector is visible. Persisted per main
-    /// window via UserDefaults.
-    @Published var showsInspector: Bool = MarkdownPanel.loadInspectorVisibility()
-
     /// Title shown in the tab bar (filename).
     @Published private(set) var displayTitle: String = ""
 
@@ -34,12 +30,6 @@ final class MarkdownPanel: Panel, ObservableObject {
 
     /// Whether the file has been deleted or is unreadable.
     @Published private(set) var isFileUnavailable: Bool = false
-
-    /// Pane where the markdown chat pill accumulates agent terminal tabs.
-    /// Stored on the panel model instead of the SwiftUI view so split layout
-    /// reparenting does not lose the companion-pane reference.
-    @Published var chatCompanionPaneId: PaneID?
-    @Published var chatCompanionAgent: MarkdownPillAgent?
 
     /// Token incremented to trigger focus flash animation.
     @Published private(set) var focusFlashToken: Int = 0
@@ -52,15 +42,6 @@ final class MarkdownPanel: Panel, ObservableObject {
     private var fileDescriptor: Int32 = -1
     private var isClosed: Bool = false
     private let watchQueue = DispatchQueue(label: "com.cmux.markdown-file-watch", qos: .utility)
-
-    /// Off-main queue for frontmatter parsing. Parses are short — a few
-    /// hundred microseconds in practice — but the file-watcher path can
-    /// fire on every keystroke when the file is open in another editor,
-    /// so we keep them off the main actor.
-    private let parseQueue = DispatchQueue(label: "com.cmux.brain-object-parse", qos: .userInitiated)
-    /// Bumped per loadFileContent() so stale parses can be ignored.
-    private var parseGeneration: Int = 0
-    private static let inspectorVisibilityKey = "cmux.brainViewer.showsInspector"
 
     /// Maximum number of reattach attempts after a file delete/rename event.
     private static let maxReattachAttempts = 6
@@ -97,6 +78,7 @@ final class MarkdownPanel: Panel, ObservableObject {
     func close() {
         isClosed = true
         stopFileWatcher()
+        NotificationCenter.default.post(name: Self.didCloseNotification, object: self)
     }
 
     func triggerFlash(reason: WorkspaceAttentionFlashReason) {
@@ -123,21 +105,17 @@ final class MarkdownPanel: Panel, ObservableObject {
                 isFileUnavailable = true
             }
         }
-        scheduleParse()
-    }
-
-    // MARK: - Object inspector
-
-    /// Toggle inspector visibility and persist.
-    func toggleInspector() {
-        showsInspector.toggle()
-        UserDefaults.standard.set(showsInspector, forKey: MarkdownPanel.inspectorVisibilityKey)
     }
 
     /// Write a single frontmatter key back to disk. `value == nil` removes
-    /// the key. The file watcher will pick up the change and re-parse, but
-    /// we also do an optimistic local update so the UI snaps before the
-    /// watcher round-trip completes.
+    /// the key. The file watcher will pick up the change, but we also do an
+    /// optimistic local update so the UI snaps before the watcher round-trip
+    /// completes.
+    ///
+    /// Lives on the panel (not on the Zebra side-car controller) because
+    /// it has to mutate `content`, which is `@Published private(set)`.
+    /// `MarkdownPanelController` subscribes to `panel.$content` and re-parses
+    /// automatically — no extra coupling needed.
     func updateFrontmatter(key: String, value: String?) {
         let snapshot = content
         let newText = BrainFrontmatterWriter.setScalar(key, to: value, in: snapshot)
@@ -145,34 +123,8 @@ final class MarkdownPanel: Panel, ObservableObject {
         do {
             try newText.write(toFile: filePath, atomically: true, encoding: .utf8)
             content = newText
-            scheduleParse()
         } catch {
             NSLog("MarkdownPanel.updateFrontmatter failed for key=\(key): \(error)")
-        }
-    }
-
-    private static func loadInspectorVisibility() -> Bool {
-        if UserDefaults.standard.object(forKey: inspectorVisibilityKey) == nil {
-            // Inspector ships visible by default — that's the whole point
-            // of the brain-viewer feature.
-            return true
-        }
-        return UserDefaults.standard.bool(forKey: inspectorVisibilityKey)
-    }
-
-    /// Parse the current content off-main, then publish on the main actor.
-    private func scheduleParse() {
-        parseGeneration &+= 1
-        let gen = parseGeneration
-        let snapshot = content
-        let path = filePath
-        parseQueue.async { [weak self] in
-            let result = BrainObjectParser.parse(snapshot, filename: path)
-            DispatchQueue.main.async {
-                guard let self else { return }
-                guard self.parseGeneration == gen else { return }
-                self.parse = result
-            }
         }
     }
 
