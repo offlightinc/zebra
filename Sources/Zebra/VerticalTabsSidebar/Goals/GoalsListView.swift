@@ -71,7 +71,7 @@ private struct GoalsListBody: View {
             collapseAllToolbar
             GoalsPicker(selection: snapshot.picker, onSelect: onPickerSelect)
                 .padding(.horizontal, GoalsDesignTokens.pickerOuterHorizontalPadding)
-                .frame(height: SidebarWorkspaceListMetrics.secondRowHeight)
+                .frame(height: ZebraSidebarMetrics.secondRowHeight)
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

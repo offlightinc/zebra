@@ -34,7 +34,12 @@ struct ZebraServices {
     /// Build a fresh container with default-initialized stores. Call this once
     /// per main window in `AppDelegate.createMainWindow(...)`.
     static func makeDefault() -> ZebraServices {
-        ZebraServices(
+        // Idempotent: the cmux metric reads this static at layout time, so
+        // setting it before the first window builds is enough. Same value
+        // every call so racing main-window creation is harmless.
+        MinimalModeSidebarTitlebarControlsMetrics.extraLeadingInset =
+            VerticalTabsSidebarModeRail.fixedWidth
+        return ZebraServices(
             sidebarMode: VerticalTabsSidebarModeState(),
             vault: VerticalTabsSidebarVaultState(),
             markdownFiles: MarkdownFileListStore(),

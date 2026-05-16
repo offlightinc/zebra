@@ -193,7 +193,7 @@ struct EmailListView: View {
                 },
                 onCloseFilter: {}
             )
-            .frame(height: SidebarWorkspaceListMetrics.secondRowHeight)
+            .frame(height: ZebraSidebarMetrics.secondRowHeight)
 
             if !viewModel.filters.isEmpty {
                 chipRow

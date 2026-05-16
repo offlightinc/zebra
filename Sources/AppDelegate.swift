@@ -6939,7 +6939,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         let sidebarWidth = sessionWindowSnapshot?.sidebar.width
             .map(SessionPersistencePolicy.sanitizedSidebarWidth)
-            ?? SessionPersistencePolicy.defaultSidebarWidth
+            ?? ZebraSidebarDefaults.defaultWidth
         let sidebarState = SidebarState(
             isVisible: sessionWindowSnapshot?.sidebar.isVisible ?? true,
             persistedWidth: CGFloat(sidebarWidth)

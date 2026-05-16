@@ -3,17 +3,17 @@
 # allowlist — one path per line, blank lines and `#` comments ignored.
 
 # Adapter / DI seams
-Sources/AppDelegate.swift
-Sources/ContentView.swift
-Sources/Panels/PanelContentView.swift
-Sources/Panels/MarkdownPanel.swift
-Sources/WorkspaceContentView.swift
+Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment + ZebraSidebarDefaults.defaultWidth fallback
+Sources/ContentView.swift                  # SidebarSlots composer + \.sidebarExtraLeadingInset
+Sources/Panels/PanelContentView.swift      # \.markdownPanelViewFactory factory lookup
+Sources/Panels/MarkdownPanel.swift         # didCloseNotification + updateFrontmatter
+Sources/WindowDragHandleView.swift         # MinimalModeSidebarTitlebarControlsMetrics.extraLeadingInset seam (Zebra sets it)
 
-# Preference / metric overrides (small, single-value). TODO: move into Zebra
-# seams (Phase 1.4 finish-up).
-Sources/SessionPersistence.swift           # defaultSidebarWidth: 200 → 300 (Zebra ships wider rail-aware sidebar)
-Sources/WindowChromeMetrics.swift          # SidebarWorkspaceListMetrics.secondRowHeight constant used by Zebra Tasks/Goals modes
-Sources/WindowDragHandleView.swift         # MinimalModeSidebarTitlebarControlsMetrics.leadingInset adds rail width
+# Upstream-only drift (zebra is behind on these — rebase resolves; not a Zebra touch).
+# Listed here so the guard doesn't flag them while waiting for the next rebase.
+Sources/SessionPersistence.swift           # upstream added: SessionRightSidebarToolPanelSnapshot, hasUnreadIndicator
+Sources/WindowChromeMetrics.swift          # upstream added: misc metrics
+Sources/WorkspaceContentView.swift         # upstream added: unread indicator props on PaneTabBar
 
 # Localization (single catalog — see docs note about SwiftUI string tables)
 Resources/Localizable.xcstrings

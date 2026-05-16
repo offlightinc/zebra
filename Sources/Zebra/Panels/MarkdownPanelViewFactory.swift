@@ -12,7 +12,6 @@ import SwiftUI
 /// `FilePreviewPanel` from cmux paths).
 struct MarkdownPanelViewContext {
     let panel: MarkdownPanel
-    let workspace: Workspace
     let paneId: PaneID
     let isFocused: Bool
     let isVisibleInUI: Bool
@@ -37,25 +36,46 @@ extension EnvironmentValues {
 }
 
 /// Zebra's factory implementation. Resolves the per-panel side-car
-/// controller from `ZebraServices.panelControllers` and hands it to
-/// `MarkdownPanelView`.
+/// controller from `ZebraServices.panelControllers` and hands the context
+/// to `ZebraMarkdownPanelHost`, which looks up the panel's `Workspace`
+/// from `TabManager` so cmux's `PanelContentView` can stay workspace-free.
 enum ZebraMarkdownPanelViewFactory {
     @MainActor
     static func make(services: ZebraServices) -> MarkdownPanelViewFactory {
         { context in
             let controller = services.panelControllers.controller(for: context.panel)
             return AnyView(
-                MarkdownPanelView(
-                    panel: context.panel,
-                    controller: controller,
-                    workspace: context.workspace,
-                    paneId: context.paneId,
-                    isFocused: context.isFocused,
-                    isVisibleInUI: context.isVisibleInUI,
-                    portalPriority: context.portalPriority,
-                    onRequestPanelFocus: context.onRequestPanelFocus
-                )
+                ZebraMarkdownPanelHost(context: context, controller: controller)
             )
+        }
+    }
+}
+
+/// Resolves the `Workspace` for a `MarkdownPanel` at view-construction time
+/// so the factory doesn't need a `Workspace` in its context. Keeps cmux's
+/// `PanelContentView` and `WorkspaceContentView` byte-identical to upstream
+/// (no `workspace:` parameter threading).
+private struct ZebraMarkdownPanelHost: View {
+    let context: MarkdownPanelViewContext
+    @ObservedObject var controller: MarkdownPanelController
+    @EnvironmentObject private var tabManager: TabManager
+
+    var body: some View {
+        if let workspace = tabManager.tabs.first(where: { $0.id == context.panel.workspaceId }) {
+            MarkdownPanelView(
+                panel: context.panel,
+                controller: controller,
+                workspace: workspace,
+                paneId: context.paneId,
+                isFocused: context.isFocused,
+                isVisibleInUI: context.isVisibleInUI,
+                portalPriority: context.portalPriority,
+                onRequestPanelFocus: context.onRequestPanelFocus
+            )
+        } else {
+            // Panel's workspace went away mid-render. Fall through to an
+            // empty surface; cmux will tear down the panel shortly after.
+            Color.clear
         }
     }
 }

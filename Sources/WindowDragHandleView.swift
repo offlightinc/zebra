@@ -545,8 +545,13 @@ enum MinimalModeSidebarTitlebarControlsMetrics {
         topInset()
     }
 
+    /// External contributors (e.g. Zebra's mode rail) can push the minimal-mode
+    /// titlebar controls right by setting this to a non-zero value at app
+    /// startup. Cmux ships with 0 so the controls hug the leading edge.
+    nonisolated(unsafe) static var extraLeadingInset: CGFloat = 0
+
     static func leadingInset(defaults: UserDefaults = .standard) -> CGFloat {
-        MinimalModeTitlebarDebugSettings.leftControlsLeadingInset(defaults: defaults) + VerticalTabsSidebarModeRail.fixedWidth
+        MinimalModeTitlebarDebugSettings.leftControlsLeadingInset(defaults: defaults) + extraLeadingInset
     }
 
     static func topInset(defaults: UserDefaults = .standard) -> CGFloat {
