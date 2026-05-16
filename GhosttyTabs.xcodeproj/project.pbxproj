@@ -38,6 +38,7 @@
 		46F6AC15863EC84DCD3770A2 /* TerminalAndGhosttyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02FC74F2C27127CC565B3E8C /* TerminalAndGhosttyTests.swift */; };
 		4D8B37E0E11A29997632765F /* Sidebar/InternalTabDragConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 610008EA5E3744DDBE05C8E2 /* Sidebar/InternalTabDragConfiguration.swift */; };
 		51D800000000000000000001 /* SidebarIdentifierFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51D800000000000000000002 /* SidebarIdentifierFormattingTests.swift */; };
+		5BCAFE0001A1B2C3D4E5F60711 /* Zebra/Environment/ZebraServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BCAFE0001A1B2C3D4E5F60710 /* Zebra/Environment/ZebraServices.swift */; };
 		5B5B0001A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0001A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarMode.swift */; };
 		5B5B0002A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarModeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0002A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeState.swift */; };
 		5B5B0003A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0003A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift */; };
@@ -599,6 +600,7 @@
 		51D800000000000000000002 /* SidebarIdentifierFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarIdentifierFormattingTests.swift; sourceTree = "<group>"; };
 		58C7B1B978620BE162CC057E /* BrowserPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserPanelTests.swift; sourceTree = "<group>"; };
 		5B1EA8948C5F126FE63CFB4E /* AuthSettingsStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthSettingsStore.swift; sourceTree = "<group>"; };
+		5BCAFE0001A1B2C3D4E5F60710 /* Zebra/Environment/ZebraServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Zebra/Environment/ZebraServices.swift; sourceTree = "<group>"; };
 		5B5B0001A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/VerticalTabsSidebarMode.swift; sourceTree = "<group>"; };
 		5B5B0002A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/VerticalTabsSidebarModeState.swift; sourceTree = "<group>"; };
 		5B5B0003A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift; sourceTree = "<group>"; };
@@ -1247,6 +1249,7 @@
 				A5001701A1B2C3D4E5F60718 /* Windowing/WindowAppearanceSnapshot.swift */,
 				A5001801A1B2C3D4E5F60718 /* Windowing/WindowBackdropController.swift */,
 				D1614EAD3CCF70A177A51BD1 /* Sidebar/SidebarState.swift */,
+				5BCAFE0001A1B2C3D4E5F60710 /* Zebra/Environment/ZebraServices.swift */,
 				5B5B0001A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarMode.swift */,
 				5B5B0002A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeState.swift */,
 				5B5B0003A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift */,
@@ -1957,6 +1960,7 @@
 				A5001700A1B2C3D4E5F60718 /* Windowing/WindowAppearanceSnapshot.swift in Sources */,
 				A5001800A1B2C3D4E5F60718 /* Windowing/WindowBackdropController.swift in Sources */,
 				F57072635F25EBCA741E125D /* Sidebar/SidebarState.swift in Sources */,
+				5BCAFE0001A1B2C3D4E5F60711 /* Zebra/Environment/ZebraServices.swift in Sources */,
 				5B5B0001A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarMode.swift in Sources */,
 				5B5B0002A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarModeState.swift in Sources */,
 				5B5B0003A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift in Sources */,

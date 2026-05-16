@@ -6975,28 +6975,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 #endif
 
-        let verticalTabsSidebarModeState = VerticalTabsSidebarModeState()
-        let verticalTabsSidebarVaultState = VerticalTabsSidebarVaultState()
-        let markdownFileListStore = MarkdownFileListStore()
-        let goalFileListStore = GoalFileListStore()
-        let taskFileListStore = TaskFileListStore()
-        let personFileListStore = PersonFileListStore()
-        let goalsViewState = GoalsViewState()
-
-        let root = ContentView(updateViewModel: updateViewModel, windowId: windowId)
-            .environmentObject(tabManager)
-            .environmentObject(notificationStore)
-            .environmentObject(sidebarState)
-            .environmentObject(sidebarSelectionState)
-            .environmentObject(fileExplorerState)
-            .environmentObject(cmuxConfigStore)
-            .environmentObject(verticalTabsSidebarModeState)
-            .environmentObject(verticalTabsSidebarVaultState)
-            .environmentObject(markdownFileListStore)
-            .environmentObject(goalFileListStore)
-            .environmentObject(taskFileListStore)
-            .environmentObject(personFileListStore)
-            .environmentObject(goalsViewState)
+        let root = ZebraServices.makeDefault().injectIntoEnvironment(
+            ContentView(updateViewModel: updateViewModel, windowId: windowId)
+                .environmentObject(tabManager)
+                .environmentObject(notificationStore)
+                .environmentObject(sidebarState)
+                .environmentObject(sidebarSelectionState)
+                .environmentObject(fileExplorerState)
+                .environmentObject(cmuxConfigStore)
+        )
 
         // Use the current key window's size for new windows so Cmd+Shift+N
         // creates a window matching the previous one's dimensions.
