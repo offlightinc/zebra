@@ -106532,13 +106532,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cmd-clicking .md/.markdown/.mkd/.mdx files opens the cmux markdown viewer panel instead of the preferred editor."
+            "value": "When supported file routing is on, Cmd-clicking Markdown files opens the rendered cmux markdown viewer instead of the generic file preview."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": ".md/.markdown/.mkd/.mdx ファイルを Cmd+クリックすると、優先エディタの代わりに cmux マークダウンビューアパネルが開きます。"
+            "value": "対応ファイルのルーティングが有効な場合、Markdown ファイルを Cmd+クリックすると、汎用ファイルプレビューではなくレンダリング済みの cmux マークダウンビューアで開きます。"
           }
         },
         "ko": {

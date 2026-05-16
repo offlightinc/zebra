@@ -62,7 +62,7 @@ private struct ZebraMarkdownPanelHost: View {
 
     var body: some View {
         if let workspace = tabManager.tabs.first(where: { $0.id == context.panel.workspaceId }) {
-            MarkdownPanelView(
+            ZebraMarkdownPanelView(
                 panel: context.panel,
                 controller: controller,
                 workspace: workspace,
