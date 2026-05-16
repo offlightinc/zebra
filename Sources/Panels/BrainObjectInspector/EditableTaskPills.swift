@@ -34,7 +34,7 @@ struct EditableTaskStatusPill: View {
             OptionPicker(
                 current: value,
                 ordered: BrainTaskStatus.primaryCases,
-                title: String(localized: "task.picker.status.title", defaultValue: "Change status"),
+                title: String(localized: "brain.status.picker.title", defaultValue: "Change status"),
                 label: { $0.localizedLabel },
                 glyph: { StatusGlyph(status: $0) },
                 onSelect: { selected in

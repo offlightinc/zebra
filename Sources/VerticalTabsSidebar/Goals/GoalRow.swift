@@ -126,7 +126,7 @@ struct GoalStatusRow: View {
             OptionPicker(
                 current: status,
                 ordered: BrainGoalStatus.allCases,
-                title: String(localized: "task.picker.status.title", defaultValue: "Change status"),
+                title: String(localized: "brain.status.picker.title", defaultValue: "Change status"),
                 label: { $0.localizedLabel },
                 glyph: { StatusGlyph(shape: $0.glyphShape) },
                 onSelect: { selected in
