@@ -27,6 +27,7 @@ By default, `reload.sh` builds but does **not** launch the app. The script print
 1. Grab the path from the `App path:` line in `reload.sh` output.
 2. Prepend `file://` and URL-encode spaces as `%20`. Do not hardcode any part of the path.
 3. Format it as a markdown link using the template for your agent type.
+4. In the final chat response, always include this clickable app link. Do not leave only the plain filesystem path, because clicking a plain path may not launch the app.
 
 Example. If `reload.sh` output contains:
 ```
@@ -44,17 +45,25 @@ App path:
 **Codex** outputs:
 ```
 =======================================================
-[my-tag: file:///Users/someone/Library/Developer/Xcode/DerivedData/cmux-my-tag/Build/Products/Debug/cmux%20DEV%20my-tag.app](file:///Users/someone/Library/Developer/Xcode/DerivedData/cmux-my-tag/Build/Products/Debug/cmux%20DEV%20my-tag.app)
+[my-tag: cmux DEV my-tag.app](file:///Users/someone/Library/Developer/Xcode/DerivedData/cmux-my-tag/Build/Products/Debug/cmux%20DEV%20my-tag.app)
 =======================================================
 ```
 
 Never use `/tmp/cmux-<tag>/...` app links in chat output.
+Never report a successful `reload.sh` build with only a raw `/Users/.../*.app` path. The user should be able to click the markdown link and launch the tagged app directly.
 
 After making code changes, always use `reload.sh --tag` to build. **Never run bare `xcodebuild` or `open` an untagged `cmux DEV.app`.** Untagged builds share the default debug socket and bundle ID with other agents, causing conflicts and stealing focus.
 
 ```bash
 ./scripts/reload.sh --tag <your-branch-slug>
 ```
+
+Codex note: run `./scripts/reload.sh` with escalated permissions from the start. The script writes
+GhosttyKit cache locks under `~/.cache/cmux/ghosttykit`, which is outside the Codex workspace
+sandbox. If Codex runs it without escalation, `ensure-ghosttykit.sh` can loop forever printing
+`Waiting for GhosttyKit cache lock...` because the lock `mkdir` fails with `Operation not permitted`.
+When requesting approval, keep the prefix narrow to `./scripts/reload.sh`; do not request broad
+shell prefixes such as `bash`, `zsh`, or `python3`.
 
 If you only need to verify the build compiles (no launch), use a tagged derivedDataPath:
 
