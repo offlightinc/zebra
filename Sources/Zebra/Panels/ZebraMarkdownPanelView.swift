@@ -1,13 +1,84 @@
 import AppKit
+import Combine
 import SwiftUI
 import MarkdownUI
 import Bonsplit
 
+// MARK: - Protocol seam (Phase 3.2 prototype, inlined to avoid pbxproj churn)
+//
+// Defines the surface ZebraMarkdownPanelView needs from cmux's MarkdownPanel /
+// Workspace / TerminalPanel. The conformances at the bottom of this file are
+// the only place this file names the concrete cmux types — everything inside
+// the view body works through these protocols. Phase 3.3 will lift the
+// protocols out into Packages/ZebraVault/ and the conformances into
+// Sources/Zebra/Adapters/.
+
+@MainActor
+protocol ZebraMarkdownPanelModel: ObservableObject {
+    var id: UUID { get }
+    var filePath: String { get }
+    var displayTitle: String { get }
+    var content: String { get }
+    var isFileUnavailable: Bool { get }
+    /// Bumped each time cmux asks the panel to flash its focus ring.
+    var focusFlashToken: Int { get }
+    func updateFrontmatter(key: String, value: String?)
+}
+
+@MainActor
+protocol ZebraTerminalPanel: AnyObject {
+    var id: UUID { get }
+    func sendInput(_ text: String)
+    /// True once the underlying ghostty surface pointer is non-nil.
+    var isSurfaceReady: Bool { get }
+}
+
+@MainActor
+protocol ZebraMarkdownWorkspace: AnyObject, ObservableObject {
+    var allPaneIds: [PaneID] { get }
+
+    func openOrFocusMarkdownSurface(
+        inPane paneId: PaneID,
+        filePath: String,
+        focus: Bool
+    ) -> (any ZebraMarkdownPanelModel)?
+
+    func newTerminalSurface(
+        inPane paneId: PaneID,
+        focus: Bool?,
+        initialCommand: String?
+    ) -> (any ZebraTerminalPanel)?
+
+    func newTerminalSplit(
+        from panelId: UUID,
+        orientation: SplitOrientation,
+        initialCommand: String?
+    ) -> (any ZebraTerminalPanel)?
+
+    func paneId(forPanelId panelId: UUID) -> PaneID?
+}
+
+/// File-scope so it can hold `static let` constants. Lifted out of the
+/// generic `ZebraMarkdownPanelView` struct because Swift disallows static
+/// stored properties inside a generic context.
+fileprivate enum InspectorSplitMetrics {
+    static let markdownMinWidth: CGFloat = 360
+    static let minInspectorWidth: Double = 280
+    static let maxInspectorWidth: Double = 420
+    static let dividerWidth: CGFloat = 1
+}
+
 /// SwiftUI view that renders a MarkdownPanel's content using MarkdownUI.
-struct ZebraMarkdownPanelView: View {
-    @ObservedObject var panel: MarkdownPanel
+///
+/// Generic over the model so SwiftUI's `@ObservedObject` sees a concrete
+/// `ObservableObject` type at compile time. The cmux side constructs this
+/// with `Model = MarkdownPanel`; the protocol seam (`ZebraMarkdownPanelModel`
+/// + `ZebraMarkdownWorkspace`) is what lets the view sit inside ZebraVault
+/// later without dragging the cmux model with it.
+struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
+    @ObservedObject var panel: Model
     @ObservedObject var controller: MarkdownPanelController
-    let workspace: Workspace
+    let workspace: any ZebraMarkdownWorkspace
     let paneId: PaneID
     let isFocused: Bool
     let isVisibleInUI: Bool
@@ -55,13 +126,6 @@ struct ZebraMarkdownPanelView: View {
     }
 
     // MARK: - Content
-
-    private enum InspectorSplitMetrics {
-        static let markdownMinWidth: CGFloat = 360
-        static let minInspectorWidth: Double = 280
-        static let maxInspectorWidth: Double = 420
-        static let dividerWidth: CGFloat = 1
-    }
 
     @ViewBuilder
     private var splitContentView: some View {
@@ -223,7 +287,7 @@ struct ZebraMarkdownPanelView: View {
             return
         }
 
-        _ = workspace.openOrFocusMarkdownSurface(inPane: paneId, filePath: filePath)
+        _ = workspace.openOrFocusMarkdownSurface(inPane: paneId, filePath: filePath, focus: true)
     }
 
     /// Chevron that hides/shows the right-pane inspector. The icon
@@ -461,7 +525,7 @@ struct ZebraMarkdownPanelView: View {
     /// away; submit then lazily recreates it next to this markdown panel.
     fileprivate var liveChatCompanionAgent: MarkdownPillAgent? {
         guard let paneId = controller.chatCompanionPaneId,
-              workspace.bonsplitController.allPaneIds.contains(paneId) else {
+              workspace.allPaneIds.contains(paneId) else {
             return nil
         }
         return controller.chatCompanionAgent
@@ -494,9 +558,9 @@ struct ZebraMarkdownPanelView: View {
 
     /// Create a fresh agent terminal for every prompt. The first prompt makes
     /// a companion split; subsequent prompts add tabs to that remembered pane.
-    private func createAgentTerminalTab() -> TerminalPanel? {
+    private func createAgentTerminalTab() -> (any ZebraTerminalPanel)? {
         if let paneId = controller.chatCompanionPaneId,
-           workspace.bonsplitController.allPaneIds.contains(paneId),
+           workspace.allPaneIds.contains(paneId),
            let panel = workspace.newTerminalSurface(
                inPane: paneId,
                focus: true,
@@ -520,13 +584,13 @@ struct ZebraMarkdownPanelView: View {
     /// prompt as its initial argument.
     private func sendStartupSequence(
         startup: String,
-        to terminalPanel: TerminalPanel
+        to terminalPanel: any ZebraTerminalPanel
     ) {
         let runSequence = {
             terminalPanel.sendInput(startup)
         }
 
-        if terminalPanel.surface.surface != nil {
+        if terminalPanel.isSurfaceReady {
             runSequence()
             return
         }
@@ -545,7 +609,7 @@ struct ZebraMarkdownPanelView: View {
             queue: .main
         ) { _ in
             guard !resolved,
-                  terminalPanel.surface.surface != nil else { return }
+                  terminalPanel.isSurfaceReady else { return }
             resolved = true
             cleanup()
             runSequence()
@@ -850,5 +914,68 @@ private enum BrainObjectLinkResolver {
         let ext = ns.pathExtension.lowercased()
         guard ext == "md" || ext == "markdown" else { return value }
         return ns.deletingPathExtension
+    }
+}
+
+// MARK: - Conformances (cmux models → Zebra protocols)
+//
+// MarkdownPanel, TerminalPanel, and Workspace are internal to the cmux
+// target. Because the protocols above are also declared in the cmux module,
+// the conformances stay internal and need no `public` modifier on the cmux
+// side — Phase 3 has not yet split modules. When the view moves into
+// Packages/ZebraVault/ (step 3.3), these `extension` blocks move into
+// Sources/Zebra/Adapters/ on the cmux side, the protocols become `public`
+// in ZebraVault, and the conformances stay internal in cmux.
+
+extension MarkdownPanel: ZebraMarkdownPanelModel {}
+
+extension TerminalPanel: ZebraTerminalPanel {
+    var isSurfaceReady: Bool {
+        surface.surface != nil
+    }
+}
+
+extension Workspace: ZebraMarkdownWorkspace {
+    var allPaneIds: [PaneID] {
+        bonsplitController.allPaneIds
+    }
+
+    func openOrFocusMarkdownSurface(
+        inPane paneId: PaneID,
+        filePath: String,
+        focus: Bool
+    ) -> (any ZebraMarkdownPanelModel)? {
+        let concrete: MarkdownPanel? = openOrFocusMarkdownSurface(
+            inPane: paneId,
+            filePath: filePath,
+            focus: focus
+        )
+        return concrete
+    }
+
+    func newTerminalSurface(
+        inPane paneId: PaneID,
+        focus: Bool?,
+        initialCommand: String?
+    ) -> (any ZebraTerminalPanel)? {
+        let concrete: TerminalPanel? = newTerminalSurface(
+            inPane: paneId,
+            focus: focus,
+            initialCommand: initialCommand
+        )
+        return concrete
+    }
+
+    func newTerminalSplit(
+        from panelId: UUID,
+        orientation: SplitOrientation,
+        initialCommand: String?
+    ) -> (any ZebraTerminalPanel)? {
+        let concrete: TerminalPanel? = newTerminalSplit(
+            from: panelId,
+            orientation: orientation,
+            initialCommand: initialCommand
+        )
+        return concrete
     }
 }
