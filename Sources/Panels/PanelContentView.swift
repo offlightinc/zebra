@@ -18,7 +18,7 @@ struct PanelContentView: View {
     let onFocus: () -> Void
     let onRequestPanelFocus: () -> Void
     let onTriggerFlash: () -> Void
-    @Environment(\.zebra) private var zebra
+    @Environment(\.markdownPanelViewFactory) private var markdownPanelViewFactory
 
     var body: some View {
         renderedPanel
@@ -57,17 +57,17 @@ struct PanelContentView: View {
                 )
             }
         case .markdown:
-            if let markdownPanel = panel as? MarkdownPanel, let zebra {
-                MarkdownPanelView(
+            if let markdownPanel = panel as? MarkdownPanel,
+               let factory = markdownPanelViewFactory {
+                factory(MarkdownPanelViewContext(
                     panel: markdownPanel,
-                    controller: zebra.panelControllers.controller(for: markdownPanel),
                     workspace: workspace,
                     paneId: paneId,
                     isFocused: isFocused,
                     isVisibleInUI: isVisibleInUI,
                     portalPriority: portalPriority,
                     onRequestPanelFocus: onRequestPanelFocus
-                )
+                ))
             }
         case .filePreview:
             if let filePreviewPanel = panel as? FilePreviewPanel {

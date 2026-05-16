@@ -10480,31 +10480,6 @@ final class Workspace: Identifiable, ObservableObject {
         return newFilePreviewSurface(inPane: paneId, filePath: filePath, focus: focus)
     }
 
-    /// Focus an existing MarkdownPanel for `filePath` or create one. Mirrors
-    /// `openOrFocusFilePreviewSurface` so the rail's markdown-mode click
-    /// behavior matches the file-preview click behavior — same dedup, same
-    /// focus semantics — but routes to the panel that hosts the brain
-    /// object inspector.
-    @discardableResult
-    func openOrFocusMarkdownSurface(
-        inPane paneId: PaneID,
-        filePath: String,
-        focus: Bool = true
-    ) -> MarkdownPanel? {
-        let canonical = (filePath as NSString).resolvingSymlinksInPath
-        for (existingId, panel) in panels {
-            guard let markdown = panel as? MarkdownPanel else { continue }
-            if (markdown.filePath as NSString).resolvingSymlinksInPath == canonical {
-                if focus {
-                    focusPanel(existingId)
-                }
-                return markdown
-            }
-        }
-
-        return newMarkdownSurface(inPane: paneId, filePath: filePath, focus: focus)
-    }
-
     @discardableResult
     func newFilePreviewSurface(
         inPane paneId: PaneID,

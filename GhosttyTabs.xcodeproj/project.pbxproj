@@ -43,6 +43,8 @@
 		5BCAFE0003A1B2C3D4E5F60711 /* Zebra/Sidebar/ZebraSidebarBody.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BCAFE0003A1B2C3D4E5F60710 /* Zebra/Sidebar/ZebraSidebarBody.swift */; };
 		5BCAFE0004A1B2C3D4E5F60711 /* Zebra/Sidebar/ZebraStoreBindings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BCAFE0004A1B2C3D4E5F60710 /* Zebra/Sidebar/ZebraStoreBindings.swift */; };
 		5BCAFE0005A1B2C3D4E5F60711 /* Zebra/Panels/MarkdownPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BCAFE0005A1B2C3D4E5F60710 /* Zebra/Panels/MarkdownPanelController.swift */; };
+		5BCAFE0006A1B2C3D4E5F60711 /* Zebra/Panels/Workspace+MarkdownSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BCAFE0006A1B2C3D4E5F60710 /* Zebra/Panels/Workspace+MarkdownSurface.swift */; };
+		5BCAFE0007A1B2C3D4E5F60711 /* Zebra/Panels/MarkdownPanelViewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BCAFE0007A1B2C3D4E5F60710 /* Zebra/Panels/MarkdownPanelViewFactory.swift */; };
 		5B5B0001A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0001A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarMode.swift */; };
 		5B5B0002A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarModeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0002A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeState.swift */; };
 		5B5B0003A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5B0003A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift */; };
@@ -610,6 +612,8 @@
 		5BCAFE0003A1B2C3D4E5F60710 /* Zebra/Sidebar/ZebraSidebarBody.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Zebra/Sidebar/ZebraSidebarBody.swift; sourceTree = "<group>"; };
 		5BCAFE0004A1B2C3D4E5F60710 /* Zebra/Sidebar/ZebraStoreBindings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Zebra/Sidebar/ZebraStoreBindings.swift; sourceTree = "<group>"; };
 		5BCAFE0005A1B2C3D4E5F60710 /* Zebra/Panels/MarkdownPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Zebra/Panels/MarkdownPanelController.swift; sourceTree = "<group>"; };
+		5BCAFE0006A1B2C3D4E5F60710 /* Zebra/Panels/Workspace+MarkdownSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Panels/Workspace+MarkdownSurface.swift"; sourceTree = "<group>"; };
+		5BCAFE0007A1B2C3D4E5F60710 /* Zebra/Panels/MarkdownPanelViewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Zebra/Panels/MarkdownPanelViewFactory.swift; sourceTree = "<group>"; };
 		5B5B0001A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/VerticalTabsSidebarMode.swift; sourceTree = "<group>"; };
 		5B5B0002A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/VerticalTabsSidebarModeState.swift; sourceTree = "<group>"; };
 		5B5B0003A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift; sourceTree = "<group>"; };
@@ -1265,6 +1269,8 @@
 				5BCAFE0003A1B2C3D4E5F60710 /* Zebra/Sidebar/ZebraSidebarBody.swift */,
 				5BCAFE0004A1B2C3D4E5F60710 /* Zebra/Sidebar/ZebraStoreBindings.swift */,
 				5BCAFE0005A1B2C3D4E5F60710 /* Zebra/Panels/MarkdownPanelController.swift */,
+				5BCAFE0006A1B2C3D4E5F60710 /* Zebra/Panels/Workspace+MarkdownSurface.swift */,
+				5BCAFE0007A1B2C3D4E5F60710 /* Zebra/Panels/MarkdownPanelViewFactory.swift */,
 				5B5B0001A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarMode.swift */,
 				5B5B0002A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeState.swift */,
 				5B5B0003A1B2C3D4E5F60710 /* VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift */,
@@ -1981,6 +1987,8 @@
 				5BCAFE0003A1B2C3D4E5F60711 /* Zebra/Sidebar/ZebraSidebarBody.swift in Sources */,
 				5BCAFE0004A1B2C3D4E5F60711 /* Zebra/Sidebar/ZebraStoreBindings.swift in Sources */,
 				5BCAFE0005A1B2C3D4E5F60711 /* Zebra/Panels/MarkdownPanelController.swift in Sources */,
+				5BCAFE0006A1B2C3D4E5F60711 /* Zebra/Panels/Workspace+MarkdownSurface.swift in Sources */,
+				5BCAFE0007A1B2C3D4E5F60711 /* Zebra/Panels/MarkdownPanelViewFactory.swift in Sources */,
 				5B5B0001A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarMode.swift in Sources */,
 				5B5B0002A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarModeState.swift in Sources */,
 				5B5B0003A1B2C3D4E5F60711 /* VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift in Sources */,
