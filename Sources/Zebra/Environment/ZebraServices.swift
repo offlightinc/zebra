@@ -47,6 +47,7 @@ struct ZebraServices {
     /// without subscribing to any of them.
     func injectIntoEnvironment<V: View>(_ view: V) -> some View {
         view
+            .zebraStoreBindings()
             .environment(\.zebra, self)
             .environment(\.sidebarComposer, ZebraSidebarComposer.composer)
             .environment(\.sidebarExtraLeadingInset, VerticalTabsSidebarModeRail.fixedWidth)

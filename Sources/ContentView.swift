@@ -1054,13 +1054,6 @@ struct ContentView: View {
     @EnvironmentObject var sidebarSelectionState: SidebarSelectionState
     @EnvironmentObject var cmuxConfigStore: CmuxConfigStore
     @EnvironmentObject var fileExplorerState: FileExplorerState
-    @EnvironmentObject var verticalTabsSidebarModeState: VerticalTabsSidebarModeState
-    @EnvironmentObject var verticalTabsSidebarVaultState: VerticalTabsSidebarVaultState
-    @EnvironmentObject var markdownFileListStore: MarkdownFileListStore
-    @EnvironmentObject var goalFileListStore: GoalFileListStore
-    @EnvironmentObject var taskFileListStore: TaskFileListStore
-    @EnvironmentObject var personFileListStore: PersonFileListStore
-    @EnvironmentObject var goalsViewState: GoalsViewState
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.sidebarExtraLeadingInset) private var sidebarExtraLeadingInset
     @AppStorage("titlebarControlsStyle") private var titlebarControlsStyleRawValue = TitlebarControlsStyle.classic.rawValue
@@ -1078,7 +1071,6 @@ struct ContentView: View {
     @StateObject private var fileExplorerStore = FileExplorerStore()
     @StateObject private var sessionIndexStore = SessionIndexStore()
     @StateObject private var selectedWorkspaceDirectoryObserver = SelectedWorkspaceDirectoryObserver()
-    @StateObject private var activeMarkdownPathsObserver = ActiveMarkdownPathsObserver()
     @State private var backgroundWorkspacePrimeCoordinator = BackgroundWorkspacePrimeCoordinator()
     @State private var fileExplorerWidth: CGFloat = 220
     @State private var fileExplorerDragStartWidth: CGFloat?
@@ -2493,22 +2485,6 @@ struct ContentView: View {
         _ = workspace.openOrFocusFilePreviewSurface(inPane: paneId, filePath: filePath)
     }
 
-    private func syncMarkdownFileListStoreDirectory() {
-        markdownFileListStore.bind(rootPath: verticalTabsSidebarVaultState.selectedVault?.path)
-    }
-
-    private func syncGoalFileListStoreDirectory() {
-        goalFileListStore.bind(vaultRoot: verticalTabsSidebarVaultState.selectedVault?.path)
-    }
-
-    private func syncTaskFileListStoreDirectory() {
-        taskFileListStore.bind(vaultRoot: verticalTabsSidebarVaultState.selectedVault?.path)
-    }
-
-    private func syncPersonFileListStoreDirectory() {
-        personFileListStore.bind(vaultRoot: verticalTabsSidebarVaultState.selectedVault?.path)
-    }
-
     private func syncFileExplorerDirectory() {
         guard let selectedId = tabManager.selectedTabId,
               let tab = tabManager.tabs.first(where: { $0.id == selectedId }) else {
@@ -2665,12 +2641,6 @@ struct ContentView: View {
 
         view = AnyView(view.onAppear {
             selectedWorkspaceDirectoryObserver.wire(tabManager: tabManager)
-            activeMarkdownPathsObserver.wire(tabManager: tabManager)
-            verticalTabsSidebarModeState.activeMarkdownFilePaths = activeMarkdownPathsObserver.paths
-            syncMarkdownFileListStoreDirectory()
-            syncGoalFileListStoreDirectory()
-            syncTaskFileListStoreDirectory()
-            syncPersonFileListStoreDirectory()
             tabManager.applyWindowBackgroundForSelectedTab()
             reconcileMountedWorkspaceIds()
             previousSelectedWorkspaceId = tabManager.selectedTabId
@@ -2769,22 +2739,6 @@ struct ContentView: View {
         // File explorer: keep the Combine subscription stable across body re-evaluations.
         view = AnyView(view.onChange(of: selectedWorkspaceDirectoryObserver.directoryChangeGeneration) { _ in
             syncFileExplorerDirectory()
-            activeMarkdownPathsObserver.recompute()
-        })
-
-        view = AnyView(view.onChange(of: tabManager.selectedTabId) { _ in
-            activeMarkdownPathsObserver.recompute()
-        })
-
-        view = AnyView(view.onChange(of: verticalTabsSidebarVaultState.selectedVaultPath) { _ in
-            syncMarkdownFileListStoreDirectory()
-            syncGoalFileListStoreDirectory()
-            syncTaskFileListStoreDirectory()
-            syncPersonFileListStoreDirectory()
-        })
-
-        view = AnyView(view.onChange(of: activeMarkdownPathsObserver.paths) { newPaths in
-            verticalTabsSidebarModeState.activeMarkdownFilePaths = newPaths
         })
 
         view = AnyView(view.onChange(of: tabManager.isWorkspaceCycleHot) { _ in
