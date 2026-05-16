@@ -1,10 +1,5 @@
 import XCTest
-
-#if canImport(cmux_DEV)
-@testable import cmux_DEV
-#elseif canImport(cmux)
-@testable import cmux
-#endif
+@testable import ZebraVault
 
 /// Goal status parser 정책 회귀 방지 — `GoalFrontmatterParser` 가 frontmatter
 /// 의 `status:` 값을 어떻게 다루는지 3 케이스로 검증.

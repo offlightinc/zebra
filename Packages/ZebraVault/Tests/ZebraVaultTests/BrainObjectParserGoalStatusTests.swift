@@ -1,10 +1,5 @@
 import XCTest
-
-#if canImport(cmux_DEV)
-@testable import cmux_DEV
-#elseif canImport(cmux)
-@testable import cmux
-#endif
+@testable import ZebraVault
 
 /// Inspector parser (`BrainObjectParser`) 도 sidebar parser
 /// (`GoalFrontmatterParser`) 와 같은 status 정책을 따르는지 검증.
