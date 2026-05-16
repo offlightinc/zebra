@@ -33,9 +33,14 @@ final class VerticalTabsSidebarVaultState: ObservableObject {
 
         let restoredSelectedPath = selectedVaultPath
             ?? UserDefaults.standard.string(forKey: Self.selectedVaultPathDefaultsKey)
-        if let restoredSelectedPath,
+        if Self.shouldPreferOfflightVault(over: restoredSelectedPath),
+           let preferredDefaultPath = Self.preferredDefaultVaultPath(in: self.vaults) {
+            self.selectedVaultPath = preferredDefaultPath
+        } else if let restoredSelectedPath,
            self.vaults.contains(where: { $0.path == restoredSelectedPath }) {
             self.selectedVaultPath = restoredSelectedPath
+        } else if let preferredDefaultPath = Self.preferredDefaultVaultPath(in: self.vaults) {
+            self.selectedVaultPath = preferredDefaultPath
         } else {
             self.selectedVaultPath = self.vaults.first?.path
         }
@@ -72,7 +77,10 @@ final class VerticalTabsSidebarVaultState: ObservableObject {
         var seen = Set<String>()
         return candidates.compactMap { candidate in
             let path = normalizedPath(candidate)
-            guard !path.isEmpty, !seen.contains(path), isDirectory(path) else { return nil }
+            guard !path.isEmpty,
+                  !seen.contains(path),
+                  !isDeprecatedDefaultVaultPath(path),
+                  isDirectory(path) else { return nil }
             seen.insert(path)
             return path
         }
@@ -81,10 +89,30 @@ final class VerticalTabsSidebarVaultState: ObservableObject {
     private static func defaultVaultPathCandidates() -> [String] {
         let home = NSHomeDirectory()
         return [
-            "\(home)/brain",
+            "\(home)/brain-offlight",
             "\(home)/b-brain",
-            "\(home)/b-brain-offlight",
         ]
+    }
+
+    private static func preferredDefaultVaultPath(in vaults: [VerticalTabsSidebarVault]) -> String? {
+        let home = NSHomeDirectory()
+        let preferredPath = normalizedPath("\(home)/brain-offlight")
+        return vaults.first { $0.path == preferredPath }?.path
+    }
+
+    private static func shouldPreferOfflightVault(over restoredSelectedPath: String?) -> Bool {
+        guard let restoredSelectedPath else { return true }
+        let home = NSHomeDirectory()
+        return normalizedPath(restoredSelectedPath) == normalizedPath("\(home)/b-brain")
+    }
+
+    private static func isDeprecatedDefaultVaultPath(_ path: String) -> Bool {
+        let home = NSHomeDirectory()
+        let deprecatedPaths = [
+            normalizedPath("\(home)/brain"),
+            normalizedPath("\(home)/b-brain-offlight"),
+        ]
+        return deprecatedPaths.contains(normalizedPath(path))
     }
 
     private static func makeVaults(paths: [String]) -> [VerticalTabsSidebarVault] {
