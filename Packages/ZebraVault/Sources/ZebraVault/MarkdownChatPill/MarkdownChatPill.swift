@@ -87,7 +87,7 @@ enum MarkdownPillPalette {
     static let selectionTint = Color(red: 232.0 / 255, green: 183.0 / 255, blue: 92.0 / 255)
 }
 
-struct MarkdownChatPill: View {
+public struct MarkdownChatPill: View {
     let displayTitle: String
     /// Non-nil when this markdown already has a companion pane for agent
     /// tabs. Submit still creates a fresh terminal tab; this only changes
@@ -96,6 +96,16 @@ struct MarkdownChatPill: View {
     /// Parent handles the actual split/tab creation and terminal input.
     /// The pill just emits the user's intent.
     let onSubmit: (_ text: String, _ agent: MarkdownPillAgent) -> Void
+
+    public init(
+        displayTitle: String,
+        activeAgent: MarkdownPillAgent?,
+        onSubmit: @escaping (_ text: String, _ agent: MarkdownPillAgent) -> Void
+    ) {
+        self.displayTitle = displayTitle
+        self.activeAgent = activeAgent
+        self.onSubmit = onSubmit
+    }
 
     @State private var isExpanded: Bool = false
     @State private var text: String = ""
@@ -170,7 +180,7 @@ struct MarkdownChatPill: View {
     private var placeholderText: String {
         String(localized: "markdownChat.pill.placeholder.doc", defaultValue: "Ask about this doc")
     }
-    var body: some View {
+    public var body: some View {
         Group {
             if isExpanded {
                 expandedView

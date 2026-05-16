@@ -2,6 +2,7 @@ import AppKit
 import Bonsplit
 import Combine
 import Foundation
+import ZebraVault
 
 /// Side-car for `MarkdownPanel`. Holds every piece of state that used to
 /// live on the panel model but only matters to Zebra's inspector / chat

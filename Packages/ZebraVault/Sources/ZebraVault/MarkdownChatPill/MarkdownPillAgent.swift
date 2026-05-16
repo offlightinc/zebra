@@ -1,11 +1,11 @@
 import Foundation
 
-enum MarkdownPillAgent: String, CaseIterable, Identifiable {
+public enum MarkdownPillAgent: String, CaseIterable, Identifiable, Sendable {
     case codex
     case claude
     case gemini
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 
     /// The CLI binary name expected on $PATH. See
     /// `MarkdownChatPillCommand` for the shell launch + first-prompt

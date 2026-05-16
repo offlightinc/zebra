@@ -7,13 +7,13 @@ import Foundation
 /// in its own file makes the per-agent CLI conventions (codex `-c` trust
 /// override, claude `--append-system-prompt`, gemini `--skip-trust`)
 /// auditable without scrolling past hundreds of lines of view code.
-enum MarkdownChatPillCommand {
+public enum MarkdownChatPillCommand {
     private static let codexTargetRepoEnvKey = "CMUX_MARKDOWN_CHAT_CODEX_TARGET_REPO"
 
     /// Prepare any agent-specific launch state that cannot be expressed as a
     /// safe session-scoped CLI flag. Returns false when preparation failed and
     /// the agent should fall back to its own first-run prompt.
-    static func prepareLaunchEnvironment(agent: MarkdownPillAgent, markdownFilePath: String) -> Bool {
+    public static func prepareLaunchEnvironment(agent: MarkdownPillAgent, markdownFilePath: String) -> Bool {
         let parent = (markdownFilePath as NSString).deletingLastPathComponent
         let cwd = parent.isEmpty ? "/" : parent
         switch agent {
@@ -26,7 +26,7 @@ enum MarkdownChatPillCommand {
         }
     }
 
-    static func shellStartupLine(
+    public static func shellStartupLine(
         agent: MarkdownPillAgent,
         markdownFilePath: String,
         userPrompt: String

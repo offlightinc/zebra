@@ -205,12 +205,6 @@
 		ED99931FC572143B7C941D33 /* Zebra/BrainObjectInspector/BrainObjectInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 268CE15FD4E5691DAB58C8AF /* Zebra/BrainObjectInspector/BrainObjectInspectorView.swift */; };
 		BC25D8DD69EB5AA881A7A69D /* Zebra/BrainObjectInspector/EditableTaskPills.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EA50197DB068BF261FE3178 /* Zebra/BrainObjectInspector/EditableTaskPills.swift */; };
 		46E0CCF933273FBF602555A3 /* Zebra/Environment/ZebraServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AD520CC2C6DD547257B9CAC /* Zebra/Environment/ZebraServices.swift */; };
-		75EA85D08670614EF9607D69 /* Zebra/MarkdownChatPill/BrainSkillsManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3307C2A633027B2BCD3A597 /* Zebra/MarkdownChatPill/BrainSkillsManifest.swift */; };
-		3D4B386DC6234B7115568180 /* Zebra/MarkdownChatPill/MarkdownChatPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6CDA6F635694DC9F8062C46 /* Zebra/MarkdownChatPill/MarkdownChatPill.swift */; };
-		913824B706A03DE41B2F593A /* Zebra/MarkdownChatPill/MarkdownChatPillCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CFBE1FFE852680B43D1909E /* Zebra/MarkdownChatPill/MarkdownChatPillCommand.swift */; };
-		DDE11C65B36DA0820CA79A89 /* Zebra/MarkdownChatPill/MarkdownChatPillSkillsPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005ABC8A358798729B461D0D /* Zebra/MarkdownChatPill/MarkdownChatPillSkillsPicker.swift */; };
-		C9CAB9562914F4D0ABA87CFE /* Zebra/MarkdownChatPill/MarkdownPillAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A4A0E9288C5B34B120F11F /* Zebra/MarkdownChatPill/MarkdownPillAgent.swift */; };
-		466FF86C5A8D0EAAB7553011 /* Zebra/MarkdownChatPill/MarkdownPillKbdLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15955A9F43D2E2D76B3511CE /* Zebra/MarkdownChatPill/MarkdownPillKbdLabel.swift */; };
 		3953C2B7E5A8E8CC9A1357FD /* Zebra/Panels/MarkdownPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 258A948FC450218CA8C4D2EA /* Zebra/Panels/MarkdownPanelController.swift */; };
 		EDCD9F45C2F5408F731B4991 /* Zebra/Panels/ZebraMarkdownPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C75F6DB4882044231FD3D7C5 /* Zebra/Panels/ZebraMarkdownPanelView.swift */; };
 		136724FB9BF64613D3680D0D /* Zebra/Panels/MarkdownPanelViewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87D8D1774DE317B4D8041A9B /* Zebra/Panels/MarkdownPanelViewFactory.swift */; };
@@ -806,12 +800,6 @@
 		2EA50197DB068BF261FE3178 /* Zebra/BrainObjectInspector/EditableTaskPills.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/BrainObjectInspector/EditableTaskPills.swift"; sourceTree = "<group>"; };
 		1AD520CC2C6DD547257B9CAC /* Zebra/Environment/ZebraServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Environment/ZebraServices.swift"; sourceTree = "<group>"; };
 		A5C00100A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Adapters/MarkdownPanel+ZebraVault.swift"; sourceTree = "<group>"; };
-		F3307C2A633027B2BCD3A597 /* Zebra/MarkdownChatPill/BrainSkillsManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/MarkdownChatPill/BrainSkillsManifest.swift"; sourceTree = "<group>"; };
-		F6CDA6F635694DC9F8062C46 /* Zebra/MarkdownChatPill/MarkdownChatPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/MarkdownChatPill/MarkdownChatPill.swift"; sourceTree = "<group>"; };
-		6CFBE1FFE852680B43D1909E /* Zebra/MarkdownChatPill/MarkdownChatPillCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/MarkdownChatPill/MarkdownChatPillCommand.swift"; sourceTree = "<group>"; };
-		005ABC8A358798729B461D0D /* Zebra/MarkdownChatPill/MarkdownChatPillSkillsPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/MarkdownChatPill/MarkdownChatPillSkillsPicker.swift"; sourceTree = "<group>"; };
-		F4A4A0E9288C5B34B120F11F /* Zebra/MarkdownChatPill/MarkdownPillAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/MarkdownChatPill/MarkdownPillAgent.swift"; sourceTree = "<group>"; };
-		15955A9F43D2E2D76B3511CE /* Zebra/MarkdownChatPill/MarkdownPillKbdLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/MarkdownChatPill/MarkdownPillKbdLabel.swift"; sourceTree = "<group>"; };
 		258A948FC450218CA8C4D2EA /* Zebra/Panels/MarkdownPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Panels/MarkdownPanelController.swift"; sourceTree = "<group>"; };
 		C75F6DB4882044231FD3D7C5 /* Zebra/Panels/ZebraMarkdownPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Panels/ZebraMarkdownPanelView.swift"; sourceTree = "<group>"; };
 		87D8D1774DE317B4D8041A9B /* Zebra/Panels/MarkdownPanelViewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Panels/MarkdownPanelViewFactory.swift"; sourceTree = "<group>"; };
@@ -1439,12 +1427,6 @@
 				268CE15FD4E5691DAB58C8AF /* Zebra/BrainObjectInspector/BrainObjectInspectorView.swift */,
 				2EA50197DB068BF261FE3178 /* Zebra/BrainObjectInspector/EditableTaskPills.swift */,
 				1AD520CC2C6DD547257B9CAC /* Zebra/Environment/ZebraServices.swift */,
-				F3307C2A633027B2BCD3A597 /* Zebra/MarkdownChatPill/BrainSkillsManifest.swift */,
-				F6CDA6F635694DC9F8062C46 /* Zebra/MarkdownChatPill/MarkdownChatPill.swift */,
-				6CFBE1FFE852680B43D1909E /* Zebra/MarkdownChatPill/MarkdownChatPillCommand.swift */,
-				005ABC8A358798729B461D0D /* Zebra/MarkdownChatPill/MarkdownChatPillSkillsPicker.swift */,
-				F4A4A0E9288C5B34B120F11F /* Zebra/MarkdownChatPill/MarkdownPillAgent.swift */,
-				15955A9F43D2E2D76B3511CE /* Zebra/MarkdownChatPill/MarkdownPillKbdLabel.swift */,
 				258A948FC450218CA8C4D2EA /* Zebra/Panels/MarkdownPanelController.swift */,
 				C75F6DB4882044231FD3D7C5 /* Zebra/Panels/ZebraMarkdownPanelView.swift */,
 				87D8D1774DE317B4D8041A9B /* Zebra/Panels/MarkdownPanelViewFactory.swift */,
@@ -2225,12 +2207,6 @@
 				BC25D8DD69EB5AA881A7A69D /* Zebra/BrainObjectInspector/EditableTaskPills.swift in Sources */,
 				A5C00101A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift in Sources */,
 				46E0CCF933273FBF602555A3 /* Zebra/Environment/ZebraServices.swift in Sources */,
-				75EA85D08670614EF9607D69 /* Zebra/MarkdownChatPill/BrainSkillsManifest.swift in Sources */,
-				3D4B386DC6234B7115568180 /* Zebra/MarkdownChatPill/MarkdownChatPill.swift in Sources */,
-				913824B706A03DE41B2F593A /* Zebra/MarkdownChatPill/MarkdownChatPillCommand.swift in Sources */,
-				DDE11C65B36DA0820CA79A89 /* Zebra/MarkdownChatPill/MarkdownChatPillSkillsPicker.swift in Sources */,
-				C9CAB9562914F4D0ABA87CFE /* Zebra/MarkdownChatPill/MarkdownPillAgent.swift in Sources */,
-				466FF86C5A8D0EAAB7553011 /* Zebra/MarkdownChatPill/MarkdownPillKbdLabel.swift in Sources */,
 				3953C2B7E5A8E8CC9A1357FD /* Zebra/Panels/MarkdownPanelController.swift in Sources */,
 				EDCD9F45C2F5408F731B4991 /* Zebra/Panels/ZebraMarkdownPanelView.swift in Sources */,
 				136724FB9BF64613D3680D0D /* Zebra/Panels/MarkdownPanelViewFactory.swift in Sources */,
