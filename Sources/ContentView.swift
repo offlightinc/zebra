@@ -1062,6 +1062,7 @@ struct ContentView: View {
     @EnvironmentObject var personFileListStore: PersonFileListStore
     @EnvironmentObject var goalsViewState: GoalsViewState
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.sidebarExtraLeadingInset) private var sidebarExtraLeadingInset
     @AppStorage("titlebarControlsStyle") private var titlebarControlsStyleRawValue = TitlebarControlsStyle.classic.rawValue
     @State private var sidebarWidth: CGFloat = 300
     @State private var hoveredResizerHandles: Set<SidebarResizerHandle> = []
@@ -2651,7 +2652,7 @@ struct ContentView: View {
                 .overlay(alignment: .topLeading) {
                     if isFullScreen && sidebarState.isVisible && !isMinimalMode {
                         fullscreenControls
-                            .padding(.leading, 10 + VerticalTabsSidebarModeRail.fixedWidth)
+                            .padding(.leading, 10 + sidebarExtraLeadingInset)
                             .padding(.top, 4)
                     }
                 }
@@ -9077,12 +9078,7 @@ struct VerticalTabsSidebar: View {
     let onNewTab: () -> Void
     @EnvironmentObject var tabManager: TabManager
     @EnvironmentObject var notificationStore: TerminalNotificationStore
-    @EnvironmentObject var verticalTabsSidebarModeState: VerticalTabsSidebarModeState
-    @EnvironmentObject var verticalTabsSidebarVaultState: VerticalTabsSidebarVaultState
-    @EnvironmentObject var markdownFileListStore: MarkdownFileListStore
-    @EnvironmentObject var goalFileListStore: GoalFileListStore
-    @EnvironmentObject var taskFileListStore: TaskFileListStore
-    @EnvironmentObject var goalsViewState: GoalsViewState
+    @Environment(\.sidebarComposer) private var sidebarComposer
     @Binding var selection: SidebarSelection
     @Binding var selectedTabIds: Set<UUID>
     @Binding var lastSidebarSelectionIndex: Int?
@@ -9217,7 +9213,18 @@ struct VerticalTabsSidebar: View {
             workspaceTerminalScrollBarHiddenById: workspaceTerminalScrollBarHiddenById
         )
 
-        verticalTabsSidebarBody(renderContext: renderContext)
+        let slots = SidebarSlots(
+            workspaceList: AnyView(workspaceScrollArea(renderContext: renderContext)),
+            defaultFooter: AnyView(
+                SidebarFooter(
+                    updateViewModel: updateViewModel,
+                    fileExplorerState: fileExplorerState,
+                    onSendFeedback: onSendFeedback
+                )
+            ),
+            onSendFeedback: onSendFeedback
+        )
+        sidebarComposer.compose(slots)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay {
             FirstMouseGatedHostingOverlay()
@@ -9300,93 +9307,6 @@ struct VerticalTabsSidebar: View {
             terminalScrollBarVisibilityGeneration &+= 1
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private func verticalTabsSidebarBody(renderContext: WorkspaceListRenderContext) -> some View {
-        HStack(spacing: 0) {
-            VerticalTabsSidebarModeRail(state: verticalTabsSidebarModeState)
-                .fixedSize(horizontal: true, vertical: false)
-            verticalTabsSidebarContentColumn(renderContext: renderContext)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .clipped()
-    }
-
-    private func verticalTabsSidebarContentColumn(renderContext: WorkspaceListRenderContext) -> some View {
-        VStack(spacing: 0) {
-            verticalTabsSidebarModeContent(renderContext: renderContext)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-            verticalTabsSidebarFooter
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var verticalTabsSidebarFooter: some View {
-        VerticalTabsSidebarFooter(
-            vaultState: verticalTabsSidebarVaultState,
-            onSendFeedback: onSendFeedback
-        )
-    }
-
-    private func verticalTabsSidebarModeContent(renderContext: WorkspaceListRenderContext) -> some View {
-        ZStack(alignment: .topLeading) {
-            verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .terminal) {
-                workspaceScrollArea(renderContext: renderContext)
-            }
-            verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .goals && verticalTabsSidebarModeState.listVisible) {
-                VerticalTabsSidebarGoalsContent(
-                    state: verticalTabsSidebarModeState,
-                    goalsStore: goalFileListStore,
-                    viewState: goalsViewState,
-                    onSelectFile: openVerticalTabsSidebarMarkdownFile
-                )
-            }
-            verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .tasks && verticalTabsSidebarModeState.listVisible) {
-                VerticalTabsSidebarTasksContent(
-                    state: verticalTabsSidebarModeState,
-                    taskStore: taskFileListStore,
-                    onSelectFile: openVerticalTabsSidebarMarkdownFile
-                )
-            }
-            verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .email && verticalTabsSidebarModeState.listVisible) {
-                VerticalTabsSidebarEmailContent(state: verticalTabsSidebarModeState)
-            }
-            verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .documents && verticalTabsSidebarModeState.listVisible) {
-                VerticalTabsSidebarDocumentsContent(
-                    state: verticalTabsSidebarModeState,
-                    store: markdownFileListStore,
-                    onSelectFile: openVerticalTabsSidebarMarkdownFile
-                )
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .animation(.easeOut(duration: 0.15), value: verticalTabsSidebarModeState.selectedMode)
-        .animation(.easeOut(duration: 0.15), value: verticalTabsSidebarModeState.listVisible)
-    }
-
-    private func verticalTabsSidebarModeLayer<Content: View>(
-        isVisible: Bool,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        content()
-            .opacity(isVisible ? 1 : 0)
-            .allowsHitTesting(isVisible)
-            .accessibilityHidden(!isVisible)
-    }
-
-    private func openVerticalTabsSidebarMarkdownFile(filePath: String) {
-        guard let workspace = tabManager.selectedWorkspace else { return }
-        guard let paneId = workspace.bonsplitController.focusedPaneId ?? workspace.bonsplitController.allPaneIds.first else {
-            return
-        }
-
-        selection = .tabs
-        // Markdown rail modes (goals / tasks / documents) route through the
-        // brain-object-aware MarkdownPanel so the right-pane inspector lights
-        // up. Other entrypoints (Cmd-click in terminal, file-explorer reveal)
-        // keep using FilePreviewPanel for raw text / diff workflows.
-        _ = workspace.openOrFocusMarkdownSurface(inPane: paneId, filePath: filePath)
     }
 
     private func workspaceScrollArea(renderContext: WorkspaceListRenderContext) -> some View {
@@ -10651,7 +10571,7 @@ private struct SidebarFooterButtons: View {
     }
 }
 
-private struct VerticalTabsSidebarFooter: View {
+struct VerticalTabsSidebarFooter: View {
     @ObservedObject var vaultState: VerticalTabsSidebarVaultState
     let onSendFeedback: () -> Void
 

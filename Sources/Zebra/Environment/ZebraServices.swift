@@ -48,6 +48,8 @@ struct ZebraServices {
     func injectIntoEnvironment<V: View>(_ view: V) -> some View {
         view
             .environment(\.zebra, self)
+            .environment(\.sidebarComposer, ZebraSidebarComposer.composer)
+            .environment(\.sidebarExtraLeadingInset, VerticalTabsSidebarModeRail.fixedWidth)
             .environmentObject(sidebarMode)
             .environmentObject(vault)
             .environmentObject(markdownFiles)
