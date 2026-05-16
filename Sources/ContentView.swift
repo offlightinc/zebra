@@ -9349,6 +9349,9 @@ struct VerticalTabsSidebar: View {
                     onSelectFile: openVerticalTabsSidebarMarkdownFile
                 )
             }
+            verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .email && verticalTabsSidebarModeState.listVisible) {
+                VerticalTabsSidebarEmailContent(state: verticalTabsSidebarModeState)
+            }
             verticalTabsSidebarModeLayer(isVisible: verticalTabsSidebarModeState.selectedMode == .documents && verticalTabsSidebarModeState.listVisible) {
                 VerticalTabsSidebarDocumentsContent(
                     state: verticalTabsSidebarModeState,
