@@ -8,6 +8,10 @@ modify, and the reason. Any other cmux file change in a Zebra PR is a
 The companion script `scripts/check-upstream-touchpoints.sh` reads the
 machine-readable allowlist in `docs/upstream-touchpoints.txt`.
 
+`./scripts/setup.sh` wires `git config core.hooksPath .githooks`, so the
+shared `.githooks/pre-commit` runs the guard on every `git commit`. Bypass
+once with `git commit --no-verify`.
+
 ## How Zebra is allowed to touch a cmux file
 
 Each touchpoint should fit one of these seam types — `Sources/Zebra/` provides
