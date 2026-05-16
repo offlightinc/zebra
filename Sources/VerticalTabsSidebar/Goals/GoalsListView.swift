@@ -111,9 +111,10 @@ private struct GoalsListBody: View {
 
     // Same icon/hit area/font as VerticalTabsSidebarMarkdownListView so docs and
     // goals modes share visual rhythm with the titlebar trailing buttons.
-    // Button only enables when there is something to collapse.
+    // Button disabled when nothing to collapse (현 mode 의 모든 섹션이 이미
+    // 접혀 있거나 entries 자체가 없을 때) — Tasks 의 collapse-all 정책과 동일.
     private var collapseAllToolbar: some View {
-        let canCollapse = snapshot.hasRoot && !visibleEntries.isEmpty
+        let canCollapse = snapshot.hasRoot && !visibleEntries.isEmpty && !allCollapsed
         return HStack(spacing: 0) {
             Spacer(minLength: 0)
             Button {
@@ -151,6 +152,23 @@ private struct GoalsListBody: View {
             collapsedCadenceSections = Set(GoalCadence.allCases)
         case .status:
             collapsedStatusSections = Set(BrainGoalStatus.allCases)
+        }
+    }
+
+    /// 현 mode 의 collapsible 섹션이 모두 이미 접혀 있는지. 접혀 있으면
+    /// collapse-all 이 no-op 이라 button 비활성. (status mode 의 UNKNOWN
+    /// bucket 처럼 onToggle: nil 인 비-collapsible 섹션은 계산에서 제외.)
+    private var allCollapsed: Bool {
+        switch snapshot.picker {
+        case .outline:
+            var ids: Set<String> = []
+            let tree = GoalOutlineTree.build(entries: visibleEntries)
+            collectAllOutlineIds(nodes: tree.roots, into: &ids)
+            return !ids.isEmpty && ids.isSubset(of: collapsedOutlineIds)
+        case .cadence:
+            return GoalCadence.allCases.allSatisfy { collapsedCadenceSections.contains($0) }
+        case .status:
+            return BrainGoalStatus.allCases.allSatisfy { collapsedStatusSections.contains($0) }
         }
     }
 
@@ -290,20 +308,15 @@ private extension GoalsViewState.Picker {
 
 // MARK: - Outline
 
-private struct OutlineLayout: View, Equatable {
+// Layout struct 에는 Equatable 채택을 하지 않는다 — `.equatable()` 로 wrap 시
+// LazyVStack child layout 의 measurement 가 stale 처리되어 row 사이 vertical
+// gap 발생 (commit 73d18aea7 참고). conformance 자체를 제거해서 미래에 다시
+// wrap 하기 어렵게 만든다.
+private struct OutlineLayout: View {
     let entries: [GoalEntry]
     let activePaths: Set<String>
     @Binding var collapsedIds: Set<String>
     let onSelectFile: (String) -> Void
-
-    // Compare only value inputs. onSelectFile captures may be stale and that is
-    // fine — they fire actions, not identity. The Binding's wrappedValue
-    // participates via `collapsedIds`.
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.entries == rhs.entries
-            && lhs.activePaths == rhs.activePaths
-            && lhs.collapsedIds == rhs.collapsedIds
-    }
 
     var body: some View {
         let tree = GoalOutlineTree.build(entries: entries)
@@ -401,17 +414,13 @@ enum GoalOutlineTree {
 
 // MARK: - Cadence
 
-private struct CadenceLayout: View, Equatable {
+// Layout struct 에는 Equatable 채택 금지 (`.equatable()` wrap 시 row vertical
+// gap 발생 — commit 73d18aea7 참고).
+private struct CadenceLayout: View {
     let entries: [GoalEntry]
     let activePaths: Set<String>
     @Binding var collapsedSections: Set<GoalCadence>
     let onSelectFile: (String) -> Void
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.entries == rhs.entries
-            && lhs.activePaths == rhs.activePaths
-            && lhs.collapsedSections == rhs.collapsedSections
-    }
 
     var body: some View {
         let buckets = bucketize(entries: entries)
