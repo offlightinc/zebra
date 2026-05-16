@@ -26,7 +26,7 @@ struct TaskListRow: View, Equatable {
         HStack(spacing: 8) {
             statusButton
             Text(task.title)
-                .font(.system(size: 13))
+                .font(.system(size: SidebarRowTokens.fontSize))
                 .foregroundColor(isCompleted ? BVColor.fgMute : BVColor.fg)
                 .strikethrough(isCompleted, color: BVColor.fgMute.opacity(0.5))
                 .lineLimit(1)
@@ -56,7 +56,8 @@ struct TaskListRow: View, Equatable {
                     .help(String(localized: "task.row.unrecognizedTip", defaultValue: "Unrecognized status — schema 정식 표기 아님"))
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 5)
+        .padding(.horizontal, SidebarRowTokens.horizontalPadding)
+        .padding(.vertical, SidebarRowTokens.verticalPadding)
         .sidebarRowChrome(isSelected: isSelected, isHovered: rowHover)
         .onTapGesture { onOpen(task) }
         .onHover { rowHover = $0 }

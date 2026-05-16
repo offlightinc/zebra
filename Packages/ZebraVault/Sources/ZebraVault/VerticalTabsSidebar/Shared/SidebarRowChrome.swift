@@ -1,5 +1,12 @@
 import SwiftUI
 
+enum SidebarRowTokens {
+    static let fontSize: CGFloat = 13
+    static let verticalPadding: CGFloat = 5
+    static let horizontalPadding: CGFloat = 12
+    static let metaFontSize: CGFloat = 11
+}
+
 /// 사이드바 행 (Tasks / Goals) 의 selection / hover 시각 chrome.
 /// - selection: 좌측 2pt accent bar + 행 배경 옅은 accent tint
 /// - hover: 회색 tint (selection 보다 약함)

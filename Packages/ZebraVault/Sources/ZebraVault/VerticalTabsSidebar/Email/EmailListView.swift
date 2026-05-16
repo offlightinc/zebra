@@ -684,7 +684,7 @@ private struct EmailThreadRow: View {
                 .frame(width: 18, height: 18)
 
             Text(thread.subject)
-                .font(.system(size: 13.5, weight: thread.unread ? .semibold : .regular))
+                .font(.system(size: SidebarRowTokens.fontSize, weight: thread.unread ? .semibold : .regular))
                 .foregroundColor(thread.unread ? BVColor.fg : BVColor.fg.opacity(0.65))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -710,10 +710,9 @@ private struct EmailThreadRow: View {
                     .foregroundColor(BVColor.fgFaint)
             }
         }
-        .padding(.horizontal, 14)
-        .frame(height: 32)
-        .background(hovered ? BVColor.bgHover : Color.clear)
-        .contentShape(Rectangle())
+        .padding(.horizontal, SidebarRowTokens.horizontalPadding)
+        .padding(.vertical, SidebarRowTokens.verticalPadding)
+        .sidebarRowChrome(isSelected: false, isHovered: hovered)
         .onHover { hovered = $0 }
         .accessibilityElement(children: .combine)
     }

@@ -2,11 +2,9 @@ import SwiftUI
 
 enum GoalsDesignTokens {
     static let columnWidth: CGFloat = 240
-    // Row 는 dynamic height 사용 (rowVerticalPadding × 2 + font line-height).
-    // Tasks 와 동일 (TaskListRow: .padding(.vertical, 5) + font 13pt).
-    static let rowFontSize: CGFloat = 13
-    static let rowVerticalPadding: CGFloat = 5
-    static let rowHorizontalPadding: CGFloat = 12
+    static let rowFontSize: CGFloat = SidebarRowTokens.fontSize
+    static let rowVerticalPadding: CGFloat = SidebarRowTokens.verticalPadding
+    static let rowHorizontalPadding: CGFloat = SidebarRowTokens.horizontalPadding
 
     static let groupHeaderFontSize: CGFloat = 11
     static let groupHeaderHorizontalPadding: CGFloat = 12
@@ -28,7 +26,7 @@ enum GoalsDesignTokens {
     // 우측 meta (status row 의 N/M, cadence row 의 due) 는 Task 의 due 와
     // 일관 — font 11pt + plain text. 색은 Task SidebarDueLabel 의 fgFaint 와
     // 동일.
-    static let metaFontSize: CGFloat = 11
+    static let metaFontSize: CGFloat = SidebarRowTokens.metaFontSize
 
     static let outlineChevronColumnWidth: CGFloat = 16
     static let outlineIndentPerLevel: CGFloat = 16
