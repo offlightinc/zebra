@@ -277,9 +277,7 @@ else
     echo "==> Building GhosttyKit.xcframework (this may take a few minutes)..."
     (
       cd ghostty
-      # NOTE: crash-report-subdir was added upstream but the zebra ghostty
-      # fork doesn't have it yet. Re-add once ghostty submodule is bumped.
-      "$ZIG_BIN" build -Demit-xcframework=true -Dxcframework-target=universal -Doptimize=ReleaseFast
+      "$ZIG_BIN" build -Dcrash-report-subdir="$GHOSTTYKIT_CRASH_REPORT_SUBDIR" -Demit-xcframework=true -Dxcframework-target=universal -Doptimize=ReleaseFast
     )
     echo "$GHOSTTY_KEY" > "$LOCAL_KEY_STAMP"
     echo "$GHOSTTY_SHA" > "$LEGACY_LOCAL_SHA_STAMP"
