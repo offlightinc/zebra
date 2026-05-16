@@ -417,23 +417,35 @@ struct MarkdownChatPill: View {
                 Text(String(localized: "markdownChat.pill.session.label", defaultValue: "session"))
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(MarkdownPillPalette.text)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 Text("·")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(MarkdownPillPalette.textMuted)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 Text(activeAgent?.label ?? "")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(MarkdownPillPalette.textMuted)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(MarkdownPillPalette.accent.opacity(0.10))
             .overlay(Capsule().stroke(MarkdownPillPalette.accent.opacity(0.30), lineWidth: 1))
             .clipShape(Capsule())
+            .fixedSize(horizontal: true, vertical: false)
 
             Text(String(localized: "markdownChat.pill.newSessionPrompt", defaultValue: "New session…"))
                 .font(.system(size: 13.5))
                 .foregroundColor(MarkdownPillPalette.textDim)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(-1)
+
+            sendButton(enabled: false)
         }
         .padding(8)
         .background(MarkdownPillPalette.pillBg)
@@ -651,6 +663,7 @@ struct MarkdownChatPill: View {
                 .foregroundColor(MarkdownPillPalette.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.leading, 8)
         .padding(.trailing, 10)
@@ -660,6 +673,7 @@ struct MarkdownChatPill: View {
             Capsule().stroke(MarkdownPillPalette.accent.opacity(0.25), lineWidth: 1)
         )
         .clipShape(Capsule())
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func agentSelectorButton(compact: Bool) -> some View {

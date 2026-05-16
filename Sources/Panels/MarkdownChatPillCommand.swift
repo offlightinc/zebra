@@ -8,6 +8,8 @@ import Foundation
 /// override, claude `--append-system-prompt`, gemini `--skip-trust`)
 /// auditable without scrolling past hundreds of lines of view code.
 enum MarkdownChatPillCommand {
+    private static let codexTargetRepoEnvKey = "CMUX_MARKDOWN_CHAT_CODEX_TARGET_REPO"
+
     /// Prepare any agent-specific launch state that cannot be expressed as a
     /// safe session-scoped CLI flag. Returns false when preparation failed and
     /// the agent should fall back to its own first-run prompt.
@@ -56,13 +58,64 @@ enum MarkdownChatPillCommand {
         let hiddenContextInstruction = fileContext
         switch agent {
         case .codex:
-            let override = "projects.\"\(cwd)\".trust_level=\"trusted\""
-            return "cd \(shellQuote(cwd)) && codex -c \(shellQuote(override)) \(shellQuote(visibleContextPrompt))"
+            let codexLaunch = codexLaunchContext(markdownCwd: cwd)
+            let trustOverride = "projects.\"\(codexLaunch.cwd)\".trust_level=\"trusted\""
+            var parts = [
+                "cd \(shellQuote(codexLaunch.cwd)) && codex",
+                "-C \(shellQuote(codexLaunch.cwd))"
+            ]
+            if let addDir = codexLaunch.addDir {
+                parts.append("--add-dir \(shellQuote(addDir))")
+            }
+            parts.append("-c \(shellQuote(trustOverride))")
+            parts.append(shellQuote(visibleContextPrompt))
+            return parts.joined(separator: " ")
         case .claude:
             return "cd \(shellQuote(cwd)) && claude --append-system-prompt \(shellQuote(hiddenContextInstruction)) \(shellQuote(promptArgument))"
         case .gemini:
             return "cd \(shellQuote(cwd)) && gemini --skip-trust --prompt-interactive \(shellQuote(visibleContextPrompt))"
         }
+    }
+
+    private struct CodexLaunchContext {
+        let cwd: String
+        let addDir: String?
+    }
+
+    private static func codexLaunchContext(markdownCwd: String) -> CodexLaunchContext {
+        let markdownCwd = standardizedPath(markdownCwd)
+        guard let targetRepo = codexTargetRepoPath(),
+              targetRepo != markdownCwd else {
+            return CodexLaunchContext(cwd: markdownCwd, addDir: nil)
+        }
+
+        return CodexLaunchContext(
+            cwd: targetRepo,
+            addDir: isPath(markdownCwd, inside: targetRepo) ? nil : markdownCwd
+        )
+    }
+
+    private static func codexTargetRepoPath() -> String? {
+        guard let raw = ProcessInfo.processInfo.environment[codexTargetRepoEnvKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        let path = standardizedPath((raw as NSString).expandingTildeInPath)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+        return path
+    }
+
+    private static func standardizedPath(_ path: String) -> String {
+        (path as NSString).standardizingPath
+    }
+
+    private static func isPath(_ path: String, inside root: String) -> Bool {
+        path == root || path.hasPrefix(root + "/")
     }
 
     private static func shellQuote(_ value: String) -> String {

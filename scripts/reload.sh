@@ -15,6 +15,7 @@ CMUX_DEV_PORT=""
 CMUX_DEV_PORT_END=""
 CMUX_DEV_PORT_RANGE=""
 CMUX_DEV_ORIGIN=""
+CMUX_MARKDOWN_CHAT_CODEX_TARGET_REPO_VALUE=""
 CLI_PATH=""
 LAST_SOCKET_PATH_DIR="$HOME/Library/Application Support/cmux"
 LAST_SOCKET_PATH_FILE="${LAST_SOCKET_PATH_DIR}/last-socket-path"
@@ -211,6 +212,38 @@ set_plist_env() {
     || /usr/libexec/PlistBuddy -c "Add :LSEnvironment:${key} string \"${value}\"" "$plist"
 }
 
+local_env_value() {
+  local key="$1"
+  local env_file="${CMUX_LOCAL_ENV_FILE:-.env}"
+  local line=""
+  local value=""
+
+  if [[ -n "${!key:-}" ]]; then
+    printf '%s\n' "${!key}"
+    return 0
+  fi
+
+  [[ -r "$env_file" ]] || return 1
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    line="${line#export }"
+    if [[ "$line" == "$key="* ]]; then
+      value="${line#*=}"
+      value="${value%"${value##*[![:space:]]}"}"
+      value="${value#"${value%%[![:space:]]*}"}"
+      if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+        value="${value:1:${#value}-2}"
+      elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+        value="${value:1:${#value}-2}"
+      fi
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done < "$env_file"
+  return 1
+}
+
 tagged_derived_data_path() {
   local slug="$1"
   echo "$HOME/Library/Developer/Xcode/DerivedData/cmux-${slug}"
@@ -351,6 +384,7 @@ CMUX_DEV_PORT="$(choose_cmux_dev_port)"
 CMUX_DEV_PORT_RANGE="$(choose_cmux_dev_port_range)"
 CMUX_DEV_PORT_END="$(choose_cmux_dev_port_end "$CMUX_DEV_PORT" "$CMUX_DEV_PORT_RANGE")"
 CMUX_DEV_ORIGIN="http://localhost:${CMUX_DEV_PORT}"
+CMUX_MARKDOWN_CHAT_CODEX_TARGET_REPO_VALUE="$(local_env_value CMUX_MARKDOWN_CHAT_CODEX_TARGET_REPO 2>/dev/null || true)"
 
 # Quiet logging: capture all noisy build output (xcodebuild, zig, codesign,
 # plistbuddy, etc.) to a single log file. On success we print only a one-line
@@ -579,6 +613,9 @@ if [[ -n "$TAG" && "$APP_NAME" != "$SEARCH_APP_NAME" ]]; then
       set_plist_env "$INFO_PLIST" CMUX_AUTH_WWW_ORIGIN "$CMUX_DEV_ORIGIN"
       set_plist_env "$INFO_PLIST" CMUX_API_BASE_URL "$CMUX_DEV_ORIGIN"
       set_plist_env "$INFO_PLIST" CMUX_VM_API_BASE_URL "$CMUX_DEV_ORIGIN"
+      if [[ -n "$CMUX_MARKDOWN_CHAT_CODEX_TARGET_REPO_VALUE" ]]; then
+        set_plist_env "$INFO_PLIST" CMUX_MARKDOWN_CHAT_CODEX_TARGET_REPO "$CMUX_MARKDOWN_CHAT_CODEX_TARGET_REPO_VALUE"
+      fi
       if [[ -S "$CMUXD_SOCKET" ]]; then
         for PID in $(lsof -t "$CMUXD_SOCKET" 2>/dev/null); do
           kill "$PID" 2>/dev/null || true
