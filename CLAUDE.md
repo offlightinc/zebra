@@ -7,7 +7,7 @@
 - **cmux 파일 직접 수정 금지.** upstream 코드에 닿아야 하면 EnvironmentKey / Composer slot / Factory closure 중 하나로 seam 을 내고, 채우는 쪽은 Zebra 코드로만.
 - **cmux 모델에 zebra-only 필드/메서드 추가 금지.** 필요하면 side-car controller 로 빼고 owner 는 `ZebraServices` (앱 전역). View 의 `@StateObject` / `onDisappear` 에 매면 split reparent 시 회귀 발생.
 - **새 Zebra 파일은 `Sources/Zebra/**`** 안에만 (Phase 3 이후 `Packages/ZebraVault/`). `Sources/` 직하부나 `Sources/Panels/` 에 zebra 파일 추가 금지.
-- **`Resources/Localizable.xcstrings` 는 upstream 전용.** Zebra 문자열은 `Resources/Localizable+Zebra.xcstrings`.
+- **`Resources/Localizable.xcstrings` 의 upstream 영역은 byte-identical 유지.** Zebra 신규 문자열은 같은 파일 끝의 Zebra append 블록에 추가. (별도 `.xcstrings` 카탈로그로 분리하면 SwiftUI 가 별도 table 로 컴파일해서 `String(localized:)` 가 못 찾음 — Phase 1.3 회귀 학습.)
 
 자세한 패턴/이유는 `/Users/han/.claude/plans/cmux-zbrown-cmux-wise-treasure.md` 참조.
 
