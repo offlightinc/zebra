@@ -1,0 +1,29 @@
+# Cmux files Zebra is allowed to touch. See docs/upstream-touchpoints.md for
+# the human-readable table. `scripts/check-upstream-touchpoints.sh` reads this
+# allowlist — one path per line, blank lines and `#` comments ignored.
+
+# Adapter / DI seams
+Sources/AppDelegate.swift
+Sources/ContentView.swift
+Sources/Panels/PanelContentView.swift
+Sources/Panels/MarkdownPanel.swift
+Sources/WorkspaceContentView.swift
+
+# Preference / metric overrides (small, single-value). TODO: move into Zebra
+# seams (Phase 1.4 finish-up).
+Sources/SessionPersistence.swift           # defaultSidebarWidth: 200 → 300 (Zebra ships wider rail-aware sidebar)
+Sources/WindowChromeMetrics.swift          # SidebarWorkspaceListMetrics.secondRowHeight constant used by Zebra Tasks/Goals modes
+Sources/WindowDragHandleView.swift         # MinimalModeSidebarTitlebarControlsMetrics.leadingInset adds rail width
+
+# Localization (single catalog — see docs note about SwiftUI string tables)
+Resources/Localizable.xcstrings
+
+# Tests + project plumbing
+cmuxTests/FileDropOverlayViewTests.swift
+GhosttyTabs.xcodeproj/project.pbxproj
+
+# Docs
+CLAUDE.md
+AGENTS.md
+docs/upstream-touchpoints.md
+docs/upstream-touchpoints.txt
