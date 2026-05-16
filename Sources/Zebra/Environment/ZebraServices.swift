@@ -46,8 +46,12 @@ struct ZebraServices {
     /// the container for cases where a view needs to read multiple stores
     /// without subscribing to any of them.
     func injectIntoEnvironment<V: View>(_ view: V) -> some View {
+        // NOTE: caller must attach `.zebraStoreBindings()` to the innermost
+        // view (e.g., `ContentView()`) BEFORE handing it here. The modifier
+        // reads cmux `@EnvironmentObject` values (TabManager, etc.) plus the
+        // Zebra ones below, so every env provider has to sit above it in
+        // the SwiftUI tree.
         view
-            .zebraStoreBindings()
             .environment(\.zebra, self)
             .environment(\.sidebarComposer, ZebraSidebarComposer.composer)
             .environment(\.sidebarExtraLeadingInset, VerticalTabsSidebarModeRail.fixedWidth)

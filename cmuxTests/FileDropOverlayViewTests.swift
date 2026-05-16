@@ -17,6 +17,7 @@ final class FileDropOverlayViewTests: XCTestCase {
 
         let root = ZebraServices.makeDefault().injectIntoEnvironment(
             ContentView(updateViewModel: UpdateViewModel(), windowId: windowId)
+                .zebraStoreBindings()
                 .environmentObject(TabManager())
                 .environmentObject(TerminalNotificationStore.shared)
                 .environmentObject(SidebarState())
