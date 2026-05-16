@@ -1,4 +1,5 @@
 import SwiftUI
+import ZebraVault
 
 /// Container for Zebra-only app-wide stores.
 ///

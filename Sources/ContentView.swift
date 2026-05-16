@@ -6,6 +6,7 @@ import Observation
 import SwiftUI
 import ObjectiveC
 import UniformTypeIdentifiers
+import ZebraVault
 import WebKit
 
 var fileDropOverlayKey: UInt8 = 0

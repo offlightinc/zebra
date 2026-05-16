@@ -1,4 +1,5 @@
 import SwiftUI
+import ZebraVault
 
 /// Zebra-side wiring that used to live inside cmux's `ContentView`:
 /// `ActiveMarkdownPathsObserver` ownership, four "vault root → store"

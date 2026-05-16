@@ -1,4 +1,5 @@
 import SwiftUI
+import ZebraVault
 
 /// Zebra's plug for the sidebar composer slot.
 ///

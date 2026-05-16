@@ -199,67 +199,15 @@
 		D7AB0000000000000000000B /* TerminalController+MoveTabToNewWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7AB0000000000000000000C /* TerminalController+MoveTabToNewWorkspace.swift */; };
 		C7A50A000000000000000002 /* TerminalControllerPaneResizeSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A50A000000000000000001 /* TerminalControllerPaneResizeSupport.swift */; };
 		C7A50B000000000000000002 /* TerminalControllerV2ParamParsingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A50B000000000000000001 /* TerminalControllerV2ParamParsingSupport.swift */; };
-		E4A475473C813FEC89EB3E41 /* Zebra/BrainObjectInspector/BrainFrontmatterWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D84041895AB34888931A1073 /* Zebra/BrainObjectInspector/BrainFrontmatterWriter.swift */; };
-		FA7321F54E14C167A8FE9B2A /* Zebra/BrainObjectInspector/BrainObject.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37294762FE90D6DE19A6C6DC /* Zebra/BrainObjectInspector/BrainObject.swift */; };
-		08976D9C9956FC014A46953A /* Zebra/BrainObjectInspector/BrainObjectInspectorAtoms.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1704AEE95EB1547F96281FDF /* Zebra/BrainObjectInspector/BrainObjectInspectorAtoms.swift */; };
-		ED99931FC572143B7C941D33 /* Zebra/BrainObjectInspector/BrainObjectInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 268CE15FD4E5691DAB58C8AF /* Zebra/BrainObjectInspector/BrainObjectInspectorView.swift */; };
-		BC25D8DD69EB5AA881A7A69D /* Zebra/BrainObjectInspector/EditableTaskPills.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EA50197DB068BF261FE3178 /* Zebra/BrainObjectInspector/EditableTaskPills.swift */; };
 		46E0CCF933273FBF602555A3 /* Zebra/Environment/ZebraServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AD520CC2C6DD547257B9CAC /* Zebra/Environment/ZebraServices.swift */; };
 		3953C2B7E5A8E8CC9A1357FD /* Zebra/Panels/MarkdownPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 258A948FC450218CA8C4D2EA /* Zebra/Panels/MarkdownPanelController.swift */; };
 		EDCD9F45C2F5408F731B4991 /* Zebra/Panels/ZebraMarkdownPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C75F6DB4882044231FD3D7C5 /* Zebra/Panels/ZebraMarkdownPanelView.swift */; };
 		136724FB9BF64613D3680D0D /* Zebra/Panels/MarkdownPanelViewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87D8D1774DE317B4D8041A9B /* Zebra/Panels/MarkdownPanelViewFactory.swift */; };
-		254B9BDBEFF1C77393FE0147 /* Zebra/Pickers/CompactMonthCalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A15801C5EB8EB7157C0A309 /* Zebra/Pickers/CompactMonthCalendar.swift */; };
-		6E2AE6A5740BE6E6A9D29C95 /* Zebra/Pickers/OptionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 375A2BBEDB6D3B8897D1BEBF /* Zebra/Pickers/OptionPicker.swift */; };
-		5CB4A5ACE1D9864CF9F8911A /* Zebra/Pickers/PickerContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1DEE2A13D8BDF691567C41D /* Zebra/Pickers/PickerContainer.swift */; };
 		157819BFFF0BE052B3457EA1 /* Zebra/Sidebar/SidebarComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0280C547F1415A00F4A83C88 /* Zebra/Sidebar/SidebarComposer.swift */; };
 		C888676166DD8CE54D802FCF /* Zebra/Sidebar/ZebraSidebarBody.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE55E0558CB845AA6941E11B /* Zebra/Sidebar/ZebraSidebarBody.swift */; };
 		D4446646D4849C1E8A40AD05 /* Zebra/Sidebar/ZebraSidebarDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250A4B541BC713D8F44C65BE /* Zebra/Sidebar/ZebraSidebarDefaults.swift */; };
-		97466A0103DCAF124BC0133D /* Zebra/Sidebar/ZebraSidebarMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51335B8F0D8664BEB3DE1A71 /* Zebra/Sidebar/ZebraSidebarMetrics.swift */; };
 		2452BB620E8CFE14B50863FE /* Zebra/Sidebar/ZebraStoreBindings.swift in Sources */ = {isa = PBXBuildFile; fileRef = D435987F08AE8BD4E59C87B1 /* Zebra/Sidebar/ZebraStoreBindings.swift */; };
 		BDA9BC207BABB4CDF0C011CC /* Zebra/VerticalTabsSidebar/ActiveMarkdownPathsObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEBC3522B444F0B550834EC2 /* Zebra/VerticalTabsSidebar/ActiveMarkdownPathsObserver.swift */; };
-		22E7E45043631AC81DA21D7E /* Zebra/VerticalTabsSidebar/Email/EmailListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F862F34383110EA0A2B82165 /* Zebra/VerticalTabsSidebar/Email/EmailListView.swift */; };
-		92BEC9759BD5936789D1030A /* Zebra/VerticalTabsSidebar/FrontmatterUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F599DFAE8B6BBAA006FD7EB /* Zebra/VerticalTabsSidebar/FrontmatterUtils.swift */; };
-		8C4412A32B99AC72EBC88E97 /* Zebra/VerticalTabsSidebar/Goals/GoalEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF7E31F698268493D2F8259D /* Zebra/VerticalTabsSidebar/Goals/GoalEntry.swift */; };
-		C9F364E2C1F65683B8498E8C /* Zebra/VerticalTabsSidebar/Goals/GoalFileListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4538EAF2001D64A88A58268 /* Zebra/VerticalTabsSidebar/Goals/GoalFileListStore.swift */; };
-		C9BAD745A4476CD316F74ABE /* Zebra/VerticalTabsSidebar/Goals/GoalFrontmatterParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C27CD26630EB9F92124B745 /* Zebra/VerticalTabsSidebar/Goals/GoalFrontmatterParser.swift */; };
-		3DC5DCC9046DAE43BCF23CC2 /* Zebra/VerticalTabsSidebar/Goals/GoalRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F30FF49D56429B0C686E8FD /* Zebra/VerticalTabsSidebar/Goals/GoalRow.swift */; };
-		08D8A07001BC9F8F32834BFD /* Zebra/VerticalTabsSidebar/Goals/GoalsDesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = E27FC1C344A333DC6ABDEF2C /* Zebra/VerticalTabsSidebar/Goals/GoalsDesignTokens.swift */; };
-		94E434E36201E6883BF15C27 /* Zebra/VerticalTabsSidebar/Goals/GoalsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AE0173512C7C483FC27848D /* Zebra/VerticalTabsSidebar/Goals/GoalsListView.swift */; };
-		0C9FD92E39DA9BF709237E43 /* Zebra/VerticalTabsSidebar/Goals/GoalsViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39CD94439526799315168F2E /* Zebra/VerticalTabsSidebar/Goals/GoalsViewState.swift */; };
-		1ECA542ABBD702882089644B /* Zebra/VerticalTabsSidebar/MarkdownFileEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCEC7627C4A0D0C525D083CE /* Zebra/VerticalTabsSidebar/MarkdownFileEntry.swift */; };
-		E2954202FDC4F117A3BC35E7 /* Zebra/VerticalTabsSidebar/MarkdownFileListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F66429D250984EF5EF98016 /* Zebra/VerticalTabsSidebar/MarkdownFileListStore.swift */; };
-		F4105F1A419229A5BC19F7F3 /* Zebra/VerticalTabsSidebar/MarkdownVaultSubdirStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13B2FDE97B2DFAE5210B29DE /* Zebra/VerticalTabsSidebar/MarkdownVaultSubdirStore.swift */; };
-		953B24C2F2CFEC470D29DADB /* Zebra/VerticalTabsSidebar/People/PersonEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 845EBFFE57EE57FAFCAB8606 /* Zebra/VerticalTabsSidebar/People/PersonEntry.swift */; };
-		1B076C06966505EC45E224F0 /* Zebra/VerticalTabsSidebar/People/PersonFileListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D74B7FBBF5C5328F630553A /* Zebra/VerticalTabsSidebar/People/PersonFileListStore.swift */; };
-		5CDB7CB8997AB7F7D8475225 /* Zebra/VerticalTabsSidebar/People/PersonFrontmatterParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF1E354DC6F79E345D01DB88 /* Zebra/VerticalTabsSidebar/People/PersonFrontmatterParser.swift */; };
-		5572F6752842E5FAC597BB3A /* Zebra/VerticalTabsSidebar/Shared/SidebarDueLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F69F30416BDB6C390758A0BF /* Zebra/VerticalTabsSidebar/Shared/SidebarDueLabel.swift */; };
-		D144B9F22D749E3583162083 /* Zebra/VerticalTabsSidebar/Shared/SidebarRowChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 414398B9B843ADC93844B1D6 /* Zebra/VerticalTabsSidebar/Shared/SidebarRowChrome.swift */; };
-		586B3CC278DD80EEAFFBEF7E /* Zebra/VerticalTabsSidebar/Shared/SidebarSectionHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F754ABD1DB971EF373CCF49 /* Zebra/VerticalTabsSidebar/Shared/SidebarSectionHeader.swift */; };
-		C8B7858AB495BF32BCAC4C9C /* Zebra/VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC86DDC835906909B5C2408 /* Zebra/VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift */; };
-		E71D035354979DF4039CDFE6 /* Zebra/VerticalTabsSidebar/Shared/StatusGlyphShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C2BD0E0BC1FB21575BF8F8 /* Zebra/VerticalTabsSidebar/Shared/StatusGlyphShape.swift */; };
-		521DE4209F9D124C38DADA51 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E394A8559F3A4655C9918A04 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */; };
-		7899A2783F374C1DD432CB79 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBFDCEA9744EE1714B3BEB08 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */; };
-		00E858392B9D89F95E53ABF8 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28456CD5A9F3BDAC765B4E3D /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift */; };
-		97539F98D36F68B27BC9B4AB /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44BA07C379ADAFC5C6F96745 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift */; };
-		0C004193DCF13CCE10B862F9 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FEA4491F5FDE65570E8E363 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift */; };
-		3FCA5E14F913612D95BB517B /* Zebra/VerticalTabsSidebar/Tasks/TaskFileListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F31E414D4F1E73E92BDCB88 /* Zebra/VerticalTabsSidebar/Tasks/TaskFileListStore.swift */; };
-		FF9A9E3AC690EEE75EF284A2 /* Zebra/VerticalTabsSidebar/Tasks/TaskFilterChipView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C585E7B57646DEEAE49EB1CE /* Zebra/VerticalTabsSidebar/Tasks/TaskFilterChipView.swift */; };
-		99B142A174CEDD623EB2B73E /* Zebra/VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00494BBE4FCBA53B22DA800 /* Zebra/VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift */; };
-		6BE6F1AC4CEAEE60659383A7 /* Zebra/VerticalTabsSidebar/Tasks/TaskItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5B650133EAF9D0AAB672760 /* Zebra/VerticalTabsSidebar/Tasks/TaskItem.swift */; };
-		C6AB144E4DA9FF485D5380CD /* Zebra/VerticalTabsSidebar/Tasks/TaskListRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E885E549F3F42708F9AB719F /* Zebra/VerticalTabsSidebar/Tasks/TaskListRow.swift */; };
-		9A9C340356BAA073C92FAA81 /* Zebra/VerticalTabsSidebar/Tasks/TaskListToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C842106324E148070AA71FF9 /* Zebra/VerticalTabsSidebar/Tasks/TaskListToolbar.swift */; };
-		B4265D0B6CD396A85AD962D2 /* Zebra/VerticalTabsSidebar/Tasks/TaskListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFB90578AC7F567A52052F33 /* Zebra/VerticalTabsSidebar/Tasks/TaskListView.swift */; };
-		53ED856282AB42126032475D /* Zebra/VerticalTabsSidebar/Tasks/TaskListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F2D3E424E6565BC25E753CD /* Zebra/VerticalTabsSidebar/Tasks/TaskListViewModel.swift */; };
-		6B7D018A1BB123BDFE205BBE /* Zebra/VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99656C5F6CD697CEF55270BB /* Zebra/VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */; };
-		F927CF1DB17D762BD2873BA3 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarDocumentsContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C3ED31BBA0E988A6BF29D18 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarDocumentsContent.swift */; };
-		F3398BD15E4880E2E3F9835F /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarEmailContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D58CC382FB62737A666D083 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarEmailContent.swift */; };
-		EAC16EFFEED7325A0E49A54C /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarGoalsContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45D6785B88B41588DC0EB59D /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarGoalsContent.swift */; };
-		3834B2E17D6C3C3DA2BEEFEB /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarMarkdownListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13C90A0B7D2C6A568DA739C3 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarMarkdownListView.swift */; };
-		76C043CA073F045D7BC46159 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74EEAE6494FA9B3C9FA55046 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarMode.swift */; };
-		6F26C30E6C2CE83EECC7ED5F /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 240A8DC5BED4A01DA70E2F4B /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift */; };
-		05DDD9414DA5DE6A576139FD /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15948A16B87C338DB0084DBA /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeState.swift */; };
-		AEBA49B7926B8E0C7932260B /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarTasksContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75C157ACA056E4964D8C1BAD /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarTasksContent.swift */; };
-		2A8ED5CF1B0463148C81608F /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarVaultState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 348283975374EED7560137D1 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarVaultState.swift */; };
 		594B13EF165C542F2EBC8ABC /* Panels/MarkdownPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A8C9B2927F37120455B21A5 /* Panels/MarkdownPanelView.swift */; };
 		A5001093 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001090 /* AppDelegate.swift */; };
 		C3677002000000000000001 /* CmuxSSHURLRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3677002000000000000002 /* CmuxSSHURLRequest.swift */; };
@@ -793,68 +741,16 @@
 		C7A503000000000000000001 /* TaskManagerSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskManagerSnapshot.swift; sourceTree = "<group>"; };
 		C7A504000000000000000001 /* TaskManagerTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskManagerTypes.swift; sourceTree = "<group>"; };
 		C7A505000000000000000001 /* TerminalControllerTopSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalControllerTopSupport.swift; sourceTree = "<group>"; };
-		D84041895AB34888931A1073 /* Zebra/BrainObjectInspector/BrainFrontmatterWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/BrainObjectInspector/BrainFrontmatterWriter.swift"; sourceTree = "<group>"; };
-		37294762FE90D6DE19A6C6DC /* Zebra/BrainObjectInspector/BrainObject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/BrainObjectInspector/BrainObject.swift"; sourceTree = "<group>"; };
-		1704AEE95EB1547F96281FDF /* Zebra/BrainObjectInspector/BrainObjectInspectorAtoms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/BrainObjectInspector/BrainObjectInspectorAtoms.swift"; sourceTree = "<group>"; };
-		268CE15FD4E5691DAB58C8AF /* Zebra/BrainObjectInspector/BrainObjectInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/BrainObjectInspector/BrainObjectInspectorView.swift"; sourceTree = "<group>"; };
-		2EA50197DB068BF261FE3178 /* Zebra/BrainObjectInspector/EditableTaskPills.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/BrainObjectInspector/EditableTaskPills.swift"; sourceTree = "<group>"; };
 		1AD520CC2C6DD547257B9CAC /* Zebra/Environment/ZebraServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Environment/ZebraServices.swift"; sourceTree = "<group>"; };
 		A5C00100A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Adapters/MarkdownPanel+ZebraVault.swift"; sourceTree = "<group>"; };
 		258A948FC450218CA8C4D2EA /* Zebra/Panels/MarkdownPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Panels/MarkdownPanelController.swift"; sourceTree = "<group>"; };
 		C75F6DB4882044231FD3D7C5 /* Zebra/Panels/ZebraMarkdownPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Panels/ZebraMarkdownPanelView.swift"; sourceTree = "<group>"; };
 		87D8D1774DE317B4D8041A9B /* Zebra/Panels/MarkdownPanelViewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Panels/MarkdownPanelViewFactory.swift"; sourceTree = "<group>"; };
-		8A15801C5EB8EB7157C0A309 /* Zebra/Pickers/CompactMonthCalendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Pickers/CompactMonthCalendar.swift"; sourceTree = "<group>"; };
-		375A2BBEDB6D3B8897D1BEBF /* Zebra/Pickers/OptionPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Pickers/OptionPicker.swift"; sourceTree = "<group>"; };
-		D1DEE2A13D8BDF691567C41D /* Zebra/Pickers/PickerContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Pickers/PickerContainer.swift"; sourceTree = "<group>"; };
 		0280C547F1415A00F4A83C88 /* Zebra/Sidebar/SidebarComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Sidebar/SidebarComposer.swift"; sourceTree = "<group>"; };
 		FE55E0558CB845AA6941E11B /* Zebra/Sidebar/ZebraSidebarBody.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Sidebar/ZebraSidebarBody.swift"; sourceTree = "<group>"; };
 		250A4B541BC713D8F44C65BE /* Zebra/Sidebar/ZebraSidebarDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Sidebar/ZebraSidebarDefaults.swift"; sourceTree = "<group>"; };
-		51335B8F0D8664BEB3DE1A71 /* Zebra/Sidebar/ZebraSidebarMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Sidebar/ZebraSidebarMetrics.swift"; sourceTree = "<group>"; };
 		D435987F08AE8BD4E59C87B1 /* Zebra/Sidebar/ZebraStoreBindings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Sidebar/ZebraStoreBindings.swift"; sourceTree = "<group>"; };
 		AEBC3522B444F0B550834EC2 /* Zebra/VerticalTabsSidebar/ActiveMarkdownPathsObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/ActiveMarkdownPathsObserver.swift"; sourceTree = "<group>"; };
-		F862F34383110EA0A2B82165 /* Zebra/VerticalTabsSidebar/Email/EmailListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Email/EmailListView.swift"; sourceTree = "<group>"; };
-		2F599DFAE8B6BBAA006FD7EB /* Zebra/VerticalTabsSidebar/FrontmatterUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/FrontmatterUtils.swift"; sourceTree = "<group>"; };
-		FF7E31F698268493D2F8259D /* Zebra/VerticalTabsSidebar/Goals/GoalEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Goals/GoalEntry.swift"; sourceTree = "<group>"; };
-		D4538EAF2001D64A88A58268 /* Zebra/VerticalTabsSidebar/Goals/GoalFileListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Goals/GoalFileListStore.swift"; sourceTree = "<group>"; };
-		6C27CD26630EB9F92124B745 /* Zebra/VerticalTabsSidebar/Goals/GoalFrontmatterParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Goals/GoalFrontmatterParser.swift"; sourceTree = "<group>"; };
-		3F30FF49D56429B0C686E8FD /* Zebra/VerticalTabsSidebar/Goals/GoalRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Goals/GoalRow.swift"; sourceTree = "<group>"; };
-		E27FC1C344A333DC6ABDEF2C /* Zebra/VerticalTabsSidebar/Goals/GoalsDesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Goals/GoalsDesignTokens.swift"; sourceTree = "<group>"; };
-		4AE0173512C7C483FC27848D /* Zebra/VerticalTabsSidebar/Goals/GoalsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Goals/GoalsListView.swift"; sourceTree = "<group>"; };
-		39CD94439526799315168F2E /* Zebra/VerticalTabsSidebar/Goals/GoalsViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Goals/GoalsViewState.swift"; sourceTree = "<group>"; };
-		DCEC7627C4A0D0C525D083CE /* Zebra/VerticalTabsSidebar/MarkdownFileEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/MarkdownFileEntry.swift"; sourceTree = "<group>"; };
-		4F66429D250984EF5EF98016 /* Zebra/VerticalTabsSidebar/MarkdownFileListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/MarkdownFileListStore.swift"; sourceTree = "<group>"; };
-		13B2FDE97B2DFAE5210B29DE /* Zebra/VerticalTabsSidebar/MarkdownVaultSubdirStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/MarkdownVaultSubdirStore.swift"; sourceTree = "<group>"; };
-		845EBFFE57EE57FAFCAB8606 /* Zebra/VerticalTabsSidebar/People/PersonEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/People/PersonEntry.swift"; sourceTree = "<group>"; };
-		9D74B7FBBF5C5328F630553A /* Zebra/VerticalTabsSidebar/People/PersonFileListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/People/PersonFileListStore.swift"; sourceTree = "<group>"; };
-		EF1E354DC6F79E345D01DB88 /* Zebra/VerticalTabsSidebar/People/PersonFrontmatterParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/People/PersonFrontmatterParser.swift"; sourceTree = "<group>"; };
-		F69F30416BDB6C390758A0BF /* Zebra/VerticalTabsSidebar/Shared/SidebarDueLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Shared/SidebarDueLabel.swift"; sourceTree = "<group>"; };
-		414398B9B843ADC93844B1D6 /* Zebra/VerticalTabsSidebar/Shared/SidebarRowChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Shared/SidebarRowChrome.swift"; sourceTree = "<group>"; };
-		4F754ABD1DB971EF373CCF49 /* Zebra/VerticalTabsSidebar/Shared/SidebarSectionHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Shared/SidebarSectionHeader.swift"; sourceTree = "<group>"; };
-		3AC86DDC835906909B5C2408 /* Zebra/VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift"; sourceTree = "<group>"; };
-		51C2BD0E0BC1FB21575BF8F8 /* Zebra/VerticalTabsSidebar/Shared/StatusGlyphShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Shared/StatusGlyphShape.swift"; sourceTree = "<group>"; };
-		E394A8559F3A4655C9918A04 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift"; sourceTree = "<group>"; };
-		EBFDCEA9744EE1714B3BEB08 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift"; sourceTree = "<group>"; };
-		28456CD5A9F3BDAC765B4E3D /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift"; sourceTree = "<group>"; };
-		44BA07C379ADAFC5C6F96745 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift"; sourceTree = "<group>"; };
-		8FEA4491F5FDE65570E8E363 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift"; sourceTree = "<group>"; };
-		5F31E414D4F1E73E92BDCB88 /* Zebra/VerticalTabsSidebar/Tasks/TaskFileListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/TaskFileListStore.swift"; sourceTree = "<group>"; };
-		C585E7B57646DEEAE49EB1CE /* Zebra/VerticalTabsSidebar/Tasks/TaskFilterChipView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/TaskFilterChipView.swift"; sourceTree = "<group>"; };
-		A00494BBE4FCBA53B22DA800 /* Zebra/VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift"; sourceTree = "<group>"; };
-		B5B650133EAF9D0AAB672760 /* Zebra/VerticalTabsSidebar/Tasks/TaskItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/TaskItem.swift"; sourceTree = "<group>"; };
-		E885E549F3F42708F9AB719F /* Zebra/VerticalTabsSidebar/Tasks/TaskListRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/TaskListRow.swift"; sourceTree = "<group>"; };
-		C842106324E148070AA71FF9 /* Zebra/VerticalTabsSidebar/Tasks/TaskListToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/TaskListToolbar.swift"; sourceTree = "<group>"; };
-		EFB90578AC7F567A52052F33 /* Zebra/VerticalTabsSidebar/Tasks/TaskListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/TaskListView.swift"; sourceTree = "<group>"; };
-		2F2D3E424E6565BC25E753CD /* Zebra/VerticalTabsSidebar/Tasks/TaskListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/TaskListViewModel.swift"; sourceTree = "<group>"; };
-		99656C5F6CD697CEF55270BB /* Zebra/VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift"; sourceTree = "<group>"; };
-		7C3ED31BBA0E988A6BF29D18 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarDocumentsContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/VerticalTabsSidebarDocumentsContent.swift"; sourceTree = "<group>"; };
-		0D58CC382FB62737A666D083 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarEmailContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/VerticalTabsSidebarEmailContent.swift"; sourceTree = "<group>"; };
-		45D6785B88B41588DC0EB59D /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarGoalsContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/VerticalTabsSidebarGoalsContent.swift"; sourceTree = "<group>"; };
-		13C90A0B7D2C6A568DA739C3 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarMarkdownListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/VerticalTabsSidebarMarkdownListView.swift"; sourceTree = "<group>"; };
-		74EEAE6494FA9B3C9FA55046 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/VerticalTabsSidebarMode.swift"; sourceTree = "<group>"; };
-		240A8DC5BED4A01DA70E2F4B /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift"; sourceTree = "<group>"; };
-		15948A16B87C338DB0084DBA /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeState.swift"; sourceTree = "<group>"; };
-		75C157ACA056E4964D8C1BAD /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarTasksContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/VerticalTabsSidebarTasksContent.swift"; sourceTree = "<group>"; };
-		348283975374EED7560137D1 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarVaultState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/VerticalTabsSidebar/VerticalTabsSidebarVaultState.swift"; sourceTree = "<group>"; };
 		0A8C9B2927F37120455B21A5 /* Panels/MarkdownPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Panels/MarkdownPanelView.swift"; sourceTree = "<group>"; };
 		A5001090 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		C3873002C3873002C3873002 /* GhosttyCrashBreadcrumb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyCrashBreadcrumb.swift; sourceTree = "<group>"; };
@@ -1421,67 +1317,15 @@
 				A5001620 /* AppleScriptSupport.swift */,
 				D1320AA0D1320AA0D1320AA4 /* AppIconDockTilePlugin.swift */,
 				A5C00100A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift */,
-				D84041895AB34888931A1073 /* Zebra/BrainObjectInspector/BrainFrontmatterWriter.swift */,
-				37294762FE90D6DE19A6C6DC /* Zebra/BrainObjectInspector/BrainObject.swift */,
-				1704AEE95EB1547F96281FDF /* Zebra/BrainObjectInspector/BrainObjectInspectorAtoms.swift */,
-				268CE15FD4E5691DAB58C8AF /* Zebra/BrainObjectInspector/BrainObjectInspectorView.swift */,
-				2EA50197DB068BF261FE3178 /* Zebra/BrainObjectInspector/EditableTaskPills.swift */,
 				1AD520CC2C6DD547257B9CAC /* Zebra/Environment/ZebraServices.swift */,
 				258A948FC450218CA8C4D2EA /* Zebra/Panels/MarkdownPanelController.swift */,
 				C75F6DB4882044231FD3D7C5 /* Zebra/Panels/ZebraMarkdownPanelView.swift */,
 				87D8D1774DE317B4D8041A9B /* Zebra/Panels/MarkdownPanelViewFactory.swift */,
-				8A15801C5EB8EB7157C0A309 /* Zebra/Pickers/CompactMonthCalendar.swift */,
-				375A2BBEDB6D3B8897D1BEBF /* Zebra/Pickers/OptionPicker.swift */,
-				D1DEE2A13D8BDF691567C41D /* Zebra/Pickers/PickerContainer.swift */,
 				0280C547F1415A00F4A83C88 /* Zebra/Sidebar/SidebarComposer.swift */,
 				FE55E0558CB845AA6941E11B /* Zebra/Sidebar/ZebraSidebarBody.swift */,
 				250A4B541BC713D8F44C65BE /* Zebra/Sidebar/ZebraSidebarDefaults.swift */,
-				51335B8F0D8664BEB3DE1A71 /* Zebra/Sidebar/ZebraSidebarMetrics.swift */,
 				D435987F08AE8BD4E59C87B1 /* Zebra/Sidebar/ZebraStoreBindings.swift */,
 				AEBC3522B444F0B550834EC2 /* Zebra/VerticalTabsSidebar/ActiveMarkdownPathsObserver.swift */,
-				F862F34383110EA0A2B82165 /* Zebra/VerticalTabsSidebar/Email/EmailListView.swift */,
-				2F599DFAE8B6BBAA006FD7EB /* Zebra/VerticalTabsSidebar/FrontmatterUtils.swift */,
-				FF7E31F698268493D2F8259D /* Zebra/VerticalTabsSidebar/Goals/GoalEntry.swift */,
-				D4538EAF2001D64A88A58268 /* Zebra/VerticalTabsSidebar/Goals/GoalFileListStore.swift */,
-				6C27CD26630EB9F92124B745 /* Zebra/VerticalTabsSidebar/Goals/GoalFrontmatterParser.swift */,
-				3F30FF49D56429B0C686E8FD /* Zebra/VerticalTabsSidebar/Goals/GoalRow.swift */,
-				E27FC1C344A333DC6ABDEF2C /* Zebra/VerticalTabsSidebar/Goals/GoalsDesignTokens.swift */,
-				4AE0173512C7C483FC27848D /* Zebra/VerticalTabsSidebar/Goals/GoalsListView.swift */,
-				39CD94439526799315168F2E /* Zebra/VerticalTabsSidebar/Goals/GoalsViewState.swift */,
-				DCEC7627C4A0D0C525D083CE /* Zebra/VerticalTabsSidebar/MarkdownFileEntry.swift */,
-				4F66429D250984EF5EF98016 /* Zebra/VerticalTabsSidebar/MarkdownFileListStore.swift */,
-				13B2FDE97B2DFAE5210B29DE /* Zebra/VerticalTabsSidebar/MarkdownVaultSubdirStore.swift */,
-				845EBFFE57EE57FAFCAB8606 /* Zebra/VerticalTabsSidebar/People/PersonEntry.swift */,
-				9D74B7FBBF5C5328F630553A /* Zebra/VerticalTabsSidebar/People/PersonFileListStore.swift */,
-				EF1E354DC6F79E345D01DB88 /* Zebra/VerticalTabsSidebar/People/PersonFrontmatterParser.swift */,
-				F69F30416BDB6C390758A0BF /* Zebra/VerticalTabsSidebar/Shared/SidebarDueLabel.swift */,
-				414398B9B843ADC93844B1D6 /* Zebra/VerticalTabsSidebar/Shared/SidebarRowChrome.swift */,
-				4F754ABD1DB971EF373CCF49 /* Zebra/VerticalTabsSidebar/Shared/SidebarSectionHeader.swift */,
-				3AC86DDC835906909B5C2408 /* Zebra/VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift */,
-				51C2BD0E0BC1FB21575BF8F8 /* Zebra/VerticalTabsSidebar/Shared/StatusGlyphShape.swift */,
-				E394A8559F3A4655C9918A04 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift */,
-				EBFDCEA9744EE1714B3BEB08 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift */,
-				28456CD5A9F3BDAC765B4E3D /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift */,
-				44BA07C379ADAFC5C6F96745 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift */,
-				8FEA4491F5FDE65570E8E363 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift */,
-				5F31E414D4F1E73E92BDCB88 /* Zebra/VerticalTabsSidebar/Tasks/TaskFileListStore.swift */,
-				C585E7B57646DEEAE49EB1CE /* Zebra/VerticalTabsSidebar/Tasks/TaskFilterChipView.swift */,
-				A00494BBE4FCBA53B22DA800 /* Zebra/VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift */,
-				B5B650133EAF9D0AAB672760 /* Zebra/VerticalTabsSidebar/Tasks/TaskItem.swift */,
-				E885E549F3F42708F9AB719F /* Zebra/VerticalTabsSidebar/Tasks/TaskListRow.swift */,
-				C842106324E148070AA71FF9 /* Zebra/VerticalTabsSidebar/Tasks/TaskListToolbar.swift */,
-				EFB90578AC7F567A52052F33 /* Zebra/VerticalTabsSidebar/Tasks/TaskListView.swift */,
-				2F2D3E424E6565BC25E753CD /* Zebra/VerticalTabsSidebar/Tasks/TaskListViewModel.swift */,
-				99656C5F6CD697CEF55270BB /* Zebra/VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift */,
-				7C3ED31BBA0E988A6BF29D18 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarDocumentsContent.swift */,
-				0D58CC382FB62737A666D083 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarEmailContent.swift */,
-				45D6785B88B41588DC0EB59D /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarGoalsContent.swift */,
-				13C90A0B7D2C6A568DA739C3 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarMarkdownListView.swift */,
-				74EEAE6494FA9B3C9FA55046 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarMode.swift */,
-				240A8DC5BED4A01DA70E2F4B /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift */,
-				15948A16B87C338DB0084DBA /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeState.swift */,
-				75C157ACA056E4964D8C1BAD /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarTasksContent.swift */,
-				348283975374EED7560137D1 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarVaultState.swift */,
 				0A8C9B2927F37120455B21A5 /* Panels/MarkdownPanelView.swift */,
 				A5001090 /* AppDelegate.swift */,
 				3865B0063865B0063865B006 /* AppDelegate+GlobalSearch.swift */,
@@ -2200,68 +2044,16 @@
 				A5001601 /* SentryHelper.swift in Sources */,
 				A5001621 /* AppleScriptSupport.swift in Sources */,
 				C3873001C3873001C3873001 /* GhosttyCrashBreadcrumb.swift in Sources */,
-				E4A475473C813FEC89EB3E41 /* Zebra/BrainObjectInspector/BrainFrontmatterWriter.swift in Sources */,
-				FA7321F54E14C167A8FE9B2A /* Zebra/BrainObjectInspector/BrainObject.swift in Sources */,
-				08976D9C9956FC014A46953A /* Zebra/BrainObjectInspector/BrainObjectInspectorAtoms.swift in Sources */,
-				ED99931FC572143B7C941D33 /* Zebra/BrainObjectInspector/BrainObjectInspectorView.swift in Sources */,
-				BC25D8DD69EB5AA881A7A69D /* Zebra/BrainObjectInspector/EditableTaskPills.swift in Sources */,
 				A5C00101A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift in Sources */,
 				46E0CCF933273FBF602555A3 /* Zebra/Environment/ZebraServices.swift in Sources */,
 				3953C2B7E5A8E8CC9A1357FD /* Zebra/Panels/MarkdownPanelController.swift in Sources */,
 				EDCD9F45C2F5408F731B4991 /* Zebra/Panels/ZebraMarkdownPanelView.swift in Sources */,
 				136724FB9BF64613D3680D0D /* Zebra/Panels/MarkdownPanelViewFactory.swift in Sources */,
-				254B9BDBEFF1C77393FE0147 /* Zebra/Pickers/CompactMonthCalendar.swift in Sources */,
-				6E2AE6A5740BE6E6A9D29C95 /* Zebra/Pickers/OptionPicker.swift in Sources */,
-				5CB4A5ACE1D9864CF9F8911A /* Zebra/Pickers/PickerContainer.swift in Sources */,
 				157819BFFF0BE052B3457EA1 /* Zebra/Sidebar/SidebarComposer.swift in Sources */,
 				C888676166DD8CE54D802FCF /* Zebra/Sidebar/ZebraSidebarBody.swift in Sources */,
 				D4446646D4849C1E8A40AD05 /* Zebra/Sidebar/ZebraSidebarDefaults.swift in Sources */,
-				97466A0103DCAF124BC0133D /* Zebra/Sidebar/ZebraSidebarMetrics.swift in Sources */,
 				2452BB620E8CFE14B50863FE /* Zebra/Sidebar/ZebraStoreBindings.swift in Sources */,
 				BDA9BC207BABB4CDF0C011CC /* Zebra/VerticalTabsSidebar/ActiveMarkdownPathsObserver.swift in Sources */,
-				22E7E45043631AC81DA21D7E /* Zebra/VerticalTabsSidebar/Email/EmailListView.swift in Sources */,
-				92BEC9759BD5936789D1030A /* Zebra/VerticalTabsSidebar/FrontmatterUtils.swift in Sources */,
-				8C4412A32B99AC72EBC88E97 /* Zebra/VerticalTabsSidebar/Goals/GoalEntry.swift in Sources */,
-				C9F364E2C1F65683B8498E8C /* Zebra/VerticalTabsSidebar/Goals/GoalFileListStore.swift in Sources */,
-				C9BAD745A4476CD316F74ABE /* Zebra/VerticalTabsSidebar/Goals/GoalFrontmatterParser.swift in Sources */,
-				3DC5DCC9046DAE43BCF23CC2 /* Zebra/VerticalTabsSidebar/Goals/GoalRow.swift in Sources */,
-				08D8A07001BC9F8F32834BFD /* Zebra/VerticalTabsSidebar/Goals/GoalsDesignTokens.swift in Sources */,
-				94E434E36201E6883BF15C27 /* Zebra/VerticalTabsSidebar/Goals/GoalsListView.swift in Sources */,
-				0C9FD92E39DA9BF709237E43 /* Zebra/VerticalTabsSidebar/Goals/GoalsViewState.swift in Sources */,
-				1ECA542ABBD702882089644B /* Zebra/VerticalTabsSidebar/MarkdownFileEntry.swift in Sources */,
-				E2954202FDC4F117A3BC35E7 /* Zebra/VerticalTabsSidebar/MarkdownFileListStore.swift in Sources */,
-				F4105F1A419229A5BC19F7F3 /* Zebra/VerticalTabsSidebar/MarkdownVaultSubdirStore.swift in Sources */,
-				953B24C2F2CFEC470D29DADB /* Zebra/VerticalTabsSidebar/People/PersonEntry.swift in Sources */,
-				1B076C06966505EC45E224F0 /* Zebra/VerticalTabsSidebar/People/PersonFileListStore.swift in Sources */,
-				5CDB7CB8997AB7F7D8475225 /* Zebra/VerticalTabsSidebar/People/PersonFrontmatterParser.swift in Sources */,
-				5572F6752842E5FAC597BB3A /* Zebra/VerticalTabsSidebar/Shared/SidebarDueLabel.swift in Sources */,
-				D144B9F22D749E3583162083 /* Zebra/VerticalTabsSidebar/Shared/SidebarRowChrome.swift in Sources */,
-				586B3CC278DD80EEAFFBEF7E /* Zebra/VerticalTabsSidebar/Shared/SidebarSectionHeader.swift in Sources */,
-				C8B7858AB495BF32BCAC4C9C /* Zebra/VerticalTabsSidebar/Shared/StatusGlyphHitBox.swift in Sources */,
-				E71D035354979DF4039CDFE6 /* Zebra/VerticalTabsSidebar/Shared/StatusGlyphShape.swift in Sources */,
-				521DE4209F9D124C38DADA51 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterFieldPicker.swift in Sources */,
-				7899A2783F374C1DD432CB79 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskFilterValuePicker.swift in Sources */,
-				00E858392B9D89F95E53ABF8 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskGroupByPicker.swift in Sources */,
-				97539F98D36F68B27BC9B4AB /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskPriorityPicker.swift in Sources */,
-				0C004193DCF13CCE10B862F9 /* Zebra/VerticalTabsSidebar/Tasks/Pickers/TaskStatusPicker.swift in Sources */,
-				3FCA5E14F913612D95BB517B /* Zebra/VerticalTabsSidebar/Tasks/TaskFileListStore.swift in Sources */,
-				FF9A9E3AC690EEE75EF284A2 /* Zebra/VerticalTabsSidebar/Tasks/TaskFilterChipView.swift in Sources */,
-				99B142A174CEDD623EB2B73E /* Zebra/VerticalTabsSidebar/Tasks/TaskFrontmatterParser.swift in Sources */,
-				6BE6F1AC4CEAEE60659383A7 /* Zebra/VerticalTabsSidebar/Tasks/TaskItem.swift in Sources */,
-				C6AB144E4DA9FF485D5380CD /* Zebra/VerticalTabsSidebar/Tasks/TaskListRow.swift in Sources */,
-				9A9C340356BAA073C92FAA81 /* Zebra/VerticalTabsSidebar/Tasks/TaskListToolbar.swift in Sources */,
-				B4265D0B6CD396A85AD962D2 /* Zebra/VerticalTabsSidebar/Tasks/TaskListView.swift in Sources */,
-				53ED856282AB42126032475D /* Zebra/VerticalTabsSidebar/Tasks/TaskListViewModel.swift in Sources */,
-				6B7D018A1BB123BDFE205BBE /* Zebra/VerticalTabsSidebar/Tasks/TaskPriorityIcon.swift in Sources */,
-				F927CF1DB17D762BD2873BA3 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarDocumentsContent.swift in Sources */,
-				F3398BD15E4880E2E3F9835F /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarEmailContent.swift in Sources */,
-				EAC16EFFEED7325A0E49A54C /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarGoalsContent.swift in Sources */,
-				3834B2E17D6C3C3DA2BEEFEB /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarMarkdownListView.swift in Sources */,
-				76C043CA073F045D7BC46159 /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarMode.swift in Sources */,
-				6F26C30E6C2CE83EECC7ED5F /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeRail.swift in Sources */,
-				05DDD9414DA5DE6A576139FD /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarModeState.swift in Sources */,
-				AEBA49B7926B8E0C7932260B /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarTasksContent.swift in Sources */,
-				2A8ED5CF1B0463148C81608F /* Zebra/VerticalTabsSidebar/VerticalTabsSidebarVaultState.swift in Sources */,
 				594B13EF165C542F2EBC8ABC /* Panels/MarkdownPanelView.swift in Sources */,
 				A5001093 /* AppDelegate.swift in Sources */,
 				C3677002000000000000001 /* CmuxSSHURLRequest.swift in Sources */,

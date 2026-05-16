@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import ZebraVault
 
 enum MarkdownPanelDisplayMode: String, CaseIterable, Identifiable {
     case preview
