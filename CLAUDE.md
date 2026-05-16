@@ -1,5 +1,16 @@
 # cmux agent notes
 
+## Zebra ↔ cmux 분리 원칙 (필수)
+
+이 저장소는 `manaflow-ai/cmux` 의 fork (`offlightinc/zebra`). upstream rebase 비용을 막기 위해 모든 Zebra 작업은 다음 규칙을 따른다:
+
+- **cmux 파일 직접 수정 금지.** upstream 코드에 닿아야 하면 EnvironmentKey / Composer slot / Factory closure 중 하나로 seam 을 내고, 채우는 쪽은 Zebra 코드로만.
+- **cmux 모델에 zebra-only 필드/메서드 추가 금지.** 필요하면 side-car controller 로 빼고 owner 는 `ZebraServices` (앱 전역). View 의 `@StateObject` / `onDisappear` 에 매면 split reparent 시 회귀 발생.
+- **새 Zebra 파일은 `Sources/Zebra/**`** 안에만 (Phase 3 이후 `Packages/ZebraVault/`). `Sources/` 직하부나 `Sources/Panels/` 에 zebra 파일 추가 금지.
+- **`Resources/Localizable.xcstrings` 는 upstream 전용.** Zebra 문자열은 `Resources/Localizable+Zebra.xcstrings`.
+
+자세한 패턴/이유는 `/Users/han/.claude/plans/cmux-zbrown-cmux-wise-treasure.md` 참조.
+
 ## Initial setup
 
 Run the setup script to initialize submodules and build GhosttyKit:
