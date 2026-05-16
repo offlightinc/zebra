@@ -4,10 +4,13 @@
 
 이 저장소는 `manaflow-ai/cmux` 의 fork (`offlightinc/zebra`). upstream rebase 비용을 막기 위해 모든 Zebra 작업은 다음 규칙을 따른다:
 
-- **cmux 파일 직접 수정 금지.** upstream 코드에 닿아야 하면 EnvironmentKey / Composer slot / Factory closure 중 하나로 seam 을 내고, 채우는 쪽은 Zebra 코드로만.
+- **cmux 파일 직접 수정 금지.** upstream 코드에 닿아야 하면 EnvironmentKey / Composer slot / Factory closure / 프로토콜 seam 중 하나로 자국을 내고, 채우는 쪽은 Zebra 코드로만. 허용된 touchpoint 목록은 `docs/upstream-touchpoints.md`, 강제 가드는 `scripts/check-upstream-touchpoints.sh` (pre-commit hook 으로 깔림 — `scripts/setup.sh` 가 `core.hooksPath .githooks` 설정).
 - **cmux 모델에 zebra-only 필드/메서드 추가 금지.** 필요하면 side-car controller 로 빼고 owner 는 `ZebraServices` (앱 전역). View 의 `@StateObject` / `onDisappear` 에 매면 split reparent 시 회귀 발생.
-- **새 Zebra 파일은 `Sources/Zebra/**`** 안에만 (Phase 3 이후 `Packages/ZebraVault/`). `Sources/` 직하부나 `Sources/Panels/` 에 zebra 파일 추가 금지.
-- **`Resources/Localizable.xcstrings` 의 upstream 영역은 byte-identical 유지.** Zebra 신규 문자열은 같은 파일 끝의 Zebra append 블록에 추가. 별도 `.xcstrings` 카탈로그로 분리 금지 (SwiftUI 가 별도 table 로 컴파일해서 `String(localized:)` 가 못 찾음).
+- **새 Zebra 파일의 default 위치는 `Packages/ZebraVault/Sources/ZebraVault/**` SPM 패키지.** cmux 의 `@EnvironmentObject` (`TabManager`, `SidebarSelectionState`) 를 읽거나 cmux 모델 내부 (`Workspace.bonsplitController`, `workspace.panels` 등) 를 직접 다뤄야만 하는 adapter 류는 예외적으로 `Sources/Zebra/` 아래 남긴다 (현재 10개 — `Adapters/`, `Environment/`, `Panels/`, `Sidebar/`, `VerticalTabsSidebar/ActiveMarkdownPathsObserver.swift`). 그 외에 `Sources/` 직하부나 `Sources/Panels/` 에 zebra 파일을 새로 추가하는 것은 금지.
+- **ZebraVault 의 public API 는 cmux-측 adapter 가 실제로 부르는 것만.** 내부 view/store 는 internal 기본. cmux upstream 파일에서 `import ZebraVault` 는 `docs/upstream-touchpoints.txt` 의 허용 목록에 있는 파일에서만 (현재 `AppDelegate`, `ContentView`, `Sources/Panels/MarkdownPanel.swift`). 다른 cmux 파일에서 import 하려는 욕구가 들면 seam 이 부족하다는 신호.
+- **cmux 모델을 Zebra 프로토콜에 conform 시킬 때는 `Sources/Zebra/Adapters/<Model>+ZebraVault.swift` 패턴으로.** 프로토콜은 ZebraVault 에서 `public` 으로 선언, conformance 는 cmux 측 adapter 파일에서 `extension <CmuxModel>: <ZebraProtocol> {}`. cmux upstream 파일을 한 줄도 안 만짐. Reference: `Sources/Zebra/Adapters/MarkdownPanel+ZebraVault.swift`.
+- **SwiftUI 의 `@ObservedObject var X: any P` 패턴은 피하고 generic struct 로.** Protocol existential 위에 `@ObservedObject` 를 두면 SwiftUI 의 redraw 가 호출 사이트의 concrete type 정보를 못 받아 invalidation 이 어긋날 수 있다. 대신 view 를 `struct ZebraXView<Model: P>: View { @ObservedObject var model: Model }` 식으로 protocol 위에 generic 화. cmux 호출 사이트가 concrete type 으로 instantiate → SwiftUI 가 정상 publish/sink. Reference: `ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>`.
+- **`Resources/Localizable.xcstrings` 의 upstream 영역은 byte-identical 유지.** Zebra 신규 문자열은 같은 파일 끝의 Zebra append 블록에 추가. 별도 `.xcstrings` 카탈로그로 분리 금지 (SwiftUI 가 별도 table 로 컴파일해서 `String(localized:)` 가 못 찾음). ZebraVault 안의 신규 문자열도 같은 cmux 카탈로그에 둔다 — `Packages/ZebraVault/` 안에 별도 카탈로그를 만들면 `bundle: .module` 을 호출 사이트마다 명시해야 하는데, 누락 시 silent fallback 으로 영문만 노출되는 회귀 위험이 크다 (Phase 1.3 회귀 학습).
 
 ## Initial setup
 
