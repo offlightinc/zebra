@@ -36,6 +36,11 @@ struct GoalObject {
     var title: String
     var goalId: String?
     var status: BrainGoalStatus?
+    /// frontmatter 의 `status:` 값이 있지만 BrainGoalStatus 의 어느 case 와도
+    /// 매핑 안 될 때 원본 raw 를 보존. 사이드바 / 인스펙터의 status pill 이 ?
+    /// 글리프로 노출해서 사용자가 정정할 수 있게 한다. (GoalFrontmatterParser
+    /// 의 같은 패턴과 일관 — 두 parser 가 같은 정책.)
+    var unrecognizedStatusRaw: String?
     var owner: String?
     var targetDate: BrainDate?
     var reviewCadence: String?
@@ -546,10 +551,17 @@ extension BrainObjectParser {
         // Best-effort task rollup; if we resolve nothing, leave nil so we
         // fall back to the "—" presentation rather than fake "0 of 0".
         let progress: Double? = nil
+        let statusRaw = dict["status"]?.scalar
+        let parsedStatus = statusRaw.flatMap { BrainGoalStatus(rawValue: $0.lowercased()) }
+        let unrecognizedStatusRaw: String? = {
+            guard let raw = statusRaw, !raw.isEmpty else { return nil }
+            return parsedStatus == nil ? raw : nil
+        }()
         return GoalObject(
             title: title,
             goalId: dict["goal_id"]?.scalar,
-            status: dict["status"]?.scalar.flatMap { BrainGoalStatus(rawValue: $0.lowercased()) },
+            status: parsedStatus,
+            unrecognizedStatusRaw: unrecognizedStatusRaw,
             owner: dict["owner"]?.scalar,
             targetDate: dict["target_date"]?.scalar.flatMap(parseDate(_:)),
             reviewCadence: dict["review_cadence"]?.scalar,

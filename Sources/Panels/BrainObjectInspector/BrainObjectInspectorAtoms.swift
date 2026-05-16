@@ -1,24 +1,55 @@
 import SwiftUI
 
-// MARK: - Token palette (dark)
+// MARK: - Token palette
 
-/// The design committed to a dark token palette only. The token names
-/// mirror the CSS custom properties used in the prototype so a reviewer
-/// can cross-reference. Light-mode appearance follows the same alpha
-/// scale against the system background and reads correctly without a
-/// separate ramp.
+/// Shared tokens for the brain inspector, vertical sidebar, and related pickers.
+/// The neutral ramp follows the active AppKit appearance so these surfaces do
+/// not stay pinned to the dark prototype palette in light mode.
 enum BVColor {
-    static let bg = Color(nsColor: NSColor(srgbRed: 0x1f / 255.0, green: 0x1f / 255.0, blue: 0x1f / 255.0, alpha: 1.0))
-    static let bgElev = Color(nsColor: NSColor(srgbRed: 0x26 / 255.0, green: 0x26 / 255.0, blue: 0x26 / 255.0, alpha: 1.0))
-    static let bgInput = Color.white.opacity(0.035)
-    static let bgHover = Color.white.opacity(0.05)
-    static let fg = Color.white.opacity(0.92)
-    static let fgMute = Color.white.opacity(0.58)
-    static let fgFaint = Color.white.opacity(0.38)
-    static let fgGhost = Color.white.opacity(0.22)
-    static let border = Color.white.opacity(0.07)
-    static let borderStrong = Color.white.opacity(0.12)
-    static let accent = Color(nsColor: NSColor(srgbRed: 0, green: 145 / 255.0, blue: 1.0, alpha: 1.0))
+    static let bg = adaptiveColor(
+        light: rgb(0xf7, 0xf7, 0xf8),
+        dark: rgb(0x1f, 0x1f, 0x1f)
+    )
+    static let bgElev = adaptiveColor(
+        light: rgb(0xff, 0xff, 0xff),
+        dark: rgb(0x26, 0x26, 0x26)
+    )
+    static let bgInput = adaptiveColor(
+        light: NSColor.black.withAlphaComponent(0.035),
+        dark: NSColor.white.withAlphaComponent(0.035)
+    )
+    static let bgHover = adaptiveColor(
+        light: NSColor.black.withAlphaComponent(0.055),
+        dark: NSColor.white.withAlphaComponent(0.05)
+    )
+    static let fg = adaptiveColor(
+        light: NSColor.black.withAlphaComponent(0.86),
+        dark: NSColor.white.withAlphaComponent(0.92)
+    )
+    static let fgMute = adaptiveColor(
+        light: NSColor.black.withAlphaComponent(0.58),
+        dark: NSColor.white.withAlphaComponent(0.58)
+    )
+    static let fgFaint = adaptiveColor(
+        light: NSColor.black.withAlphaComponent(0.38),
+        dark: NSColor.white.withAlphaComponent(0.38)
+    )
+    static let fgGhost = adaptiveColor(
+        light: NSColor.black.withAlphaComponent(0.22),
+        dark: NSColor.white.withAlphaComponent(0.22)
+    )
+    static let border = adaptiveColor(
+        light: NSColor.black.withAlphaComponent(0.08),
+        dark: NSColor.white.withAlphaComponent(0.07)
+    )
+    static let borderStrong = adaptiveColor(
+        light: NSColor.black.withAlphaComponent(0.14),
+        dark: NSColor.white.withAlphaComponent(0.12)
+    )
+    static let accent = adaptiveColor(
+        light: NSColor(srgbRed: 0, green: 136 / 255.0, blue: 1.0, alpha: 1.0),
+        dark: NSColor(srgbRed: 0, green: 145 / 255.0, blue: 1.0, alpha: 1.0)
+    )
 
     // Status hues match the Linear-inspired palette in notes.jsx §3.
     // HTML 디자인 (zebra/project/Zebra - Linear style.html) 기준 팔레트.
@@ -37,6 +68,16 @@ enum BVColor {
     static let priorityHigh = Color(nsColor: NSColor(srgbRed: 0xf0 / 255.0, green: 0x8a / 255.0, blue: 0x3e / 255.0, alpha: 1.0))
     static let priorityNormal = Color(nsColor: NSColor(srgbRed: 0x6c / 255.0, green: 0xae / 255.0, blue: 0xdb / 255.0, alpha: 1.0))
     static let priorityLow = Color(nsColor: NSColor(srgbRed: 0x77 / 255.0, green: 0x77 / 255.0, blue: 0x77 / 255.0, alpha: 1.0))
+
+    private static func adaptiveColor(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
+
+    private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
+        NSColor(srgbRed: red / 255.0, green: green / 255.0, blue: blue / 255.0, alpha: 1.0)
+    }
 }
 
 // MARK: - Type tag
@@ -718,6 +759,10 @@ extension View {
 /// 옵션 D 채택으로 제거됨 — StatusGlyph 가 shape 를 직접 받는다.
 struct EditableGoalStatusPill: View {
     let value: BrainGoalStatus?
+    /// frontmatter raw 가 있는데 BrainGoalStatus 매핑 실패한 값 (오타 등).
+    /// 사이드바와 같은 정책으로 inspector 도 "?" + raw 표시 → 사용자가 picker
+    /// 로 정정 가능.
+    let unrecognizedRaw: String?
     let onChange: (BrainGoalStatus?) -> Void
 
     @State private var isPresented = false
@@ -730,6 +775,11 @@ struct EditableGoalStatusPill: View {
                     Text(value.localizedLabel)
                         .font(.system(size: 11.5))
                         .foregroundColor(BVColor.fg)
+                } else if let raw = unrecognizedRaw {
+                    StatusGlyph(shape: .unknown).frame(width: 12, height: 12)
+                    Text("?\(raw)")
+                        .font(.system(size: 11.5).monospacedDigit())
+                        .foregroundColor(BVColor.fgMute)
                 } else {
                     Circle()
                         .strokeBorder(BVColor.fgFaint, style: StrokeStyle(lineWidth: 1, dash: [2, 1.4]))
@@ -746,7 +796,7 @@ struct EditableGoalStatusPill: View {
             OptionPicker(
                 current: value,
                 ordered: BrainGoalStatus.allCases,
-                title: String(localized: "task.picker.status.title", defaultValue: "Change status"),
+                title: String(localized: "brain.status.picker.title", defaultValue: "Change status"),
                 label: { $0.localizedLabel },
                 glyph: { status in
                     StatusGlyph(shape: status.glyphShape)
@@ -759,7 +809,7 @@ struct EditableGoalStatusPill: View {
                 }
             )
         }
-        .accessibilityLabel(Text(value?.localizedLabel ?? String(localized: "brain.editable.setStatus", defaultValue: "Set status...")))
+        .accessibilityLabel(Text(value?.localizedLabel ?? unrecognizedRaw ?? String(localized: "brain.editable.setStatus", defaultValue: "Set status...")))
     }
 }
 

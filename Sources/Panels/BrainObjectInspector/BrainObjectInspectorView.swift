@@ -191,7 +191,7 @@ struct GoalInspectorView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     InspectorSection {
                         PropertyRow(label: String(localized: "brain.row.status", defaultValue: "Status"), icon: "circle.dotted") {
-                            EditableGoalStatusPill(value: goal.status) { newStatus in
+                            EditableGoalStatusPill(value: goal.status, unrecognizedRaw: goal.unrecognizedStatusRaw) { newStatus in
                                 onUpdateFrontmatter?("status", newStatus?.rawValue)
                             }
                         }

@@ -7037,6 +7037,29 @@
         }
       }
     },
+    "brain.status.picker.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change status"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ステータスを変更"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "상태 변경"
+          }
+        }
+      }
+    },
     "brain.section.blockedBy": {
       "extractionState": "manual",
       "localizations": {
