@@ -17,6 +17,7 @@ struct ZebraSidebarBody: View {
     @EnvironmentObject var goalFileListStore: GoalFileListStore
     @EnvironmentObject var taskFileListStore: TaskFileListStore
     @EnvironmentObject var goalsViewState: GoalsViewState
+    @EnvironmentObject var emailListStore: ZebraEmailListStore
 
     var body: some View {
         HStack(spacing: 0) {
@@ -66,7 +67,21 @@ struct ZebraSidebarBody: View {
                 )
             }
             modeLayer(isVisible: modeState.selectedMode == .email && modeState.listVisible) {
-                VerticalTabsSidebarEmailContent(state: modeState)
+                VerticalTabsSidebarEmailContent(
+                    state: modeState,
+                    threads: emailListStore.threads,
+                    userLabels: emailListStore.userLabels,
+                    isConnected: emailListStore.isConnected,
+                    isLoading: emailListStore.isLoading,
+                    errorMessage: emailListStore.lastError,
+                    onConnect: { Task { await emailListStore.connect() } },
+                    onRefresh: { Task { await emailListStore.refresh() } },
+                    onCreateLabel: { emailListStore.localLabel(named: $0) }
+                )
+                .task(id: modeState.selectedMode) {
+                    guard modeState.selectedMode == .email else { return }
+                    await emailListStore.refreshIfNeeded()
+                }
             }
             modeLayer(isVisible: modeState.selectedMode == .documents && modeState.listVisible) {
                 VerticalTabsSidebarDocumentsContent(

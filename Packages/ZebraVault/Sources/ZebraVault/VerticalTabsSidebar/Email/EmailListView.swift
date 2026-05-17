@@ -1,31 +1,59 @@
 import SwiftUI
 
-struct EmailThreadItem: Identifiable, Hashable {
-    let id: String
-    let subject: String
-    let senderName: String
-    let receivedAt: Date
-    let unread: Bool
-    let starred: Bool
-    let hasAttachment: Bool
-    let labelIds: [String]
-    let category: EmailCategory?
+public struct EmailThreadItem: Identifiable, Hashable {
+    public let id: String
+    public let subject: String
+    public let senderName: String
+    public let receivedAt: Date
+    public let unread: Bool
+    public let starred: Bool
+    public let hasAttachment: Bool
+    public let labelIds: [String]
+    public let category: EmailCategory?
+
+    public init(
+        id: String,
+        subject: String,
+        senderName: String,
+        receivedAt: Date,
+        unread: Bool,
+        starred: Bool,
+        hasAttachment: Bool,
+        labelIds: [String],
+        category: EmailCategory?
+    ) {
+        self.id = id
+        self.subject = subject
+        self.senderName = senderName
+        self.receivedAt = receivedAt
+        self.unread = unread
+        self.starred = starred
+        self.hasAttachment = hasAttachment
+        self.labelIds = labelIds
+        self.category = category
+    }
 
     var initial: String {
         senderName.trimmingCharacters(in: .whitespacesAndNewlines).first.map { String($0).uppercased() } ?? "?"
     }
 }
 
-struct EmailUserLabel: Identifiable, Equatable {
-    let id: String
-    let name: String
-    let color: Color
+public struct EmailUserLabel: Identifiable, Equatable {
+    public let id: String
+    public let name: String
+    public let color: Color
+
+    public init(id: String, name: String, color: Color) {
+        self.id = id
+        self.name = name
+        self.color = color
+    }
 }
 
-enum EmailCategory: String, CaseIterable, Hashable {
+public enum EmailCategory: String, CaseIterable, Hashable {
     case primary, updates, promotions, social, forums, purchases
 
-    var label: String {
+    public var label: String {
         switch self {
         case .primary: return String(localized: "email.category.primary", defaultValue: "기본")
         case .updates: return String(localized: "email.category.updates", defaultValue: "업데이트")

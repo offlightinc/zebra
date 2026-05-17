@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -124,3 +125,86 @@ export const cloudVmBillingGrants = pgTable(
       .on(table.billingCustomerType, table.billingCustomerId, table.itemId, table.reason),
   ],
 );
+
+export const gmailOauthStates = pgTable(
+  "gmail_oauth_states",
+  {
+    state: text("state").primaryKey(),
+    userId: text("user_id").notNull(),
+    codeVerifier: text("code_verifier").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("gmail_oauth_states_user_expires_idx").on(table.userId, table.expiresAt),
+  ],
+);
+
+export const emailAccounts = pgTable(
+  "email_accounts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").notNull(),
+    provider: text("provider").notNull().default("gmail"),
+    email: text("email").notNull(),
+    providerAccountId: text("provider_account_id"),
+    connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+    disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("email_accounts_user_idx").on(table.userId),
+    uniqueIndex("email_accounts_user_provider_unique").on(table.userId, table.provider),
+  ],
+);
+
+export const emailAccountTokens = pgTable("email_account_tokens", {
+  emailAccountId: uuid("email_account_id")
+    .primaryKey()
+    .references(() => emailAccounts.id, { onDelete: "cascade" }),
+  accessTokenEncrypted: text("access_token_encrypted").notNull(),
+  refreshTokenEncrypted: text("refresh_token_encrypted").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const emailThreads = pgTable(
+  "email_threads",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").notNull(),
+    emailAccountId: uuid("email_account_id")
+      .notNull()
+      .references(() => emailAccounts.id, { onDelete: "cascade" }),
+    gmailThreadId: text("gmail_thread_id").notNull(),
+    latestGmailMessageId: text("latest_gmail_message_id").notNull(),
+    subject: text("subject").notNull(),
+    snippet: text("snippet"),
+    lastSenderName: text("last_sender_name"),
+    lastSenderEmail: text("last_sender_email"),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull(),
+    messageCount: integer("message_count").notNull().default(1),
+    hasAttachment: boolean("has_attachment").notNull().default(false),
+    labelIds: jsonb("label_ids").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("email_threads_user_last_message_idx").on(table.userId, table.lastMessageAt),
+    index("email_threads_account_last_message_idx").on(table.emailAccountId, table.lastMessageAt),
+    uniqueIndex("email_threads_account_gmail_thread_unique").on(table.emailAccountId, table.gmailThreadId),
+  ],
+);
+
+export const emailSyncState = pgTable("email_sync_state", {
+  emailAccountId: uuid("email_account_id")
+    .primaryKey()
+    .references(() => emailAccounts.id, { onDelete: "cascade" }),
+  lastSyncCursor: text("last_sync_cursor"),
+  lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
