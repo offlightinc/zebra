@@ -6,9 +6,12 @@ public struct VerticalTabsSidebarEmailContent: View {
     private let userLabels: [EmailUserLabel]?
     private let isConnected: Bool
     private let isLoading: Bool
+    private let isSyncing: Bool
     private let errorMessage: String?
+    private let selectedThreadId: String?
     private let onConnect: (() -> Void)?
     private let onRefresh: (() -> Void)?
+    private let onSelectThread: ((EmailThreadItem) -> Void)?
     private let onCreateLabel: ((String) -> EmailUserLabel)?
 
     public init(state: VerticalTabsSidebarModeState) {
@@ -17,9 +20,12 @@ public struct VerticalTabsSidebarEmailContent: View {
         self.userLabels = nil
         self.isConnected = true
         self.isLoading = false
+        self.isSyncing = false
         self.errorMessage = nil
+        self.selectedThreadId = nil
         self.onConnect = nil
         self.onRefresh = nil
+        self.onSelectThread = nil
         self.onCreateLabel = nil
     }
 
@@ -29,9 +35,12 @@ public struct VerticalTabsSidebarEmailContent: View {
         userLabels: [EmailUserLabel],
         isConnected: Bool,
         isLoading: Bool,
+        isSyncing: Bool,
         errorMessage: String?,
+        selectedThreadId: String?,
         onConnect: @escaping () -> Void,
         onRefresh: @escaping () -> Void,
+        onSelectThread: @escaping (EmailThreadItem) -> Void,
         onCreateLabel: @escaping (String) -> EmailUserLabel
     ) {
         self.state = state
@@ -39,9 +48,12 @@ public struct VerticalTabsSidebarEmailContent: View {
         self.userLabels = userLabels
         self.isConnected = isConnected
         self.isLoading = isLoading
+        self.isSyncing = isSyncing
         self.errorMessage = errorMessage
+        self.selectedThreadId = selectedThreadId
         self.onConnect = onConnect
         self.onRefresh = onRefresh
+        self.onSelectThread = onSelectThread
         self.onCreateLabel = onCreateLabel
     }
 
@@ -68,6 +80,11 @@ public struct VerticalTabsSidebarEmailContent: View {
             EmailSidebarView(
                 threads: resolvedThreads,
                 userLabels: userLabels ?? EmailSidebarSampleData.labels,
+                selectedThreadId: selectedThreadId,
+                isLoading: isLoading,
+                isSyncing: isSyncing,
+                onSelectThread: onSelectThread ?? { _ in },
+                onRefresh: onRefresh,
                 onCreateLabel: onCreateLabel ?? { name in
                     EmailUserLabel(id: "local-\(UUID().uuidString)", name: name, color: BrainPersonColor.color(for: name))
                 }

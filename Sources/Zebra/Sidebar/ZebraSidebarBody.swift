@@ -1,3 +1,4 @@
+import Bonsplit
 import SwiftUI
 import ZebraVault
 
@@ -18,6 +19,8 @@ struct ZebraSidebarBody: View {
     @EnvironmentObject var taskFileListStore: TaskFileListStore
     @EnvironmentObject var goalsViewState: GoalsViewState
     @EnvironmentObject var emailListStore: ZebraEmailListStore
+    @EnvironmentObject var emailDetailStore: ZebraEmailDetailStore
+    @Environment(\.zebra) private var zebra
 
     var body: some View {
         HStack(spacing: 0) {
@@ -73,9 +76,12 @@ struct ZebraSidebarBody: View {
                     userLabels: emailListStore.userLabels,
                     isConnected: emailListStore.isConnected,
                     isLoading: emailListStore.isLoading,
+                    isSyncing: emailListStore.isSyncing,
                     errorMessage: emailListStore.lastError,
+                    selectedThreadId: emailDetailStore.selectedThreadId,
                     onConnect: { Task { await emailListStore.connect() } },
                     onRefresh: { Task { await emailListStore.refresh() } },
+                    onSelectThread: openEmailThread,
                     onCreateLabel: { emailListStore.localLabel(named: $0) }
                 )
                 .task(id: modeState.selectedMode) {
@@ -108,15 +114,33 @@ struct ZebraSidebarBody: View {
 
     private func openMarkdownFile(filePath: String) {
         guard let workspace = tabManager.selectedWorkspace else { return }
-        guard let paneId = workspace.bonsplitController.focusedPaneId ?? workspace.bonsplitController.allPaneIds.first else {
-            return
-        }
         sidebarSelectionState.selection = .tabs
         // Markdown rail modes (goals / tasks / documents) route through the
         // brain-object-aware MarkdownPanel so the right-pane inspector lights
         // up. Other entrypoints (Cmd-click in terminal, file-explorer reveal)
         // keep using FilePreviewPanel for raw text / diff workflows.
-        _ = workspace.openOrFocusMarkdownSurface(inPane: paneId, filePath: filePath)
+        _ = workspace.openOrFocusMarkdownContent(
+            filePath: filePath,
+            excludedAgentCompanionPaneIds: chatCompanionPaneIds(in: workspace),
+            anchorPanelId: workspace.focusedPanelId
+        )
+    }
+
+    private func openEmailThread(_ thread: EmailThreadItem) {
+        guard let workspace = tabManager.selectedWorkspace else { return }
+        sidebarSelectionState.selection = .tabs
+        _ = workspace.openOrFocusEmailThreadContent(
+            thread: thread,
+            excludedAgentCompanionPaneIds: chatCompanionPaneIds(in: workspace),
+            anchorPanelId: workspace.focusedPanelId
+        )
+        emailDetailStore.selectThread(thread)
+    }
+
+    private func chatCompanionPaneIds(in workspace: Workspace) -> Set<PaneID> {
+        zebra?.panelControllers.activeChatCompanionPaneIds(
+            validPaneIds: workspace.bonsplitController.allPaneIds
+        ) ?? []
     }
 }
 

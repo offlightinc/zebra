@@ -121,6 +121,19 @@ final class MarkdownPanelControllerRegistry {
         return created
     }
 
+    func activeChatCompanionPaneIds(validPaneIds: [PaneID]) -> Set<PaneID> {
+        let validPaneIds = Set(validPaneIds)
+        return Set(
+            controllers.values.compactMap { controller in
+                guard let paneId = controller.chatCompanionPaneId,
+                      validPaneIds.contains(paneId) else {
+                    return nil
+                }
+                return paneId
+            }
+        )
+    }
+
     private func release(panelId: UUID) {
         controllers.removeValue(forKey: panelId)
     }

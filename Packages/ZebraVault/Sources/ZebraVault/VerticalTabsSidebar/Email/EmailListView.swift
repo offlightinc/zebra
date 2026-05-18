@@ -1,6 +1,6 @@
 import SwiftUI
 
-public struct EmailThreadItem: Identifiable, Hashable {
+public struct EmailThreadItem: Identifiable, Hashable, Codable {
     public let id: String
     public let subject: String
     public let senderName: String
@@ -50,7 +50,7 @@ public struct EmailUserLabel: Identifiable, Equatable {
     }
 }
 
-public enum EmailCategory: String, CaseIterable, Hashable {
+public enum EmailCategory: String, CaseIterable, Hashable, Codable {
     case primary, updates, promotions, social, forums, purchases
 
     public var label: String {
@@ -172,6 +172,13 @@ final class EmailListViewModel: ObservableObject {
 
 struct EmailListView: View {
     let threads: [EmailThreadItem]
+    let selectedThreadId: String?
+    // isLoading 은 placeholder (e.g. "메일 불러오는 중") 분기에만 쓰임 — 자동 DB
+    // read 동안에도 true 일 수 있다. toolbar spinner 는 isSyncing 으로 따로 본다.
+    let isLoading: Bool
+    let isSyncing: Bool
+    let onSelectThread: (EmailThreadItem) -> Void
+    let onRefresh: (() -> Void)?
     @State private var localUserLabels: [EmailUserLabel]
     let onCreateLabel: (String) -> EmailUserLabel
     @StateObject private var viewModel = EmailListViewModel()
@@ -180,9 +187,19 @@ struct EmailListView: View {
     init(
         threads: [EmailThreadItem],
         userLabels: [EmailUserLabel],
+        selectedThreadId: String? = nil,
+        isLoading: Bool = false,
+        isSyncing: Bool = false,
+        onSelectThread: @escaping (EmailThreadItem) -> Void = { _ in },
+        onRefresh: (() -> Void)? = nil,
         onCreateLabel: @escaping (String) -> EmailUserLabel
     ) {
         self.threads = threads
+        self.selectedThreadId = selectedThreadId
+        self.isLoading = isLoading
+        self.isSyncing = isSyncing
+        self.onSelectThread = onSelectThread
+        self.onRefresh = onRefresh
         self.onCreateLabel = onCreateLabel
         _localUserLabels = State(initialValue: userLabels)
     }
@@ -191,6 +208,11 @@ struct EmailListView: View {
         self.init(
             threads: threads,
             userLabels: initialUserLabels,
+            selectedThreadId: nil,
+            isLoading: false,
+            isSyncing: false,
+            onSelectThread: { _ in },
+            onRefresh: nil,
             onCreateLabel: { name in
                 EmailUserLabel(id: "local-\(UUID().uuidString)", name: name, color: BrainPersonColor.color(for: name))
             }
@@ -208,6 +230,7 @@ struct EmailListView: View {
                         ?? EmailFilter(field: field, op: .is, values: [])
                 },
                 userLabels: localUserLabels,
+                isSyncing: isSyncing,
                 onPickField: { field in
                     if !viewModel.filters.contains(where: { $0.field == field }) {
                         viewModel.filters.append(EmailFilter(field: field, op: .is, values: []))
@@ -219,7 +242,8 @@ struct EmailListView: View {
                     localUserLabels.append(label)
                     return label
                 },
-                onCloseFilter: {}
+                onCloseFilter: {},
+                onRefresh: onRefresh
             )
             .frame(height: ZebraSidebarMetrics.secondRowHeight)
 
@@ -264,10 +288,20 @@ struct EmailListView: View {
     private var listScrollView: some View {
         let filtered = EmailListViewModel.applyFilters(threads, viewModel.filters)
         let groups = EmailListViewModel.groups(for: filtered)
+        let filtersActive = !viewModel.filters.isEmpty
         return ScrollView {
             LazyVStack(spacing: 0) {
                 if groups.isEmpty {
-                    placeholder(String(localized: "email.list.empty.filtered", defaultValue: "조건에 맞는 메일이 없습니다"))
+                    if filtersActive {
+                        // 필터 때문에 결과가 비어 있는 경우 — 사용자가 좁힌 결과
+                        placeholder(String(localized: "email.list.empty.filtered", defaultValue: "조건에 맞는 메일이 없습니다"))
+                    } else if isLoading {
+                        // 첫 진입에서 backend 응답 대기 중 — "조건" 메시지로 보이면 오해이므로 분리
+                        placeholder(String(localized: "email.list.loading", defaultValue: "메일을 불러오는 중"))
+                    } else {
+                        // 필터 없는데 진짜로 inbox에 메일이 없는 상태
+                        placeholder(String(localized: "email.list.empty.inbox", defaultValue: "받은편지함에 메일이 없습니다"))
+                    }
                 } else {
                     ForEach(groups, id: \.bucket) { group in
                         SidebarSectionHeader(
@@ -277,7 +311,11 @@ struct EmailListView: View {
                             onToggle: nil
                         )
                         ForEach(group.items) { thread in
-                            EmailThreadRow(thread: thread)
+                            EmailThreadRow(
+                                thread: thread,
+                                isSelected: selectedThreadId == thread.id,
+                                onSelect: { onSelectThread(thread) }
+                            )
                         }
                     }
                 }
@@ -301,12 +339,22 @@ struct EmailListView: View {
 struct EmailSidebarView: View {
     let threads: [EmailThreadItem]
     let userLabels: [EmailUserLabel]
+    let selectedThreadId: String?
+    let isLoading: Bool
+    let isSyncing: Bool
+    let onSelectThread: (EmailThreadItem) -> Void
+    let onRefresh: (() -> Void)?
     let onCreateLabel: (String) -> EmailUserLabel
 
     var body: some View {
         EmailListView(
             threads: threads,
             userLabels: userLabels,
+            selectedThreadId: selectedThreadId,
+            isLoading: isLoading,
+            isSyncing: isSyncing,
+            onSelectThread: onSelectThread,
+            onRefresh: onRefresh,
             onCreateLabel: onCreateLabel
         )
     }
@@ -317,12 +365,15 @@ private struct EmailListToolbar: View {
     @Binding var filterStep: EmailFilterPopoverStep?
     let currentFilter: (EmailFilterField) -> EmailFilter
     let userLabels: [EmailUserLabel]
+    let isSyncing: Bool
     let onPickField: (EmailFilterField) -> Void
     let onChangeFilterValues: (EmailFilter) -> Void
     let onCreateLabel: (String) -> EmailUserLabel
     let onCloseFilter: () -> Void
+    let onRefresh: (() -> Void)?
 
     @State private var filterHover = false
+    @State private var refreshHover = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -347,6 +398,32 @@ private struct EmailListToolbar: View {
                 filterPopoverContent
             }
             Spacer()
+            if let onRefresh {
+                Button(action: onRefresh) {
+                    Group {
+                        if isSyncing {
+                            ProgressView()
+                                .controlSize(.small)
+                                .scaleEffect(0.7)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                    }
+                    .foregroundColor(BVColor.fgMute)
+                    .frame(width: 22, height: 22)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(refreshHover ? BVColor.bgHover : Color.clear)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isSyncing)
+                .onHover { refreshHover = $0 }
+                .help(String(localized: "email.toolbar.refresh", defaultValue: "Gmail 동기화"))
+                .accessibilityLabel(String(localized: "email.toolbar.refresh", defaultValue: "Gmail 동기화"))
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -704,43 +781,49 @@ private struct EmailFilterChipView: View {
 
 private struct EmailThreadRow: View {
     let thread: EmailThreadItem
+    let isSelected: Bool
+    let onSelect: () -> Void
     @State private var hovered = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            AvatarDot(initial: thread.initial, color: BrainPersonColor.color(for: thread.senderName))
-                .frame(width: 18, height: 18)
+        Button(action: onSelect) {
+            HStack(spacing: 10) {
+                AvatarDot(initial: thread.initial, color: BrainPersonColor.color(for: thread.senderName))
+                    .frame(width: 18, height: 18)
 
-            Text(thread.subject)
-                .font(.system(size: SidebarRowTokens.fontSize, weight: thread.unread ? .semibold : .regular))
-                .foregroundColor(thread.unread ? BVColor.fg : BVColor.fg.opacity(0.65))
-                .lineLimit(1)
-                .truncationMode(.tail)
+                Text(thread.subject)
+                    .font(.system(size: SidebarRowTokens.fontSize, weight: thread.unread ? .semibold : .regular))
+                    .foregroundColor(thread.unread ? BVColor.fg : BVColor.fg.opacity(0.65))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
-            Spacer(minLength: 6)
+                Spacer(minLength: 6)
 
-            HStack(spacing: 6) {
-                if thread.starred {
-                    Image(systemName: "star.fill")
-                        .font(.system(size: 9))
-                        .foregroundColor(Color(nsColor: NSColor(srgbRed: 0.96, green: 0.72, blue: 0.33, alpha: 1)))
-                        .frame(width: 12, height: 12)
+                HStack(spacing: 6) {
+                    if thread.starred {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(Color(nsColor: NSColor(srgbRed: 0.96, green: 0.72, blue: 0.33, alpha: 1)))
+                            .frame(width: 12, height: 12)
+                    }
+                    if thread.hasAttachment {
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 9))
+                            .foregroundColor(BVColor.fgMute)
+                            .frame(width: 12, height: 12)
+                    }
+                    Text(relativeTime(thread.receivedAt))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundColor(BVColor.fgFaint)
                 }
-                if thread.hasAttachment {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 9))
-                        .foregroundColor(BVColor.fgMute)
-                        .frame(width: 12, height: 12)
-                }
-                Text(relativeTime(thread.receivedAt))
-                    .font(.system(size: 11))
-                    .monospacedDigit()
-                    .foregroundColor(BVColor.fgFaint)
             }
+            .padding(.horizontal, SidebarRowTokens.horizontalPadding)
+            .padding(.vertical, SidebarRowTokens.verticalPadding)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, SidebarRowTokens.horizontalPadding)
-        .padding(.vertical, SidebarRowTokens.verticalPadding)
-        .sidebarRowChrome(isSelected: false, isHovered: hovered)
+        .buttonStyle(.plain)
+        .sidebarRowChrome(isSelected: isSelected, isHovered: hovered)
         .onHover { hovered = $0 }
         .accessibilityElement(children: .combine)
     }
@@ -806,6 +889,8 @@ private extension String {
     EmailListView(
         threads: EmailSidebarSampleData.threads,
         userLabels: EmailSidebarSampleData.labels,
+        selectedThreadId: "e2",
+        onSelectThread: { _ in },
         onCreateLabel: { name in
             EmailUserLabel(id: "local-\(UUID().uuidString)", name: name, color: BrainPersonColor.color(for: name))
         }

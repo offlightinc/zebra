@@ -19,6 +19,7 @@ struct PanelContentView: View {
     let onRequestPanelFocus: () -> Void
     let onTriggerFlash: () -> Void
     @Environment(\.markdownPanelViewFactory) private var markdownPanelViewFactory
+    @Environment(\.zebraEmailPanelViewFactory) private var zebraEmailPanelViewFactory
 
     var body: some View {
         renderedPanel
@@ -29,6 +30,23 @@ struct PanelContentView: View {
 
     @ViewBuilder
     private var renderedPanel: some View {
+        if let emailPanel = panel as? ZebraEmailThreadPanel,
+           let factory = zebraEmailPanelViewFactory {
+            factory(ZebraEmailPanelViewContext(
+                panel: emailPanel,
+                paneId: paneId,
+                isFocused: isFocused,
+                isVisibleInUI: isVisibleInUI,
+                portalPriority: portalPriority,
+                onRequestPanelFocus: onRequestPanelFocus
+            ))
+        } else {
+            typedPanel
+        }
+    }
+
+    @ViewBuilder
+    private var typedPanel: some View {
         switch panel.panelType {
         case .terminal:
             if let terminalPanel = panel as? TerminalPanel {

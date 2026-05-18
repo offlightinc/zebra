@@ -5,7 +5,7 @@
 # Adapter / DI seams
 Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment + ZebraSidebarDefaults.defaultWidth fallback
 Sources/ContentView.swift                  # SidebarSlots composer + \.sidebarExtraLeadingInset
-Sources/Panels/PanelContentView.swift      # \.markdownPanelViewFactory factory lookup
+Sources/Panels/PanelContentView.swift      # \.markdownPanelViewFactory + \.zebraEmailPanelViewFactory factory lookup
 Sources/Panels/MarkdownPanel.swift         # didCloseNotification + updateFrontmatter
 Sources/WindowDragHandleView.swift         # MinimalModeSidebarTitlebarControlsMetrics.extraLeadingInset seam (Zebra sets it)
 

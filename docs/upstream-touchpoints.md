@@ -33,7 +33,7 @@ the implementation, the cmux file only exposes the slot:
 |---|---|---|
 | `Sources/AppDelegate.swift` | DI container | `ZebraServices.makeDefault().injectIntoEnvironment(...)` wraps the root `ContentView` once per `createMainWindow`. |
 | `Sources/ContentView.swift` | Composer slot + env key + `import ZebraVault` | Builds `SidebarSlots(workspaceList: …, defaultFooter: …, onSendFeedback: …)` and calls `sidebarComposer.compose(slots)`. Reads `\.sidebarExtraLeadingInset` for fullscreen control padding. Imports `ZebraVault` to spell `VerticalTabsSidebarVaultState` for the `@EnvironmentObject` declaration. |
-| `Sources/Panels/PanelContentView.swift` | View factory | `\.markdownPanelViewFactory` env lookup + fall-through when nil. |
+| `Sources/Panels/PanelContentView.swift` | View factory | `\.markdownPanelViewFactory` and `\.zebraEmailPanelViewFactory` env lookups + fall-through when nil. |
 | `Sources/Panels/MarkdownPanel.swift` | Side-car cleanup + `import ZebraVault` | `static let didCloseNotification` + `NotificationCenter.default.post(...)` in `close()`. `updateFrontmatter(key:value:)` stays because it has to mutate `@Published private(set) var content` and calls `BrainFrontmatterWriter.setScalar` (which now lives in ZebraVault). |
 | `Sources/WorkspaceContentView.swift` | View factory plumbing | Passes `workspace:` to `PanelContentView` so the markdown view factory can pull `Workspace`-bound helpers out of the context. |
 | `Sources/SessionPersistence.swift` | Preference override (TODO migrate) | `defaultSidebarWidth: 300` (vs upstream `200`) — Zebra ships a wider rail-aware sidebar by default. Single constant; eventually move to a `\.zebraDefaultSidebarWidth` env value during a future Phase 1.4 finish-up. |

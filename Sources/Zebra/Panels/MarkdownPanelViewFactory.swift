@@ -1,5 +1,7 @@
 import Bonsplit
+import AppKit
 import SwiftUI
+import ZebraVault
 
 /// What cmux's `PanelContentView` hands to a markdown panel view factory.
 /// The factory returns the actual view; default (`nil`) means cmux has no
@@ -76,6 +78,66 @@ private struct ZebraMarkdownPanelHost: View {
             // Panel's workspace went away mid-render. Fall through to an
             // empty surface; cmux will tear down the panel shortly after.
             Color.clear
+        }
+    }
+}
+
+struct ZebraEmailPanelViewContext {
+    let panel: ZebraEmailThreadPanel
+    let paneId: PaneID
+    let isFocused: Bool
+    let isVisibleInUI: Bool
+    let portalPriority: Int
+    let onRequestPanelFocus: () -> Void
+}
+
+typealias ZebraEmailPanelViewFactory = (ZebraEmailPanelViewContext) -> AnyView
+
+private struct ZebraEmailPanelViewFactoryKey: EnvironmentKey {
+    static let defaultValue: ZebraEmailPanelViewFactory? = nil
+}
+
+extension EnvironmentValues {
+    var zebraEmailPanelViewFactory: ZebraEmailPanelViewFactory? {
+        get { self[ZebraEmailPanelViewFactoryKey.self] }
+        set { self[ZebraEmailPanelViewFactoryKey.self] = newValue }
+    }
+}
+
+enum ZebraEmailPanelViewFactoryProvider {
+    @MainActor
+    static func make(services: ZebraServices) -> ZebraEmailPanelViewFactory {
+        { context in
+            AnyView(
+                ZebraEmailPanelHost(context: context, store: services.emailDetail)
+            )
+        }
+    }
+}
+
+private struct ZebraEmailPanelHost: View {
+    let context: ZebraEmailPanelViewContext
+    @ObservedObject var store: ZebraEmailDetailStore
+
+    var body: some View {
+        ZebraEmailThreadDetailView(
+            subject: context.panel.displayTitle,
+            detail: store.detail(threadId: context.panel.threadId),
+            isLoading: store.isLoading(threadId: context.panel.threadId),
+            errorMessage: store.errorMessage(threadId: context.panel.threadId),
+            expandedMessageIds: store.expandedMessageIds(threadId: context.panel.threadId),
+            onRefresh: {
+                Task { await store.reloadThread(threadId: context.panel.threadId, forceRefresh: true) }
+            },
+            onToggleMessage: { messageId in
+                store.toggleMessage(threadId: context.panel.threadId, messageId: messageId)
+            },
+            onOpenURL: { url in
+                NSWorkspace.shared.open(url)
+            }
+        )
+        .task(id: context.panel.threadId) {
+            await store.loadThreadIfNeeded(threadId: context.panel.threadId)
         }
     }
 }
