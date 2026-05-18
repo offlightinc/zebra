@@ -1,5 +1,6 @@
 import Bonsplit
 import Combine
+import CoreGraphics
 import Foundation
 import ZebraVault
 
@@ -23,6 +24,65 @@ extension TerminalPanel: ZebraTerminalPanel {
 extension Workspace: ZebraMarkdownWorkspace {
     var allPaneIds: [PaneID] {
         bonsplitController.allPaneIds
+    }
+
+    func paneWidth(forPane paneId: PaneID) -> Double? {
+        bonsplitController.layoutSnapshot().panes
+            .first(where: { $0.paneId == paneId.id.uuidString })?
+            .frame
+            .width
+    }
+
+    @discardableResult
+    func ensurePaneWidth(_ minimumWidth: Double, forPane paneId: PaneID) -> Bool {
+        guard minimumWidth.isFinite, minimumWidth > 0 else { return false }
+
+        let tolerance = 0.5
+        if let currentWidth = paneWidth(forPane: paneId),
+           currentWidth + tolerance >= minimumWidth {
+            return true
+        }
+
+        let targetPaneId = paneId.id.uuidString
+        var candidates: [ZebraPaneWidthResizeCandidate] = []
+        let trace = zebraCollectPaneWidthResizeCandidates(
+            node: bonsplitController.treeSnapshot(),
+            targetPaneId: targetPaneId,
+            candidates: &candidates
+        )
+        guard trace.containsTarget else { return false }
+
+        var didSetDivider = false
+        for candidate in candidates where candidate.orientation == "horizontal" {
+            guard candidate.targetPaneWidth > 1,
+                  candidate.targetBranchWidth > 1 else {
+                continue
+            }
+            let branchScale = CGFloat(minimumWidth) / candidate.targetPaneWidth
+            let requiredBranchWidth = candidate.targetBranchWidth * branchScale
+            let targetFraction = requiredBranchWidth / candidate.axisPixels
+            let requested = candidate.paneInFirstChild ? targetFraction : (1 - targetFraction)
+            let clamped = min(max(requested, 0.1), 0.9)
+            guard bonsplitController.setDividerPosition(
+                clamped,
+                forSplit: candidate.splitId,
+                fromExternal: true
+            ) else {
+                continue
+            }
+            didSetDivider = true
+            notifyZebraPaneWidthChange()
+
+            if let updatedWidth = paneWidth(forPane: paneId),
+               updatedWidth + tolerance >= minimumWidth {
+                return true
+            }
+        }
+
+        if didSetDivider {
+            scheduleZebraPaneWidthFollowUp()
+        }
+        return (paneWidth(forPane: paneId) ?? 0) + tolerance >= minimumWidth
     }
 
     func openOrFocusMarkdownSurface(
@@ -62,6 +122,97 @@ extension Workspace: ZebraMarkdownWorkspace {
             initialCommand: initialCommand
         )
         return concrete
+    }
+}
+
+private extension Workspace {
+    func notifyZebraPaneWidthChange() {
+        didProgrammaticallyChangeSplitGeometry()
+    }
+
+    func scheduleZebraPaneWidthFollowUp() {
+        DispatchQueue.main.async { [weak self] in
+            self?.didProgrammaticallyChangeSplitGeometry()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.didProgrammaticallyChangeSplitGeometry()
+        }
+    }
+}
+
+private struct ZebraPaneWidthResizeCandidate {
+    let splitId: UUID
+    let orientation: String
+    let paneInFirstChild: Bool
+    let axisPixels: CGFloat
+    let targetPaneWidth: CGFloat
+    let targetBranchWidth: CGFloat
+}
+
+private struct ZebraPaneWidthResizeTrace {
+    let containsTarget: Bool
+    let bounds: CGRect
+    let targetBounds: CGRect?
+}
+
+private func zebraCollectPaneWidthResizeCandidates(
+    node: ExternalTreeNode,
+    targetPaneId: String,
+    candidates: inout [ZebraPaneWidthResizeCandidate]
+) -> ZebraPaneWidthResizeTrace {
+    switch node {
+    case .pane(let pane):
+        let bounds = CGRect(
+            x: pane.frame.x,
+            y: pane.frame.y,
+            width: pane.frame.width,
+            height: pane.frame.height
+        )
+        return ZebraPaneWidthResizeTrace(
+            containsTarget: pane.id == targetPaneId,
+            bounds: bounds,
+            targetBounds: pane.id == targetPaneId ? bounds : nil
+        )
+
+    case .split(let split):
+        let first = zebraCollectPaneWidthResizeCandidates(
+            node: split.first,
+            targetPaneId: targetPaneId,
+            candidates: &candidates
+        )
+        let second = zebraCollectPaneWidthResizeCandidates(
+            node: split.second,
+            targetPaneId: targetPaneId,
+            candidates: &candidates
+        )
+
+        let combinedBounds = first.bounds.union(second.bounds)
+        let containsTarget = first.containsTarget || second.containsTarget
+        let targetBounds = first.targetBounds ?? second.targetBounds
+
+        if containsTarget,
+           let splitUUID = UUID(uuidString: split.id),
+           let targetBounds {
+            let orientation = split.orientation.lowercased()
+            let axisPixels: CGFloat = orientation == "horizontal"
+                ? combinedBounds.width
+                : combinedBounds.height
+            let targetBranchBounds = first.containsTarget ? first.bounds : second.bounds
+            candidates.append(ZebraPaneWidthResizeCandidate(
+                splitId: splitUUID,
+                orientation: orientation,
+                paneInFirstChild: first.containsTarget,
+                axisPixels: max(axisPixels, 1),
+                targetPaneWidth: max(targetBounds.width, 1),
+                targetBranchWidth: max(targetBranchBounds.width, 1)
+            ))
+        }
+
+        return ZebraPaneWidthResizeTrace(
+            containsTarget: containsTarget,
+            bounds: combinedBounds,
+            targetBounds: targetBounds
+        )
     }
 }
 

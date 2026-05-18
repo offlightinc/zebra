@@ -13,6 +13,18 @@ fileprivate enum InspectorSplitMetrics {
     static let minInspectorWidth: Double = 280
     static let maxInspectorWidth: Double = 420
     static let dividerWidth: CGFloat = 1
+
+    static var minimumPaneWidthForInspector: Double {
+        Double(markdownMinWidth + dividerWidth) + minInspectorWidth
+    }
+
+    static var preferredPaneWidthForInspectorReveal: Double {
+        minimumPaneWidthForInspector + 24
+    }
+}
+
+fileprivate enum MarkdownChatPillOverlayMotion {
+    static let animation = Animation.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.30)
 }
 
 /// SwiftUI view that renders a MarkdownPanel's content using MarkdownUI.
@@ -37,6 +49,7 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
     @AppStorage("cmux.brainViewer.inspectorWidth") private var storedInspectorWidth: Double = 300
     @State private var inspectorWidth: Double?
     @State private var inspectorDragStartWidth: Double?
+    @State private var chatPillExpanded: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var markdownFileListStore: MarkdownFileListStore
 
@@ -78,58 +91,64 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
     private var splitContentView: some View {
         if !isVisibleInUI {
             Color.clear
-        } else if controller.showsInspector {
-            markdownInspectorSplitView
         } else {
-            markdownContentView
+            GeometryReader { proxy in
+                let inspectorCanFit = canRenderInspector(containerWidth: proxy.size.width)
+                let inspectorVisible = controller.showsInspector && inspectorCanFit
+                let inspectorAutoCollapsed = controller.showsInspector && !inspectorCanFit
+
+                if inspectorVisible {
+                    markdownInspectorSplitView(containerWidth: proxy.size.width)
+                } else {
+                    markdownContentView(isInspectorAutoCollapsed: inspectorAutoCollapsed)
+                }
+            }
         }
     }
 
-    private var markdownInspectorSplitView: some View {
-        GeometryReader { proxy in
-            let resolvedInspectorWidth = clampedInspectorWidth(
-                currentInspectorWidth,
-                containerWidth: proxy.size.width
+    private func markdownInspectorSplitView(containerWidth: CGFloat) -> some View {
+        let resolvedInspectorWidth = clampedInspectorWidth(
+            currentInspectorWidth,
+            containerWidth: containerWidth
+        )
+
+        return HStack(spacing: 0) {
+            markdownContentView(isInspectorAutoCollapsed: false)
+                .frame(minWidth: InspectorSplitMetrics.markdownMinWidth)
+
+            MarkdownInspectorResizeHandle(
+                dividerWidth: InspectorSplitMetrics.dividerWidth,
+                onDragStart: {
+                    inspectorDragStartWidth = currentInspectorWidth
+                },
+                onDragChanged: { translation in
+                    let startWidth = inspectorDragStartWidth ?? currentInspectorWidth
+                    let nextWidth = startWidth - Double(translation)
+                    withTransaction(Transaction(animation: nil)) {
+                        inspectorWidth = clampedInspectorWidth(nextWidth, containerWidth: containerWidth)
+                    }
+                },
+                onDragEnd: {
+                    storedInspectorWidth = clampedInspectorWidth(currentInspectorWidth, containerWidth: containerWidth)
+                    inspectorDragStartWidth = nil
+                },
+                onCancel: {
+                    inspectorDragStartWidth = nil
+                }
             )
 
-            HStack(spacing: 0) {
-                markdownContentView
-                    .frame(minWidth: InspectorSplitMetrics.markdownMinWidth)
-
-                MarkdownInspectorResizeHandle(
-                    dividerWidth: InspectorSplitMetrics.dividerWidth,
-                    onDragStart: {
-                        inspectorDragStartWidth = currentInspectorWidth
-                    },
-                    onDragChanged: { translation in
-                        let startWidth = inspectorDragStartWidth ?? currentInspectorWidth
-                        let nextWidth = startWidth - Double(translation)
-                        withTransaction(Transaction(animation: nil)) {
-                            inspectorWidth = clampedInspectorWidth(nextWidth, containerWidth: proxy.size.width)
-                        }
-                    },
-                    onDragEnd: {
-                        storedInspectorWidth = clampedInspectorWidth(currentInspectorWidth, containerWidth: proxy.size.width)
-                        inspectorDragStartWidth = nil
-                    },
-                    onCancel: {
-                        inspectorDragStartWidth = nil
-                    }
-                )
-
-                BrainObjectInspectorView(
-                    parse: controller.parse,
-                    onActivateRelation: activateRelation,
-                    onUpdateFrontmatter: { key, value in
-                        panel.updateFrontmatter(key: key, value: value)
-                        markdownFileListStore.refreshVaultIndex(reason: "markdownPanel.frontmatter")
-                    }
-                )
-                .frame(width: CGFloat(resolvedInspectorWidth))
-            }
-            .transaction { tx in
-                tx.animation = nil
-            }
+            BrainObjectInspectorView(
+                parse: controller.parse,
+                onActivateRelation: activateRelation,
+                onUpdateFrontmatter: { key, value in
+                    panel.updateFrontmatter(key: key, value: value)
+                    markdownFileListStore.refreshVaultIndex(reason: "markdownPanel.frontmatter")
+                }
+            )
+            .frame(width: CGFloat(resolvedInspectorWidth))
+        }
+        .transaction { tx in
+            tx.animation = nil
         }
     }
 
@@ -154,6 +173,11 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
         return min(max(width, minWidth), maxWidth)
     }
 
+    private func canRenderInspector(containerWidth: CGFloat) -> Bool {
+        guard containerWidth.isFinite else { return true }
+        return Double(containerWidth) >= InspectorSplitMetrics.minimumPaneWidthForInspector
+    }
+
     /// Markdown body uses the stripped body when frontmatter parsed
     /// cleanly; falls back to the raw content otherwise so a parse
     /// failure never breaks rendering on the left.
@@ -164,11 +188,11 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
         return panel.content
     }
 
-    private var markdownContentView: some View {
+    private func markdownContentView(isInspectorAutoCollapsed: Bool) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 // File path breadcrumb + inspector toggle
-                filePathHeader
+                filePathHeader(isInspectorAutoCollapsed: isInspectorAutoCollapsed)
                     .padding(.horizontal, 24)
                     .padding(.top, 16)
                     .padding(.bottom, 8)
@@ -197,8 +221,21 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
                     .padding(.bottom, 160)
             }
         }
+        .overlay {
+            if chatPillExpanded {
+                Rectangle()
+                    .fill(Color.black.opacity(0.001))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(MarkdownChatPillOverlayMotion.animation) {
+                            chatPillExpanded = false
+                        }
+                    }
+            }
+        }
         .overlay(alignment: .bottom) {
             MarkdownChatPill(
+                isExpanded: $chatPillExpanded,
                 displayTitle: panel.displayTitle,
                 activeAgent: liveChatCompanionAgent,
                 onSubmit: { text, agent in
@@ -210,7 +247,7 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
         }
     }
 
-    private var filePathHeader: some View {
+    private func filePathHeader(isInspectorAutoCollapsed: Bool) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "doc.richtext")
                 .foregroundColor(.secondary)
@@ -221,7 +258,7 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
-            inspectorToggle
+            inspectorToggle(isInspectorAutoCollapsed: isInspectorAutoCollapsed)
         }
     }
 
@@ -240,22 +277,40 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
     /// Chevron that hides/shows the right-pane inspector. The icon
     /// matches the panel-side convention (right-pointing chevron when
     /// closed, left when open).
-    private var inspectorToggle: some View {
+    @ViewBuilder
+    private func inspectorToggle(isInspectorAutoCollapsed: Bool) -> some View {
+        let isEffectivelyVisible = controller.showsInspector && !isInspectorAutoCollapsed
         Button {
-            controller.toggleInspector()
+            handleInspectorToggle(isInspectorAutoCollapsed: isInspectorAutoCollapsed)
         } label: {
-            Image(systemName: controller.showsInspector
+            Image(systemName: isEffectivelyVisible
                   ? "sidebar.right"
                   : "sidebar.right")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(controller.showsInspector ? .primary : .secondary)
+                .foregroundColor(isEffectivelyVisible ? .primary : .secondary)
                 .padding(4)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(controller.showsInspector
+        .help(isEffectivelyVisible
               ? String(localized: "brain.toggle.hide", defaultValue: "Hide object inspector")
               : String(localized: "brain.toggle.show", defaultValue: "Show object inspector"))
+    }
+
+    private func handleInspectorToggle(isInspectorAutoCollapsed: Bool) {
+        if controller.showsInspector && !isInspectorAutoCollapsed {
+            controller.setInspectorVisibility(false)
+            return
+        }
+
+        _ = workspace.ensurePaneWidth(
+            InspectorSplitMetrics.preferredPaneWidthForInspectorReveal,
+            forPane: paneId
+        )
+        controller.revealInspector()
+        DispatchQueue.main.async {
+            controller.revealInspector()
+        }
     }
 
     private var fileUnavailableView: some View {

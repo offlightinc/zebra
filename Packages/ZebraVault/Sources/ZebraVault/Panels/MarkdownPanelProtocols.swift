@@ -32,6 +32,10 @@ public protocol ZebraTerminalPanel: AnyObject {
 public protocol ZebraMarkdownWorkspace: AnyObject, ObservableObject {
     var allPaneIds: [PaneID] { get }
 
+    func paneWidth(forPane paneId: PaneID) -> Double?
+
+    func ensurePaneWidth(_ minimumWidth: Double, forPane paneId: PaneID) -> Bool
+
     func openOrFocusMarkdownSurface(
         inPane paneId: PaneID,
         filePath: String,

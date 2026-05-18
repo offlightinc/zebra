@@ -25,8 +25,9 @@ final class MarkdownPanelController: ObservableObject {
     /// flight; the view layer shows the loading skeleton in that window.
     @Published private(set) var parse: BrainObjectParse?
 
-    /// Whether the right-pane inspector is visible. Persisted per main
-    /// window via UserDefaults.
+    /// Whether the user wants the right-pane inspector visible. The view may
+    /// temporarily auto-collapse it when the containing pane is too narrow.
+    /// Persisted per main window via UserDefaults.
     @Published var showsInspector: Bool
 
     /// Pane where the markdown chat pill accumulates agent terminal tabs.
@@ -34,6 +35,11 @@ final class MarkdownPanelController: ObservableObject {
     /// split layout reparenting does not lose the companion-pane reference.
     @Published var chatCompanionPaneId: PaneID?
     @Published var chatCompanionAgent: MarkdownPillAgent?
+
+    /// Bumped when the user asks to reveal an auto-collapsed inspector while
+    /// `showsInspector` is already true. This gives SwiftUI a real observed
+    /// state change even though the persisted visibility intent did not change.
+    @Published private(set) var inspectorRevealToken: Int = 0
 
     private weak var panel: MarkdownPanel?
     private var contentCancellable: AnyCancellable?
@@ -56,8 +62,28 @@ final class MarkdownPanelController: ObservableObject {
 
     /// Toggle inspector visibility and persist to UserDefaults.
     func toggleInspector() {
-        showsInspector.toggle()
+        setInspectorVisibility(!showsInspector)
+    }
+
+    /// Set the user's inspector visibility intent and persist it. Auto-collapse
+    /// in the view layer must not call this with `false`.
+    func setInspectorVisibility(_ visible: Bool) {
+        guard showsInspector != visible else {
+            UserDefaults.standard.set(visible, forKey: Self.inspectorVisibilityKey)
+            return
+        }
+        showsInspector = visible
         UserDefaults.standard.set(showsInspector, forKey: Self.inspectorVisibilityKey)
+    }
+
+    /// Preserve the user's "show inspector" intent and force one render pass.
+    /// Used when the inspector is auto-collapsed by width rather than manually
+    /// hidden by the user.
+    func revealInspector() {
+        if !showsInspector {
+            setInspectorVisibility(true)
+        }
+        inspectorRevealToken &+= 1
     }
 
     private func scheduleParse(of content: String, filePath: String) {
