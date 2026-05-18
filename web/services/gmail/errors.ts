@@ -58,7 +58,62 @@ export class GmailNotConnectedError extends Error {
   }
 }
 
-export function isGmailWorkflowError(err: unknown): err is
+export type GmailWorkflowError =
+  | GmailConfigError
+  | GmailAuthError
+  | GmailDatabaseError
+  | GmailProviderError
+  | GmailNotConnectedError;
+
+const gmailWorkflowErrorTags = new Set([
+  "GmailConfigError",
+  "GmailAuthError",
+  "GmailDatabaseError",
+  "GmailProviderError",
+  "GmailNotConnectedError",
+]);
+
+export function isGmailWorkflowError(err: unknown): err is GmailWorkflowError {
+  return Boolean(gmailWorkflowErrorCause(err));
+}
+
+export function gmailWorkflowErrorCause(err: unknown): GmailWorkflowError | null {
+  if (!err || typeof err !== "object") return null;
+  const tag = (err as { _tag?: unknown })._tag;
+  if (typeof tag === "string" && gmailWorkflowErrorTags.has(tag)) {
+    return err as GmailWorkflowError;
+  }
+  const fiberCause = effectFiberFailureCause(err);
+  const fiberFailure = gmailWorkflowErrorFromEffectCause(fiberCause);
+  if (fiberFailure) return fiberFailure;
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause && cause !== err) return gmailWorkflowErrorCause(cause);
+  return null;
+}
+
+function effectFiberFailureCause(err: object): unknown {
+  const symbol = Object.getOwnPropertySymbols(err).find((candidate) =>
+    candidate.description === "effect/Runtime/FiberFailure/Cause"
+  );
+  return symbol ? (err as Record<symbol, unknown>)[symbol] : null;
+}
+
+function gmailWorkflowErrorFromEffectCause(cause: unknown): GmailWorkflowError | null {
+  if (!cause || typeof cause !== "object") return null;
+  const tag = (cause as { _tag?: unknown })._tag;
+  if (tag === "Fail") {
+    const failure = (cause as { failure?: unknown; error?: unknown }).failure ??
+      (cause as { error?: unknown }).error;
+    return gmailWorkflowErrorCause(failure);
+  }
+  if (tag === "Sequential" || tag === "Parallel") {
+    return gmailWorkflowErrorFromEffectCause((cause as { left?: unknown }).left) ??
+      gmailWorkflowErrorFromEffectCause((cause as { right?: unknown }).right);
+  }
+  return gmailWorkflowErrorFromEffectCause((cause as { cause?: unknown }).cause);
+}
+
+export function isDirectGmailWorkflowError(err: unknown): err is
   | GmailConfigError
   | GmailAuthError
   | GmailDatabaseError

@@ -1,9 +1,10 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import * as Effect from "effect/Effect";
 import { cloudDb } from "../../db/client";
 import {
   emailAccounts,
   emailAccountTokens,
+  emailMessages,
   emailSyncState,
   emailThreads,
   gmailOauthStates,
@@ -15,6 +16,8 @@ export type EmailAccountRow = typeof emailAccounts.$inferSelect;
 export type EmailAccountTokenRow = typeof emailAccountTokens.$inferSelect;
 export type EmailThreadRow = typeof emailThreads.$inferSelect;
 export type EmailThreadInsert = typeof emailThreads.$inferInsert;
+export type EmailMessageRow = typeof emailMessages.$inferSelect;
+export type EmailMessageInsert = typeof emailMessages.$inferInsert;
 export type EmailSyncStateRow = typeof emailSyncState.$inferSelect;
 
 export type ConnectedEmailAccount = {
@@ -56,81 +59,95 @@ export function saveOAuthState(input: {
   });
 }
 
-export function consumeOAuthState(state: string): Effect.Effect<GmailOAuthStateRow | null, GmailDatabaseError> {
-  return dbEffect("consume_oauth_state", async () => {
-    const db = cloudDb();
-    const [row] = await db
+export function loadOAuthState(state: string): Effect.Effect<GmailOAuthStateRow | null, GmailDatabaseError> {
+  return dbEffect("load_oauth_state", async () => {
+    const [row] = await cloudDb()
       .select()
       .from(gmailOauthStates)
       .where(eq(gmailOauthStates.state, state))
       .limit(1);
-    if (!row) return null;
-    await db.delete(gmailOauthStates).where(eq(gmailOauthStates.state, state));
-    return row;
+    return row ?? null;
   });
 }
 
-export function upsertEmailAccount(input: {
+export function connectGmailAccount(input: {
+  readonly state: string;
   readonly userId: string;
   readonly email: string;
   readonly providerAccountId?: string | null;
+  readonly accessTokenEncrypted: string;
+  readonly refreshTokenEncrypted: string;
+  readonly expiresAt: Date;
+  readonly lastSyncCursor?: string | null;
 }): Effect.Effect<EmailAccountRow, GmailDatabaseError> {
-  return dbEffect("upsert_email_account", async () => {
+  return dbEffect("connect_gmail_account", async () => {
     const now = new Date();
-    const [row] = await cloudDb()
-      .insert(emailAccounts)
-      .values({
-        userId: input.userId,
-        provider: "gmail",
-        email: input.email,
-        providerAccountId: input.providerAccountId ?? input.email,
-        connectedAt: now,
-        disconnectedAt: null,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [emailAccounts.userId, emailAccounts.provider],
-        set: {
+    return await cloudDb().transaction(async (tx) => {
+      const [account] = await tx
+        .insert(emailAccounts)
+        .values({
+          userId: input.userId,
+          provider: "gmail",
           email: input.email,
           providerAccountId: input.providerAccountId ?? input.email,
           connectedAt: now,
           disconnectedAt: null,
+          createdAt: now,
           updatedAt: now,
-        },
-      })
-      .returning();
-    return row;
-  });
-}
+        })
+        .onConflictDoUpdate({
+          target: [emailAccounts.userId, emailAccounts.provider],
+          set: {
+            email: input.email,
+            providerAccountId: input.providerAccountId ?? input.email,
+            connectedAt: now,
+            disconnectedAt: null,
+            updatedAt: now,
+          },
+        })
+        .returning();
 
-export function upsertEmailAccountTokens(input: {
-  readonly emailAccountId: string;
-  readonly accessTokenEncrypted: string;
-  readonly refreshTokenEncrypted: string;
-  readonly expiresAt: Date;
-}): Effect.Effect<void, GmailDatabaseError> {
-  return dbEffect("upsert_email_account_tokens", async () => {
-    const now = new Date();
-    await cloudDb()
-      .insert(emailAccountTokens)
-      .values({
-        emailAccountId: input.emailAccountId,
-        accessTokenEncrypted: input.accessTokenEncrypted,
-        refreshTokenEncrypted: input.refreshTokenEncrypted,
-        expiresAt: input.expiresAt,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: emailAccountTokens.emailAccountId,
-        set: {
+      await tx
+        .insert(emailAccountTokens)
+        .values({
+          emailAccountId: account.id,
           accessTokenEncrypted: input.accessTokenEncrypted,
           refreshTokenEncrypted: input.refreshTokenEncrypted,
           expiresAt: input.expiresAt,
+          createdAt: now,
           updatedAt: now,
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: emailAccountTokens.emailAccountId,
+          set: {
+            accessTokenEncrypted: input.accessTokenEncrypted,
+            refreshTokenEncrypted: input.refreshTokenEncrypted,
+            expiresAt: input.expiresAt,
+            updatedAt: now,
+          },
+        });
+
+      await tx
+        .insert(emailSyncState)
+        .values({
+          emailAccountId: account.id,
+          lastSyncCursor: input.lastSyncCursor ?? null,
+          lastSyncedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: emailSyncState.emailAccountId,
+          set: {
+            lastSyncCursor: input.lastSyncCursor ?? null,
+            updatedAt: now,
+          },
+        });
+
+      await tx.delete(gmailOauthStates).where(eq(gmailOauthStates.state, input.state));
+
+      return account;
+    });
   });
 }
 
@@ -195,38 +212,153 @@ export function listEmailThreads(input: {
   });
 }
 
+export function loadEmailThreadByGmailThreadId(input: {
+  readonly userId: string;
+  readonly emailAccountId: string;
+  readonly gmailThreadId: string;
+}): Effect.Effect<EmailThreadRow | null, GmailDatabaseError> {
+  return dbEffect("load_email_thread_by_gmail_thread_id", async () => {
+    const [row] = await cloudDb()
+      .select()
+      .from(emailThreads)
+      .where(and(
+        eq(emailThreads.userId, input.userId),
+        eq(emailThreads.emailAccountId, input.emailAccountId),
+        eq(emailThreads.gmailThreadId, input.gmailThreadId),
+        isNull(emailThreads.deletedAt),
+      ))
+      .limit(1);
+    return row ?? null;
+  });
+}
+
+export function listExistingLatestMessageIds(input: {
+  readonly emailAccountId: string;
+  readonly gmailMessageIds: readonly string[];
+}): Effect.Effect<ReadonlySet<string>, GmailDatabaseError> {
+  return dbEffect("list_existing_latest_message_ids", async () => {
+    if (input.gmailMessageIds.length === 0) return new Set<string>();
+    const rows = await cloudDb()
+      .select({ latestGmailMessageId: emailThreads.latestGmailMessageId })
+      .from(emailThreads)
+      .where(and(
+        eq(emailThreads.emailAccountId, input.emailAccountId),
+        inArray(emailThreads.latestGmailMessageId, [...input.gmailMessageIds]),
+        isNull(emailThreads.deletedAt),
+      ));
+    return new Set(rows.map((row) => row.latestGmailMessageId));
+  });
+}
+
 export function upsertEmailThreads(rows: readonly EmailThreadInsert[]): Effect.Effect<number, GmailDatabaseError> {
   return dbEffect("upsert_email_threads", async () => {
     if (rows.length === 0) return 0;
     const now = new Date();
-    const db = cloudDb();
-    for (const row of rows) {
-      await db
+    await cloudDb().transaction(async (tx) => {
+      await tx
         .insert(emailThreads)
-        .values({
+        .values(rows.map((row) => ({
           ...row,
           createdAt: row.createdAt ?? now,
           updatedAt: now,
           deletedAt: null,
-        })
+        })))
         .onConflictDoUpdate({
           target: [emailThreads.emailAccountId, emailThreads.gmailThreadId],
           set: {
-            latestGmailMessageId: row.latestGmailMessageId,
-            subject: row.subject,
-            snippet: row.snippet ?? null,
-            lastSenderName: row.lastSenderName ?? null,
-            lastSenderEmail: row.lastSenderEmail ?? null,
-            lastMessageAt: row.lastMessageAt,
-            messageCount: row.messageCount ?? 1,
-            hasAttachment: row.hasAttachment ?? false,
-            labelIds: row.labelIds ?? [],
+            latestGmailMessageId: sql`excluded.latest_gmail_message_id`,
+            subject: sql`excluded.subject`,
+            snippet: sql`excluded.snippet`,
+            lastSenderName: sql`excluded.last_sender_name`,
+            lastSenderEmail: sql`excluded.last_sender_email`,
+            lastMessageAt: sql`excluded.last_message_at`,
+            messageCount: sql`excluded.message_count`,
+            hasAttachment: sql`excluded.has_attachment`,
+            labelIds: sql`excluded.label_ids`,
             updatedAt: now,
             deletedAt: null,
           },
         });
-    }
+    });
     return rows.length;
+  });
+}
+
+export function listEmailMessagesForThread(input: {
+  readonly userId: string;
+  readonly emailThreadId: string;
+}): Effect.Effect<EmailMessageRow[], GmailDatabaseError> {
+  return dbEffect("list_email_messages_for_thread", async () => {
+    return await cloudDb()
+      .select()
+      .from(emailMessages)
+      .where(and(
+        eq(emailMessages.userId, input.userId),
+        eq(emailMessages.emailThreadId, input.emailThreadId),
+        isNull(emailMessages.deletedAt),
+      ))
+      .orderBy(asc(emailMessages.receivedAt), asc(emailMessages.gmailMessageId));
+  });
+}
+
+export function upsertEmailMessages(rows: readonly EmailMessageInsert[]): Effect.Effect<number, GmailDatabaseError> {
+  return dbEffect("upsert_email_messages", async () => {
+    if (rows.length === 0) return 0;
+    const now = new Date();
+    await cloudDb().transaction(async (tx) => {
+      await tx
+        .insert(emailMessages)
+        .values(rows.map((row) => ({
+          ...row,
+          createdAt: row.createdAt ?? now,
+          updatedAt: now,
+          bodyFetchedAt: row.bodyFetchedAt ?? now,
+          deletedAt: null,
+        })))
+        .onConflictDoUpdate({
+          target: [emailMessages.emailAccountId, emailMessages.gmailMessageId],
+          set: {
+            emailThreadId: sql`excluded.email_thread_id`,
+            gmailThreadId: sql`excluded.gmail_thread_id`,
+            internetMessageId: sql`excluded.internet_message_id`,
+            subject: sql`excluded.subject`,
+            snippet: sql`excluded.snippet`,
+            fromName: sql`excluded.from_name`,
+            fromEmail: sql`excluded.from_email`,
+            toRecipients: sql`excluded.to_recipients`,
+            ccRecipients: sql`excluded.cc_recipients`,
+            receivedAt: sql`excluded.received_at`,
+            internalDateMs: sql`excluded.internal_date_ms`,
+            isUnread: sql`excluded.is_unread`,
+            isSent: sql`excluded.is_sent`,
+            hasAttachment: sql`excluded.has_attachment`,
+            labelIds: sql`excluded.label_ids`,
+            bodyText: sql`excluded.body_text`,
+            bodyHtml: sql`excluded.body_html`,
+            bodyFetchedAt: sql`excluded.body_fetched_at`,
+            updatedAt: now,
+            deletedAt: null,
+          },
+        });
+    });
+    return rows.length;
+  });
+}
+
+export function markMissingEmailMessagesDeleted(input: {
+  readonly emailThreadId: string;
+  readonly seenGmailMessageIds: readonly string[];
+}): Effect.Effect<void, GmailDatabaseError> {
+  return dbEffect("mark_missing_email_messages_deleted", async () => {
+    if (input.seenGmailMessageIds.length === 0) return;
+    await cloudDb()
+      .update(emailMessages)
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
+      .where(and(
+        eq(emailMessages.emailThreadId, input.emailThreadId),
+        isNull(emailMessages.deletedAt),
+        notInArray(emailMessages.gmailMessageId, [...input.seenGmailMessageIds]),
+      ));
   });
 }
 

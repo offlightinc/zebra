@@ -7,6 +7,7 @@ import {
   GmailDatabaseError,
   GmailNotConnectedError,
   GmailProviderError,
+  gmailWorkflowErrorCause,
   isGmailWorkflowError,
 } from "./errors";
 
@@ -37,6 +38,8 @@ export async function withAuthedGmailApiRoute(
       } catch (err) {
         recordSpanError(span, err);
         console.error(failureLog, err);
+        const gmailError = gmailWorkflowErrorCause(err);
+        if (gmailError) return gmailErrorResponse(gmailError);
         if (isGmailWorkflowError(err)) return gmailErrorResponse(err);
         return jsonResponse({
           error: "gmail_internal_error",

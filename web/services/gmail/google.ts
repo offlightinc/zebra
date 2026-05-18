@@ -2,6 +2,10 @@ import { createHash, randomBytes } from "node:crypto";
 import { GmailConfigError, GmailProviderError } from "./errors";
 
 const gmailReadonlyScope = "https://www.googleapis.com/auth/gmail.readonly";
+const userinfoEmailScope = "https://www.googleapis.com/auth/userinfo.email";
+const metadataHeaders = ["From", "Subject", "Date"];
+const maxPlainTextBodyLength = 80_000;
+const maxHtmlBodyLength = 400_000;
 
 export type GmailOAuthConfig = {
   readonly clientId: string;
@@ -40,6 +44,12 @@ export type GmailMessage = {
   readonly payload?: GmailPayloadPart;
 };
 
+export type GmailThread = {
+  readonly id: string;
+  readonly historyId?: string;
+  readonly messages: readonly GmailMessage[];
+};
+
 export type ParsedGmailMessage = {
   readonly messageId: string;
   readonly threadId: string;
@@ -53,10 +63,34 @@ export type ParsedGmailMessage = {
   readonly historyId: string | null;
 };
 
+export type ParsedGmailThreadMessage = {
+  readonly messageId: string;
+  readonly threadId: string;
+  readonly internetMessageId: string | null;
+  readonly subject: string | null;
+  readonly snippet: string;
+  readonly senderName: string | null;
+  readonly senderEmail: string | null;
+  readonly to: string | null;
+  readonly cc: string | null;
+  readonly receivedAt: Date | null;
+  readonly internalDateMs: number | null;
+  readonly labelIds: readonly string[];
+  readonly isUnread: boolean;
+  readonly isSent: boolean;
+  readonly hasAttachment: boolean;
+  readonly bodyText: string | null;
+  readonly bodyHtml: string | null;
+};
+
 type GmailPayloadPart = {
   readonly filename?: string;
   readonly mimeType?: string;
-  readonly body?: { readonly attachmentId?: string; readonly size?: number };
+  readonly body?: {
+    readonly attachmentId?: string;
+    readonly data?: string;
+    readonly size?: number;
+  };
   readonly headers?: readonly { readonly name?: string; readonly value?: string }[];
   readonly parts?: readonly GmailPayloadPart[];
 };
@@ -95,7 +129,7 @@ export function createGmailAuthUrl(input: {
   url.searchParams.set("client_id", input.config.clientId);
   url.searchParams.set("redirect_uri", input.config.redirectUri);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", gmailReadonlyScope);
+  url.searchParams.set("scope", [gmailReadonlyScope, userinfoEmailScope].join(" "));
   url.searchParams.set("access_type", "offline");
   url.searchParams.set("prompt", "consent");
   url.searchParams.set("state", input.state);
@@ -171,7 +205,9 @@ export async function fetchGmailMessage(
   accessToken: string,
   messageId: string,
 ): Promise<GmailMessage> {
-  const path = `/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=full`;
+  const params = new URLSearchParams({ format: "metadata" });
+  for (const header of metadataHeaders) params.append("metadataHeaders", header);
+  const path = `/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?${params.toString()}`;
   const json = await gmailGetJSON("get_message", accessToken, path);
   const id = stringField(json, "id");
   const threadId = stringField(json, "threadId");
@@ -186,9 +222,28 @@ export async function fetchGmailMessage(
   };
 }
 
+export async function fetchGmailThread(
+  accessToken: string,
+  threadId: string,
+): Promise<GmailThread> {
+  const params = new URLSearchParams({ format: "full" });
+  const path = `/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?${params.toString()}`;
+  const json = await gmailGetJSON("get_thread", accessToken, path);
+  return {
+    id: stringField(json, "id"),
+    historyId: optionalStringField(json, "historyId"),
+    messages: Array.isArray(json.messages)
+      ? json.messages.flatMap((value): GmailMessage[] => {
+          const parsed = gmailMessageFromJSON(value);
+          return parsed ? [parsed] : [];
+        })
+      : [],
+  };
+}
+
 export function parseGmailMessage(message: GmailMessage): ParsedGmailMessage {
   const headers = message.payload?.headers ?? [];
-  const subject = headerValue(headers, "subject") ?? String("(no subject)");
+  const subject = headerValue(headers, "subject") ?? "(no subject)";
   const from = headerValue(headers, "from") ?? "";
   const sender = parseSender(from);
   const dateHeader = headerValue(headers, "date");
@@ -204,6 +259,40 @@ export function parseGmailMessage(message: GmailMessage): ParsedGmailMessage {
     labelIds: message.labelIds ?? [],
     hasAttachment: payloadHasAttachment(message.payload),
     historyId: message.historyId ?? null,
+  };
+}
+
+export function parseGmailThreadMessages(thread: GmailThread): readonly ParsedGmailThreadMessage[] {
+  return thread.messages.map(parseGmailThreadMessage);
+}
+
+function parseGmailThreadMessage(message: GmailMessage): ParsedGmailThreadMessage {
+  const headers = message.payload?.headers ?? [];
+  const subject = headerValue(headers, "subject");
+  const from = headerValue(headers, "from") ?? "";
+  const sender = parseSender(from);
+  const dateHeader = headerValue(headers, "date");
+  const receivedAt = dateFromGmailNullable(message.internalDate, dateHeader);
+  const bodies = extractBodies(message.payload);
+  const labels = message.labelIds ?? [];
+  return {
+    messageId: message.id,
+    threadId: message.threadId,
+    internetMessageId: headerValue(headers, "message-id"),
+    subject,
+    snippet: message.snippet ?? "",
+    senderName: sender.name || sender.email || null,
+    senderEmail: sender.email,
+    to: headerValue(headers, "to"),
+    cc: headerValue(headers, "cc"),
+    receivedAt,
+    internalDateMs: internalDateMsFromGmail(message.internalDate),
+    labelIds: labels,
+    isUnread: labels.includes("UNREAD"),
+    isSent: labels.includes("SENT"),
+    hasAttachment: payloadHasAttachment(message.payload),
+    bodyText: bodies.bodyText,
+    bodyHtml: bodies.bodyHtml,
   };
 }
 
@@ -278,21 +367,117 @@ function payloadPart(value: unknown): GmailPayloadPart | undefined {
   };
 }
 
+function gmailMessageFromJSON(value: unknown): GmailMessage | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const id = optionalStringField(raw, "id");
+  const threadId = optionalStringField(raw, "threadId");
+  if (!id || !threadId) return null;
+  return {
+    id,
+    threadId,
+    labelIds: Array.isArray(raw.labelIds) ? raw.labelIds.filter((v): v is string => typeof v === "string") : [],
+    snippet: optionalStringField(raw, "snippet") ?? "",
+    historyId: optionalStringField(raw, "historyId"),
+    internalDate: optionalStringField(raw, "internalDate"),
+    payload: payloadPart(raw.payload),
+  };
+}
+
 function payloadBody(value: unknown): GmailPayloadPart["body"] {
   if (!value || typeof value !== "object") return undefined;
   const obj = value as Record<string, unknown>;
   const attachmentId = optionalStringField(obj, "attachmentId");
+  const data = optionalStringField(obj, "data");
   const size = typeof obj.size === "number" ? obj.size : undefined;
-  return { attachmentId, size };
+  return { attachmentId, data, size };
 }
 
 function payloadHasAttachment(part: GmailPayloadPart | undefined): boolean {
   if (!part) return false;
   if (part.filename?.trim()) return true;
-  if (part.body?.attachmentId) return true;
   const disposition = headerValue(part.headers ?? [], "content-disposition")?.toLowerCase() ?? "";
   if (disposition.includes("attachment")) return true;
+  if (part.body?.attachmentId && !part.mimeType?.toLowerCase().startsWith("text/")) return true;
   return (part.parts ?? []).some(payloadHasAttachment);
+}
+
+function extractBodies(part: GmailPayloadPart | undefined): {
+  readonly bodyText: string | null;
+  readonly bodyHtml: string | null;
+} {
+  const textParts: string[] = [];
+  const htmlParts: string[] = [];
+
+  function visit(current: GmailPayloadPart | undefined): void {
+    if (!current) return;
+    const mimeType = current.mimeType?.toLowerCase() ?? "";
+    const decoded = decodeGmailBodyData(current.body?.data);
+    if (decoded) {
+      if (mimeType === "text/plain") {
+        textParts.push(decoded);
+      } else if (mimeType === "text/html") {
+        htmlParts.push(decoded);
+      }
+    }
+    for (const child of current.parts ?? []) visit(child);
+  }
+
+  visit(part);
+  const rawHtml = firstNonEmpty(htmlParts);
+  const bodyHtml = rawHtml && looksLikeHTML(rawHtml) ? truncate(rawHtml, maxHtmlBodyLength) : null;
+  const bodyText = firstNonEmpty(textParts)
+    ?? (bodyHtml ? htmlToPlainText(bodyHtml) : null)
+    ?? (rawHtml && !bodyHtml ? rawHtml : null);
+  return {
+    bodyText: bodyText ? truncate(bodyText, maxPlainTextBodyLength) : null,
+    bodyHtml,
+  };
+}
+
+function decodeGmailBodyData(data: string | undefined): string | null {
+  if (!data) return null;
+  try {
+    const normalized = data.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+    const decoded = Buffer.from(padded, "base64").toString("utf8");
+    const trimmed = decoded.trim();
+    return trimmed ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+function firstNonEmpty(values: readonly string[]): string | null {
+  for (const value of values) {
+    if (value.trim()) return value;
+  }
+  return null;
+}
+
+function looksLikeHTML(value: string): boolean {
+  return /<\/?[a-z][\s\S]*>/i.test(value);
+}
+
+function htmlToPlainText(value: string): string {
+  return value
+    .replace(/<script\b[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function truncate(value: string, maxLength: number): string {
+  return value.length > maxLength ? value.slice(0, maxLength) : value;
 }
 
 function headerValue(
@@ -316,15 +501,23 @@ function parseSender(value: string): { readonly name: string; readonly email: st
 }
 
 function dateFromGmail(internalDate: string | undefined, dateHeader: string | null): Date {
-  if (internalDate) {
-    const millis = Number(internalDate);
-    if (Number.isFinite(millis) && millis > 0) return new Date(millis);
-  }
+  return dateFromGmailNullable(internalDate, dateHeader) ?? new Date();
+}
+
+function dateFromGmailNullable(internalDate: string | undefined, dateHeader: string | null): Date | null {
+  const millis = internalDateMsFromGmail(internalDate);
+  if (millis !== null) return new Date(millis);
   if (dateHeader) {
     const parsed = Date.parse(dateHeader);
     if (Number.isFinite(parsed)) return new Date(parsed);
   }
-  return new Date();
+  return null;
+}
+
+function internalDateMsFromGmail(internalDate: string | undefined): number | null {
+  if (!internalDate) return null;
+  const millis = Number(internalDate);
+  return Number.isSafeInteger(millis) && millis > 0 ? millis : null;
 }
 
 function stringField(value: Record<string, unknown>, key: string): string {

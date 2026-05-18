@@ -7,11 +7,14 @@ import {
   exchangeGmailCode,
   fetchGmailMessage,
   fetchGmailProfile,
+  fetchGmailThread,
   gmailOAuthConfig,
   listRecentInboxMessages,
   parseGmailMessage,
+  parseGmailThreadMessages,
   refreshGmailAccessToken,
   type ParsedGmailMessage,
+  type ParsedGmailThreadMessage,
 } from "./google";
 import {
   GmailAuthError,
@@ -19,21 +22,33 @@ import {
   GmailDatabaseError,
   GmailNotConnectedError,
   GmailProviderError,
+  gmailWorkflowErrorCause,
 } from "./errors";
 import {
-  consumeOAuthState,
+  connectGmailAccount,
   getConnectedEmailAccount,
+  listEmailMessagesForThread,
   listEmailThreads,
+  listExistingLatestMessageIds,
+  loadOAuthState,
+  loadEmailThreadByGmailThreadId,
+  markMissingEmailMessagesDeleted,
   saveOAuthState,
   updateAccessToken,
   updateSyncState,
-  upsertEmailAccount,
-  upsertEmailAccountTokens,
+  upsertEmailMessages,
   upsertEmailThreads,
   type ConnectedEmailAccount,
+  type EmailMessageInsert,
+  type EmailMessageRow,
   type EmailThreadInsert,
   type EmailThreadRow,
 } from "./repository";
+
+const oauthStateTTLMs = 10 * 60 * 1000;
+const emailThreadListLimit = 100;
+const recentInboxMessageLimit = 50;
+const tokenRefreshLeewayMs = 60 * 1000;
 
 export type GmailOAuthStart = {
   readonly authUrl: string;
@@ -41,7 +56,6 @@ export type GmailOAuthStart = {
 
 export type GmailOAuthCallbackResult = {
   readonly email: string;
-  readonly syncedThreads: number;
 };
 
 export type GmailStatus = {
@@ -62,8 +76,35 @@ export type GmailThreadDTO = {
   readonly category: "primary" | "updates" | "promotions" | "social" | "forums" | "purchases" | null;
 };
 
+export type GmailThreadMessagesResponse = {
+  readonly threadId: string;
+  readonly cached: boolean;
+  readonly messages: readonly GmailThreadMessageDTO[];
+};
+
+export type GmailThreadMessageDTO = {
+  readonly messageId: string;
+  readonly threadId: string;
+  readonly internetMessageId: string | null;
+  readonly subject: string | null;
+  readonly fromName: string | null;
+  readonly fromEmail: string | null;
+  readonly to: string | null;
+  readonly cc: string | null;
+  readonly receivedAt: string | null;
+  readonly snippet: string | null;
+  readonly labelIds: readonly string[];
+  readonly isUnread: boolean;
+  readonly isSent: boolean;
+  readonly hasAttachment: boolean;
+  readonly bodyText: string | null;
+  readonly bodyHtml: string | null;
+};
+
 export function runGmailWorkflow<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
-  return Effect.runPromise(effect);
+  return Effect.runPromise(effect).catch((err) => {
+    throw gmailWorkflowErrorCause(err) ?? err;
+  });
 }
 
 export function startGmailOAuth(input: {
@@ -78,7 +119,7 @@ export function startGmailOAuth(input: {
       state,
       userId: input.userId,
       codeVerifier: pkce.codeVerifier,
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      expiresAt: new Date(Date.now() + oauthStateTTLMs),
     });
     return {
       authUrl: createGmailAuthUrl({
@@ -96,10 +137,10 @@ export function handleGmailOAuthCallback(input: {
   readonly request: Request;
 }): Effect.Effect<
   GmailOAuthCallbackResult,
-  GmailAuthError | GmailConfigError | GmailDatabaseError | GmailNotConnectedError | GmailProviderError
+  GmailAuthError | GmailConfigError | GmailDatabaseError | GmailProviderError
 > {
   return Effect.gen(function* () {
-    const storedState = yield* consumeOAuthState(input.state);
+    const storedState = yield* loadOAuthState(input.state);
     if (!storedState) {
       return yield* Effect.fail(new GmailAuthError("Gmail OAuth state was not found or was already used."));
     }
@@ -113,28 +154,27 @@ export function handleGmailOAuthCallback(input: {
       codeVerifier: storedState.codeVerifier,
     }));
     const profile = yield* providerEffect("profile", () => fetchGmailProfile(token.accessToken));
-    const account = yield* upsertEmailAccount({
+    const accessTokenEncrypted = yield* syncConfig(() => encryptGmailToken(token.accessToken));
+    const refreshTokenEncrypted = yield* syncConfig(() => encryptGmailToken(token.refreshToken));
+    yield* connectGmailAccount({
+      state: input.state,
       userId: storedState.userId,
       email: profile.emailAddress,
       providerAccountId: profile.emailAddress,
-    });
-    const accessTokenEncrypted = yield* syncConfig(() => encryptGmailToken(token.accessToken));
-    const refreshTokenEncrypted = yield* syncConfig(() => encryptGmailToken(token.refreshToken));
-    yield* upsertEmailAccountTokens({
-      emailAccountId: account.id,
       accessTokenEncrypted,
       refreshTokenEncrypted,
       expiresAt: token.expiresAt,
-    });
-    yield* updateSyncState({
-      emailAccountId: account.id,
       lastSyncCursor: profile.historyId ?? null,
-      lastSyncedAt: new Date(),
     });
-    const sync = yield* syncRecentGmail({ userId: storedState.userId, request: input.request });
+    // Backfill recent inbox so the first sidebar view has threads to show.
+    // Best-effort: a transient Gmail failure here shouldn't block the
+    // OAuth result. The user can retry via the refresh button.
+    yield* Effect.catchAll(
+      syncRecentGmail({ userId: storedState.userId, request: input.request }),
+      () => Effect.succeed({ upserted: 0 }),
+    );
     return {
       email: profile.emailAddress,
-      syncedThreads: sync.upserted,
     };
   });
 }
@@ -155,7 +195,7 @@ export function getGmailStatus(userId: string): Effect.Effect<GmailStatus, Gmail
 
 export function listGmailThreadDTOs(userId: string): Effect.Effect<readonly GmailThreadDTO[], GmailDatabaseError> {
   return Effect.gen(function* () {
-    const rows = yield* listEmailThreads({ userId, limit: 100 });
+    const rows = yield* listEmailThreads({ userId, limit: emailThreadListLimit });
     return rows.map(threadDTO);
   });
 }
@@ -174,23 +214,111 @@ export function syncRecentGmail(input: {
     }
     const config = yield* syncConfig(() => gmailOAuthConfig(input.request));
     const accessToken = yield* validAccessToken({ connection, config });
-    const listed = yield* providerEffect("list_messages", () => listRecentInboxMessages(accessToken, 50));
+    const listed = yield* providerEffect("list_messages", () => listRecentInboxMessages(accessToken, recentInboxMessageLimit));
+    // Skip messages whose id already matches some thread's latest message id —
+    // those threads are unchanged since last sync, so re-fetching their
+    // metadata wastes Gmail quota and adds latency.
+    const knownLatestIds = yield* listExistingLatestMessageIds({
+      emailAccountId: connection.account.id,
+      gmailMessageIds: listed.map((message) => message.id),
+    });
+    const toFetch = listed.filter((message) => !knownLatestIds.has(message.id));
     const messages = yield* providerEffect("get_messages", async () => {
-      const fetched = await Promise.all(listed.map((message) => fetchGmailMessage(accessToken, message.id)));
+      if (toFetch.length === 0) return [];
+      const fetched = await Promise.all(toFetch.map((message) => fetchGmailMessage(accessToken, message.id)));
       return fetched.map(parseGmailMessage);
     });
-    const rows = threadRows({
-      userId: input.userId,
-      emailAccountId: connection.account.id,
-      messages,
-    });
-    const upserted = yield* upsertEmailThreads(rows);
+    let upserted = 0;
+    if (messages.length > 0) {
+      const rows = threadRows({
+        userId: input.userId,
+        emailAccountId: connection.account.id,
+        messages,
+      });
+      upserted = yield* upsertEmailThreads(rows);
+    }
+    const profile = yield* providerEffect("profile", () => fetchGmailProfile(accessToken));
     yield* updateSyncState({
       emailAccountId: connection.account.id,
-      lastSyncCursor: latestHistoryId(messages),
+      lastSyncCursor: profile.historyId ?? connection.syncState?.lastSyncCursor ?? null,
       lastSyncedAt: new Date(),
     });
     return { upserted };
+  });
+}
+
+export function getGmailThreadMessages(input: {
+  readonly userId: string;
+  readonly request: Request;
+  readonly threadId: string;
+  readonly forceRefresh?: boolean;
+}): Effect.Effect<
+  GmailThreadMessagesResponse,
+  GmailConfigError | GmailDatabaseError | GmailNotConnectedError | GmailProviderError
+> {
+  return Effect.gen(function* () {
+    const connection = yield* getConnectedEmailAccount(input.userId);
+    if (!connection?.token) {
+      return yield* Effect.fail(new GmailNotConnectedError());
+    }
+    const config = yield* syncConfig(() => gmailOAuthConfig(input.request));
+    const accessToken = yield* validAccessToken({ connection, config });
+    let threadRow = yield* loadEmailThreadByGmailThreadId({
+      userId: input.userId,
+      emailAccountId: connection.account.id,
+      gmailThreadId: input.threadId,
+    });
+
+    if (threadRow) {
+      const cachedMessages = yield* listEmailMessagesForThread({
+        userId: input.userId,
+        emailThreadId: threadRow.id,
+      });
+      if (!input.forceRefresh && isMessageCacheFresh(threadRow, cachedMessages)) {
+        return threadMessagesResponse(input.threadId, true, cachedMessages);
+      }
+    }
+
+    const gmailThread = yield* providerEffect("get_thread", () => fetchGmailThread(accessToken, input.threadId));
+    const parsedMessages = [...parseGmailThreadMessages(gmailThread)]
+      .sort(compareParsedThreadMessages);
+    if (!threadRow) {
+      const threadUpserts = threadRowsFromThreadMessages({
+        userId: input.userId,
+        emailAccountId: connection.account.id,
+        messages: parsedMessages,
+      });
+      yield* upsertEmailThreads(threadUpserts);
+      threadRow = yield* loadEmailThreadByGmailThreadId({
+        userId: input.userId,
+        emailAccountId: connection.account.id,
+        gmailThreadId: input.threadId,
+      });
+    }
+    if (!threadRow) {
+      return {
+        threadId: input.threadId,
+        cached: false,
+        messages: [],
+      };
+    }
+
+    yield* upsertEmailMessages(emailMessageRows({
+      userId: input.userId,
+      emailAccountId: connection.account.id,
+      emailThreadId: threadRow.id,
+      gmailThreadId: input.threadId,
+      messages: parsedMessages,
+    }));
+    yield* markMissingEmailMessagesDeleted({
+      emailThreadId: threadRow.id,
+      seenGmailMessageIds: parsedMessages.map((message) => message.messageId),
+    });
+    const savedMessages = yield* listEmailMessagesForThread({
+      userId: input.userId,
+      emailThreadId: threadRow.id,
+    });
+    return threadMessagesResponse(input.threadId, false, savedMessages);
   });
 }
 
@@ -203,7 +331,7 @@ function validAccessToken(input: {
     if (!token) {
       return yield* Effect.fail(new GmailNotConnectedError());
     }
-    if (token.expiresAt.getTime() > Date.now() + 60 * 1000) {
+    if (token.expiresAt.getTime() > Date.now() + tokenRefreshLeewayMs) {
       return yield* syncConfig(() => decryptGmailToken(token.accessTokenEncrypted));
     }
     const refreshToken = yield* syncConfig(() => decryptGmailToken(token.refreshTokenEncrypted));
@@ -219,6 +347,17 @@ function validAccessToken(input: {
     });
     return refreshed.accessToken;
   });
+}
+
+function isMessageCacheFresh(
+  thread: EmailThreadRow,
+  messages: readonly EmailMessageRow[],
+): boolean {
+  if (messages.length === 0) return false;
+  if (!messages.some((message) => message.gmailMessageId === thread.latestGmailMessageId)) {
+    return false;
+  }
+  return true;
 }
 
 function threadRows(input: {
@@ -266,21 +405,130 @@ function threadRows(input: {
   }));
 }
 
-function latestHistoryId(messages: readonly ParsedGmailMessage[]): string | null {
-  const sorted = messages
-    .map((message) => message.historyId)
-    .filter((value): value is string => !!value)
-    .sort((a, b) => {
-      try {
-        const left = BigInt(a);
-        const right = BigInt(b);
-        if (left === right) return 0;
-        return left > right ? -1 : 1;
-      } catch {
-        return b.localeCompare(a);
-      }
-    });
-  return sorted[0] ?? null;
+function threadRowsFromThreadMessages(input: {
+  readonly userId: string;
+  readonly emailAccountId: string;
+  readonly messages: readonly ParsedGmailThreadMessage[];
+}): readonly EmailThreadInsert[] {
+  const byThread = new Map<string, {
+    latest: ParsedGmailThreadMessage;
+    count: number;
+    labels: Set<string>;
+    hasAttachment: boolean;
+  }>();
+  for (const message of input.messages) {
+    const existing = byThread.get(message.threadId);
+    if (!existing) {
+      byThread.set(message.threadId, {
+        latest: message,
+        count: 1,
+        labels: new Set(message.labelIds),
+        hasAttachment: message.hasAttachment,
+      });
+      continue;
+    }
+    existing.count += 1;
+    for (const label of message.labelIds) existing.labels.add(label);
+    existing.hasAttachment = existing.hasAttachment || message.hasAttachment;
+    if (parsedThreadMessageTime(message) > parsedThreadMessageTime(existing.latest)) {
+      existing.latest = message;
+    }
+  }
+  return [...byThread.entries()].map(([gmailThreadId, thread]) => ({
+    userId: input.userId,
+    emailAccountId: input.emailAccountId,
+    gmailThreadId,
+    latestGmailMessageId: thread.latest.messageId,
+    subject: thread.latest.subject ?? "(no subject)",
+    snippet: thread.latest.snippet,
+    lastSenderName: thread.latest.senderName ?? thread.latest.senderEmail,
+    lastSenderEmail: thread.latest.senderEmail,
+    lastMessageAt: thread.latest.receivedAt ?? new Date(),
+    messageCount: thread.count,
+    hasAttachment: thread.hasAttachment,
+    labelIds: [...thread.labels],
+  }));
+}
+
+function emailMessageRows(input: {
+  readonly userId: string;
+  readonly emailAccountId: string;
+  readonly emailThreadId: string;
+  readonly gmailThreadId: string;
+  readonly messages: readonly ParsedGmailThreadMessage[];
+}): readonly EmailMessageInsert[] {
+  const now = new Date();
+  return input.messages.map((message) => ({
+    userId: input.userId,
+    emailAccountId: input.emailAccountId,
+    emailThreadId: input.emailThreadId,
+    gmailThreadId: input.gmailThreadId,
+    gmailMessageId: message.messageId,
+    internetMessageId: message.internetMessageId,
+    subject: message.subject,
+    snippet: message.snippet,
+    fromName: message.senderName,
+    fromEmail: message.senderEmail,
+    toRecipients: message.to,
+    ccRecipients: message.cc,
+    receivedAt: message.receivedAt,
+    internalDateMs: message.internalDateMs,
+    isUnread: message.isUnread,
+    isSent: message.isSent,
+    hasAttachment: message.hasAttachment,
+    labelIds: [...message.labelIds],
+    bodyText: message.bodyText,
+    bodyHtml: message.bodyHtml,
+    bodyFetchedAt: now,
+  }));
+}
+
+function threadMessagesResponse(
+  threadId: string,
+  cached: boolean,
+  rows: readonly EmailMessageRow[],
+): GmailThreadMessagesResponse {
+  return {
+    threadId,
+    cached,
+    messages: rows.map(emailMessageDTO),
+  };
+}
+
+function emailMessageDTO(row: EmailMessageRow): GmailThreadMessageDTO {
+  const labels = Array.isArray(row.labelIds) ? row.labelIds : [];
+  return {
+    messageId: row.gmailMessageId,
+    threadId: row.gmailThreadId,
+    internetMessageId: row.internetMessageId,
+    subject: row.subject,
+    fromName: row.fromName,
+    fromEmail: row.fromEmail,
+    to: row.toRecipients,
+    cc: row.ccRecipients,
+    receivedAt: row.receivedAt?.toISOString() ?? null,
+    snippet: row.snippet,
+    labelIds: labels,
+    isUnread: row.isUnread,
+    isSent: row.isSent,
+    hasAttachment: row.hasAttachment,
+    bodyText: row.bodyText,
+    bodyHtml: row.bodyHtml,
+  };
+}
+
+function compareParsedThreadMessages(
+  left: ParsedGmailThreadMessage,
+  right: ParsedGmailThreadMessage,
+): number {
+  const byTime = parsedThreadMessageTime(left) - parsedThreadMessageTime(right);
+  if (byTime !== 0) return byTime;
+  return left.messageId.localeCompare(right.messageId);
+}
+
+function parsedThreadMessageTime(message: ParsedGmailThreadMessage): number {
+  if (message.internalDateMs !== null) return message.internalDateMs;
+  return message.receivedAt?.getTime() ?? 0;
 }
 
 function threadDTO(row: EmailThreadRow): GmailThreadDTO {

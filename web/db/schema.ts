@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   index,
   integer,
@@ -196,6 +197,47 @@ export const emailThreads = pgTable(
     index("email_threads_user_last_message_idx").on(table.userId, table.lastMessageAt),
     index("email_threads_account_last_message_idx").on(table.emailAccountId, table.lastMessageAt),
     uniqueIndex("email_threads_account_gmail_thread_unique").on(table.emailAccountId, table.gmailThreadId),
+  ],
+);
+
+export const emailMessages = pgTable(
+  "email_messages",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").notNull(),
+    emailAccountId: uuid("email_account_id")
+      .notNull()
+      .references(() => emailAccounts.id, { onDelete: "cascade" }),
+    emailThreadId: uuid("email_thread_id")
+      .notNull()
+      .references(() => emailThreads.id, { onDelete: "cascade" }),
+    gmailThreadId: text("gmail_thread_id").notNull(),
+    gmailMessageId: text("gmail_message_id").notNull(),
+    internetMessageId: text("internet_message_id"),
+    subject: text("subject"),
+    snippet: text("snippet"),
+    fromName: text("from_name"),
+    fromEmail: text("from_email"),
+    toRecipients: text("to_recipients"),
+    ccRecipients: text("cc_recipients"),
+    receivedAt: timestamp("received_at", { withTimezone: true }),
+    internalDateMs: bigint("internal_date_ms", { mode: "number" }),
+    isUnread: boolean("is_unread").notNull().default(false),
+    isSent: boolean("is_sent").notNull().default(false),
+    hasAttachment: boolean("has_attachment").notNull().default(false),
+    labelIds: jsonb("label_ids").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    bodyText: text("body_text"),
+    bodyHtml: text("body_html"),
+    bodyFetchedAt: timestamp("body_fetched_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("email_messages_account_thread_idx").on(table.emailAccountId, table.gmailThreadId),
+    index("email_messages_thread_received_idx").on(table.emailThreadId, table.receivedAt),
+    index("email_messages_user_received_idx").on(table.userId, table.receivedAt),
+    uniqueIndex("email_messages_account_gmail_message_unique").on(table.emailAccountId, table.gmailMessageId),
   ],
 );
 
