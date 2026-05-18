@@ -68,10 +68,10 @@ extension Workspace: ZebraMarkdownWorkspace {
 @MainActor
 final class ZebraEmailThreadPanel: Panel, ObservableObject {
     let id: UUID
-    // Piggyback `.markdown` for v1 so existing bonsplit/session plumbing can
-    // host the Zebra email panel. Rendering is guarded by `ZebraEmailThreadPanel`
-    // checks before markdown panel rendering in `PanelContentView`.
-    let panelType: PanelType = .markdown
+    // First-class panel type. Rendering goes through the generic
+    // `customPanelViewFactory` seam in `PanelContentView`, so cmux common
+    // code never has to know about `ZebraEmailThreadPanel` directly.
+    let panelType: PanelType = .email
     let threadId: String
     var displayIcon: String? { "envelope" }
 
@@ -243,9 +243,7 @@ extension Workspace {
         let newTab = Bonsplit.Tab(
             title: emailPanel.displayTitle,
             icon: emailPanel.displayIcon,
-            // Keep this aligned with the panelType piggyback above. Session
-            // persistence still ignores the panel because it is not a MarkdownPanel.
-            kind: Workspace.SurfaceKind.markdown,
+            kind: Workspace.SurfaceKind.email,
             isDirty: false,
             isLoading: false,
             isPinned: false
@@ -295,9 +293,7 @@ extension Workspace {
         guard let newTabId = bonsplitController.createTab(
             title: emailPanel.displayTitle,
             icon: emailPanel.displayIcon,
-            // Keep this aligned with the panelType piggyback above. Session
-            // persistence still ignores the panel because it is not a MarkdownPanel.
-            kind: Workspace.SurfaceKind.markdown,
+            kind: Workspace.SurfaceKind.email,
             isDirty: false,
             isLoading: false,
             isPinned: false,

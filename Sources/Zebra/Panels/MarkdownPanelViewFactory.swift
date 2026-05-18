@@ -82,62 +82,52 @@ private struct ZebraMarkdownPanelHost: View {
     }
 }
 
-struct ZebraEmailPanelViewContext {
-    let panel: ZebraEmailThreadPanel
-    let paneId: PaneID
-    let isFocused: Bool
-    let isVisibleInUI: Bool
-    let portalPriority: Int
-    let onRequestPanelFocus: () -> Void
-}
-
-typealias ZebraEmailPanelViewFactory = (ZebraEmailPanelViewContext) -> AnyView
-
-private struct ZebraEmailPanelViewFactoryKey: EnvironmentKey {
-    static let defaultValue: ZebraEmailPanelViewFactory? = nil
-}
-
-extension EnvironmentValues {
-    var zebraEmailPanelViewFactory: ZebraEmailPanelViewFactory? {
-        get { self[ZebraEmailPanelViewFactoryKey.self] }
-        set { self[ZebraEmailPanelViewFactoryKey.self] = newValue }
-    }
-}
-
-enum ZebraEmailPanelViewFactoryProvider {
+/// Zebra's implementation of the generic `customPanelViewFactory` seam
+/// declared by cmux in `PanelContentView`. Cmux common code never sees
+/// `ZebraEmailThreadPanel` (or any future Zebra panel type) — the cast
+/// happens here, inside Zebra's module. Returning `nil` means "this panel
+/// kind isn't ours; let cmux handle it" (currently a no-op for `.email`
+/// since there's no cmux-side renderer).
+enum ZebraCustomPanelViewFactoryProvider {
     @MainActor
-    static func make(services: ZebraServices) -> ZebraEmailPanelViewFactory {
+    static func make(services: ZebraServices) -> CustomPanelViewFactory {
         { context in
-            AnyView(
-                ZebraEmailPanelHost(context: context, store: services.emailDetail)
-            )
+            if let emailPanel = context.panel as? ZebraEmailThreadPanel {
+                return AnyView(
+                    ZebraEmailPanelHost(
+                        panel: emailPanel,
+                        store: services.emailDetail
+                    )
+                )
+            }
+            return nil
         }
     }
 }
 
 private struct ZebraEmailPanelHost: View {
-    let context: ZebraEmailPanelViewContext
+    let panel: ZebraEmailThreadPanel
     @ObservedObject var store: ZebraEmailDetailStore
 
     var body: some View {
         ZebraEmailThreadDetailView(
-            subject: context.panel.displayTitle,
-            detail: store.detail(threadId: context.panel.threadId),
-            isLoading: store.isLoading(threadId: context.panel.threadId),
-            errorMessage: store.errorMessage(threadId: context.panel.threadId),
-            expandedMessageIds: store.expandedMessageIds(threadId: context.panel.threadId),
+            subject: panel.displayTitle,
+            detail: store.detail(threadId: panel.threadId),
+            isLoading: store.isLoading(threadId: panel.threadId),
+            errorMessage: store.errorMessage(threadId: panel.threadId),
+            expandedMessageIds: store.expandedMessageIds(threadId: panel.threadId),
             onRefresh: {
-                Task { await store.reloadThread(threadId: context.panel.threadId, forceRefresh: true) }
+                Task { await store.reloadThread(threadId: panel.threadId, forceRefresh: true) }
             },
             onToggleMessage: { messageId in
-                store.toggleMessage(threadId: context.panel.threadId, messageId: messageId)
+                store.toggleMessage(threadId: panel.threadId, messageId: messageId)
             },
             onOpenURL: { url in
                 NSWorkspace.shared.open(url)
             }
         )
-        .task(id: context.panel.threadId) {
-            await store.loadThreadIfNeeded(threadId: context.panel.threadId)
+        .task(id: panel.threadId) {
+            await store.loadThreadIfNeeded(threadId: panel.threadId)
         }
     }
 }

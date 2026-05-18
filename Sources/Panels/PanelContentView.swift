@@ -3,6 +3,36 @@ import Foundation
 import Bonsplit
 import AppKit
 
+/// Context handed to an external panel renderer registered through
+/// `customPanelViewFactory`. The factory receives the abstract `any Panel`
+/// — concrete-type casts (e.g. to `ZebraEmailThreadPanel`) live in the
+/// registering module so cmux common code stays free of Zebra-specific
+/// types.
+struct CustomPanelViewContext {
+    let panel: any Panel
+    let paneId: PaneID
+    let isFocused: Bool
+    let isVisibleInUI: Bool
+    let portalPriority: Int
+    let onRequestPanelFocus: () -> Void
+}
+
+typealias CustomPanelViewFactory = (CustomPanelViewContext) -> AnyView?
+
+private struct CustomPanelViewFactoryKey: EnvironmentKey {
+    static let defaultValue: CustomPanelViewFactory? = nil
+}
+
+extension EnvironmentValues {
+    /// Generic panel renderer seam. Currently used by Zebra-owned panel
+    /// kinds (e.g. `.email`). Cmux common code only knows the factory
+    /// signature; it never references the concrete Zebra panel type.
+    var customPanelViewFactory: CustomPanelViewFactory? {
+        get { self[CustomPanelViewFactoryKey.self] }
+        set { self[CustomPanelViewFactoryKey.self] = newValue }
+    }
+}
+
 /// View that renders the appropriate panel view based on panel type
 struct PanelContentView: View {
     let panel: any Panel
@@ -19,7 +49,7 @@ struct PanelContentView: View {
     let onRequestPanelFocus: () -> Void
     let onTriggerFlash: () -> Void
     @Environment(\.markdownPanelViewFactory) private var markdownPanelViewFactory
-    @Environment(\.zebraEmailPanelViewFactory) private var zebraEmailPanelViewFactory
+    @Environment(\.customPanelViewFactory) private var customPanelViewFactory
 
     var body: some View {
         renderedPanel
@@ -30,23 +60,6 @@ struct PanelContentView: View {
 
     @ViewBuilder
     private var renderedPanel: some View {
-        if let emailPanel = panel as? ZebraEmailThreadPanel,
-           let factory = zebraEmailPanelViewFactory {
-            factory(ZebraEmailPanelViewContext(
-                panel: emailPanel,
-                paneId: paneId,
-                isFocused: isFocused,
-                isVisibleInUI: isVisibleInUI,
-                portalPriority: portalPriority,
-                onRequestPanelFocus: onRequestPanelFocus
-            ))
-        } else {
-            typedPanel
-        }
-    }
-
-    @ViewBuilder
-    private var typedPanel: some View {
         switch panel.panelType {
         case .terminal:
             if let terminalPanel = panel as? TerminalPanel {
@@ -107,6 +120,21 @@ struct PanelContentView: View {
                     onRequestPanelFocus: onRequestPanelFocus
                 )
             }
+        case .email:
+            // Cmux common code stays Zebra-type-free. The registered
+            // `customPanelViewFactory` (set up by `ZebraServices`) decides
+            // how to render and what concrete panel type to cast to.
+            if let factory = customPanelViewFactory,
+               let view = factory(CustomPanelViewContext(
+                   panel: panel,
+                   paneId: paneId,
+                   isFocused: isFocused,
+                   isVisibleInUI: isVisibleInUI,
+                   portalPriority: portalPriority,
+                   onRequestPanelFocus: onRequestPanelFocus
+               )) {
+                view
+            }
         }
     }
 
@@ -124,7 +152,7 @@ struct PanelContentView: View {
     private var shouldInstallPaneDropTarget: Bool {
         guard isVisibleInUI else { return false }
         switch panel.panelType {
-        case .markdown, .filePreview, .rightSidebarTool:
+        case .markdown, .filePreview, .rightSidebarTool, .email:
             return true
         case .terminal, .browser:
             return false

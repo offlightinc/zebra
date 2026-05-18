@@ -4,9 +4,14 @@
 
 # Adapter / DI seams
 Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment + ZebraSidebarDefaults.defaultWidth fallback
-Sources/ContentView.swift                  # SidebarSlots composer + \.sidebarExtraLeadingInset
-Sources/Panels/PanelContentView.swift      # \.markdownPanelViewFactory + \.zebraEmailPanelViewFactory factory lookup
+Sources/ContentView.swift                  # SidebarSlots composer + \.sidebarExtraLeadingInset + commandPalette PanelType.email branches
+Sources/Panels/PanelContentView.swift      # \.markdownPanelViewFactory + \.customPanelViewFactory + PanelType.email render branch
 Sources/Panels/MarkdownPanel.swift         # didCloseNotification + updateFrontmatter
+Sources/Panels/Panel.swift                 # PanelType.email case (Zebra-owned panel kind, rendered via customPanelViewFactory seam)
+Sources/Workspace.swift                    # SurfaceKind.email + PanelType.email branches in surfaceKind / session snapshot / createPanel
+Sources/CmuxLifecycleEventPublishing.swift # cmuxEventSurfaceKind PanelType.email branch
+Sources/TerminalPaneDropTargetView.swift   # PanelType.email branch in pane drop target dispatch
+Sources/Search/GlobalSearchDocuments.swift # PanelType.email branch in browseHit kind mapping
 Sources/WindowDragHandleView.swift         # MinimalModeSidebarTitlebarControlsMetrics.extraLeadingInset seam (Zebra sets it)
 
 # Upstream-only drift (zebra is behind on these — rebase resolves; not a Zebra touch).
@@ -26,7 +31,7 @@ Sources/Auth/AuthEnvironment.swift
 
 # Tests + project plumbing
 cmuxTests/FileDropOverlayViewTests.swift
-GhosttyTabs.xcodeproj/project.pbxproj
+cmux.xcodeproj/project.pbxproj
 
 # Docs
 CLAUDE.md

@@ -14,6 +14,10 @@
 #   0  no unapproved cmux file changes
 #   1  found at least one unapproved cmux file change
 #   2  invalid arguments / setup error
+#
+# bash 3.2 compatible (macOS default `/bin/bash`) — no `mapfile`, no
+# `declare -A`. Linear scans are fine: the allowlist + upstream file set are
+# both small enough that O(n*m) lookups never show up in profile.
 
 set -euo pipefail
 
@@ -43,38 +47,58 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Collect changed files.
+# Collect changed files (bash 3.2: no `mapfile`).
+changed=()
 if [[ "$mode" == "staged" ]]; then
-  mapfile -t changed < <(git -C "$ROOT" diff --cached --name-only --diff-filter=AMR)
+  while IFS= read -r line; do
+    changed+=("$line")
+  done < <(git -C "$ROOT" diff --cached --name-only --diff-filter=AMR)
 else
   if ! git -C "$ROOT" rev-parse --verify --quiet "$base" >/dev/null; then
     echo "error: ref '$base' not found. Try fetching upstream first: git fetch upstream main" >&2
     exit 2
   fi
-  mapfile -t changed < <(git -C "$ROOT" diff --name-only --diff-filter=AMR "$base"...HEAD)
+  while IFS= read -r line; do
+    changed+=("$line")
+  done < <(git -C "$ROOT" diff --name-only --diff-filter=AMR "$base"...HEAD)
 fi
 
-# Read allowlist into an associative array for O(1) lookup.
-declare -A allowed=()
+# Read allowlist into a plain array (bash 3.2: no associative arrays).
+allowed=()
 while IFS= read -r line; do
   trimmed="${line%%#*}"
   trimmed="${trimmed#"${trimmed%%[![:space:]]*}"}"
   trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
   [[ -z "$trimmed" ]] && continue
-  allowed["$trimmed"]=1
+  allowed+=("$trimmed")
 done <"$ALLOWLIST"
 
 # Resolve once: list every file that exists in upstream/main. Anything not in
-# this set is a Zebra-only addition and isn't subject to the allowlist —
-# Zebra files can move freely.
-declare -A upstream_files=()
+# this set is a Zebra-only addition and isn't subject to the allowlist.
+upstream_files=()
+have_upstream=0
 if git -C "$ROOT" rev-parse --verify --quiet upstream/main >/dev/null; then
+  have_upstream=1
   while IFS= read -r p; do
-    upstream_files["$p"]=1
+    upstream_files+=("$p")
   done < <(git -C "$ROOT" ls-tree -r --name-only upstream/main)
 else
   echo "warning: no 'upstream/main' ref — cannot distinguish Zebra-only files; falling back to path heuristics" >&2
 fi
+
+# Linear membership helpers. Allowlist size stays in the dozens; upstream
+# file set is a few thousand at most. Even with O(n) lookups the whole hook
+# finishes in well under 100ms, which is the budget that matters.
+contains_path() {
+  local needle="$1"; shift
+  local item
+  for item in "$@"; do
+    if [[ "$item" == "$needle" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 violations=()
 for path in "${changed[@]}"; do
@@ -85,15 +109,15 @@ for path in "${changed[@]}"; do
   esac
   # Anything not under a cmux-relevant root is unrelated.
   case "$path" in
-    Sources/*|Resources/*|cmuxTests/*|Packages/*|GhosttyTabs.xcodeproj/*) ;;
+    Sources/*|Resources/*|cmuxTests/*|Packages/*|cmux.xcodeproj/*) ;;
     *) continue ;;
   esac
   # If we have the upstream snapshot and this file doesn't exist there, it's
   # a Zebra-only addition — no allowlist required.
-  if [[ ${#upstream_files[@]} -gt 0 && -z "${upstream_files[$path]+x}" ]]; then
+  if [[ $have_upstream -eq 1 ]] && ! contains_path "$path" "${upstream_files[@]}"; then
     continue
   fi
-  if [[ -z "${allowed[$path]+x}" ]]; then
+  if ! contains_path "$path" "${allowed[@]}"; then
     violations+=("$path")
   fi
 done

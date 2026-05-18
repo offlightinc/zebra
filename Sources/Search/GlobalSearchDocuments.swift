@@ -34,7 +34,9 @@ enum GlobalSearchDocuments {
             kind = .browser
         case .markdown:
             kind = .markdown
-        case .terminal, .filePreview, .rightSidebarTool:
+        case .terminal, .filePreview, .rightSidebarTool, .email:
+            // Email panels surface in global search through their tab title
+            // only — no dedicated `.email` search kind yet.
             kind = .title
         }
 

@@ -525,6 +525,11 @@ extension Workspace {
             markdownSnapshot = nil
             filePreviewSnapshot = nil
             rightSidebarToolSnapshot = SessionRightSidebarToolPanelSnapshot(mode: toolPanel.mode)
+        case .email:
+            // Zebra-owned panel. Session snapshot intentionally skips it —
+            // email surfaces re-open from sidebar selection, not from
+            // serialized state.
+            return nil
         }
 
         return SessionPanelSnapshot(
@@ -886,6 +891,11 @@ extension Workspace {
             }
             applySessionPanelMetadata(snapshot, toPanelId: toolPanel.id)
             return toolPanel.id
+        case .email:
+            // snapshotPanel for .email returns nil, so we should never reach
+            // this branch. Keep it explicit so the exhaustive switch stays
+            // total without silently restoring an empty email panel.
+            return nil
         }
     }
 
@@ -7457,6 +7467,11 @@ final class Workspace: Identifiable, ObservableObject {
         static let markdown = "markdown"
         static let filePreview = "filePreview"
         static let rightSidebarTool = "rightSidebarTool"
+        // Zebra-owned surface kind. Bonsplit tab metadata uses this string;
+        // restoration / session snapshot intentionally does NOT try to rebuild
+        // an email panel from this kind (those flows skip non-restorable
+        // panels via Workspace's restore guards).
+        static let email = "email"
     }
 
     enum PanelShellActivityState: String {
@@ -8309,6 +8324,8 @@ final class Workspace: Identifiable, ObservableObject {
             return SurfaceKind.filePreview
         case .rightSidebarTool:
             return SurfaceKind.rightSidebarTool
+        case .email:
+            return SurfaceKind.email
         }
     }
 

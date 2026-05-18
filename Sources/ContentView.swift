@@ -5751,6 +5751,8 @@ struct ContentView: View {
             return String(localized: "commandPalette.kind.filePreview", defaultValue: "File Preview")
         case .rightSidebarTool:
             return String(localized: "commandPalette.kind.rightSidebarTool", defaultValue: "Tool")
+        case .email:
+            return String(localized: "commandPalette.kind.email", defaultValue: "Email")
         }
     }
 
@@ -5766,6 +5768,8 @@ struct ContentView: View {
             return ["file", "preview", "text", "pdf", "image", "audio", "video"]
         case .rightSidebarTool:
             return ["tool", "files", "find", "vault", "sidebar"]
+        case .email:
+            return ["email", "mail", "gmail", "inbox", "thread"]
         }
     }
 
