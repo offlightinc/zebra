@@ -416,14 +416,30 @@ private struct EmailHTMLBodyView: NSViewRepresentable {
             decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void
         ) {
             preferences.allowsContentJavaScript = false
-            if let url = navigationAction.request.url,
+
+            // The very first navigation from loadHTMLString arrives with the
+            // web view still at no url. Always let that one through; everything
+            // after is treated as untrusted content.
+            if webView.url == nil {
+                decisionHandler(.allow, preferences)
+                return
+            }
+
+            // Only real user clicks (`linkActivated`) route out via
+            // NSWorkspace.open. <meta refresh>, script-driven navigation, form
+            // submits, etc. come in as .other / .formSubmitted / .reload and
+            // get dropped so untrusted email HTML can't auto-open external
+            // apps or browsers.
+            if navigationAction.navigationType == .linkActivated,
+               let url = navigationAction.request.url,
                let scheme = url.scheme?.lowercased(),
                ["http", "https", "mailto"].contains(scheme) {
                 onOpenURL(url)
                 decisionHandler(.cancel, preferences)
                 return
             }
-            decisionHandler(.allow, preferences)
+
+            decisionHandler(.cancel, preferences)
         }
     }
 }

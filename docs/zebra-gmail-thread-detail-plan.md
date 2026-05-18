@@ -813,3 +813,71 @@ subject를 쓴다고 view 섹션에 한 줄 추가한다.
 이 "리뷰 피드백" 섹션의 결정이 본문 결정과 충돌하면 이 섹션이 우선한다.
 구현자는 본 섹션의 항목 1~6을 lock된 결정으로 취급하고, 7~11은 구현 PR에
 반영한다.
+
+## 코덱스 리뷰 피드백 (2026-05-18 append)
+
+PR `phase3-gmail-thread-and-pane-placement` 에 대한 codex 리뷰. 이번 PR 안에서
+즉시 처리한 항목과 별도 issue 로 분리한 항목을 구분.
+
+### 이번 PR 에서 fix 한 항목
+
+1. **WKWebView navigation guard**
+   - 이전: 모든 http/https/mailto navigation 을 `NSWorkspace.open` 으로 라우팅.
+   - 누수: `<meta refresh>` / script-driven navigation 으로 untrusted 이메일이
+     사용자 클릭 없이 외부 앱/브라우저를 열 수 있었음.
+   - Fix: `webView.url == nil` 인 첫 loadHTMLString 만 허용, 그 후로는
+     `navigationAction.navigationType == .linkActivated` 인 사용자 클릭만 open,
+     나머지는 모두 cancel.
+
+2. **UserDefaults snapshot cache 보존**
+   - 이전: `ZebraGmailAPIClientError.backendUnreachable` catch 에서
+     `threads = []` 대입 → `didSet` 으로 빈 배열이 UserDefaults 까지 persist.
+     첫 frame UX 목적과 정반대로 cache 가 날아감.
+   - Fix: backendUnreachable 분기에서 `threads` 대입 제거. 일시 네트워크 장애
+     동안 cached snapshot 그대로 유지, 다음 성공 read 가 자연 replace.
+
+3. **OAuth backfill failure 신호**
+   - 이전: `Effect.catchAll` 로 silent swallow → 사용자가 OAuth 직후 빈 inbox
+     봐도 원인 모름.
+   - Fix: backfill 실패 시 backend `console.warn` 로그 + workflow 응답에
+     `backfillSucceeded: boolean` 추가. callback route 가 그 값으로 HTML
+     메시지를 분기 ("connected, but initial sync failed. Press the Gmail sync
+     button to retry.").
+
+4. **Auth preheat catch log**
+   - 이전: `Task.detached { _ = try? await AuthManager.shared.currentTokens() }`
+     — throw 시 silent.
+   - Fix: `do/catch` 로 변경, 실패 시 NSLog 로 진단 로그 출력. Release 빌드에서도
+     남도록 perfLog DEBUG 가드 우회.
+
+### Follow-up issue (별도 PR/issue)
+
+5. **PanelType piggyback 누수**
+   - codex 지적: command palette / lifecycle event / search index 에서 email
+     panel 이 markdown 으로 보임.
+   - 이번 PR 보류 이유: 가드 추가하려면 cmux upstream 4~5 파일 더 건드려야 함.
+     piggyback 전체 의도(cmux 최소 침투)와 일관성 어긋남. 정석은 PanelType
+     enum 에 `.zebraEmail` case 추가 후 모든 exhaustive switch 처리 — 큰 작업.
+   - User-facing 영향: search 분류 라벨 "Markdown", lifecycle event 의 type
+     필드. 직접 깨지는 동작 없음.
+   - Follow-up: 별도 PR 로 PanelType enum case 도입 또는 helper 함수에 panel
+     인스턴스 검사 가드 통합.
+
+6. **history.list incremental sync (label/thread 자동 reconciliation)**
+   - 현재 skip-existing-ids 가 label 토글 (STARRED, UNREAD) 을 latest_id
+     바뀔 때까지 미반영. Pub/Sub watch + history.list 도입 시 자동 해결.
+   - 인프라 비용: Gcp Pub/Sub topic, watch 등록 cron, OIDC 검증.
+
+7. **WKWebView malicious HTML regression samples**
+   - sanitize + CSP 정책의 빈틈 검증용 sample HTML 세트 작성. 신규 보안
+     fix 시 회귀 방지.
+
+8. **thread missing reconciliation (false soft delete 가드)**
+   - `markMissingEmailMessagesDeleted` 가 Gmail 응답 일시 누락을 archive 와
+     혼동 가능. 응답 검증 가드 (예: 최소 메시지 수 sanity check) 검토.
+
+9. **본문 평문 DB cache 보안/프라이버시 정책**
+   - `email_messages.body_text/body_html` 가 평문 저장. 보안 결정 누락.
+   - v1 OK 로 두되 retention policy 명시 필요: TTL (예: 30일 후 본문만 purge),
+     Gmail disconnect 시 cascade 삭제 (이미 cascade FK 로 처리됨), 또는
+     암호화. 셋 중 하나 follow-up 으로.

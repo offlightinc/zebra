@@ -26,7 +26,10 @@ export async function GET(request: Request): Promise<Response> {
       state,
       request,
     }));
-    return htmlResponse(`Gmail connected for ${escapeHTML(result.email)}. You can return to Zebra.`);
+    const message = result.backfillSucceeded
+      ? `Gmail connected for ${escapeHTML(result.email)}. You can return to Zebra.`
+      : `Gmail connected for ${escapeHTML(result.email)}, but the initial inbox sync failed. Return to Zebra and press the Gmail sync button to retry.`;
+    return htmlResponse(message);
   } catch (err) {
     const response = gmailErrorResponse(err);
     if (response.headers.get("content-type")?.includes("application/json")) {

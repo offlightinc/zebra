@@ -133,8 +133,14 @@ final class ZebraEmailListStore: ObservableObject {
         Self.perfLog("init isConnected=\(self.isConnected) cachedThreads=\(self.threads.count)")
         // Warm the auth token in the background so the first sidebar visit
         // doesn't pay the ~2s first-token cost on top of the network round trip.
+        // Failures are logged (not swallowed) — the next currentTokens() call
+        // retries, but the silent failure used to mask token-store regressions.
         Task.detached {
-            _ = try? await AuthManager.shared.currentTokens()
+            do {
+                _ = try await AuthManager.shared.currentTokens()
+            } catch {
+                NSLog("%@", "[ZebraEmail] auth token preheat failed: \(error)")
+            }
         }
     }
 
@@ -212,9 +218,10 @@ final class ZebraEmailListStore: ObservableObject {
             threads = []
             lastError = nil
         } catch ZebraGmailAPIClientError.backendUnreachable {
-            // Network blip — keep the cached connected state so the UI
-            // doesn't flash the connect CTA when the user is just offline.
-            threads = []
+            // Network blip — keep the cached snapshot and connected state so
+            // the UI doesn't lose its first-frame inbox just because the user
+            // is briefly offline. Persisted threads stay untouched; the next
+            // successful read replaces them.
             lastError = nil
         } catch {
             lastError = displayError(error)
@@ -251,7 +258,8 @@ final class ZebraEmailListStore: ObservableObject {
             threads = []
             lastError = nil
         } catch ZebraGmailAPIClientError.backendUnreachable {
-            threads = []
+            // Same as refreshIfNeeded: don't blow away the cached snapshot
+            // on a transient network failure.
             lastError = nil
         } catch {
             lastError = displayError(error)

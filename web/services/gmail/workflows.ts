@@ -56,6 +56,12 @@ export type GmailOAuthStart = {
 
 export type GmailOAuthCallbackResult = {
   readonly email: string;
+  /**
+   * true 면 OAuth 콜백 안에서 inbox backfill 까지 성공.
+   * false 면 OAuth 자체는 성공(토큰 저장됨)했지만 첫 inbox sync 가 실패.
+   * 호출자(callback route 등)는 사용자에게 "연결됐지만 동기화 실패 → 새로고침 눌러주세요" 안내 가능.
+   */
+  readonly backfillSucceeded: boolean;
 };
 
 export type GmailStatus = {
@@ -167,14 +173,26 @@ export function handleGmailOAuthCallback(input: {
       lastSyncCursor: profile.historyId ?? null,
     });
     // Backfill recent inbox so the first sidebar view has threads to show.
-    // Best-effort: a transient Gmail failure here shouldn't block the
-    // OAuth result. The user can retry via the refresh button.
-    yield* Effect.catchAll(
-      syncRecentGmail({ userId: storedState.userId, request: input.request }),
-      () => Effect.succeed({ upserted: 0 }),
+    // Best-effort: a transient Gmail failure here shouldn't block the OAuth
+    // result (account+token are already persisted), but we surface it on the
+    // callback HTML so the user knows to press the sync button afterwards.
+    // Backend log here also lets us correlate post-launch empty inbox reports
+    // with the original sync failure.
+    const backfillSucceeded = yield* Effect.catchAll(
+      syncRecentGmail({ userId: storedState.userId, request: input.request }).pipe(
+        Effect.map(() => true),
+      ),
+      (error) => Effect.sync(() => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[gmail.oauth.backfill_failed] userId=${storedState.userId} email=${profile.emailAddress} error=${message}`,
+        );
+        return false;
+      }),
     );
     return {
       email: profile.emailAddress,
+      backfillSucceeded,
     };
   });
 }
