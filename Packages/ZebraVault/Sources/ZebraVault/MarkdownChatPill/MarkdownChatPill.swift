@@ -92,6 +92,12 @@ public struct MarkdownChatPill: View {
     private static let collapsedHeight: CGFloat = 46
     private static let collapsedContentHeight: CGFloat = 30
     private static let expandedHeight: CGFloat = 156
+    /// Slot height the pill grows by when the slash picker is open.
+    /// Matches the picker's own maxHeight (200 for the scroll area) plus
+    /// header (~24), inner padding (~10), and the spacing between input
+    /// and picker (~8). Conservative so a fully-populated picker doesn't
+    /// overflow the pill.
+    private static let skillsPickerSlotHeight: CGFloat = 244
     private static let expandedChipMaxWidth: CGFloat = 320
     private static let motion = Animation.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.30)
 
@@ -180,8 +186,16 @@ public struct MarkdownChatPill: View {
     private var shellCornerRadius: CGFloat {
         isExpanded ? 18 : Self.collapsedHeight / 2
     }
+    /// Pill height. Three states:
+    ///   - collapsed (capsule strip): `collapsedHeight`
+    ///   - expanded, no slash picker: `expandedHeight`
+    ///   - expanded with slash picker open: + `skillsPickerSlotHeight`
     private var shellHeight: CGFloat {
-        isExpanded ? Self.expandedHeight : Self.collapsedHeight
+        guard isExpanded else { return Self.collapsedHeight }
+        let pickerOpen = isSlashMode && (matchingSkills?.isEmpty == false)
+        return pickerOpen
+            ? Self.expandedHeight + Self.skillsPickerSlotHeight
+            : Self.expandedHeight
     }
     private var shellPadding: CGFloat {
         isExpanded ? 14 : 8
@@ -197,15 +211,12 @@ public struct MarkdownChatPill: View {
     }
 
     public var body: some View {
-        VStack(spacing: 8) {
-            if isExpanded, isSlashMode, let skills = matchingSkills {
-                skillsPicker(skills)
-                    .frame(maxWidth: Self.maxWidth)
-            }
-
-            pillShell
-        }
-        .frame(maxWidth: Self.maxWidth)
+        // Picker now lives INSIDE pillShell (between input and divider)
+        // to match the md-app.jsx mockup: one dark popover surface, not
+        // a floating sibling that lets the markdown content bleed through
+        // its translucent fill.
+        pillShell
+            .frame(maxWidth: Self.maxWidth)
         // Lazy-load the gbrain manifest the first time the user types a
         // slash. Empty array is a valid result (gbrain not installed) — it
         // still satisfies "cached", so we won't keep retrying every
@@ -255,6 +266,15 @@ public struct MarkdownChatPill: View {
                     .allowsHitTesting(isExpanded)
                     .accessibilityHidden(!isExpanded)
 
+                // Slash picker sits between input and divider, mirroring
+                // md-app.jsx where SkillsMenu is the optional middle child
+                // of the pill flex container. Pill height grows by
+                // `skillsPickerSlotHeight` while it's visible.
+                if isExpanded, isSlashMode, let skills = matchingSkills, !skills.isEmpty {
+                    skillsPicker(skills)
+                        .frame(maxHeight: Self.skillsPickerSlotHeight - 8, alignment: .top)
+                }
+
                 dividerSlot
                     .frame(height: isExpanded ? 5 : 0, alignment: .topLeading)
                     .opacity(expandedOpacity)
@@ -278,6 +298,7 @@ public struct MarkdownChatPill: View {
         .frame(height: shellHeight, alignment: .topLeading)
         .contentShape(RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous))
         .animation(Self.motion, value: isExpanded)
+        .animation(Self.motion, value: isSlashMode)
         .onTapGesture {
             guard !isExpanded else { return }
             expandFromCollapsed()
@@ -292,6 +313,10 @@ public struct MarkdownChatPill: View {
     }
 
     private var shellBackground: some View {
+        // Tracks `shellHeight`, which itself flexes between collapsed,
+        // expanded, and expanded-with-slash-picker states. SwiftUI
+        // animates the height transitions via `Self.motion` keyed on
+        // `isExpanded` (and the picker-toggle drives a re-evaluation).
         RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous)
             .fill(isExpanded ? MarkdownPillPalette.pillBgExpanded : MarkdownPillPalette.pillBg)
             .overlay(
