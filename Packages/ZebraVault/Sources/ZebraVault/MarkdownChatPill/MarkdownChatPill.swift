@@ -128,14 +128,12 @@ public struct MarkdownChatPill: View {
     /// navigation. Reset to 0 whenever the filter changes so the top match
     /// is always the default selection.
     @State private var skillsSelectedIndex: Int = 0
-    /// NSEvent monitor token used to intercept ↑/↓/⏎ ahead of the
-    /// focused TextField while the slash picker is open. SwiftUI's
-    /// `.onKeyPress(.upArrow)` on an outer container is preempted by the
-    /// focused TextField's caret-movement handling, so we run the monitor
-    /// at the local NSEvent level instead. Lifecycle is tied to the pill
-    /// existing in the view tree.
-    @State private var slashKeyMonitor: Any?
-    @FocusState private var textFieldFocused: Bool
+    /// First-responder state for the NSTextView wrapper. Mirrored from the
+    /// view's `becomeFirstResponder` / `resignFirstResponder` overrides so
+    /// the pill's expand/collapse logic can read and drive focus from
+    /// SwiftUI-land. Not a `@FocusState` because that only binds to SwiftUI
+    /// focusable views, and our input is an NSView underneath.
+    @State private var textFieldFocused: Bool = false
 
     /// True while the user is mid-slash — input begins with `/` and has no
     /// whitespace yet, so we can offer skill completions. Once they type a
@@ -228,12 +226,6 @@ public struct MarkdownChatPill: View {
                 agentMenuOpen = false
             }
         }
-        .onAppear {
-            installSlashKeyMonitor()
-        }
-        .onDisappear {
-            removeSlashKeyMonitor()
-        }
         // Focus-loss fallback. Mostly redundant with the parent dismiss
         // overlay, but catches paths where focus leaves without a click in
         // our window — app switch (⌘⇥), another textfield grabbing
@@ -290,46 +282,13 @@ public struct MarkdownChatPill: View {
             guard !isExpanded else { return }
             expandFromCollapsed()
         }
-        .onKeyPress(.escape) {
-            if isExpanded, text.isEmpty {
-                collapse()
-                return .handled
-            }
-            return .ignored
-        }
-        // ↑/↓ navigate the slash picker; Enter picks. Outside slash mode they
-        // pass through to the textfield (newline / caret movement).
-        .onKeyPress(.upArrow) {
-            guard isExpanded, isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return .ignored }
-            skillsSelectedIndex = max(0, skillsSelectedIndex - 1)
-            return .handled
-        }
-        .onKeyPress(.downArrow) {
-            guard isExpanded, isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return .ignored }
-            skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
-            return .handled
-        }
-        // ⏎ submits (or picks a slash skill). When an IME is mid-
-        // composition we first force-commit its marked text and sync our
-        // @State `text` directly from the NSTextView, then re-evaluate
-        // the action on the next runloop tick so the slash-mode / submit
-        // gate sees the post-commit string.
-        //
-        // POLICY: one Enter == commit-and-submit. We intentionally do *not*
-        // adopt the native-macOS "first Enter commits, second Enter
-        // submits" pattern (Slack/Discord-style). Most pill traffic is
-        // one-shot prompts where the user types and immediately wants to
-        // send — making them press Enter twice is friction. If we ever
-        // want the two-step variant, return `.handled` from the IME
-        // branch without scheduling `runEnterAction()`.
-        .onKeyPress(.return) {
-            guard isExpanded else { return .ignored }
-            if commitIMECompositionIfNeeded() {
-                DispatchQueue.main.async { _ = runEnterAction() }
-                return .handled
-            }
-            return runEnterAction() ? .handled : .ignored
-        }
+        // Key routing lives in `MarkdownChatPillTextView` (NSTextView
+        // subclass) so AppKit handles every standard caret/edit gesture
+        // natively — ⌘←/→, ⌥←/→, ⇧+selection, ⇧⏎ for newline, etc. — and
+        // we only see the four callbacks (return / move-up / move-down /
+        // cancel) we explicitly opt into. The previous outer
+        // `.onKeyPress(...)` stack pre-empted the focused TextField's key
+        // map on macOS, which is why arrows and ⇧⏎ stopped working.
     }
 
     private var shellBackground: some View {
@@ -372,12 +331,11 @@ public struct MarkdownChatPill: View {
             isExpanded = true
         }
         DispatchQueue.main.async {
+            // NSTextView wrapper hooks updateNSView off this binding to
+            // call `makeFirstResponder` and place the caret at the end
+            // of any preserved text, so we don't need a separate
+            // caret-to-end pass here.
             textFieldFocused = true
-            // macOS TextField selects-all on first-responder grant; when
-            // we're re-expanding with preserved text the user expects a
-            // caret at the end, not a wholesale selection that the next
-            // keystroke would destroy.
-            DispatchQueue.main.async { moveCaretToEnd() }
         }
     }
 
@@ -386,21 +344,6 @@ public struct MarkdownChatPill: View {
         withAnimation(Self.motion) {
             isExpanded = false
         }
-    }
-
-    /// Move the focused NSTextView's caret to the end of its content,
-    /// collapsing any selection. Safe no-op when our pill isn't the
-    /// first responder.
-    ///
-    /// `textFieldFocused` guards the multi-pill case: if the user
-    /// clicked into a different pill in the same window before our
-    /// deferred dispatch fired, that pill now owns first-responder and
-    /// we'd otherwise mutate its selection.
-    private func moveCaretToEnd() {
-        guard textFieldFocused,
-              let textView = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
-        let end = (textView.string as NSString).length
-        textView.setSelectedRange(NSRange(location: end, length: 0))
     }
 
     private func submit() {
@@ -412,57 +355,46 @@ public struct MarkdownChatPill: View {
         textFieldFocused = false
     }
 
-    // MARK: - Slash key monitor
+    // MARK: - Key callbacks (routed up from MarkdownChatPillTextView)
 
-    /// Register a local NSEvent monitor so ↑/↓/⏎ go to the slash picker
-    /// instead of the focused TextField while the slash menu is open. We
-    /// fall back to passing the event through whenever the picker is not
-    /// active so normal typing (caret movement, newline) keeps working.
-    private func installSlashKeyMonitor() {
-        guard slashKeyMonitor == nil else { return }
-        slashKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // `NSEvent.addLocalMonitorForEvents` is process-wide, so we
-            // gate on @FocusState `textFieldFocused` — our TextField has
-            // first-responder ownership only while it's actually focused.
-            // If the user is typing in another textfield (sidebar search,
-            // a different markdown panel's pill, etc.) the event passes
-            // through unmodified. Not a perfect defense (focus state can
-            // momentarily lag) but matches the actual user-intent gate.
-            guard isExpanded,
-                  textFieldFocused,
-                  isSlashMode,
-                  let skills = matchingSkills,
-                  !skills.isEmpty else {
-                return event
-            }
-            switch event.keyCode {
-            case 126: // up arrow
-                skillsSelectedIndex = max(0, skillsSelectedIndex - 1)
-                return nil
-            case 125: // down arrow
-                skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
-                return nil
-            case 36, 76: // return / numpad enter
-                // Same commit-then-pick dance as `.onKeyPress(.return)`,
-                // routed through the shared helpers so both paths stay in
-                // lockstep (IME commit + `runEnterAction()` re-evaluation).
-                if commitIMECompositionIfNeeded() {
-                    DispatchQueue.main.async { _ = runEnterAction() }
-                    return nil
-                }
-                _ = runEnterAction()
-                return nil
-            default:
-                return event
-            }
+    /// NSTextView wrapper calls this on bare ⏎. Slash-picker takes
+    /// priority; otherwise `submit()`. Returns whether anything was acted
+    /// on — used only for diagnostics; the wrapper consumes the key
+    /// either way (we reserve plain ⏎ for submit-intent).
+    @discardableResult
+    private func handleReturn() -> Bool {
+        if isSlashMode, let skills = matchingSkills, !skills.isEmpty {
+            let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
+            pickSkill(skills[safeIndex])
+            return true
         }
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            submit()
+            return true
+        }
+        return false
     }
 
-    private func removeSlashKeyMonitor() {
-        if let monitor = slashKeyMonitor {
-            NSEvent.removeMonitor(monitor)
-            slashKeyMonitor = nil
-        }
+    /// Slash picker ↑ navigation. Returns true to consume the keystroke,
+    /// false to let NSTextView do native caret movement.
+    private func handleMoveUp() -> Bool {
+        guard isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return false }
+        skillsSelectedIndex = max(0, skillsSelectedIndex - 1)
+        return true
+    }
+
+    private func handleMoveDown() -> Bool {
+        guard isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return false }
+        skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
+        return true
+    }
+
+    /// Escape collapses the pill when empty; otherwise we let NSTextView
+    /// do whatever its native cancel handler wants (no-op in practice).
+    private func handleCancel() -> Bool {
+        guard isExpanded, text.isEmpty else { return false }
+        collapse()
+        return true
     }
 
     // MARK: - Unified shell slots
@@ -556,21 +488,23 @@ public struct MarkdownChatPill: View {
     }
 
     private var inputArea: some View {
-        // multiline TextField (axis: .vertical) gives native placeholder
-        // so the cursor and placeholder always align — unlike TextEditor,
-        // which has internal text-container insets that don't match a
-        // manually-positioned Text overlay. SwiftUI's TextField `prompt:`
-        // also applies system dimming on top of custom colors, so we render
-        // the placeholder ourselves.
+        // NSTextView wrapper so the pill input gets the full Cocoa text
+        // keymap — ⌘←/→, ⌥←/→, Home/End, ⇧+selection, ⇧⏎ for newline,
+        // word-wise delete, undo, IME composition. SwiftUI TextField
+        // (NSTextField underneath) did not give us these.
         ZStack(alignment: .topLeading) {
-            TextField("", text: $text, axis: .vertical)
-                .textFieldStyle(.plain)
-                .focused($textFieldFocused)
-                .font(.system(size: 14))
-                .foregroundColor(MarkdownPillPalette.text)
-                .tint(MarkdownPillPalette.accent)
-                .lineLimit(2...2)
-                .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38, alignment: .topLeading)
+            MarkdownChatPillTextView(
+                text: $text,
+                isFocused: $textFieldFocused,
+                font: NSFont.systemFont(ofSize: 14),
+                textColor: NSColor(MarkdownPillPalette.text),
+                caretColor: NSColor(MarkdownPillPalette.accent),
+                onReturn: { handleReturn() },
+                onMoveUp: { handleMoveUp() },
+                onMoveDown: { handleMoveDown() },
+                onCancel: { handleCancel() }
+            )
+            .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38, alignment: .topLeading)
 
             if text.isEmpty {
                 Text(placeholderText)
@@ -610,75 +544,6 @@ public struct MarkdownChatPill: View {
             agentSelectorButton(compact: false)
             sendButton(enabled: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-    }
-
-    /// Pick a slash skill if the picker is open, otherwise submit the
-    /// current prompt. Returns `true` when something happened (so the
-    /// caller can mark the key event handled). Hoisted out of the
-    /// `.onKeyPress(.return)` closure so the IME commit path can reuse it
-    /// after deferring one runloop tick.
-    ///
-    /// Re-evaluates `isSlashMode` / `matchingSkills` from current state
-    /// instead of capturing them — the IME commit may have changed the
-    /// text (e.g., committing a space ended slash mode), so the deferred
-    /// caller must see the latest values.
-    private func runEnterAction() -> Bool {
-        if isSlashMode, let skills = matchingSkills, !skills.isEmpty {
-            let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
-            pickSkill(skills[safeIndex])
-            return true
-        }
-        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            submit()
-            return true
-        }
-        return false
-    }
-
-    /// If the focused NSTextView is mid-IME-composition (marked text not
-    /// yet committed), force-commit it via `unmarkText()` and sync our
-    /// `text` @State directly from the view's storage so the next
-    /// `runEnterAction()` call reads the post-commit string regardless of
-    /// SwiftUI binding propagation timing. Returns `true` when a commit
-    /// happened (caller should defer the follow-up action one tick).
-    @discardableResult
-    private func commitIMECompositionIfNeeded() -> Bool {
-        guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView,
-              isFirstResponderComposingIME() else {
-            return false
-        }
-        textView.unmarkText()
-        // Pull the committed string straight from the text view rather
-        // than waiting for SwiftUI's TextField binding to catch up — the
-        // binding usually propagates on the next runloop, but "usually"
-        // is not "always", and a missed propagation silently loses a
-        // syllable from the prompt.
-        text = textView.string
-        return true
-    }
-
-    /// True when the focused NSTextView is *actively composing inside an
-    /// IME* (Korean Hangul jamo waiting to combine, Pinyin candidate, etc.).
-    /// We only run the commit path in that case — a pure keylayout source
-    /// never produces composition state, and we observed `hasMarkedText()`
-    /// false-positives on English input that swallowed every Enter.
-    ///
-    /// NOTE: the `com.apple.inputmethod.*` substring check is a heuristic
-    /// against a private-ish identifier. Third-party IMEs may use other
-    /// prefixes. The deeper fix is to identify whether the queried
-    /// NSTextView is genuinely ours (responder-chain or hosting-view
-    /// ancestry check) — same multi-panel scoping problem we have in the
-    /// selection observer. Kept as a defensive filter until then.
-    private func isFirstResponderComposingIME() -> Bool {
-        guard textFieldFocused,
-              let textView = NSApp.keyWindow?.firstResponder as? NSTextView else {
-            return false
-        }
-        guard let sourceID = textView.inputContext?.selectedKeyboardInputSource,
-              sourceID.contains("inputmethod") else {
-            return false
-        }
-        return textView.hasMarkedText()
     }
 
     // MARK: - Sub-components
