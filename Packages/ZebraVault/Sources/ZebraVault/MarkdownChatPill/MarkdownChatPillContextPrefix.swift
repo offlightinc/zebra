@@ -95,10 +95,10 @@ public enum MarkdownChatPillContextPrefix {
         "For tracking down related material, gbrain's `search` / `query` / `get` tend to surface backlinks and compiled_truth that raw grep misses, and leaving a `[Source: …, YYYY-MM-DD]` citation alongside backlinks when writing new facts keeps the graph alive across sessions."
 
     private static let taskAdvisoryTemplate =
-        "This terminal opened on top of a G-Brain task document at <path>. A task is an execution unit, so its `status` field carries a lifecycle phase such as not-started, in-progress, or wrapped-up; taking that phase signal into account once while reading the user's request tends to land the answer in the right register."
+        "This terminal opened on top of a G-Brain task document at <path>. A task is an execution unit owned by someone, and its `status` field carries two layered signals at once — a lifecycle phase (todo / doing / done) and a dependency signal (`blocked` for internal work, `waiting` for an external response). Glancing at that signal once tends to set the tone for the answer."
 
     private static let goalAdvisoryTemplate =
-        "This terminal opened on top of a G-Brain goal document at <path>. A goal treats its body and frontmatter (metrics · milestones · linked tasks) as the primary source, so leaning on the document itself reads more naturally than inferring operational state from the outside."
+        "This terminal opened on top of a G-Brain goal document at <path>. A goal is a time-bound outcome measured by metrics or milestones, usually fanning out into subgoals and linked tasks. The goal page itself is the primary source for current direction, while the linked tasks carry day-to-day execution state."
 
     private static let fallbackAdvisoryTemplate =
         "This terminal opened on top of a `<type>` G-Brain document at <path>. This surface has no special operational-phase marker; its body and frontmatter are the primary source."

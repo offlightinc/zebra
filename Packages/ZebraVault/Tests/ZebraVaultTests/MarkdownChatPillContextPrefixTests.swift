@@ -147,25 +147,31 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
 
     // MARK: - Build output (3 surface)
 
-    func testTaskPrefixContainsPathAndPhaseHint() {
+    func testTaskPrefixContainsPathAndTwoAxisStatusHint() {
         let out = MarkdownChatPillContextPrefix.build(
             markdownFilePath: "/Users/foo/brain/tasks/x.md",
             surface: .task
         )
         XCTAssertTrue(out.contains("/Users/foo/brain/tasks/x.md"))
         XCTAssertTrue(out.contains("task document"))
+        // C 안: status 의 두 축 — lifecycle phase + dependency 신호 (blocked/waiting)
         XCTAssertTrue(out.contains("lifecycle phase"))
+        XCTAssertTrue(out.contains("`blocked`"))
+        XCTAssertTrue(out.contains("`waiting`"))
         XCTAssertEqual(out.components(separatedBy: "\n").count, 2)
     }
 
-    func testGoalPrefixContainsPathAndFrontmatterHint() {
+    func testGoalPrefixContainsPathAndTwoLayerHint() {
         let out = MarkdownChatPillContextPrefix.build(
             markdownFilePath: "/Users/foo/brain/goals/y.md",
             surface: .goal
         )
         XCTAssertTrue(out.contains("/Users/foo/brain/goals/y.md"))
         XCTAssertTrue(out.contains("goal document"))
-        XCTAssertTrue(out.contains("metrics · milestones · linked tasks"))
+        // D 안: time-bound outcome + measures + 2-layer (goal direction / linked tasks execution)
+        XCTAssertTrue(out.contains("time-bound outcome"))
+        XCTAssertTrue(out.contains("metrics or milestones"))
+        XCTAssertTrue(out.contains("subgoals and linked tasks"))
     }
 
     func testFallbackPrefixInterpolatesTypeLabel() {
