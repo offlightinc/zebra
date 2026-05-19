@@ -102,7 +102,7 @@ public enum MarkdownChatPillContextPrefix {
         "This terminal opened on top of a b-brain goal document at <path>. A goal is a time-bound outcome measured by metrics or milestones, usually fanning out into subgoals and linked tasks. The goal page itself is the primary source for current direction, while the linked tasks carry day-to-day execution state."
 
     private static let fallbackAdvisoryTemplate =
-        "This terminal opened on top of a `<type>` b-brain document at <path>. This surface has no special operational-phase marker; its body and frontmatter are the primary source."
+        "This terminal opened on top of a `<type>` b-brain document at <path>. Its body and frontmatter are the primary source."
 
     /// 두 줄 prose 한 덩어리를 반환한다. 호출 측은 prefix 뒤에 빈 줄 한 개 + 사용자 message 형태로 붙인다.
     public static func build(
