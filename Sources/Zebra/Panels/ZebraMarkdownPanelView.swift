@@ -559,9 +559,14 @@ struct ZebraMarkdownPanelView<
         }
         #endif
 
+        // surface 결정 책임은 호출 사이트가 가진다 — markdown panel 이므로 frontmatter
+        // detect 로 .task / .goal / .fallback 중 하나. email panel 측에서 ChatPill 마운트가
+        // 추가되면 그쪽 호출 사이트는 `.email` 을 직접 주입한다.
+        let surface = MarkdownChatPillContextSurface.detect(fromContent: panel.content)
         let startupLine = MarkdownChatPillCommand.shellStartupLine(
             agent: agent,
             markdownFilePath: panel.filePath,
+            surface: surface,
             userPrompt: text
         )
         sendStartupSequence(
