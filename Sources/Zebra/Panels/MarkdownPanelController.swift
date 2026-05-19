@@ -103,6 +103,7 @@ final class MarkdownPanelController: ObservableObject {
 @MainActor
 final class MarkdownPanelControllerRegistry {
     private var controllers: [UUID: MarkdownPanelController] = [:]
+    private var closedPanelIds: Set<UUID> = []
     private var closeObserver: NSObjectProtocol?
 
     init() {
@@ -130,9 +131,19 @@ final class MarkdownPanelControllerRegistry {
         if let existing = controllers[panel.id] {
             return existing
         }
+        closedPanelIds.remove(panel.id)
         let created = MarkdownPanelController(panel: panel)
         controllers[panel.id] = created
         return created
+    }
+
+    /// Same as `controller(for:)`, but refuses stale view work for panels that
+    /// already completed their close lifecycle. SwiftUI can briefly ask the
+    /// factory to rebuild content for a closed tab while Bonsplit is tearing
+    /// down the subtree; that must not resurrect per-tab inspector state.
+    func controllerIfOpen(for panel: MarkdownPanel) -> MarkdownPanelController? {
+        guard !closedPanelIds.contains(panel.id) else { return nil }
+        return controller(for: panel)
     }
 
     func activeChatCompanionPaneIds(validPaneIds: [PaneID]) -> Set<PaneID> {
@@ -154,5 +165,6 @@ final class MarkdownPanelControllerRegistry {
 
     private func release(panelId: UUID) {
         controllers.removeValue(forKey: panelId)
+        closedPanelIds.insert(panelId)
     }
 }
