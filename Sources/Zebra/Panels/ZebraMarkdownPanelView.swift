@@ -147,9 +147,6 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
             )
             .frame(width: CGFloat(resolvedInspectorWidth))
         }
-        .transaction { tx in
-            tx.animation = nil
-        }
     }
 
     private var currentInspectorWidth: Double {
