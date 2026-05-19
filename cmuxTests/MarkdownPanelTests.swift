@@ -117,6 +117,78 @@ final class MarkdownPanelTests: XCTestCase {
         XCTAssertFalse(panel.isDirty)
     }
 
+    func testMarkdownInspectorIntentResetsWhenPanelClosesAndReopens() throws {
+        let fileManager = FileManager.default
+        let directoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("cmux-markdown-inspector-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directoryURL) }
+
+        let fileURL = directoryURL.appendingPathComponent("note.md")
+        try "# Note\n\nBody.\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let registry = MarkdownPanelControllerRegistry()
+        let panel = MarkdownPanel(workspaceId: UUID(), filePath: fileURL.path)
+        let controller = registry.controller(for: panel)
+
+        controller.setInspectorVisibility(false)
+        XCTAssertEqual(controller.inspectorVisibilityIntent, .userHidden)
+        XCTAssertTrue(registry.hasController(for: panel))
+
+        panel.close()
+        XCTAssertFalse(registry.hasController(for: panel))
+
+        let reopenedPanel = MarkdownPanel(workspaceId: UUID(), filePath: fileURL.path)
+        defer { reopenedPanel.close() }
+
+        let reopenedController = registry.controller(for: reopenedPanel)
+        XCTAssertEqual(reopenedController.inspectorVisibilityIntent, .defaultShown)
+    }
+
+    func testMarkdownInspectorIntentResetsThroughWorkspaceTabCloseAndReopen() throws {
+        let fileManager = FileManager.default
+        let directoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("cmux-markdown-inspector-workspace-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer {
+            TerminalController.shared.setActiveTabManager(nil)
+            try? fileManager.removeItem(at: directoryURL)
+        }
+
+        let fileURL = directoryURL.appendingPathComponent("note.md")
+        try "# Note\n\nBody.\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let manager = TabManager()
+        let workspace = manager.addWorkspace(select: true, eagerLoadTerminal: false)
+        let pane = try XCTUnwrap(workspace.bonsplitController.allPaneIds.first)
+        TerminalController.shared.setActiveTabManager(manager)
+
+        let registry = MarkdownPanelControllerRegistry()
+        let openedPanel = try XCTUnwrap(
+            workspace.newMarkdownSurface(inPane: pane, filePath: fileURL.path, focus: true)
+        )
+        let openedController = registry.controller(for: openedPanel)
+        openedController.setInspectorVisibility(false)
+        XCTAssertEqual(openedController.inspectorVisibilityIntent, .userHidden)
+        XCTAssertTrue(registry.hasController(for: openedPanel))
+
+        XCTAssertTrue(workspace.closePanel(openedPanel.id, force: true))
+        XCTAssertFalse(registry.hasController(for: openedPanel))
+        XCTAssertNil(workspace.markdownPanel(for: openedPanel.id))
+
+        let reopenedPanel = try XCTUnwrap(
+            workspace.openOrFocusMarkdownContent(
+                filePath: fileURL.path,
+                excludedAgentCompanionPaneIds: [],
+                anchorPanelId: workspace.focusedPanelId
+            )
+        )
+        XCTAssertNotEqual(reopenedPanel.id, openedPanel.id)
+
+        let reopenedController = registry.controller(for: reopenedPanel)
+        XCTAssertEqual(reopenedController.inspectorVisibilityIntent, .defaultShown)
+    }
+
     func testMarkdownRenderKeepsVisibleHeadingPositionAfterContentUpdate() async throws {
         let frame = NSRect(x: 0, y: 0, width: 720, height: 360)
         let webView = WKWebView(frame: frame, configuration: WKWebViewConfiguration())
