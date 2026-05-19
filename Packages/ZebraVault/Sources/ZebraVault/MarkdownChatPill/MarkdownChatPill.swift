@@ -195,10 +195,7 @@ public struct MarkdownChatPill: View {
         isExpanded ? 0 : 1
     }
     private var collapsedPromptText: String {
-        if activeAgent != nil {
-            return String(localized: "markdownChat.pill.newSessionPrompt", defaultValue: "New session…")
-        }
-        return placeholderText
+        placeholderText
     }
 
     public var body: some View {
