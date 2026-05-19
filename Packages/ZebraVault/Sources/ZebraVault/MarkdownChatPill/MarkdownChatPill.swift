@@ -144,7 +144,19 @@ public struct MarkdownChatPill: View {
     /// True while the user is mid-slash — input begins with `/` and has no
     /// whitespace yet, so we can offer skill completions. Once they type a
     /// space the slash command is "committed" and the picker hides.
-    private var isSlashMode: Bool {
+    ///
+    /// Driven by `onChange(of: text)` so its toggles can be wrapped in
+    /// `withAnimation(Self.motion)`. A pure computed property derived
+    /// from `text` would change implicitly during typing, which SwiftUI's
+    /// `.animation(_:value:)` doesn't reliably catch for nested
+    /// frame/transition mutations — so the pill height step was popping
+    /// instead of easing.
+    @State private var isSlashMode: Bool = false
+
+    /// Recompute `isSlashMode` from the canonical text-prefix rule. Used
+    /// from `onChange(of: text)` so we can wrap the toggle in
+    /// `withAnimation` whenever it actually flips.
+    private static func computeSlashMode(_ text: String) -> Bool {
         guard text.hasPrefix("/") else { return false }
         return !text.contains(" ")
     }
@@ -227,6 +239,18 @@ public struct MarkdownChatPill: View {
             }
             // Filter changed → reset selection to the top match.
             skillsSelectedIndex = 0
+
+            // Animate the pill grow / shrink only when slash mode
+            // actually toggles. Typing further characters inside slash
+            // mode (e.g. /sh → /ship) just changes the filter, not the
+            // picker's visibility, so we skip wrapping those in
+            // withAnimation to avoid spurious re-layout transitions.
+            let next = Self.computeSlashMode(newValue)
+            if next != isSlashMode {
+                withAnimation(Self.motion) {
+                    isSlashMode = next
+                }
+            }
         }
         .onChange(of: isExpanded) { _, expanded in
             if expanded, let activeAgent {
@@ -298,7 +322,10 @@ public struct MarkdownChatPill: View {
         .frame(height: shellHeight, alignment: .topLeading)
         .contentShape(RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous))
         .animation(Self.motion, value: isExpanded)
-        .animation(Self.motion, value: isSlashMode)
+        // isSlashMode is mutated via `withAnimation(Self.motion)` in
+        // `onChange(of: text)`, so we don't need an extra value-keyed
+        // .animation modifier here — that would double-animate and
+        // sometimes lose the transition timing on quick toggles.
         .onTapGesture {
             guard !isExpanded else { return }
             expandFromCollapsed()
@@ -341,10 +368,15 @@ public struct MarkdownChatPill: View {
             onPick: pickSkill
         )
         .frame(maxWidth: .infinity, alignment: .leading)
-        .transition(.opacity)
-        .transaction { tx in
-            tx.animation = nil
-        }
+        // Picker fades in while the pill grows, and fades out while it
+        // shrinks back. Both directions inherit `Self.motion` from the
+        // outer `.animation(_:value: isSlashMode)` so the picker and the
+        // pill height move in lockstep — no jarring pop-in, no late
+        // fade-out after the height collapse.
+        .transition(.asymmetric(
+            insertion: .opacity.combined(with: .move(edge: .top)),
+            removal: .opacity
+        ))
     }
 
     private func expandFromCollapsed() {
