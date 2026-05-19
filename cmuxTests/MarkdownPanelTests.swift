@@ -137,6 +137,7 @@ final class MarkdownPanelTests: XCTestCase {
 
         panel.close()
         XCTAssertFalse(registry.hasController(for: panel))
+        XCTAssertNil(registry.controllerIfOpen(for: panel))
 
         let reopenedPanel = MarkdownPanel(workspaceId: UUID(), filePath: fileURL.path)
         defer { reopenedPanel.close() }
@@ -174,6 +175,7 @@ final class MarkdownPanelTests: XCTestCase {
 
         XCTAssertTrue(workspace.closePanel(openedPanel.id, force: true))
         XCTAssertFalse(registry.hasController(for: openedPanel))
+        XCTAssertNil(registry.controllerIfOpen(for: openedPanel))
         XCTAssertNil(workspace.markdownPanel(for: openedPanel.id))
 
         let reopenedPanel = try XCTUnwrap(
