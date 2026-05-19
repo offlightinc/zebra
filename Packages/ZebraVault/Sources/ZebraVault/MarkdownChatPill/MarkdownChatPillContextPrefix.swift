@@ -1,6 +1,6 @@
 import Foundation
 
-/// G-Brain 문서 종류를 ChatPill prefix 분기에 필요한 3개 surface 로만 좁힌 enum.
+/// b-brain 문서 종류를 ChatPill prefix 분기에 필요한 3개 surface 로만 좁힌 enum.
 ///
 /// v1 은 **task / goal / fallback** 만 다룬다.
 ///
@@ -74,7 +74,7 @@ public enum MarkdownChatPillContextSurface: Equatable {
 }
 
 /// ChatPill 이 새 에이전트 터미널을 띄울 때 사용자 프롬프트 앞에 흘려보내는
-/// "이 터미널은 어떤 G-Brain 문서 위에서 열렸는지" advisory prose.
+/// "이 터미널은 어떤 b-brain 문서 위에서 열렸는지" advisory prose.
 ///
 /// **영어 prose 인 이유**: 사용자 프롬프트는 한국어가 기본이라, prefix 도 한국어면
 /// 에이전트 입장에서 advisory 가 어디 끝나고 user prompt 가 어디서 시작하는지 시각적
@@ -87,21 +87,22 @@ public enum MarkdownChatPillContextSurface: Equatable {
 ///   - 본문 데이터 inline 금지 (timeline·checklist 발췌 등).
 ///   - 메타룰(citation/mutation/사용자 지시 우선) 은 글로벌 CLAUDE.md 의 책임.
 ///     단 brain-first lookup + cite·backlink 한 줄은 ChatPill 의 본질이라 공통으로 붙는다.
-///   - 두 줄 prose: 줄1 = surface advisory, 줄2 = 공통 gbrain advisory.
+///   - 두 줄 prose: 줄1 = surface advisory, 줄2 = 공통 b-brain advisory.
 ///   - `<path>` 는 모든 surface 에서 인터폴레이션, `<type>` 은 fallback 한정.
 public enum MarkdownChatPillContextPrefix {
-    /// 3 surface 가 공통으로 붙이는 둘째 줄. gbrain query/search/get advisory + citation·backlink advisory.
-    private static let commonGbrainAdvisoryLine =
-        "For tracking down related material, gbrain's `search` / `query` / `get` tend to surface backlinks and compiled_truth that raw grep misses, and leaving a `[Source: …, YYYY-MM-DD]` citation alongside backlinks when writing new facts keeps the graph alive across sessions."
+    /// 3 surface 가 공통으로 붙이는 둘째 줄. b-brain query/search/get advisory + citation·backlink advisory.
+    /// (CLI 이름은 `b-brain` — gbrain 은 다른 fork 로, 거기엔 task/goal type 자체가 없다.)
+    private static let commonBbrainAdvisoryLine =
+        "For tracking down related material, b-brain's `search` / `query` / `get` tend to surface backlinks and compiled_truth that raw grep misses, and leaving a `[Source: …, YYYY-MM-DD]` citation alongside backlinks when writing new facts keeps the graph alive across sessions."
 
     private static let taskAdvisoryTemplate =
-        "This terminal opened on top of a G-Brain task document at <path>. A task is an execution unit owned by someone, and its `status` field carries two layered signals at once — a lifecycle phase (todo / doing / done) and a dependency signal (`blocked` for internal work, `waiting` for an external response). Glancing at that signal once tends to set the tone for the answer."
+        "This terminal opened on top of a b-brain task document at <path>. A task is an execution unit owned by someone, and its `status` field carries two layered signals at once — a lifecycle phase (todo / doing / done) and a dependency signal (`blocked` for internal work, `waiting` for an external response). Glancing at that signal once tends to set the tone for the answer."
 
     private static let goalAdvisoryTemplate =
-        "This terminal opened on top of a G-Brain goal document at <path>. A goal is a time-bound outcome measured by metrics or milestones, usually fanning out into subgoals and linked tasks. The goal page itself is the primary source for current direction, while the linked tasks carry day-to-day execution state."
+        "This terminal opened on top of a b-brain goal document at <path>. A goal is a time-bound outcome measured by metrics or milestones, usually fanning out into subgoals and linked tasks. The goal page itself is the primary source for current direction, while the linked tasks carry day-to-day execution state."
 
     private static let fallbackAdvisoryTemplate =
-        "This terminal opened on top of a `<type>` G-Brain document at <path>. This surface has no special operational-phase marker; its body and frontmatter are the primary source."
+        "This terminal opened on top of a `<type>` b-brain document at <path>. This surface has no special operational-phase marker; its body and frontmatter are the primary source."
 
     /// 두 줄 prose 한 덩어리를 반환한다. 호출 측은 prefix 뒤에 빈 줄 한 개 + 사용자 message 형태로 붙인다.
     public static func build(
@@ -119,6 +120,6 @@ public enum MarkdownChatPillContextPrefix {
                 .replacingOccurrences(of: "<path>", with: markdownFilePath)
                 .replacingOccurrences(of: "<type>", with: typeLabel)
         }
-        return firstLine + "\n" + commonGbrainAdvisoryLine
+        return firstLine + "\n" + commonBbrainAdvisoryLine
     }
 }
