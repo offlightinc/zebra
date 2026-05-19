@@ -171,9 +171,10 @@ public struct MarkdownChatPill: View {
         DispatchQueue.main.async { textFieldFocused = true }
     }
     private var contextChipTitle: String {
-        displayTitle.isEmpty
-            ? String(localized: "markdownChat.pill.chip.thisDoc", defaultValue: "this doc")
-            : displayTitle
+        if !isExpanded || displayTitle.isEmpty {
+            return String(localized: "markdownChat.pill.chip.thisDoc", defaultValue: "this doc")
+        }
+        return displayTitle
     }
     private var placeholderText: String {
         String(localized: "markdownChat.pill.placeholder.doc", defaultValue: "Ask about this doc")
@@ -493,7 +494,8 @@ public struct MarkdownChatPill: View {
                     .opacity(collapsedOpacity)
             }
         }
-        .frame(minWidth: 58, maxWidth: Self.expandedChipMaxWidth, alignment: .leading)
+        .frame(minWidth: 58, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
         .layoutPriority(0)
     }
 
