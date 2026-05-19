@@ -88,9 +88,11 @@ enum MarkdownPillPalette {
 }
 
 public struct MarkdownChatPill: View {
+    private static let maxWidth: CGFloat = 720
     private static let collapsedHeight: CGFloat = 46
     private static let collapsedContentHeight: CGFloat = 30
     private static let expandedHeight: CGFloat = 156
+    private static let expandedChipMaxWidth: CGFloat = 320
     private static let motion = Animation.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.30)
 
     let displayTitle: String
@@ -182,16 +184,32 @@ public struct MarkdownChatPill: View {
     private var shellHeight: CGFloat {
         isExpanded ? Self.expandedHeight : Self.collapsedHeight
     }
+    private var shellPadding: CGFloat {
+        isExpanded ? 14 : 8
+    }
+    private var expandedOpacity: Double {
+        isExpanded ? 1 : 0
+    }
+    private var collapsedOpacity: Double {
+        isExpanded ? 0 : 1
+    }
+    private var collapsedPromptText: String {
+        if activeAgent != nil {
+            return String(localized: "markdownChat.pill.newSessionPrompt", defaultValue: "New session…")
+        }
+        return placeholderText
+    }
 
     public var body: some View {
         VStack(spacing: 8) {
             if isExpanded, isSlashMode, let skills = matchingSkills {
                 skillsPicker(skills)
+                    .frame(maxWidth: Self.maxWidth)
             }
 
             pillShell
         }
-        .frame(maxWidth: 720)
+        .frame(maxWidth: Self.maxWidth)
         // Lazy-load the gbrain manifest the first time the user types a
         // slash. Empty array is a valid result (gbrain not installed) — it
         // still satisfies "cached", so we won't keep retrying every
@@ -235,39 +253,84 @@ public struct MarkdownChatPill: View {
         ZStack(alignment: .topLeading) {
             shellBackground
 
-            ZStack(alignment: .topLeading) {
-                Group {
-                    if activeAgent != nil {
-                        companionPaneContent
-                    } else {
-                        collapsedContent
-                    }
-                }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .frame(height: Self.collapsedHeight, alignment: .topLeading)
-                .opacity(isExpanded ? 0 : 1)
-                .allowsHitTesting(!isExpanded)
-                .accessibilityHidden(isExpanded)
+            VStack(alignment: .leading, spacing: isExpanded ? 8 : 0) {
+                headerRow
+                    .frame(height: Self.collapsedContentHeight, alignment: .center)
 
-                expandedContent
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .frame(height: Self.expandedHeight, alignment: .topLeading)
-                    .opacity(isExpanded ? 1 : 0)
+                inputArea
+                    .frame(height: isExpanded ? 38 : 0, alignment: .topLeading)
+                    .opacity(expandedOpacity)
+                    .offset(y: isExpanded ? 0 : -4)
+                    .clipped()
+                    .allowsHitTesting(isExpanded)
+                    .accessibilityHidden(!isExpanded)
+
+                dividerSlot
+                    .frame(height: isExpanded ? 5 : 0, alignment: .topLeading)
+                    .opacity(expandedOpacity)
+                    .clipped()
+
+                footerRow
+                    .frame(height: isExpanded ? Self.collapsedContentHeight : 0, alignment: .topLeading)
+                    .opacity(expandedOpacity)
+                    .offset(y: isExpanded ? 0 : -4)
+                    .clipped()
                     .allowsHitTesting(isExpanded)
                     .accessibilityHidden(!isExpanded)
             }
+            .padding(shellPadding)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .frame(height: shellHeight, alignment: .topLeading)
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous))
         }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .frame(height: shellHeight, alignment: .topLeading)
         .contentShape(RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous))
+        .animation(Self.motion, value: isExpanded)
         .onTapGesture {
             guard !isExpanded else { return }
             expandFromCollapsed()
+        }
+        .onKeyPress(.escape) {
+            if isExpanded, text.isEmpty {
+                collapse()
+                return .handled
+            }
+            return .ignored
+        }
+        // ↑/↓ navigate the slash picker; Enter picks. Outside slash mode they
+        // pass through to the textfield (newline / caret movement).
+        .onKeyPress(.upArrow) {
+            guard isExpanded, isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return .ignored }
+            skillsSelectedIndex = max(0, skillsSelectedIndex - 1)
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            guard isExpanded, isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return .ignored }
+            skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
+            return .handled
+        }
+        // ⏎ submits (or picks a slash skill). When an IME is mid-
+        // composition we first force-commit its marked text and sync our
+        // @State `text` directly from the NSTextView, then re-evaluate
+        // the action on the next runloop tick so the slash-mode / submit
+        // gate sees the post-commit string.
+        //
+        // POLICY: one Enter == commit-and-submit. We intentionally do *not*
+        // adopt the native-macOS "first Enter commits, second Enter
+        // submits" pattern (Slack/Discord-style). Most pill traffic is
+        // one-shot prompts where the user types and immediately wants to
+        // send — making them press Enter twice is friction. If we ever
+        // want the two-step variant, return `.handled` from the IME
+        // branch without scheduling `runEnterAction()`.
+        .onKeyPress(.return) {
+            guard isExpanded else { return .ignored }
+            if commitIMECompositionIfNeeded() {
+                DispatchQueue.main.async { _ = runEnterAction() }
+                return .handled
+            }
+            return runEnterAction() ? .handled : .ignored
         }
     }
 
@@ -284,6 +347,7 @@ public struct MarkdownChatPill: View {
                 x: 0,
                 y: 18
             )
+            .frame(maxWidth: .infinity)
             .frame(height: shellHeight)
     }
 
@@ -403,182 +467,149 @@ public struct MarkdownChatPill: View {
         }
     }
 
-    // MARK: - Collapsed (idle)
+    // MARK: - Unified shell slots
 
-    private var collapsedContent: some View {
+    private var headerRow: some View {
         HStack(spacing: 10) {
+            leadingChipSlot
+
+            promptModeLabel
+                .layoutPriority(0)
+
+            collapsedHeaderControls
+                .opacity(collapsedOpacity)
+                .allowsHitTesting(!isExpanded)
+                .accessibilityHidden(isExpanded)
+        }
+    }
+
+    private var leadingChipSlot: some View {
+        ZStack(alignment: .leading) {
             contextChip(label: contextChipTitle)
-                .frame(minWidth: 58, maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(0)
+                .opacity(activeAgent == nil || isExpanded ? 1 : 0)
 
-            Text(placeholderText)
-                .font(.system(size: 13.5))
-                .foregroundColor(MarkdownPillPalette.textDim)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(minWidth: 58, maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(0)
-
-            agentSelectorButton(compact: true)
-            sendButton(enabled: false)
-        }
-        .frame(height: Self.collapsedContentHeight)
-    }
-
-    // MARK: - Companion pane (collapsed, with agent tab target)
-
-    private var companionPaneContent: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(MarkdownPillPalette.accent)
-                    .frame(width: 6, height: 6)
-                Text(String(localized: "markdownChat.pill.session.label", defaultValue: "session"))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(MarkdownPillPalette.text)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                Text("·")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(MarkdownPillPalette.textMuted)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                Text(activeAgent?.label ?? "")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(MarkdownPillPalette.textMuted)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+            if activeAgent != nil {
+                sessionChip
+                    .opacity(collapsedOpacity)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(MarkdownPillPalette.accent.opacity(0.10))
-            .overlay(Capsule().stroke(MarkdownPillPalette.accent.opacity(0.30), lineWidth: 1))
-            .clipShape(Capsule())
-            .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(minWidth: 58, maxWidth: Self.expandedChipMaxWidth, alignment: .leading)
+        .layoutPriority(0)
+    }
 
-            Text(String(localized: "markdownChat.pill.newSessionPrompt", defaultValue: "New session…"))
+    private var sessionChip: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(MarkdownPillPalette.accent)
+                .frame(width: 6, height: 6)
+            Text(String(localized: "markdownChat.pill.session.label", defaultValue: "session"))
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(MarkdownPillPalette.text)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Text("·")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(MarkdownPillPalette.textMuted)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Text(activeAgent?.label ?? "")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(MarkdownPillPalette.textMuted)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(MarkdownPillPalette.accent.opacity(0.10))
+        .overlay(Capsule().stroke(MarkdownPillPalette.accent.opacity(0.30), lineWidth: 1))
+        .clipShape(Capsule())
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var promptModeLabel: some View {
+        ZStack(alignment: .leading) {
+            Text(collapsedPromptText)
                 .font(.system(size: 13.5))
                 .foregroundColor(MarkdownPillPalette.textDim)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(minWidth: 58, maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(0)
+                .opacity(collapsedOpacity)
 
-            sendButton(enabled: false)
+            Text(String(localized: "markdownChat.pill.context.auto", defaultValue: "· auto"))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(MarkdownPillPalette.textDim)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .opacity(expandedOpacity)
         }
-        .frame(height: Self.collapsedContentHeight)
+        .frame(minWidth: 58, maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 
-    // MARK: - Expanded (focused)
+    private var collapsedHeaderControls: some View {
+        HStack(spacing: 6) {
+            if activeAgent == nil {
+                agentSelectorButton(compact: true)
+            }
+            sendButton(enabled: false)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
 
-    private var expandedContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 6) {
-                contextChip(label: contextChipTitle)
-                    .frame(maxWidth: 320, alignment: .leading)
-                    .layoutPriority(-1)
-                Text(String(localized: "markdownChat.pill.context.auto", defaultValue: "· auto"))
+    private var inputArea: some View {
+        // multiline TextField (axis: .vertical) gives native placeholder
+        // so the cursor and placeholder always align — unlike TextEditor,
+        // which has internal text-container insets that don't match a
+        // manually-positioned Text overlay. SwiftUI's TextField `prompt:`
+        // also applies system dimming on top of custom colors, so we render
+        // the placeholder ourselves.
+        ZStack(alignment: .topLeading) {
+            TextField("", text: $text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .focused($textFieldFocused)
+                .font(.system(size: 14))
+                .foregroundColor(MarkdownPillPalette.text)
+                .tint(MarkdownPillPalette.accent)
+                .lineLimit(2...2)
+                .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38, alignment: .topLeading)
+
+            if text.isEmpty {
+                Text(placeholderText)
+                    .font(.system(size: 14))
+                    .foregroundColor(MarkdownPillPalette.textDim)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var dividerSlot: some View {
+        Rectangle()
+            .fill(MarkdownPillPalette.border)
+            .frame(height: 1)
+            .padding(.top, 4)
+    }
+
+    private var footerRow: some View {
+        HStack(spacing: 6) {
+            skillsButton
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 4) {
+                MarkdownPillKbdLabel("↵")
+                Text(String(localized: "markdownChat.pill.footer.run", defaultValue: " run · "))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(MarkdownPillPalette.textDim)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+                MarkdownPillKbdLabel("⇧↵")
+                Text(String(localized: "markdownChat.pill.footer.newline", defaultValue: " newline"))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(MarkdownPillPalette.textDim)
             }
+            .padding(.trailing, 4)
 
-            // multiline TextField (axis: .vertical) gives native placeholder
-            // so the cursor and placeholder always align — unlike TextEditor,
-            // which has internal text-container insets that don't match a
-            // manually-positioned Text overlay. `prompt:` lets us color the
-            // placeholder explicitly (default TextField placeholder color is
-            // .placeholderText which renders too dark on the dark pill bg).
-            // Keep this as a fixed two-line region so slash picker appearance
-            // does not change the shell's measured height.
-            // SwiftUI's TextField `prompt:` parameter applies system placeholder
-            // dimming on top of any color we set (especially after focus),
-            // pushing the visible color far below mockup's `#6c6960`. To
-            // keep placeholder color stable across focus states we render it
-            // ourselves and feed an empty prompt to the TextField.
-            ZStack(alignment: .topLeading) {
-                TextField("", text: $text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .focused($textFieldFocused)
-                    .font(.system(size: 14))
-                    .foregroundColor(MarkdownPillPalette.text)
-                    .tint(MarkdownPillPalette.accent)
-                    .lineLimit(2...2)
-                    .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38, alignment: .topLeading)
-
-                if text.isEmpty {
-                    Text(placeholderText)
-                        .font(.system(size: 14))
-                        .foregroundColor(MarkdownPillPalette.textDim)
-                        .allowsHitTesting(false)
-                }
-            }
-
-            Rectangle()
-                .fill(MarkdownPillPalette.border)
-                .frame(height: 1)
-                .padding(.top, 4)
-
-            HStack(spacing: 6) {
-                skillsButton
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: 4) {
-                    MarkdownPillKbdLabel("↵")
-                    Text(String(localized: "markdownChat.pill.footer.run", defaultValue: " run · "))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(MarkdownPillPalette.textDim)
-                    MarkdownPillKbdLabel("⇧↵")
-                    Text(String(localized: "markdownChat.pill.footer.newline", defaultValue: " newline"))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(MarkdownPillPalette.textDim)
-                }
-                .padding(.trailing, 4)
-
-                agentSelectorButton(compact: false)
-                sendButton(enabled: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .onKeyPress(.escape) {
-            if text.isEmpty {
-                collapse()
-                return .handled
-            }
-            return .ignored
-        }
-        // ↑/↓ navigate the slash picker; Enter picks. Outside slash mode they
-        // pass through to the textfield (newline / caret movement).
-        .onKeyPress(.upArrow) {
-            guard isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return .ignored }
-            skillsSelectedIndex = max(0, skillsSelectedIndex - 1)
-            return .handled
-        }
-        .onKeyPress(.downArrow) {
-            guard isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return .ignored }
-            skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
-            return .handled
-        }
-        // ⏎ submits (or picks a slash skill). When an IME is mid-
-        // composition we first force-commit its marked text and sync our
-        // @State `text` directly from the NSTextView, then re-evaluate
-        // the action on the next runloop tick so the slash-mode / submit
-        // gate sees the post-commit string.
-        //
-        // POLICY: one Enter == commit-and-submit. We intentionally do *not*
-        // adopt the native-macOS "first Enter commits, second Enter
-        // submits" pattern (Slack/Discord-style). Most pill traffic is
-        // one-shot prompts where the user types and immediately wants to
-        // send — making them press Enter twice is friction. If we ever
-        // want the two-step variant, return `.handled` from the IME
-        // branch without scheduling `runEnterAction()`.
-        .onKeyPress(.return) {
-            if commitIMECompositionIfNeeded() {
-                DispatchQueue.main.async { _ = runEnterAction() }
-                return .handled
-            }
-            return runEnterAction() ? .handled : .ignored
+            agentSelectorButton(compact: false)
+            sendButton(enabled: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
