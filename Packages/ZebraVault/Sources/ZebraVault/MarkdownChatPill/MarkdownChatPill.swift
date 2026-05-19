@@ -358,21 +358,17 @@ public struct MarkdownChatPill: View {
     // MARK: - Key callbacks (routed up from MarkdownChatPillTextView)
 
     /// NSTextView wrapper calls this on bare ⏎. Slash-picker takes
-    /// priority; otherwise `submit()`. Returns whether anything was acted
-    /// on — used only for diagnostics; the wrapper consumes the key
-    /// either way (we reserve plain ⏎ for submit-intent).
-    @discardableResult
-    private func handleReturn() -> Bool {
+    /// priority over submit; empty text is a no-op. The wrapper always
+    /// consumes the keystroke either way, so this returns `Void`.
+    private func handleReturn() {
         if isSlashMode, let skills = matchingSkills, !skills.isEmpty {
             let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
             pickSkill(skills[safeIndex])
-            return true
+            return
         }
         if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             submit()
-            return true
         }
-        return false
     }
 
     /// Slash picker ↑ navigation. Returns true to consume the keystroke,

@@ -25,10 +25,11 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
     let font: NSFont
     let textColor: NSColor
     let caretColor: NSColor
-    /// Called on bare ⏎. Return value is informational — we always consume
-    /// the keystroke (newline is reserved for ⇧⏎). Return `true` if the
-    /// caller acted on it, `false` for a no-op (e.g. empty text).
-    let onReturn: () -> Bool
+    /// Called on bare ⏎. We always consume the keystroke (newline is
+    /// reserved for ⇧⏎), so the callback has no return value — it's the
+    /// caller's job to decide whether to act (submit, slash-pick) or
+    /// no-op on the current state.
+    let onReturn: () -> Void
     /// Bare ↑. Return `true` to consume (slash picker handled it), `false`
     /// to let NSTextView do native caret movement.
     let onMoveUp: () -> Bool
@@ -94,8 +95,7 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
             // External text mutation (e.g. slash-pick replaced the line).
             // Move the caret to the end to match the prior behavior.
             textView.string = text
-            let end = NSRange(location: (text as NSString).length, length: 0)
-            textView.setSelectedRange(end)
+            Self.moveCaretToEnd(textView)
         }
 
         if textView.font != font { textView.font = font }
@@ -110,10 +110,18 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
                 window.makeFirstResponder(textView)
                 // SwiftUI parent re-expanding the pill expects the caret at
                 // the end of the preserved text, not the implicit start.
-                let end = NSRange(location: (textView.string as NSString).length, length: 0)
-                textView.setSelectedRange(end)
+                Self.moveCaretToEnd(textView)
             }
         }
+    }
+
+    /// Collapse selection to a zero-length range at the end of the text
+    /// view's content. Called both when SwiftUI hands us new text (slash
+    /// pick) and when the pill re-expands so the caret lands where the
+    /// user last left off, not at offset 0.
+    private static func moveCaretToEnd(_ textView: NSTextView) {
+        let end = (textView.string as NSString).length
+        textView.setSelectedRange(NSRange(location: end, length: 0))
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -149,7 +157,7 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
                 if !mods.isEmpty {
                     return false
                 }
-                _ = parent.onReturn()
+                parent.onReturn()
                 return true
             case #selector(NSResponder.moveUp(_:)):
                 return parent.onMoveUp()
@@ -198,6 +206,10 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
         override func becomeFirstResponder() -> Bool {
             let ok = super.becomeFirstResponder()
             if ok, let coordinator, !coordinator.parent.isFocused {
+                // `parent` is a struct snapshot, but `isFocused` is an
+                // @Binding — assigning through it goes back to SwiftUI's
+                // source-of-truth, so the stale-snapshot worry doesn't
+                // apply to binding members.
                 let parent = coordinator.parent
                 DispatchQueue.main.async {
                     if !parent.isFocused { parent.isFocused = true }
