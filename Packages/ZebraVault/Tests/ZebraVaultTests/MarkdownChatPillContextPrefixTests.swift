@@ -9,7 +9,7 @@ import XCTest
 ///     frontmatter type 이 들어와도 fallback 으로 떨어진다. 라벨만 보존.)
 ///   - surface 결정은 **호출 사이트 책임**: markdown panel 은 `detect(fromContent:)`.
 ///     향후 다른 panel kind 가 ChatPill 마운트되면 그쪽 호출 사이트가 직접 enum 주입.
-///   - 두 줄 prose. 줄1 surface advisory + 줄2 공통 gbrain advisory.
+///   - 두 줄 prose. 줄1 surface advisory + 줄2 공통 b-brain advisory.
 ///   - `<path>` 는 모든 surface 에서, `<type>` 은 fallback 에서만 인터폴레이션.
 ///   - 톤 가드: 명령형/분기형/탐색 닫는 표현/리스트 마커/헤더 0건.
 final class MarkdownChatPillContextPrefixTests: XCTestCase {
@@ -179,7 +179,7 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
             markdownFilePath: "/Users/foo/brain/people/p.md",
             surface: .fallback(typeLabel: "person")
         )
-        XCTAssertTrue(out.contains("`person` G-Brain document"))
+        XCTAssertTrue(out.contains("`person` b-brain document"))
         XCTAssertTrue(out.contains("/Users/foo/brain/people/p.md"))
     }
 
@@ -188,7 +188,7 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
         let surfaces: [MarkdownChatPillContextSurface] = [
             .task, .goal, .fallback(typeLabel: "person")
         ]
-        let commonHint = "gbrain's `search` / `query` / `get`"
+        let commonHint = "b-brain's `search` / `query` / `get`"
         for surface in surfaces {
             let out = MarkdownChatPillContextPrefix.build(
                 markdownFilePath: path,
@@ -196,7 +196,7 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
             )
             XCTAssertTrue(
                 out.contains(commonHint),
-                "surface \(surface) prefix missing common gbrain advisory line"
+                "surface \(surface) prefix missing common b-brain advisory line"
             )
             XCTAssertTrue(
                 out.contains("[Source: …, YYYY-MM-DD]"),
