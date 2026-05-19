@@ -29,11 +29,16 @@ public enum MarkdownChatPillCommand {
     public static func shellStartupLine(
         agent: MarkdownPillAgent,
         markdownFilePath: String,
+        surface: MarkdownChatPillContextSurface,
         userPrompt: String
     ) -> String {
         let parent = (markdownFilePath as NSString).deletingLastPathComponent
         let cwd = parent.isEmpty ? "/" : parent
-        return "\(invocation(agent: agent, cwd: cwd, markdownFilePath: markdownFilePath, prompt: userPrompt))\r"
+        let contextPrefix = MarkdownChatPillContextPrefix.build(
+            markdownFilePath: markdownFilePath,
+            surface: surface
+        )
+        return "\(invocation(agent: agent, cwd: cwd, contextPrefix: contextPrefix, prompt: userPrompt))\r"
     }
 
     /// Per-agent CLI invocation tuned to keep the initial prompt on the agent
@@ -44,18 +49,15 @@ public enum MarkdownChatPillCommand {
     private static func invocation(
         agent: MarkdownPillAgent,
         cwd: String,
-        markdownFilePath: String,
+        contextPrefix: String,
         prompt: String
     ) -> String {
         let promptArgument = singleLineShellArgument(prompt)
-        let fileContext = "Use this markdown file as context: \(markdownFilePath)"
-        // Visible context = what we want the agent to *see in the user
-        // message* (file note + user's question). Compressed to one line so
-        // shell single-quoting is straightforward.
-        let visibleContextPrompt = "\(fileContext). \(promptArgument)"
-        // Hidden system-prompt variant for claude's --append-system-prompt:
-        // the file note alone (claude takes the user prompt separately).
-        let hiddenContextInstruction = fileContext
+        // Visible context = surface advisory + gbrain advisory + blank line + user prompt
+        // (서로 다른 두 메시지 줄이라 빈 줄로 끊어둔다). 단일 따옴표 안의 embedded newline 은
+        // bash/zsh 모두 그대로 argv 한 인자로 들고가니까 quoting 만 정직하게 하면 된다.
+        // claude 분기는 `contextPrefix` 자체를 system prompt 로 보내고 user prompt 는 별도 argv.
+        let visibleContextPrompt = "\(contextPrefix)\n\n\(promptArgument)"
         switch agent {
         case .codex:
             let codexLaunch = codexLaunchContext(markdownCwd: cwd)
@@ -71,7 +73,7 @@ public enum MarkdownChatPillCommand {
             parts.append(shellQuote(visibleContextPrompt))
             return parts.joined(separator: " ")
         case .claude:
-            return "cd \(shellQuote(cwd)) && claude --append-system-prompt \(shellQuote(hiddenContextInstruction)) \(shellQuote(promptArgument))"
+            return "cd \(shellQuote(cwd)) && claude --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
         case .gemini:
             return "cd \(shellQuote(cwd)) && gemini --skip-trust --prompt-interactive \(shellQuote(visibleContextPrompt))"
         }
