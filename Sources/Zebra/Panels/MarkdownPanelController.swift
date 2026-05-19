@@ -25,10 +25,10 @@ final class MarkdownPanelController: ObservableObject {
     /// flight; the view layer shows the loading skeleton in that window.
     @Published private(set) var parse: BrainObjectParse?
 
-    /// Whether the user wants the right-pane inspector visible. The view may
-    /// temporarily auto-collapse it when the containing pane is too narrow.
-    /// Persisted per main window via UserDefaults.
-    @Published var showsInspector: Bool
+    /// The user's explicit inspector intent for this markdown panel. New
+    /// panels start visible by default; width-based auto-collapse is derived
+    /// in the view and never writes back here.
+    @Published private(set) var inspectorVisibilityIntent: MarkdownInspectorVisibilityIntent = .defaultShown
 
     /// Pane where the markdown chat pill accumulates agent terminal tabs.
     /// Stored on the controller (panel-identified, not view-identified) so
@@ -37,8 +37,8 @@ final class MarkdownPanelController: ObservableObject {
     @Published var chatCompanionAgent: MarkdownPillAgent?
 
     /// Bumped when the user asks to reveal an auto-collapsed inspector while
-    /// `showsInspector` is already true. This gives SwiftUI a real observed
-    /// state change even though the persisted visibility intent did not change.
+    /// the panel already wants the inspector visible. This gives SwiftUI a real
+    /// observed state change even though the visibility intent did not change.
     @Published private(set) var inspectorRevealToken: Int = 0
 
     private weak var panel: MarkdownPanel?
@@ -46,11 +46,8 @@ final class MarkdownPanelController: ObservableObject {
     private let parseQueue = DispatchQueue(label: "com.cmux.brain-object-parse", qos: .userInitiated)
     private var parseGeneration: Int = 0
 
-    private static let inspectorVisibilityKey = "cmux.brainViewer.showsInspector"
-
     init(panel: MarkdownPanel) {
         self.panel = panel
-        self.showsInspector = Self.loadInspectorVisibility()
         // Subscribe to content changes once; every disk reload, optimistic
         // frontmatter update, or initial load fires a parse here. View
         // lifecycle does not affect this subscription.
@@ -60,27 +57,26 @@ final class MarkdownPanelController: ObservableObject {
             }
     }
 
-    /// Toggle inspector visibility and persist to UserDefaults.
-    func toggleInspector() {
-        setInspectorVisibility(!showsInspector)
+    var wantsInspectorVisible: Bool {
+        inspectorVisibilityIntent.wantsVisible
     }
 
-    /// Set the user's inspector visibility intent and persist it. Auto-collapse
-    /// in the view layer must not call this with `false`.
+    /// Toggle only this markdown panel's user intent.
+    func toggleInspector() {
+        setInspectorVisibility(!wantsInspectorVisible)
+    }
+
+    /// Set this panel's inspector visibility intent. Auto-collapse in the view
+    /// layer must not call this with `false`.
     func setInspectorVisibility(_ visible: Bool) {
-        guard showsInspector != visible else {
-            UserDefaults.standard.set(visible, forKey: Self.inspectorVisibilityKey)
-            return
-        }
-        showsInspector = visible
-        UserDefaults.standard.set(showsInspector, forKey: Self.inspectorVisibilityKey)
+        inspectorVisibilityIntent = visible ? .userShown : .userHidden
     }
 
     /// Preserve the user's "show inspector" intent and force one render pass.
     /// Used when the inspector is auto-collapsed by width rather than manually
     /// hidden by the user.
     func revealInspector() {
-        if !showsInspector {
+        if !wantsInspectorVisible {
             setInspectorVisibility(true)
         }
         inspectorRevealToken &+= 1
@@ -99,14 +95,6 @@ final class MarkdownPanelController: ObservableObject {
         }
     }
 
-    private static func loadInspectorVisibility() -> Bool {
-        if UserDefaults.standard.object(forKey: inspectorVisibilityKey) == nil {
-            // Inspector ships visible by default — that's the whole point
-            // of the brain-viewer feature.
-            return true
-        }
-        return UserDefaults.standard.bool(forKey: inspectorVisibilityKey)
-    }
 }
 
 /// Per-panel registry of `MarkdownPanelController` instances. Looked up by
@@ -158,6 +146,10 @@ final class MarkdownPanelControllerRegistry {
                 return paneId
             }
         )
+    }
+
+    func hasController(for panel: MarkdownPanel) -> Bool {
+        controllers[panel.id] != nil
     }
 
     private func release(panelId: UUID) {
