@@ -117,7 +117,8 @@ final class ZebraEmailListStore: ObservableObject {
     @Published private(set) var isSyncing = false
     @Published private(set) var lastError: String?
 
-    private let client: ZebraGmailAPIClient
+    private let client: ZebraClawvisorEmailClient
+    private var prefetchTask: Task<Void, Never>?
     private static let lastConnectedKey = "ZebraEmailListStore.lastKnownConnected"
     private static let lastThreadsKey = "ZebraEmailListStore.lastThreadsSnapshot"
 
@@ -131,17 +132,6 @@ final class ZebraEmailListStore: ObservableObject {
             self.threads = restored
         }
         Self.perfLog("init isConnected=\(self.isConnected) cachedThreads=\(self.threads.count)")
-        // Warm the auth token in the background so the first sidebar visit
-        // doesn't pay the ~2s first-token cost on top of the network round trip.
-        // Failures are logged (not swallowed) — the next currentTokens() call
-        // retries, but the silent failure used to mask token-store regressions.
-        Task.detached {
-            do {
-                _ = try await AuthManager.shared.currentTokens()
-            } catch {
-                NSLog("%@", "[ZebraEmail] auth token preheat failed: \(error)")
-            }
-        }
     }
 
     private func persistThreads(_ value: [EmailThreadItem]) {
@@ -188,8 +178,8 @@ final class ZebraEmailListStore: ObservableObject {
     }
 
     /// Read-only path used when the email sidebar becomes visible. Loads the
-    /// backend's cached threads without touching Gmail outbound. Manual sync
-    /// only fires when the user taps refresh or completes OAuth.
+    /// local SQLite cache without touching Gmail outbound. Manual sync only
+    /// fires when the user taps refresh.
     ///
     /// Status and threads are fetched in parallel — they have no dependency
     /// (a disconnected account returns an empty thread list anyway), so a
@@ -212,16 +202,13 @@ final class ZebraEmailListStore: ObservableObject {
             Self.perfLog("threads awaited at \(Int(Date().timeIntervalSince(tStart) * 1000))ms")
             recordConnected(status.connected)
             threads = status.connected ? loadedThreads : []
+            if status.connected {
+                startBodyPrefetchIfNeeded(for: loadedThreads)
+            }
             lastError = nil
-        } catch ZebraGmailAPIClientError.notSignedIn {
+        } catch ZebraClawvisorEmailClientError.notConfigured(_) {
             recordConnected(false)
             threads = []
-            lastError = nil
-        } catch ZebraGmailAPIClientError.backendUnreachable {
-            // Network blip — keep the cached snapshot and connected state so
-            // the UI doesn't lose its first-frame inbox just because the user
-            // is briefly offline. Persisted threads stay untouched; the next
-            // successful read replaces them.
             lastError = nil
         } catch {
             lastError = displayError(error)
@@ -246,20 +233,17 @@ final class ZebraEmailListStore: ObservableObject {
             }
             var syncError: String?
             do {
-                try await client.sync()
+                _ = try await client.syncRecentInbox()
             } catch {
                 syncError = displayError(error)
             }
             let loadedThreads = try await client.threads()
             threads = loadedThreads
             lastError = loadedThreads.isEmpty ? syncError : nil
-        } catch ZebraGmailAPIClientError.notSignedIn {
+            startBodyPrefetchIfNeeded(for: loadedThreads)
+        } catch ZebraClawvisorEmailClientError.notConfigured(_) {
             recordConnected(false)
             threads = []
-            lastError = nil
-        } catch ZebraGmailAPIClientError.backendUnreachable {
-            // Same as refreshIfNeeded: don't blow away the cached snapshot
-            // on a transient network failure.
             lastError = nil
         } catch {
             lastError = displayError(error)
@@ -271,13 +255,17 @@ final class ZebraEmailListStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            let authURL = try await client.startOAuth()
-            NSWorkspace.shared.open(authURL)
+            let status = try await client.status()
+            recordConnected(status.connected)
+            if status.connected {
+                _ = try await client.syncRecentInbox()
+                threads = try await client.threads()
+                startBodyPrefetchIfNeeded(for: threads)
+            }
             lastError = nil
-            pollAfterOAuthLaunch()
-        } catch ZebraGmailAPIClientError.notSignedIn {
-            lastError = nil
-            beginSignInThenConnectGmail()
+        } catch ZebraClawvisorEmailClientError.notConfigured(_) {
+            recordConnected(false)
+            lastError = String(localized: "email.error.clawvisorRequired", defaultValue: "Clawvisor Gmail 설정이 필요합니다")
         } catch {
             lastError = displayError(error)
         }
@@ -314,28 +302,17 @@ final class ZebraEmailListStore: ObservableObject {
         return String(raw[..<index]) + "..."
     }
 
-    private func pollAfterOAuthLaunch() {
-        // Backend's OAuth callback already backfills inbox. Polling here only
-        // needs to detect when status flips to connected and load the cached
-        // threads — no extra Gmail outbound from the desktop side.
-        Task { [weak self] in
-            for _ in 0..<30 {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard let self else { return }
-                await self.refreshIfNeeded()
-                if self.isConnected { return }
-            }
-        }
-    }
-
-    private func beginSignInThenConnectGmail() {
-        Task { @MainActor [weak self] in
-            let signedIn = await AuthManager.shared.beginSignInAndAwait(timeout: 90)
-            guard let self else { return }
-            if signedIn {
-                await self.connect()
-            } else {
-                self.lastError = String(localized: "email.error.signInRequired", defaultValue: "먼저 Zebra에 로그인해 주세요")
+    private func startBodyPrefetchIfNeeded(for threads: [EmailThreadItem]) {
+        guard !threads.isEmpty else { return }
+        if prefetchTask?.isCancelled == false { return }
+        let client = self.client
+        prefetchTask = Task(priority: .utility) { [weak self] in
+            defer { self?.prefetchTask = nil }
+            do {
+                let fetched = try await client.prefetchRecentMessageBodies(limit: 8)
+                Self.perfLog("prefetchRecentMessageBodies fetched=\(fetched)")
+            } catch {
+                Self.perfLog("prefetchRecentMessageBodies failed=\(error.localizedDescription)")
             }
         }
     }
@@ -364,7 +341,7 @@ final class ZebraEmailDetailStore: ObservableObject {
     @Published private(set) var selectedThreadId: String?
     @Published private var threadStates: [String: ZebraEmailThreadUIState] = [:]
 
-    private let client = ZebraGmailAPIClient.shared
+    private let client = ZebraClawvisorEmailClient.shared
 
     func selectThread(_ thread: EmailThreadItem) {
         selectedThreadId = thread.id
@@ -453,238 +430,4 @@ private struct ZebraEmailThreadUIState {
     var isLoading = false
     var errorMessage: String?
     var expandedMessageIds: Set<String>?
-}
-
-private actor ZebraGmailAPIClient {
-    static let shared = ZebraGmailAPIClient()
-
-    private let session: URLSession
-    private let decoder: JSONDecoder
-    private let iso8601: ISO8601DateFormatter
-
-    init(session: URLSession = .shared) {
-        self.session = session
-        let decoder = JSONDecoder()
-        self.decoder = decoder
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        self.iso8601 = formatter
-    }
-
-    func status() async throws -> GmailStatusResponse {
-        let (data, http) = try await request("GET", path: "/api/gmail/status")
-        try ensureOK(http, data: data)
-        return try decoder.decode(GmailStatusResponse.self, from: data)
-    }
-
-    func sync() async throws {
-        let (data, http) = try await request("POST", path: "/api/gmail/sync", jsonBody: [:])
-        try ensureOK(http, data: data)
-    }
-
-    func startOAuth() async throws -> URL {
-        let (data, http) = try await request("POST", path: "/api/gmail/oauth/start", jsonBody: [:])
-        try ensureOK(http, data: data)
-        let response = try decoder.decode(GmailOAuthStartResponse.self, from: data)
-        guard let url = URL(string: response.authUrl) else {
-            throw ZebraGmailAPIClientError.malformedResponse("bad Gmail OAuth URL")
-        }
-        return url
-    }
-
-    func threads() async throws -> [EmailThreadItem] {
-        let (data, http) = try await request("GET", path: "/api/gmail/threads")
-        try ensureOK(http, data: data)
-        let response = try decoder.decode(GmailThreadsResponse.self, from: data)
-        return response.threads.compactMap { dto in
-            guard let receivedAt = parseDate(dto.receivedAt) else { return nil }
-            return EmailThreadItem(
-                id: dto.id,
-                subject: dto.subject,
-                senderName: dto.senderName,
-                receivedAt: receivedAt,
-                unread: dto.unread,
-                starred: dto.starred,
-                hasAttachment: dto.hasAttachment,
-                labelIds: dto.labelIds,
-                category: dto.category.flatMap(EmailCategory.init(rawValue:))
-            )
-        }
-    }
-
-    func threadMessages(threadId: String, forceRefresh: Bool = false) async throws -> EmailThreadDetail {
-        let encodedThreadId = threadId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? threadId
-        let queryItems = forceRefresh ? [URLQueryItem(name: "refresh", value: "1")] : []
-        let (data, http) = try await request(
-            "GET",
-            path: "/api/gmail/threads/\(encodedThreadId)/messages",
-            queryItems: queryItems
-        )
-        try ensureOK(http, data: data)
-        let response = try decoder.decode(GmailThreadMessagesResponse.self, from: data)
-        return EmailThreadDetail(
-            threadId: response.threadId,
-            cached: response.cached,
-            messages: response.messages.map { dto in
-                EmailThreadMessage(
-                    id: dto.messageId,
-                    internetMessageId: dto.internetMessageId,
-                    subject: dto.subject,
-                    fromName: dto.fromName,
-                    fromEmail: dto.fromEmail,
-                    to: dto.to,
-                    cc: dto.cc,
-                    receivedAt: dto.receivedAt.flatMap(parseDate),
-                    snippet: dto.snippet,
-                    labelIds: dto.labelIds,
-                    isUnread: dto.isUnread,
-                    isSent: dto.isSent,
-                    hasAttachment: dto.hasAttachment,
-                    bodyText: dto.bodyText,
-                    bodyHtml: dto.bodyHtml
-                )
-            }
-        )
-    }
-
-    private func request(
-        _ method: String,
-        path: String,
-        queryItems: [URLQueryItem] = [],
-        jsonBody: [String: Any]? = nil
-    ) async throws -> (Data, HTTPURLResponse) {
-        let tStart = Date()
-        let tokens: (accessToken: String, refreshToken: String)
-        do {
-            tokens = try await AuthManager.shared.currentTokens()
-        } catch {
-            throw ZebraGmailAPIClientError.notSignedIn
-        }
-        let tAfterTokens = Date()
-
-        guard var components = URLComponents(url: AuthEnvironment.vmAPIBaseURL, resolvingAgainstBaseURL: false) else {
-            throw ZebraGmailAPIClientError.malformedResponse("bad Gmail API base URL")
-        }
-        components.path = (components.path.hasSuffix("/") ? String(components.path.dropLast()) : components.path) + path
-        if !queryItems.isEmpty {
-            components.queryItems = (components.queryItems ?? []) + queryItems
-        }
-        guard let url = components.url else {
-            throw ZebraGmailAPIClientError.malformedResponse("could not build Gmail API URL")
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue(tokens.refreshToken, forHTTPHeaderField: "X-Stack-Refresh-Token")
-        if let jsonBody {
-            request.setValue("application/json", forHTTPHeaderField: "content-type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: jsonBody, options: [])
-        }
-
-        let data: Data
-        let response: URLResponse
-        do {
-            let tBeforeNet = Date()
-            (data, response) = try await session.data(for: request)
-            let now = Date()
-            let tokensMs = Int(tAfterTokens.timeIntervalSince(tStart) * 1000)
-            let netMs = Int(now.timeIntervalSince(tBeforeNet) * 1000)
-            let totalMs = Int(now.timeIntervalSince(tStart) * 1000)
-            ZebraEmailListStore.perfLog("\(method) \(path) tokens=\(tokensMs)ms net=\(netMs)ms total=\(totalMs)ms")
-        } catch let error as URLError {
-            throw ZebraGmailAPIClientError.backendUnreachable(error.localizedDescription)
-        }
-        guard let http = response as? HTTPURLResponse else {
-            throw ZebraGmailAPIClientError.malformedResponse("non-HTTP Gmail API response")
-        }
-        return (data, http)
-    }
-
-    private func ensureOK(_ response: HTTPURLResponse, data: Data) throws {
-        guard (200..<300).contains(response.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw ZebraGmailAPIClientError.httpStatus(response.statusCode, body)
-        }
-    }
-
-    private func parseDate(_ value: String) -> Date? {
-        if let date = iso8601.date(from: value) {
-            return date
-        }
-        let fallback = ISO8601DateFormatter()
-        fallback.formatOptions = [.withInternetDateTime]
-        return fallback.date(from: value)
-    }
-}
-
-private struct GmailStatusResponse: Decodable {
-    let connected: Bool
-    let email: String?
-    let lastSyncedAt: String?
-}
-
-private struct GmailThreadsResponse: Decodable {
-    let threads: [GmailThreadDTO]
-}
-
-private struct GmailOAuthStartResponse: Decodable {
-    let authUrl: String
-}
-
-private struct GmailThreadDTO: Decodable {
-    let id: String
-    let subject: String
-    let senderName: String
-    let receivedAt: String
-    let unread: Bool
-    let starred: Bool
-    let hasAttachment: Bool
-    let labelIds: [String]
-    let category: String?
-}
-
-private struct GmailThreadMessagesResponse: Decodable {
-    let threadId: String
-    let cached: Bool
-    let messages: [GmailThreadMessageDTO]
-}
-
-private struct GmailThreadMessageDTO: Decodable {
-    let messageId: String
-    let threadId: String
-    let internetMessageId: String?
-    let subject: String?
-    let fromName: String?
-    let fromEmail: String?
-    let to: String?
-    let cc: String?
-    let receivedAt: String?
-    let snippet: String?
-    let labelIds: [String]
-    let isUnread: Bool
-    let isSent: Bool
-    let hasAttachment: Bool
-    let bodyText: String?
-    let bodyHtml: String?
-}
-
-private enum ZebraGmailAPIClientError: LocalizedError {
-    case notSignedIn
-    case backendUnreachable(String)
-    case httpStatus(Int, String)
-    case malformedResponse(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .notSignedIn:
-            return "Not signed in."
-        case .backendUnreachable(let detail):
-            return "Gmail API backend is unreachable: \(detail)"
-        case .httpStatus(let status, let body):
-            return "Gmail API request failed (\(status)): \(body)"
-        case .malformedResponse(let detail):
-            return "Gmail API response was malformed: \(detail)"
-        }
-    }
 }
