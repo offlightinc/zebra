@@ -63,6 +63,21 @@ public struct ZebraEmailThreadDetailView: View {
 
             Spacer(minLength: 8)
 
+            if let gmailURL = EmailThreadGmailURL.build(
+                accountEmail: detail?.accountEmail,
+                providerThreadId: detail?.providerThreadId
+            ) {
+                Button(action: { onOpenURL(gmailURL) }) {
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(BVColor.fgMute)
+                .help(String(localized: "email.detail.openInGmail", defaultValue: "Open in Gmail"))
+                .accessibilityLabel(String(localized: "email.detail.openInGmail", defaultValue: "Open in Gmail"))
+            }
+
             Button(action: onRefresh) {
                 if isLoading {
                     ProgressView()

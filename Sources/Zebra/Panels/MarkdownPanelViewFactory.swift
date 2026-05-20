@@ -125,7 +125,12 @@ private struct ZebraEmailPanelHost: View {
                 store.toggleMessage(threadId: panel.threadId, messageId: messageId)
             },
             onOpenURL: { url in
-                NSWorkspace.shared.open(url)
+                let ok = NSWorkspace.shared.open(url)
+                #if DEBUG
+                if !ok {
+                    cmuxDebugLog("email.openURL.failed url=\(url.absoluteString)")
+                }
+                #endif
             }
         )
         .task(id: panel.threadId) {

@@ -2,15 +2,21 @@ import Foundation
 
 public struct EmailThreadDetail: Equatable {
     public let threadId: String
+    public let providerThreadId: String?
+    public let accountEmail: String?
     public let cached: Bool
     public let messages: [EmailThreadMessage]
 
     public init(
         threadId: String,
+        providerThreadId: String? = nil,
+        accountEmail: String? = nil,
         cached: Bool,
         messages: [EmailThreadMessage]
     ) {
         self.threadId = threadId
+        self.providerThreadId = providerThreadId
+        self.accountEmail = accountEmail
         self.cached = cached
         self.messages = messages
     }

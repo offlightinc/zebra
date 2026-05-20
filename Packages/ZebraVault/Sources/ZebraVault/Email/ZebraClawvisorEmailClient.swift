@@ -121,7 +121,13 @@ public actor ZebraClawvisorEmailClient {
         if !forceRefresh {
             let cached = try loadMessages(threadId: threadId)
             if cached.contains(where: { ($0.bodyText?.isEmpty == false) || ($0.bodyHtml?.isEmpty == false) }) {
-                return EmailThreadDetail(threadId: threadId, cached: true, messages: cached)
+                return EmailThreadDetail(
+                    threadId: threadId,
+                    providerThreadId: try? loadStoredThreadId(forLookupId: threadId),
+                    accountEmail: (try? loadConfig().accountEmail).flatMap { $0.isEmpty ? nil : $0 },
+                    cached: true,
+                    messages: cached
+                )
             }
         }
 
@@ -129,7 +135,19 @@ public actor ZebraClawvisorEmailClient {
         let rows = try await fetchThreadMessages(config: config, threadId: threadId)
         try upsertMessages(rows, threadId: threadId)
         let saved = try loadMessages(threadId: threadId)
-        return EmailThreadDetail(threadId: threadId, cached: false, messages: saved)
+        let providerThreadId: String? = {
+            if let candidate = rows.first?.threadId, !candidate.isEmpty {
+                return candidate
+            }
+            return try? loadStoredThreadId(forLookupId: threadId)
+        }()
+        return EmailThreadDetail(
+            threadId: threadId,
+            providerThreadId: providerThreadId,
+            accountEmail: config.accountEmail.isEmpty ? nil : config.accountEmail,
+            cached: false,
+            messages: saved
+        )
     }
 
     private func fetchThreadMessages(config: ClawvisorConfig, threadId: String) async throws -> [NormalizedMessage] {
@@ -864,6 +882,24 @@ private extension ZebraClawvisorEmailClient {
             ))
         }
         return rows
+    }
+
+    func loadStoredThreadId(forLookupId lookupId: String) throws -> String? {
+        try openDatabaseIfNeeded()
+        var found: String?
+        try query("""
+        SELECT thread_id FROM email_messages
+        WHERE thread_id = ? OR message_id = ?
+        LIMIT 1
+        """, [lookupId, lookupId]) { stmt in
+            if found == nil {
+                found = sqliteText(stmt, 0)
+            }
+        }
+        if let value = found, !value.isEmpty {
+            return value
+        }
+        return nil
     }
 
     func loadMessages(threadId: String) throws -> [EmailThreadMessage] {
