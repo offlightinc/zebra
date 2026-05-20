@@ -9,17 +9,17 @@ import ZebraVault
 /// generic `ZebraMarkdownPanelView` struct because Swift disallows static
 /// stored properties inside a generic context.
 fileprivate enum InspectorSplitMetrics {
-    static let markdownMinWidth: CGFloat = 360
-    static let minInspectorWidth: Double = 280
-    static let maxInspectorWidth: Double = 420
-    static let dividerWidth: CGFloat = 1
+    static let markdownMinWidth: CGFloat = CGFloat(MarkdownInspectorVisibilityPolicy.markdownMinWidth)
+    static let minInspectorWidth: Double = MarkdownInspectorVisibilityPolicy.minInspectorWidth
+    static let maxInspectorWidth: Double = MarkdownInspectorVisibilityPolicy.maxInspectorWidth
+    static let dividerWidth: CGFloat = CGFloat(MarkdownInspectorVisibilityPolicy.dividerWidth)
 
     static var minimumPaneWidthForInspector: Double {
-        Double(markdownMinWidth + dividerWidth) + minInspectorWidth
+        MarkdownInspectorVisibilityPolicy.minimumPaneWidthForInspector
     }
 
     static var preferredPaneWidthForInspectorReveal: Double {
-        minimumPaneWidthForInspector + 24
+        MarkdownInspectorVisibilityPolicy.preferredPaneWidthForInspectorReveal
     }
 }
 
@@ -34,10 +34,13 @@ fileprivate enum MarkdownChatPillOverlayMotion {
 /// with `Model = MarkdownPanel`; the protocol seam (`ZebraMarkdownPanelModel`
 /// + `ZebraMarkdownWorkspace`) is what lets the view sit inside ZebraVault
 /// later without dragging the cmux model with it.
-struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
+struct ZebraMarkdownPanelView<
+    Model: ZebraMarkdownPanelModel,
+    WorkspaceModel: ZebraMarkdownWorkspace
+>: View {
     @ObservedObject var panel: Model
     @ObservedObject var controller: MarkdownPanelController
-    let workspace: any ZebraMarkdownWorkspace
+    @ObservedObject var workspace: WorkspaceModel
     let paneId: PaneID
     let isFocused: Bool
     let isVisibleInUI: Bool
@@ -93,14 +96,20 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
             Color.clear
         } else {
             GeometryReader { proxy in
-                let inspectorCanFit = canRenderInspector(containerWidth: proxy.size.width)
-                let inspectorVisible = controller.showsInspector && inspectorCanFit
-                let inspectorAutoCollapsed = controller.showsInspector && !inspectorCanFit
+                let inspectorState = MarkdownInspectorVisibilityPolicy.state(
+                    intent: controller.inspectorVisibilityIntent,
+                    paneWidth: resolvedPaneWidth(fallback: proxy.size.width)
+                )
 
-                if inspectorVisible {
+                if inspectorState.isVisible {
+                    // Policy decides visibility from the bonsplit-modeled
+                    // pane width, but actual HStack layout must use the
+                    // SwiftUI-measured container so inspector clamping
+                    // matches what's drawn this frame (the two values
+                    // briefly disagree during resize transitions).
                     markdownInspectorSplitView(containerWidth: proxy.size.width)
                 } else {
-                    markdownContentView(isInspectorAutoCollapsed: inspectorAutoCollapsed)
+                    markdownContentView(isInspectorAutoCollapsed: inspectorState.isAutoCollapsed)
                 }
             }
         }
@@ -170,9 +179,12 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
         return min(max(width, minWidth), maxWidth)
     }
 
-    private func canRenderInspector(containerWidth: CGFloat) -> Bool {
-        guard containerWidth.isFinite else { return true }
-        return Double(containerWidth) >= InspectorSplitMetrics.minimumPaneWidthForInspector
+    private func resolvedPaneWidth(fallback: CGFloat) -> Double? {
+        if let paneWidth = workspace.paneWidth(forPane: paneId), paneWidth.isFinite {
+            return paneWidth
+        }
+        guard fallback.isFinite else { return nil }
+        return Double(fallback)
     }
 
     /// Markdown body uses the stripped body when frontmatter parsed
@@ -276,7 +288,7 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
     /// closed, left when open).
     @ViewBuilder
     private func inspectorToggle(isInspectorAutoCollapsed: Bool) -> some View {
-        let isEffectivelyVisible = controller.showsInspector && !isInspectorAutoCollapsed
+        let isEffectivelyVisible = controller.wantsInspectorVisible && !isInspectorAutoCollapsed
         Button {
             handleInspectorToggle(isInspectorAutoCollapsed: isInspectorAutoCollapsed)
         } label: {
@@ -295,7 +307,7 @@ struct ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>: View {
     }
 
     private func handleInspectorToggle(isInspectorAutoCollapsed: Bool) {
-        if controller.showsInspector && !isInspectorAutoCollapsed {
+        if controller.wantsInspectorVisible && !isInspectorAutoCollapsed {
             controller.setInspectorVisibility(false)
             return
         }

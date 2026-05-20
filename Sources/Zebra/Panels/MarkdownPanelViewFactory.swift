@@ -45,7 +45,9 @@ enum ZebraMarkdownPanelViewFactory {
     @MainActor
     static func make(services: ZebraServices) -> MarkdownPanelViewFactory {
         { context in
-            let controller = services.panelControllers.controller(for: context.panel)
+            guard let controller = services.panelControllers.controllerIfOpen(for: context.panel) else {
+                return AnyView(Color.clear)
+            }
             return AnyView(
                 ZebraMarkdownPanelHost(context: context, controller: controller)
             )
