@@ -179,11 +179,7 @@ final class MarkdownPanelTests: XCTestCase {
         XCTAssertNil(workspace.markdownPanel(for: openedPanel.id))
 
         let reopenedPanel = try XCTUnwrap(
-            workspace.openOrFocusMarkdownContent(
-                filePath: fileURL.path,
-                excludedAgentCompanionPaneIds: [],
-                anchorPanelId: workspace.focusedPanelId
-            )
+            workspace.openMarkdownFromSidebar(inPane: pane, filePath: fileURL.path)
         )
         XCTAssertNotEqual(reopenedPanel.id, openedPanel.id)
 

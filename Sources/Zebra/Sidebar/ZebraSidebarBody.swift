@@ -114,16 +114,16 @@ struct ZebraSidebarBody: View {
 
     private func openMarkdownFile(filePath: String) {
         guard let workspace = tabManager.selectedWorkspace else { return }
+        guard let paneId = workspace.bonsplitController.focusedPaneId
+            ?? workspace.bonsplitController.allPaneIds.first else {
+            return
+        }
         sidebarSelectionState.selection = .tabs
         // Markdown rail modes (goals / tasks / documents) route through the
         // brain-object-aware MarkdownPanel so the right-pane inspector lights
-        // up. Other entrypoints (Cmd-click in terminal, file-explorer reveal)
-        // keep using FilePreviewPanel for raw text / diff workflows.
-        _ = workspace.openOrFocusMarkdownContent(
-            filePath: filePath,
-            excludedAgentCompanionPaneIds: chatCompanionPaneIds(in: workspace),
-            anchorPanelId: workspace.focusedPanelId
-        )
+        // up. If the focused tab is already Markdown, keep that tab and swap
+        // its file instead of creating another Markdown tab.
+        _ = workspace.openMarkdownFromSidebar(inPane: paneId, filePath: filePath)
     }
 
     private func openEmailThread(_ thread: EmailThreadItem) {

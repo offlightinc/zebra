@@ -263,38 +263,6 @@ final class ZebraEmailThreadPanel: Panel, ObservableObject {
 
 extension Workspace {
     @discardableResult
-    func openOrFocusMarkdownContent(
-        filePath: String,
-        excludedAgentCompanionPaneIds: Set<PaneID>,
-        anchorPanelId: UUID?
-    ) -> MarkdownPanel? {
-        if let existing = focusExistingMarkdownContent(filePath: filePath) {
-            return existing
-        }
-
-        if let paneId = resolvePaneForContentOpen(
-            kind: .markdown,
-            excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds,
-            anchorPanelId: anchorPanelId
-        ) {
-            return openOrFocusMarkdownSurface(inPane: paneId, filePath: filePath, focus: true)
-        }
-
-        guard let sourcePanelId = firstPanelIdForContentSplit(
-            excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds
-        ) else {
-            return nil
-        }
-        return newMarkdownSplit(
-            from: sourcePanelId,
-            orientation: .horizontal,
-            insertFirst: true,
-            filePath: filePath,
-            focus: true
-        )
-    }
-
-    @discardableResult
     func openOrFocusEmailThreadContent(
         thread: EmailThreadItem,
         excludedAgentCompanionPaneIds: Set<PaneID>,
@@ -476,19 +444,6 @@ private enum ZebraContentPlacementKind {
 }
 
 private extension Workspace {
-    func focusExistingMarkdownContent(filePath: String) -> MarkdownPanel? {
-        let canonical = (filePath as NSString).resolvingSymlinksInPath
-        for (existingId, panel) in panels {
-            guard let markdownPanel = panel as? MarkdownPanel else { continue }
-            guard (markdownPanel.filePath as NSString).resolvingSymlinksInPath == canonical else {
-                continue
-            }
-            focusPanel(existingId)
-            return markdownPanel
-        }
-        return nil
-    }
-
     func resolvePaneForContentOpen(
         kind: ZebraContentPlacementKind,
         excludedAgentCompanionPaneIds: Set<PaneID>,

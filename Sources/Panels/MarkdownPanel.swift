@@ -23,7 +23,7 @@ final class MarkdownPanel: Panel, ObservableObject, FilePreviewTextEditingPanel 
     let panelType: PanelType = .markdown
 
     /// Absolute path to the markdown file being displayed.
-    let filePath: String
+    private(set) var filePath: String
 
     /// The workspace this panel belongs to.
     private(set) var workspaceId: UUID
@@ -207,6 +207,19 @@ final class MarkdownPanel: Panel, ObservableObject, FilePreviewTextEditingPanel 
                 GlobalSearchCoordinator.shared.captureMarkdownPanel(self)
             }
         }
+    }
+
+    func openFile(_ nextFilePath: String) {
+        let canonicalCurrent = (filePath as NSString).resolvingSymlinksInPath
+        let canonicalNext = (nextFilePath as NSString).resolvingSymlinksInPath
+        guard canonicalCurrent != canonicalNext else { return }
+
+        stopWatching()
+        filePath = nextFilePath
+        displayTitle = (nextFilePath as NSString).lastPathComponent
+
+        loadFileContent()
+        startFileWatcher()
     }
 
     // MARK: - File I/O
