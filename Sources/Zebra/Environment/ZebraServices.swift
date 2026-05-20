@@ -75,6 +75,8 @@ struct ZebraServices {
             .environment(\.sidebarExtraLeadingInset, VerticalTabsSidebarModeRail.fixedWidth)
             .environment(\.markdownPanelViewFactory, ZebraMarkdownPanelViewFactory.make(services: self))
             .environment(\.customPanelViewFactory, ZebraCustomPanelViewFactoryProvider.make(services: self))
+            .environment(\.settingsExtensionSections, ZebraSettingsExtensionRegistry.sections())
+            .environment(\.settingsExtensionViewFactory, ZebraSettingsExtensionRegistry.viewFactory())
             .environmentObject(sidebarMode)
             .environmentObject(vault)
             .environmentObject(markdownFiles)

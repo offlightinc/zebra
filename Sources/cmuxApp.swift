@@ -615,6 +615,13 @@ struct cmuxApp: App {
 
         Window(String(localized: "settings.title", defaultValue: "Settings"), id: SettingsWindowPresenter.windowID) {
             SettingsRootView()
+                // ZEBRA-SEAM:settings-extension(window-env) — Settings runs in
+                // a separate SwiftUI scene, so ZebraServices.injectIntoEnvironment
+                // (which is attached to ContentView in AppDelegate) doesn't
+                // reach this view tree. Inject the extension env values
+                // directly here. Registry lives in Sources/Zebra/Settings/.
+                .environment(\.settingsExtensionSections, ZebraSettingsExtensionRegistry.sections())
+                .environment(\.settingsExtensionViewFactory, ZebraSettingsExtensionRegistry.viewFactory())
                 .cmuxAppearanceColorScheme(appearanceMode)
                 .background(WindowAccessor { window in
                     SettingsWindowPresenter.configure(window: window)
@@ -4986,6 +4993,13 @@ struct SettingsView: View {
     private let shortcutChordsDocsURL = URL(string: "https://cmux.com/docs/keyboard-shortcuts#shortcut-chords")!
     private let settingsJSONDocsURL = URL(string: "https://cmux.com/docs/configuration#cmux-json")!
     @Environment(\.openWindow) private var openWindow
+    // ZEBRA-SEAM:settings-extension(env) — non-cmux modules contribute Settings
+    // sections via these env values. Defined in Sources/Zebra/Settings/.
+    // Revert plan: drop these two lines, the matching ForEach later in body,
+    // the .onReceive extension branch, and the applySettingsNavigation
+    // extension variant.
+    @Environment(\.settingsExtensionSections) private var settingsExtensionSections
+    @Environment(\.settingsExtensionViewFactory) private var settingsExtensionViewFactory
     @SceneStorage("selectedSettingsSection") private var selectedSettingsSectionRaw = SettingsNavigationTarget.account.rawValue
     @State private var highlightedSearchAnchorID: String?
     @State private var searchHighlightToken = 0
@@ -5625,6 +5639,32 @@ struct SettingsView: View {
             }
         }
     }
+
+    // ZEBRA-SEAM:settings-extension(applyNav-begin)
+    private func applySettingsNavigation(
+        extensionDestination: SettingsExtensionDestination,
+        proxy: ScrollViewProxy
+    ) {
+        settingsNavigationGeneration += 1
+        let navigationGeneration = settingsNavigationGeneration
+        let sectionID = SettingsSearchIndex.sectionID(forExtensionID: extensionDestination.extensionID)
+        if extensionDestination.shouldHighlight {
+            highlightedSearchAnchorID = extensionDestination.anchorID
+            searchHighlightStartedAt = Date()
+            searchHighlightToken += 1
+        } else {
+            highlightedSearchAnchorID = nil
+            searchHighlightStartedAt = nil
+        }
+        DispatchQueue.main.async {
+            guard navigationGeneration == settingsNavigationGeneration else { return }
+            proxy.scrollTo(sectionID, anchor: .top)
+            if extensionDestination.shouldHighlight {
+                proxy.scrollTo(extensionDestination.anchorID, anchor: .center)
+            }
+        }
+    }
+    // ZEBRA-SEAM:settings-extension(applyNav-end)
 
     private func chooseNotificationSoundFile() {
         let panel = NSOpenPanel()
@@ -7171,6 +7211,19 @@ struct SettingsView: View {
                         .padding(.vertical, 10)
                         .settingsSearchAnchor(SettingsSearchIndex.settingID(for: .reset, idSuffix: "reset-all"))
                     }
+
+                    // ZEBRA-SEAM:settings-extension(body) — render extension
+                    // sections after builtin ones. cmux never names the
+                    // extension's concrete view type; the factory closure
+                    // (set up by ZebraServices) does the cast.
+                    ForEach(settingsExtensionSections) { section in
+                        SettingsSectionHeader(title: section.title)
+                            .settingsSearchAnchor(SettingsSearchIndex.sectionID(forExtensionID: section.id))
+                        if let factory = settingsExtensionViewFactory, let view = factory(section.id) {
+                            view
+                        }
+                    }
+                    // ZEBRA-SEAM:settings-extension(body-end)
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
@@ -7222,8 +7275,13 @@ struct SettingsView: View {
             reloadWorkspaceTabColorSettings()
         }
         .onReceive(NotificationCenter.default.publisher(for: SettingsNavigationRequest.notificationName)) { notification in
-            guard let destination = SettingsNavigationRequest.destination(from: notification) else { return }
-            applySettingsNavigation(destination, proxy: proxy)
+            if let destination = SettingsNavigationRequest.destination(from: notification) {
+                applySettingsNavigation(destination, proxy: proxy)
+            } else if let extDestination = SettingsNavigationRequest.extensionDestination(from: notification) {
+                // ZEBRA-SEAM:settings-extension(onReceive) — route extension
+                // navigation requests through the extension-aware variant.
+                applySettingsNavigation(extensionDestination: extDestination, proxy: proxy)
+            }
         }
         .confirmationDialog(
             String(localized: "settings.browser.history.clearDialog.title", defaultValue: "Clear browser history?"),
@@ -8123,13 +8181,17 @@ private struct SettingsRootView: View {
     @SceneStorage("selectedSettingsSidebarEntry") private var selectedSidebarEntryID = SettingsSearchIndex.defaultSelectionID
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var searchText = ""
+    // ZEBRA-SEAM:settings-extension(rootView-env)
+    @Environment(\.settingsExtensionSections) private var settingsExtensionSections
 
     private var selectedSection: SettingsNavigationTarget {
         SettingsNavigationTarget(rawValue: selectedSectionRaw) ?? .account
     }
 
     private var sidebarEntries: [SettingsSearchEntry] {
-        SettingsSearchIndex.entries(matching: searchText)
+        // ZEBRA-SEAM:settings-extension(sidebar) — pass extras so extension
+        // entries appear in the sidebar / search alongside builtin sections.
+        SettingsSearchIndex.entries(matching: searchText, extras: settingsExtensionSections)
     }
 
     private var isSearching: Bool {
@@ -8183,6 +8245,9 @@ private struct SettingsRootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: SettingsNavigationRequest.notificationName)) { notification in
             guard let target = SettingsNavigationRequest.target(from: notification) else { return }
+            // entry(withID:) returns nil for extension entry ids, so the
+            // preserve-search-selection check naturally falls through to
+            // false when the user is sitting on an extension entry.
             let selectedEntry = SettingsSearchIndex.entry(withID: selectedSidebarEntryID)
             let shouldPreserveSearchSelection = isSearching && selectedEntry?.target == target
             navigate(to: target, preferSectionSelection: !shouldPreserveSearchSelection, postRequest: false)
@@ -8190,6 +8255,20 @@ private struct SettingsRootView: View {
     }
 
     private func selectSidebarEntry(_ entryID: String) {
+        // ZEBRA-SEAM:settings-extension(select-begin) — extension entries
+        // use an id prefix; route those through the extension-aware request
+        // so `selectedSectionRaw` (which only describes builtin sections)
+        // stays untouched.
+        if let extensionID = SettingsSearchIndex.extensionID(fromEntryID: entryID) {
+            selectedSidebarEntryID = entryID
+            SettingsNavigationRequest.post(
+                extensionID: extensionID,
+                anchorID: entryID,
+                highlight: isSearching
+            )
+            return
+        }
+        // ZEBRA-SEAM:settings-extension(select-end)
         guard let entry = SettingsSearchIndex.entry(withID: entryID) else { return }
         selectedSidebarEntryID = entry.id
         selectedSectionRaw = entry.target.rawValue

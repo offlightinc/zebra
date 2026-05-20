@@ -13,6 +13,7 @@ Sources/CmuxLifecycleEventPublishing.swift # cmuxEventSurfaceKind PanelType.emai
 Sources/TerminalPaneDropTargetView.swift   # PanelType.email branch in pane drop target dispatch
 Sources/Search/GlobalSearchDocuments.swift # PanelType.email branch in browseHit kind mapping
 Sources/WindowDragHandleView.swift         # MinimalModeSidebarTitlebarControlsMetrics.extraLeadingInset seam (Zebra sets it)
+Sources/cmuxApp.swift                      # SettingsExtension seam — env reads + body ForEach + onReceive branch + selectSidebarEntry branch + applySettingsNavigation(extensionDestination:) variant. All sites marked with `ZEBRA-SEAM:settings-extension(...)` comments. To revert: grep for `ZEBRA-SEAM:settings-extension` and remove tagged regions.
 
 # Upstream-only drift (zebra is behind on these — rebase resolves; not a Zebra touch).
 # Listed here so the guard doesn't flag them while waiting for the next rebase.
