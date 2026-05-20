@@ -22,6 +22,16 @@ private extension MarkdownPillAgent {
         }
     }
 
+    /// Two-line description shown under the label in the picker. Matches
+    /// md-app.jsx's `AGENTS.desc` strings — "vendor · tagline" monospace.
+    var desc: String {
+        switch self {
+        case .codex: return "OpenAI · code-first"
+        case .claude: return "Anthropic · reasoning"
+        case .gemini: return "Google · long context"
+        }
+    }
+
     // Mockup-faithful (placeholder marks, not real brands) — md-chat.jsx::AgentDot
     var glyph: String {
         switch self {
@@ -58,6 +68,63 @@ struct MarkdownPillAgentDot: View {
             .frame(width: size, height: size)
             .background(agent.glyphBg)
             .clipShape(RoundedRectangle(cornerRadius: size / 4))
+    }
+}
+
+/// Rich agent row used inside the chat pill's agent picker popover.
+/// Mirrors md-app.jsx::AgentSelector dropdown rows:
+///   [dot]  label              [⌥1]
+///          vendor · tagline
+/// Active row tints its background with the accent mint.
+fileprivate struct MarkdownPillAgentMenuRow: View {
+    let agent: MarkdownPillAgent
+    let active: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            MarkdownPillAgentDot(agent: agent, size: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(agent.label)
+                    .font(.system(size: 12.5))
+                    .foregroundColor(MarkdownPillPalette.text)
+                Text(agent.desc)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundColor(MarkdownPillPalette.textDim)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            MarkdownPillKbd(text: agent.shortcutHint)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(active ? MarkdownPillPalette.accent.opacity(0.10) : .clear)
+        )
+        .contentShape(Rectangle())
+    }
+}
+
+/// Mockup-faithful kbd chip — small monospace label inside a faint
+/// white-tinted rounded rect.
+fileprivate struct MarkdownPillKbd: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10.5, design: .monospaced))
+            .foregroundColor(MarkdownPillPalette.textMuted)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3)
+                            .stroke(Color.white.opacity(0.08))
+                    )
+            )
     }
 }
 
@@ -654,36 +721,37 @@ public struct MarkdownChatPill: View {
         // Keep the agent label on a single line even when the pill is narrow;
         // the context and prompt slots truncate before this button wraps.
         .fixedSize(horizontal: true, vertical: false)
-        .popover(isPresented: $agentMenuOpen, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(MarkdownPillAgent.allCases) { option in
-                    Button {
-                        agent = option
-                        agentMenuOpen = false
-                    } label: {
-                        HStack(spacing: 8) {
-                            MarkdownPillAgentDot(agent: option, size: 14)
-                            Text(option.label)
-                                .font(.system(size: 12, weight: .medium))
-                            Spacer(minLength: 12)
-                            if option == agent {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(MarkdownPillPalette.accent)
-                            }
-                            Text(option.shortcutHint)
-                                .font(.system(size: 10.5, design: .monospaced))
-                                .foregroundColor(MarkdownPillPalette.textDim)
+        .overlay(alignment: .top) {
+            if agentMenuOpen {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(MarkdownPillAgent.allCases) { option in
+                        Button {
+                            agent = option
+                            agentMenuOpen = false
+                        } label: {
+                            MarkdownPillAgentMenuRow(
+                                agent: option,
+                                active: option == agent
+                            )
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .frame(minWidth: 140, alignment: .leading)
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(4)
+                .frame(width: 220)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.98))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(MarkdownPillPalette.borderStrong, lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.55), radius: 30, x: 0, y: 24)
+                .alignmentGuide(.top) { d in d.height + 6 }
+                .zIndex(50)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            .padding(4)
         }
         .help(compact ? agent.label : "\(agent.label) (\(agent.shortcutHint))")
         .accessibilityLabel(Text(String(localized: "markdownChat.pill.agent.a11y", defaultValue: "Choose CLI agent")))

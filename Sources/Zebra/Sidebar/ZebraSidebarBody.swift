@@ -79,7 +79,7 @@ struct ZebraSidebarBody: View {
                     isSyncing: emailListStore.isSyncing,
                     errorMessage: emailListStore.lastError,
                     selectedThreadId: emailDetailStore.selectedThreadId,
-                    onConnect: { Task { await emailListStore.connect() } },
+                    onConnect: { agent in startClawvisorOnboardingAgent(agent: agent) },
                     onRefresh: { Task { await emailListStore.refresh() } },
                     onSelectThread: openEmailThread,
                     onCreateLabel: { emailListStore.localLabel(named: $0) }
@@ -110,6 +110,23 @@ struct ZebraSidebarBody: View {
             .opacity(isVisible ? 1 : 0)
             .allowsHitTesting(isVisible)
             .accessibilityHidden(!isVisible)
+    }
+
+    /// Launch a fresh terminal tab in the focused pane, drop the user into
+    /// Claude Code, and seed an agent system prompt that walks them through
+    /// signing up at Clawvisor and writing `~/.gbrain/.env`. Replaces the
+    /// previous direct-OAuth flow (which is dead since the desktop moved to
+    /// the local SQLite + Clawvisor brain RPC client).
+    private func startClawvisorOnboardingAgent(agent: ZebraClawvisorAgent) {
+        guard let workspace = tabManager.selectedWorkspace else { return }
+        // Ensure `~/.gbrain` exists and is pre-trusted in `~/.claude.json` so
+        // the user doesn't see Claude's "Trust this folder?" dialog mid-flow.
+        ZebraClawvisorOnboardingCommand.prepareLaunchEnvironment()
+        let startupLine = ZebraClawvisorOnboardingCommand.shellStartupLine(agent: agent)
+        _ = workspace.newTerminalSurfaceInFocusedPane(
+            focus: true,
+            initialInput: startupLine
+        )
     }
 
     private func openMarkdownFile(filePath: String) {
