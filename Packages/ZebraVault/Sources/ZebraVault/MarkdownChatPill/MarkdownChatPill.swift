@@ -88,6 +88,19 @@ enum MarkdownPillPalette {
 }
 
 public struct MarkdownChatPill: View {
+    private static let maxWidth: CGFloat = 720
+    private static let collapsedHeight: CGFloat = 46
+    private static let collapsedContentHeight: CGFloat = 30
+    private static let expandedHeight: CGFloat = 156
+    /// Slot height the pill grows by when the slash picker is open.
+    /// Matches the picker's own maxHeight (200 for the scroll area) plus
+    /// header (~24), inner padding (~10), and the spacing between input
+    /// and picker (~8). Conservative so a fully-populated picker doesn't
+    /// overflow the pill.
+    private static let skillsPickerSlotHeight: CGFloat = 244
+    private static let expandedChipMaxWidth: CGFloat = 320
+    private static let motion = Animation.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.30)
+
     let displayTitle: String
     /// Non-nil when this markdown already has a companion pane for agent
     /// tabs. Submit still creates a fresh terminal tab; this only changes
@@ -98,16 +111,18 @@ public struct MarkdownChatPill: View {
     let onSubmit: (_ text: String, _ agent: MarkdownPillAgent) -> Void
 
     public init(
+        isExpanded: Binding<Bool>,
         displayTitle: String,
         activeAgent: MarkdownPillAgent?,
         onSubmit: @escaping (_ text: String, _ agent: MarkdownPillAgent) -> Void
     ) {
+        self._isExpanded = isExpanded
         self.displayTitle = displayTitle
         self.activeAgent = activeAgent
         self.onSubmit = onSubmit
     }
 
-    @State private var isExpanded: Bool = false
+    @Binding private var isExpanded: Bool
     @State private var text: String = ""
     @State private var agent: MarkdownPillAgent = .codex
     @State private var agentMenuOpen: Bool = false
@@ -119,30 +134,29 @@ public struct MarkdownChatPill: View {
     /// navigation. Reset to 0 whenever the filter changes so the top match
     /// is always the default selection.
     @State private var skillsSelectedIndex: Int = 0
-    /// NSEvent monitor token used to intercept ↑/↓/⏎ ahead of the
-    /// focused TextField while the slash picker is open. SwiftUI's
-    /// `.onKeyPress(.upArrow)` on an outer container is preempted by the
-    /// focused TextField's caret-movement handling, so we run the monitor
-    /// at the local NSEvent level instead. Lifecycle is tied to the pill
-    /// existing in the view tree.
-    @State private var slashKeyMonitor: Any?
-    /// NSEvent monitor for mouse-down events anywhere in our process.
-    /// Detects clicks outside the pill's window-coordinate frame and
-    /// collapses the expanded state. Complements the focus-loss path
-    /// because clicks on non-first-responder views (empty markdown
-    /// background, scroll containers) don't trigger any focus change.
-    @State private var outsideClickMonitor: Any?
-    /// Pill's frame in window coordinates (SwiftUI `.global`, top-left
-    /// origin). Updated by a GeometryReader behind the pill so the
-    /// outside-click monitor can hit-test live geometry without holding
-    /// an NSView reference.
-    @State private var pillFrameInWindow: CGRect = .zero
-    @FocusState private var textFieldFocused: Bool
+    /// First-responder state for the NSTextView wrapper. Mirrored from the
+    /// view's `becomeFirstResponder` / `resignFirstResponder` overrides so
+    /// the pill's expand/collapse logic can read and drive focus from
+    /// SwiftUI-land. Not a `@FocusState` because that only binds to SwiftUI
+    /// focusable views, and our input is an NSView underneath.
+    @State private var textFieldFocused: Bool = false
 
     /// True while the user is mid-slash — input begins with `/` and has no
     /// whitespace yet, so we can offer skill completions. Once they type a
     /// space the slash command is "committed" and the picker hides.
-    private var isSlashMode: Bool {
+    ///
+    /// Driven by `onChange(of: text)` so its toggles can be wrapped in
+    /// `withAnimation(Self.motion)`. A pure computed property derived
+    /// from `text` would change implicitly during typing, which SwiftUI's
+    /// `.animation(_:value:)` doesn't reliably catch for nested
+    /// frame/transition mutations — so the pill height step was popping
+    /// instead of easing.
+    @State private var isSlashMode: Bool = false
+
+    /// Recompute `isSlashMode` from the canonical text-prefix rule. Used
+    /// from `onChange(of: text)` so we can wrap the toggle in
+    /// `withAnimation` whenever it actually flips.
+    private static func computeSlashMode(_ text: String) -> Bool {
         guard text.hasPrefix("/") else { return false }
         return !text.contains(" ")
     }
@@ -173,32 +187,48 @@ public struct MarkdownChatPill: View {
         DispatchQueue.main.async { textFieldFocused = true }
     }
     private var contextChipTitle: String {
-        displayTitle.isEmpty
-            ? String(localized: "markdownChat.pill.chip.thisDoc", defaultValue: "this doc")
-            : displayTitle
+        if !isExpanded || displayTitle.isEmpty {
+            return String(localized: "markdownChat.pill.chip.thisDoc", defaultValue: "this doc")
+        }
+        return displayTitle
     }
     private var placeholderText: String {
         String(localized: "markdownChat.pill.placeholder.doc", defaultValue: "Ask about this doc")
     }
+    private var shellCornerRadius: CGFloat {
+        isExpanded ? 18 : Self.collapsedHeight / 2
+    }
+    /// Pill height. Three states:
+    ///   - collapsed (capsule strip): `collapsedHeight`
+    ///   - expanded, no slash picker: `expandedHeight`
+    ///   - expanded with slash picker open: + `skillsPickerSlotHeight`
+    private var shellHeight: CGFloat {
+        guard isExpanded else { return Self.collapsedHeight }
+        let pickerOpen = isSlashMode && (matchingSkills?.isEmpty == false)
+        return pickerOpen
+            ? Self.expandedHeight + Self.skillsPickerSlotHeight
+            : Self.expandedHeight
+    }
+    private var shellPadding: CGFloat {
+        isExpanded ? 14 : 8
+    }
+    private var expandedOpacity: Double {
+        isExpanded ? 1 : 0
+    }
+    private var collapsedOpacity: Double {
+        isExpanded ? 0 : 1
+    }
+    private var collapsedPromptText: String {
+        placeholderText
+    }
+
     public var body: some View {
-        Group {
-            if isExpanded {
-                expandedView
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .move(edge: .bottom)),
-                        removal: .opacity
-                    ))
-            } else if activeAgent != nil {
-                companionPaneView
-                    .transition(.opacity)
-            } else {
-                collapsedView
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeOut(duration: 0.22), value: isExpanded)
-        .animation(.easeOut(duration: 0.22), value: activeAgent)
-        .frame(maxWidth: 720)
+        // Picker now lives INSIDE pillShell (between input and divider)
+        // to match the md-app.jsx mockup: one dark popover surface, not
+        // a floating sibling that lets the markdown content bleed through
+        // its translucent fill.
+        pillShell
+            .frame(maxWidth: Self.maxWidth)
         // Lazy-load the gbrain manifest the first time the user types a
         // slash. Empty array is a valid result (gbrain not installed) — it
         // still satisfies "cached", so we won't keep retrying every
@@ -209,116 +239,168 @@ public struct MarkdownChatPill: View {
             }
             // Filter changed → reset selection to the top match.
             skillsSelectedIndex = 0
-        }
-        .background(
-            // Track the pill's live window-coordinate frame so the
-            // mouse-down monitor can decide "inside vs outside" without
-            // an NSView reference. `Color.clear` carries no visual weight
-            // and `GeometryReader` reads the parent's actual rendered
-            // frame regardless of expand/collapse transition.
-            GeometryReader { proxy in
-                Color.clear
-                    .onAppear { pillFrameInWindow = proxy.frame(in: .global) }
-                    .onChange(of: proxy.frame(in: .global)) { _, frame in
-                        pillFrameInWindow = frame
-                    }
+
+            // Animate the pill grow / shrink only when slash mode
+            // actually toggles. Typing further characters inside slash
+            // mode (e.g. /sh → /ship) just changes the filter, not the
+            // picker's visibility, so we skip wrapping those in
+            // withAnimation to avoid spurious re-layout transitions.
+            let next = Self.computeSlashMode(newValue)
+            if next != isSlashMode {
+                withAnimation(Self.motion) {
+                    isSlashMode = next
+                }
             }
-        )
-        .onAppear {
-            installSlashKeyMonitor()
-            installOutsideClickMonitor()
         }
-        .onDisappear {
-            removeSlashKeyMonitor()
-            removeOutsideClickMonitor()
+        .onChange(of: isExpanded) { _, expanded in
+            if expanded, let activeAgent {
+                agent = activeAgent
+            }
+            if !expanded {
+                textFieldFocused = false
+                agentMenuOpen = false
+            }
         }
-        // Focus-loss fallback. Mostly redundant with the mouse-down
-        // monitor below, but catches paths where focus leaves without
-        // a click in our window — app switch (⌘⇥), another textfield
-        // grabbing first-responder programmatically, etc. The mouse-down
-        // monitor handles the empty-background-click case the focus
-        // proxy misses (non-first-responder views don't fire any focus
-        // change).
+        // Focus-loss fallback. Mostly redundant with the parent dismiss
+        // overlay, but catches paths where focus leaves without a click in
+        // our window — app switch (⌘⇥), another textfield grabbing
+        // first-responder programmatically, etc.
         .onChange(of: textFieldFocused) { _, focused in
             guard isExpanded, !focused else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                 guard isExpanded, !textFieldFocused, !agentMenuOpen else { return }
-                isExpanded = false
+                collapse()
             }
         }
     }
 
-    // MARK: - Outside-click monitor
+    private var pillShell: some View {
+        ZStack(alignment: .topLeading) {
+            shellBackground
 
-    /// Install a process-local mouse-down monitor that collapses the
-    /// expanded pill whenever the click lands outside our frame.
-    /// `agentMenuOpen` short-circuits because the popover lives in a
-    /// separate window and its own dismiss machinery handles closure —
-    /// trying to hit-test those events against our main-window frame
-    /// would always read "outside" and prematurely collapse the pill.
-    private func installOutsideClickMonitor() {
-        guard outsideClickMonitor == nil else { return }
-        outsideClickMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
-        ) { event in
-            guard isExpanded, !agentMenuOpen,
-                  let window = event.window,
-                  let contentView = window.contentView else {
-                return event
+            VStack(alignment: .leading, spacing: isExpanded ? 8 : 0) {
+                headerRow
+                    .frame(height: Self.collapsedContentHeight, alignment: .center)
+
+                inputArea
+                    .frame(height: isExpanded ? 38 : 0, alignment: .topLeading)
+                    .opacity(expandedOpacity)
+                    .offset(y: isExpanded ? 0 : -4)
+                    .clipped()
+                    .allowsHitTesting(isExpanded)
+                    .accessibilityHidden(!isExpanded)
+
+                // Slash picker sits between input and divider, mirroring
+                // md-app.jsx where SkillsMenu is the optional middle child
+                // of the pill flex container. Pill height grows by
+                // `skillsPickerSlotHeight` while it's visible.
+                if isExpanded, isSlashMode, let skills = matchingSkills, !skills.isEmpty {
+                    skillsPicker(skills)
+                        .frame(maxHeight: Self.skillsPickerSlotHeight - 8, alignment: .top)
+                }
+
+                dividerSlot
+                    .frame(height: isExpanded ? 5 : 0, alignment: .topLeading)
+                    .opacity(expandedOpacity)
+                    .clipped()
+
+                footerRow
+                    .frame(height: isExpanded ? Self.collapsedContentHeight : 0, alignment: .topLeading)
+                    .opacity(expandedOpacity)
+                    .offset(y: isExpanded ? 0 : -4)
+                    .clipped()
+                    .allowsHitTesting(isExpanded)
+                    .accessibilityHidden(!isExpanded)
             }
-            // NSEvent.locationInWindow is AppKit (bottom-left origin);
-            // SwiftUI .global is top-left. Flip y once against the
-            // contentView's height to compare in the same space.
-            let click = CGPoint(
-                x: event.locationInWindow.x,
-                y: contentView.bounds.height - event.locationInWindow.y
+            .padding(shellPadding)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(height: shellHeight, alignment: .topLeading)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(height: shellHeight, alignment: .topLeading)
+        .contentShape(RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous))
+        .animation(Self.motion, value: isExpanded)
+        // isSlashMode is mutated via `withAnimation(Self.motion)` in
+        // `onChange(of: text)`, so we don't need an extra value-keyed
+        // .animation modifier here — that would double-animate and
+        // sometimes lose the transition timing on quick toggles.
+        .onTapGesture {
+            guard !isExpanded else { return }
+            expandFromCollapsed()
+        }
+        // Key routing lives in `MarkdownChatPillTextView` (NSTextView
+        // subclass) so AppKit handles every standard caret/edit gesture
+        // natively — ⌘←/→, ⌥←/→, ⇧+selection, ⇧⏎ for newline, etc. — and
+        // we only see the four callbacks (return / move-up / move-down /
+        // cancel) we explicitly opt into. The previous outer
+        // `.onKeyPress(...)` stack pre-empted the focused TextField's key
+        // map on macOS, which is why arrows and ⇧⏎ stopped working.
+    }
+
+    private var shellBackground: some View {
+        // Tracks `shellHeight`, which itself flexes between collapsed,
+        // expanded, and expanded-with-slash-picker states. SwiftUI
+        // animates the height transitions via `Self.motion` keyed on
+        // `isExpanded` (and the picker-toggle drives a re-evaluation).
+        RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous)
+            .fill(isExpanded ? MarkdownPillPalette.pillBgExpanded : MarkdownPillPalette.pillBg)
+            .overlay(
+                RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous)
+                    .stroke(MarkdownPillPalette.borderStrong, lineWidth: 1)
             )
-            if !pillFrameInWindow.contains(click) {
-                isExpanded = false
-                textFieldFocused = false
-            }
-            // Always pass the event through — we only react to it, never
-            // consume it, so the click still reaches whatever was under
-            // the cursor.
-            return event
-        }
+            .shadow(
+                color: Color.black.opacity(0.45),
+                radius: 18,
+                x: 0,
+                y: 18
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: shellHeight)
     }
 
-    private func removeOutsideClickMonitor() {
-        if let outsideClickMonitor {
-            NSEvent.removeMonitor(outsideClickMonitor)
-            self.outsideClickMonitor = nil
-        }
+    private func skillsPicker(_ skills: [BrainSkillsManifest.Skill]) -> some View {
+        MarkdownChatPillSkillsPicker(
+            skills: skills,
+            slashFilter: slashFilter,
+            selectedIndex: $skillsSelectedIndex,
+            onPick: pickSkill
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Picker fades in while the pill grows, and fades out while it
+        // shrinks back. Both directions inherit `Self.motion` from the
+        // outer `.animation(_:value: isSlashMode)` so the picker and the
+        // pill height move in lockstep — no jarring pop-in, no late
+        // fade-out after the height collapse.
+        .transition(.asymmetric(
+            insertion: .opacity.combined(with: .move(edge: .top)),
+            removal: .opacity
+        ))
     }
 
     private func expandFromCollapsed() {
+        guard !isExpanded else { return }
         if let activeAgent {
             agent = activeAgent
         }
-        isExpanded = true
+        withAnimation(Self.motion) {
+            isExpanded = true
+        }
         DispatchQueue.main.async {
+            // NSTextView wrapper hooks updateNSView off this binding to
+            // call `makeFirstResponder` and place the caret at the end
+            // of any preserved text, so we don't need a separate
+            // caret-to-end pass here.
             textFieldFocused = true
-            // macOS TextField selects-all on first-responder grant; when
-            // we're re-expanding with preserved text the user expects a
-            // caret at the end, not a wholesale selection that the next
-            // keystroke would destroy.
-            DispatchQueue.main.async { moveCaretToEnd() }
         }
     }
 
-    /// Move the focused NSTextView's caret to the end of its content,
-    /// collapsing any selection. Safe no-op when our pill isn't the
-    /// first responder.
-    ///
-    /// `textFieldFocused` guards the multi-pill case: if the user
-    /// clicked into a different pill in the same window before our
-    /// deferred dispatch fired, that pill now owns first-responder and
-    /// we'd otherwise mutate its selection.
-    private func moveCaretToEnd() {
-        guard textFieldFocused,
-              let textView = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
-        let end = (textView.string as NSString).length
-        textView.setSelectedRange(NSRange(location: end, length: 0))
+    private func collapse() {
+        textFieldFocused = false
+        withAnimation(Self.motion) {
+            isExpanded = false
+        }
     }
 
     private func submit() {
@@ -326,339 +408,195 @@ public struct MarkdownChatPill: View {
         guard !trimmed.isEmpty else { return }
         onSubmit(trimmed, agent)
         text = ""
-        isExpanded = false
+        collapse()
         textFieldFocused = false
     }
 
-    // MARK: - Slash key monitor
+    // MARK: - Key callbacks (routed up from MarkdownChatPillTextView)
 
-    /// Register a local NSEvent monitor so ↑/↓/⏎ go to the slash picker
-    /// instead of the focused TextField while the slash menu is open. We
-    /// fall back to passing the event through whenever the picker is not
-    /// active so normal typing (caret movement, newline) keeps working.
-    private func installSlashKeyMonitor() {
-        guard slashKeyMonitor == nil else { return }
-        slashKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // `NSEvent.addLocalMonitorForEvents` is process-wide, so we
-            // gate on @FocusState `textFieldFocused` — our TextField has
-            // first-responder ownership only while it's actually focused.
-            // If the user is typing in another textfield (sidebar search,
-            // a different markdown panel's pill, etc.) the event passes
-            // through unmodified. Not a perfect defense (focus state can
-            // momentarily lag) but matches the actual user-intent gate.
-            guard isExpanded,
-                  textFieldFocused,
-                  isSlashMode,
-                  let skills = matchingSkills,
-                  !skills.isEmpty else {
-                return event
-            }
-            switch event.keyCode {
-            case 126: // up arrow
-                skillsSelectedIndex = max(0, skillsSelectedIndex - 1)
-                return nil
-            case 125: // down arrow
-                skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
-                return nil
-            case 36, 76: // return / numpad enter
-                // Same commit-then-pick dance as `.onKeyPress(.return)`,
-                // routed through the shared helpers so both paths stay in
-                // lockstep (IME commit + `runEnterAction()` re-evaluation).
-                if commitIMECompositionIfNeeded() {
-                    DispatchQueue.main.async { _ = runEnterAction() }
-                    return nil
-                }
-                _ = runEnterAction()
-                return nil
-            default:
-                return event
-            }
-        }
-    }
-
-    private func removeSlashKeyMonitor() {
-        if let monitor = slashKeyMonitor {
-            NSEvent.removeMonitor(monitor)
-            slashKeyMonitor = nil
-        }
-    }
-
-    // MARK: - Collapsed (idle)
-
-    private var collapsedView: some View {
-        HStack(spacing: 10) {
-            contextChip(label: contextChipTitle)
-
-            // `.layoutPriority(-1)` makes the placeholder the *first* to give
-            // up space when the pill gets narrow — the chip (filename) and
-            // agent button keep their intrinsic widths, and "Ask about this
-            // doc" truncates aggressively (eventually to nothing) before the
-            // agent label is forced to wrap.
-            Text(placeholderText)
-                .font(.system(size: 13.5))
-                .foregroundColor(MarkdownPillPalette.textDim)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(-1)
-
-            agentSelectorButton(compact: true)
-            sendButton(enabled: false)
-        }
-        .padding(8)
-        .background(MarkdownPillPalette.pillBg)
-        .clipShape(Capsule())
-        .overlay(
-            Capsule().stroke(MarkdownPillPalette.borderStrong, lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.45), radius: 18, x: 0, y: 18)
-        .contentShape(Capsule())
-        .onTapGesture { expandFromCollapsed() }
-    }
-
-    // MARK: - Companion pane (collapsed, with agent tab target)
-
-    private var companionPaneView: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(MarkdownPillPalette.accent)
-                    .frame(width: 6, height: 6)
-                Text(String(localized: "markdownChat.pill.session.label", defaultValue: "session"))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(MarkdownPillPalette.text)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                Text("·")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(MarkdownPillPalette.textMuted)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                Text(activeAgent?.label ?? "")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(MarkdownPillPalette.textMuted)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(MarkdownPillPalette.accent.opacity(0.10))
-            .overlay(Capsule().stroke(MarkdownPillPalette.accent.opacity(0.30), lineWidth: 1))
-            .clipShape(Capsule())
-            .fixedSize(horizontal: true, vertical: false)
-
-            Text(String(localized: "markdownChat.pill.newSessionPrompt", defaultValue: "New session…"))
-                .font(.system(size: 13.5))
-                .foregroundColor(MarkdownPillPalette.textDim)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(-1)
-
-            sendButton(enabled: false)
-        }
-        .padding(8)
-        .background(MarkdownPillPalette.pillBg)
-        .clipShape(Capsule())
-        .overlay(Capsule().stroke(MarkdownPillPalette.borderStrong, lineWidth: 1))
-        .shadow(color: Color.black.opacity(0.45), radius: 18, x: 0, y: 18)
-        .contentShape(Capsule())
-        .onTapGesture { expandFromCollapsed() }
-    }
-
-    // MARK: - Expanded (focused)
-
-    private var expandedView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 6) {
-                contextChip(label: contextChipTitle)
-                Text(String(localized: "markdownChat.pill.context.auto", defaultValue: "· auto"))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(MarkdownPillPalette.textDim)
-            }
-
-            // multiline TextField (axis: .vertical) gives native placeholder
-            // so the cursor and placeholder always align — unlike TextEditor,
-            // which has internal text-container insets that don't match a
-            // manually-positioned Text overlay. `prompt:` lets us color the
-            // placeholder explicitly (default TextField placeholder color is
-            // .placeholderText which renders too dark on the dark pill bg).
-            // lineLimit(2...6) keeps the input height roughly matching the
-            // mockup's rows=2 textarea even when empty.
-            // SwiftUI's TextField `prompt:` parameter applies system placeholder
-            // dimming on top of any color we set (especially after focus),
-            // pushing the visible color far below mockup's `#6c6960`. To
-            // keep placeholder color stable across focus states we render it
-            // ourselves and feed an empty prompt to the TextField.
-            ZStack(alignment: .topLeading) {
-                TextField("", text: $text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .focused($textFieldFocused)
-                    .font(.system(size: 14))
-                    .foregroundColor(MarkdownPillPalette.text)
-                    .tint(MarkdownPillPalette.accent)
-                    .lineLimit(2...6)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-
-                if text.isEmpty {
-                    Text(placeholderText)
-                        .font(.system(size: 14))
-                        .foregroundColor(MarkdownPillPalette.textDim)
-                        .allowsHitTesting(false)
-                }
-            }
-
-            if isSlashMode, let skills = matchingSkills {
-                MarkdownChatPillSkillsPicker(
-                    skills: skills,
-                    slashFilter: slashFilter,
-                    selectedIndex: $skillsSelectedIndex,
-                    onPick: pickSkill
-                )
-            }
-
-            Rectangle()
-                .fill(MarkdownPillPalette.border)
-                .frame(height: 1)
-                .padding(.top, 4)
-
-            HStack(spacing: 6) {
-                skillsButton
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: 4) {
-                    MarkdownPillKbdLabel("↵")
-                    Text(String(localized: "markdownChat.pill.footer.run", defaultValue: " run · "))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(MarkdownPillPalette.textDim)
-                    MarkdownPillKbdLabel("⇧↵")
-                    Text(String(localized: "markdownChat.pill.footer.newline", defaultValue: " newline"))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(MarkdownPillPalette.textDim)
-                }
-                .padding(.trailing, 4)
-
-                agentSelectorButton(compact: false)
-                sendButton(enabled: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(14)
-        .background(MarkdownPillPalette.pillBgExpanded)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18).stroke(MarkdownPillPalette.borderStrong, lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.55), radius: 24, x: 0, y: 24)
-        .onKeyPress(.escape) {
-            if text.isEmpty {
-                isExpanded = false
-                textFieldFocused = false
-                return .handled
-            }
-            return .ignored
-        }
-        // ↑/↓ navigate the slash picker; Enter picks. Outside slash mode they
-        // pass through to the textfield (newline / caret movement).
-        .onKeyPress(.upArrow) {
-            guard isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return .ignored }
-            skillsSelectedIndex = max(0, skillsSelectedIndex - 1)
-            return .handled
-        }
-        .onKeyPress(.downArrow) {
-            guard isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return .ignored }
-            skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
-            return .handled
-        }
-        // ⏎ submits (or picks a slash skill). When an IME is mid-
-        // composition we first force-commit its marked text and sync our
-        // @State `text` directly from the NSTextView, then re-evaluate
-        // the action on the next runloop tick so the slash-mode / submit
-        // gate sees the post-commit string.
-        //
-        // POLICY: one Enter == commit-and-submit. We intentionally do *not*
-        // adopt the native-macOS "first Enter commits, second Enter
-        // submits" pattern (Slack/Discord-style). Most pill traffic is
-        // one-shot prompts where the user types and immediately wants to
-        // send — making them press Enter twice is friction. If we ever
-        // want the two-step variant, return `.handled` from the IME
-        // branch without scheduling `runEnterAction()`.
-        .onKeyPress(.return) {
-            if commitIMECompositionIfNeeded() {
-                DispatchQueue.main.async { _ = runEnterAction() }
-                return .handled
-            }
-            return runEnterAction() ? .handled : .ignored
-        }
-    }
-
-    /// Pick a slash skill if the picker is open, otherwise submit the
-    /// current prompt. Returns `true` when something happened (so the
-    /// caller can mark the key event handled). Hoisted out of the
-    /// `.onKeyPress(.return)` closure so the IME commit path can reuse it
-    /// after deferring one runloop tick.
-    ///
-    /// Re-evaluates `isSlashMode` / `matchingSkills` from current state
-    /// instead of capturing them — the IME commit may have changed the
-    /// text (e.g., committing a space ended slash mode), so the deferred
-    /// caller must see the latest values.
-    private func runEnterAction() -> Bool {
+    /// NSTextView wrapper calls this on bare ⏎. Slash-picker takes
+    /// priority over submit; empty text is a no-op. The wrapper always
+    /// consumes the keystroke either way, so this returns `Void`.
+    private func handleReturn() {
         if isSlashMode, let skills = matchingSkills, !skills.isEmpty {
             let safeIndex = min(max(0, skillsSelectedIndex), skills.count - 1)
             pickSkill(skills[safeIndex])
-            return true
+            return
         }
         if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             submit()
-            return true
         }
-        return false
     }
 
-    /// If the focused NSTextView is mid-IME-composition (marked text not
-    /// yet committed), force-commit it via `unmarkText()` and sync our
-    /// `text` @State directly from the view's storage so the next
-    /// `runEnterAction()` call reads the post-commit string regardless of
-    /// SwiftUI binding propagation timing. Returns `true` when a commit
-    /// happened (caller should defer the follow-up action one tick).
-    @discardableResult
-    private func commitIMECompositionIfNeeded() -> Bool {
-        guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView,
-              isFirstResponderComposingIME() else {
-            return false
-        }
-        textView.unmarkText()
-        // Pull the committed string straight from the text view rather
-        // than waiting for SwiftUI's TextField binding to catch up — the
-        // binding usually propagates on the next runloop, but "usually"
-        // is not "always", and a missed propagation silently loses a
-        // syllable from the prompt.
-        text = textView.string
+    /// Slash picker ↑ navigation. Returns true to consume the keystroke,
+    /// false to let NSTextView do native caret movement.
+    private func handleMoveUp() -> Bool {
+        guard isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return false }
+        skillsSelectedIndex = max(0, skillsSelectedIndex - 1)
         return true
     }
 
-    /// True when the focused NSTextView is *actively composing inside an
-    /// IME* (Korean Hangul jamo waiting to combine, Pinyin candidate, etc.).
-    /// We only run the commit path in that case — a pure keylayout source
-    /// never produces composition state, and we observed `hasMarkedText()`
-    /// false-positives on English input that swallowed every Enter.
-    ///
-    /// NOTE: the `com.apple.inputmethod.*` substring check is a heuristic
-    /// against a private-ish identifier. Third-party IMEs may use other
-    /// prefixes. The deeper fix is to identify whether the queried
-    /// NSTextView is genuinely ours (responder-chain or hosting-view
-    /// ancestry check) — same multi-panel scoping problem we have in the
-    /// selection observer. Kept as a defensive filter until then.
-    private func isFirstResponderComposingIME() -> Bool {
-        guard textFieldFocused,
-              let textView = NSApp.keyWindow?.firstResponder as? NSTextView else {
-            return false
+    private func handleMoveDown() -> Bool {
+        guard isSlashMode, let skills = matchingSkills, !skills.isEmpty else { return false }
+        skillsSelectedIndex = min(skills.count - 1, skillsSelectedIndex + 1)
+        return true
+    }
+
+    /// Escape collapses the pill when empty; otherwise we let NSTextView
+    /// do whatever its native cancel handler wants (no-op in practice).
+    private func handleCancel() -> Bool {
+        guard isExpanded, text.isEmpty else { return false }
+        collapse()
+        return true
+    }
+
+    // MARK: - Unified shell slots
+
+    private var headerRow: some View {
+        HStack(spacing: 10) {
+            leadingChipSlot
+
+            promptModeLabel
+                .layoutPriority(0)
+
+            collapsedHeaderControls
+                .opacity(collapsedOpacity)
+                .allowsHitTesting(!isExpanded)
+                .accessibilityHidden(isExpanded)
         }
-        guard let sourceID = textView.inputContext?.selectedKeyboardInputSource,
-              sourceID.contains("inputmethod") else {
-            return false
+    }
+
+    private var leadingChipSlot: some View {
+        ZStack(alignment: .leading) {
+            contextChip(label: contextChipTitle)
+                .opacity(activeAgent == nil || isExpanded ? 1 : 0)
+
+            if activeAgent != nil {
+                sessionChip
+                    .opacity(collapsedOpacity)
+            }
         }
-        return textView.hasMarkedText()
+        .frame(minWidth: 58, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(0)
+    }
+
+    private var sessionChip: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(MarkdownPillPalette.accent)
+                .frame(width: 6, height: 6)
+            Text(String(localized: "markdownChat.pill.session.label", defaultValue: "session"))
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(MarkdownPillPalette.text)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Text("·")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(MarkdownPillPalette.textMuted)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Text(activeAgent?.label ?? "")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(MarkdownPillPalette.textMuted)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(MarkdownPillPalette.accent.opacity(0.10))
+        .overlay(Capsule().stroke(MarkdownPillPalette.accent.opacity(0.30), lineWidth: 1))
+        .clipShape(Capsule())
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var promptModeLabel: some View {
+        ZStack(alignment: .leading) {
+            Text(collapsedPromptText)
+                .font(.system(size: 13.5))
+                .foregroundColor(MarkdownPillPalette.textDim)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .opacity(collapsedOpacity)
+
+            Text(String(localized: "markdownChat.pill.context.auto", defaultValue: "· auto"))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(MarkdownPillPalette.textDim)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .opacity(expandedOpacity)
+        }
+        .frame(minWidth: 58, maxWidth: .infinity, alignment: .leading)
+        .clipped()
+    }
+
+    private var collapsedHeaderControls: some View {
+        HStack(spacing: 6) {
+            if activeAgent == nil {
+                agentSelectorButton(compact: true)
+            }
+            sendButton(enabled: false)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var inputArea: some View {
+        // NSTextView wrapper so the pill input gets the full Cocoa text
+        // keymap — ⌘←/→, ⌥←/→, Home/End, ⇧+selection, ⇧⏎ for newline,
+        // word-wise delete, undo, IME composition. SwiftUI TextField
+        // (NSTextField underneath) did not give us these.
+        ZStack(alignment: .topLeading) {
+            MarkdownChatPillTextView(
+                text: $text,
+                isFocused: $textFieldFocused,
+                font: NSFont.systemFont(ofSize: 14),
+                textColor: NSColor(MarkdownPillPalette.text),
+                caretColor: NSColor(MarkdownPillPalette.accent),
+                onReturn: { handleReturn() },
+                onMoveUp: { handleMoveUp() },
+                onMoveDown: { handleMoveDown() },
+                onCancel: { handleCancel() }
+            )
+            .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38, alignment: .topLeading)
+
+            if text.isEmpty {
+                Text(placeholderText)
+                    .font(.system(size: 14))
+                    .foregroundColor(MarkdownPillPalette.textDim)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var dividerSlot: some View {
+        Rectangle()
+            .fill(MarkdownPillPalette.border)
+            .frame(height: 1)
+            .padding(.top, 4)
+    }
+
+    private var footerRow: some View {
+        HStack(spacing: 6) {
+            skillsButton
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 4) {
+                MarkdownPillKbdLabel("↵")
+                Text(String(localized: "markdownChat.pill.footer.run", defaultValue: " run · "))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(MarkdownPillPalette.textDim)
+                MarkdownPillKbdLabel("⇧↵")
+                Text(String(localized: "markdownChat.pill.footer.newline", defaultValue: " newline"))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(MarkdownPillPalette.textDim)
+            }
+            .padding(.trailing, 4)
+
+            agentSelectorButton(compact: false)
+            sendButton(enabled: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
     }
 
     // MARK: - Sub-components
@@ -713,9 +651,8 @@ public struct MarkdownChatPill: View {
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
-        // Keep the agent label on a single line even when the pill is narrow —
-        // the placeholder and chip have `.layoutPriority(-1)` / truncation so
-        // they shrink first instead of forcing this button to wrap.
+        // Keep the agent label on a single line even when the pill is narrow;
+        // the context and prompt slots truncate before this button wraps.
         .fixedSize(horizontal: true, vertical: false)
         .popover(isPresented: $agentMenuOpen, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 0) {
@@ -758,7 +695,6 @@ public struct MarkdownChatPill: View {
         // decoration anymore.
         Button {
             text = "/"
-            isExpanded = true
             DispatchQueue.main.async { textFieldFocused = true }
         } label: {
             HStack(spacing: 5) {
