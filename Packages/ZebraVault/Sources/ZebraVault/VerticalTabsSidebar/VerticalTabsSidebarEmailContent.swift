@@ -119,6 +119,68 @@ public struct VerticalTabsSidebarEmailContent: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(BVColor.bg)
+        .overlayPreferenceValue(AgentButtonAnchorKey.self) { anchor in
+            agentDropdownOverlay(anchor: anchor)
+        }
+    }
+
+    /// Renders the agent picker dropdown BELOW the agent button. Anchored
+    /// via `AgentButtonAnchorKey`. Lives at `disconnectedContent`'s root so
+    /// it doesn't get tangled in the inner VStack/Spacer layout.
+    @ViewBuilder
+    private func agentDropdownOverlay(anchor: Anchor<CGRect>?) -> some View {
+        GeometryReader { geo in
+            if let anchor, agentMenuOpen {
+                let rect = geo[anchor]
+                let dropdownWidth: CGFloat = 240
+                let gap: CGFloat = 6
+                ZStack(alignment: .topLeading) {
+                    Color.clear
+                    agentDropdownPanel
+                        .offset(x: max(0, min(geo.size.width - dropdownWidth, rect.midX - dropdownWidth / 2)))
+                }
+                .frame(
+                    width: geo.size.width,
+                    height: max(0, geo.size.height - rect.maxY - gap),
+                    alignment: .topLeading
+                )
+                .offset(y: rect.maxY + gap)
+                .allowsHitTesting(true)
+            }
+        }
+        .dismissOnOutsideMouseUp(isPresented: $agentMenuOpen)
+    }
+
+    private var agentDropdownPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(ZebraClawvisorAgent.allCases) { option in
+                Button {
+                    if option.isAvailable {
+                        selectedAgent = option
+                        agentMenuOpen = false
+                    }
+                } label: {
+                    ZebraClawvisorAgentMenuRow(
+                        agent: option,
+                        active: option == selectedAgent
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(!option.isAvailable)
+            }
+        }
+        .padding(4)
+        .frame(width: 240)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.98))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(MarkdownPillPalette.borderStrong, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.55), radius: 30, x: 0, y: 24)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// Standalone "Connect" button. Tapping kicks off the onboarding agent
@@ -174,40 +236,12 @@ public struct VerticalTabsSidebarEmailContent: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .overlay(alignment: .bottom) {
-            if agentMenuOpen {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(ZebraClawvisorAgent.allCases) { option in
-                        Button {
-                            if option.isAvailable {
-                                selectedAgent = option
-                                agentMenuOpen = false
-                            }
-                        } label: {
-                            ZebraClawvisorAgentMenuRow(
-                                agent: option,
-                                active: option == selectedAgent
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!option.isAvailable)
-                    }
-                }
-                .padding(4)
-                .frame(width: 240)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.98))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(MarkdownPillPalette.borderStrong, lineWidth: 1)
-                )
-                .shadow(color: Color.black.opacity(0.55), radius: 30, x: 0, y: 24)
-                .alignmentGuide(.bottom) { _ in -6 }
-                .zIndex(50)
-            }
-        }
+        // Publish the button's bounds so `disconnectedContent` can render the
+        // dropdown BELOW the pill via `.overlayPreferenceValue`. Embedding the
+        // dropdown inline as an `.overlay` on this Button was unreliable —
+        // alignmentGuide offsets didn't escape some intermediate layout
+        // boundary and the popup rendered above the trigger instead of below.
+        .anchorPreference(key: AgentButtonAnchorKey.self, value: .bounds) { $0 }
     }
 
     private func errorContent(_ message: String) -> some View {
