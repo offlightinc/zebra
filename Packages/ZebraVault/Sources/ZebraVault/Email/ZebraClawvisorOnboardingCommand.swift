@@ -98,21 +98,38 @@ public enum ZebraClawvisorOnboardingCommand {
         }
     }
 
-    /// Returns the agent-specific system prompt. Only `.claudeCode` has a
-    /// hand-tuned flow today; everything else falls back to the Claude Code
-    /// version because the dropdown is disabled for them.
+    /// Returns the agent-specific system prompt. Only `.claudeCode` is
+    /// wired today — the picker UI disables the other rows and
+    /// `ZebraSidebarBody.startClawvisorOnboardingAgent` enforces the same
+    /// guard at the domain boundary. Listing only the wired case makes the
+    /// non-exhaustive switch a compile-time nudge: when a future case is
+    /// added to `ZebraClawvisorAgent`, Swift forces us to decide its
+    /// onboarding flow here instead of silently falling back to Claude
+    /// Code's prompt.
     static func systemPrompt(for agent: ZebraClawvisorAgent) -> String {
         switch agent {
-        case .claudeCode, .claudeDesktop, .openClawHermes, .otherAgents:
+        case .claudeCode:
+            return claudeCodeSystemPrompt
+        case .claudeDesktop, .openClawHermes, .otherAgents:
+            // Unreachable in practice — caller-side guard blocks these. If we
+            // ever land here it means a non-available agent slipped past the
+            // guard; log and return the Claude Code prompt as a safe fallback.
+            assertionFailure("systemPrompt called for unwired agent: \(agent.rawValue)")
             return claudeCodeSystemPrompt
         }
     }
 
     /// First user turn that triggers the agent to greet. Same canned line
-    /// for every agent for now.
+    /// for every wired agent (only Claude Code today). Other cases are
+    /// unreachable — see `systemPrompt(for:)` for the reasoning.
     static func initialUserPrompt(for agent: ZebraClawvisorAgent) -> String {
-        _ = agent
-        return "Help me connect my Gmail to Zebra through Clawvisor."
+        switch agent {
+        case .claudeCode:
+            return "Help me connect my Gmail to Zebra through Clawvisor."
+        case .claudeDesktop, .openClawHermes, .otherAgents:
+            assertionFailure("initialUserPrompt called for unwired agent: \(agent.rawValue)")
+            return "Help me connect my Gmail to Zebra through Clawvisor."
+        }
     }
 
     /// System prompt for the Claude Code flow specifically. Mirrors the

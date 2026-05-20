@@ -131,6 +131,9 @@ final class ZebraEmailListStore: ObservableObject {
     private let dotEnvWatcherQueue = DispatchQueue(
         label: "com.cmux.zebra.dotenv-watcher", qos: .utility
     )
+    /// Pending coalesced reload — see `scheduleConfigReload()` for the
+    /// debounce rationale. Cancelled and re-scheduled on each new event.
+    private var configReloadWorkItem: DispatchWorkItem?
 
     init() {
         self.client = .shared
@@ -151,6 +154,7 @@ final class ZebraEmailListStore: ObservableObject {
     deinit {
         fileWatchSource?.cancel()
         directoryWatchSource?.cancel()
+        configReloadWorkItem?.cancel()
     }
 
     // MARK: - ~/.gbrain/.env file watcher
@@ -260,11 +264,24 @@ final class ZebraEmailListStore: ObservableObject {
 
     /// Invalidate the actor's cached config so the next call picks up the
     /// new env values, then trigger a sidebar refresh.
+    ///
+    /// Debounced — DispatchSource fires one event per write, and editors
+    /// (or gbrain's own writer) can emit several writes within a few ms
+    /// when rewriting `~/.gbrain/.env`. Without coalescing we'd queue N
+    /// `invalidateConfig` + `refresh` Task chains and stampede the actor.
+    /// 100ms is long enough to swallow a burst, short enough that the
+    /// "Connect" screen still flips to the inbox before the user notices.
     private func scheduleConfigReload() {
-        Task { [weak self] in
-            await ZebraClawvisorEmailClient.shared.invalidateConfig()
-            await self?.refresh()
+        configReloadWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            Task {
+                await ZebraClawvisorEmailClient.shared.invalidateConfig()
+                await self.refresh()
+            }
         }
+        configReloadWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: item)
     }
 
     private func persistThreads(_ value: [EmailThreadItem]) {

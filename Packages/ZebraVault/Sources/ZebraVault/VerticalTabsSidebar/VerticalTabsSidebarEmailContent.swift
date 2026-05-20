@@ -1,5 +1,17 @@
 import SwiftUI
 
+/// Captures the email sidebar agent picker trigger button's bounds so the
+/// dropdown can be rendered at `disconnectedContent`'s root level (outside
+/// the inner VStack/Spacer layout). Scoped `fileprivate` so it can't leak
+/// anchors into the chat pill's `AgentButtonAnchorKey` if either view ever
+/// ends up nested inside the other.
+fileprivate struct EmailAgentButtonAnchorKey: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
 public struct VerticalTabsSidebarEmailContent: View {
     @ObservedObject public var state: VerticalTabsSidebarModeState
     private let threads: [EmailThreadItem]?
@@ -119,13 +131,13 @@ public struct VerticalTabsSidebarEmailContent: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(BVColor.bg)
-        .overlayPreferenceValue(AgentButtonAnchorKey.self) { anchor in
+        .overlayPreferenceValue(EmailAgentButtonAnchorKey.self) { anchor in
             agentDropdownOverlay(anchor: anchor)
         }
     }
 
     /// Renders the agent picker dropdown BELOW the agent button. Anchored
-    /// via `AgentButtonAnchorKey`. Lives at `disconnectedContent`'s root so
+    /// via `EmailAgentButtonAnchorKey`. Lives at `disconnectedContent`'s root so
     /// it doesn't get tangled in the inner VStack/Spacer layout.
     @ViewBuilder
     private func agentDropdownOverlay(anchor: Anchor<CGRect>?) -> some View {
@@ -173,7 +185,7 @@ public struct VerticalTabsSidebarEmailContent: View {
         .frame(width: 240)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.98))
+                .fill(MarkdownPillPalette.popoverBg)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
@@ -241,7 +253,7 @@ public struct VerticalTabsSidebarEmailContent: View {
         // dropdown inline as an `.overlay` on this Button was unreliable —
         // alignmentGuide offsets didn't escape some intermediate layout
         // boundary and the popup rendered above the trigger instead of below.
-        .anchorPreference(key: AgentButtonAnchorKey.self, value: .bounds) { $0 }
+        .anchorPreference(key: EmailAgentButtonAnchorKey.self, value: .bounds) { $0 }
     }
 
     private func errorContent(_ message: String) -> some View {

@@ -118,6 +118,12 @@ struct ZebraSidebarBody: View {
     /// previous direct-OAuth flow (which is dead since the desktop moved to
     /// the local SQLite + Clawvisor brain RPC client).
     private func startClawvisorOnboardingAgent(agent: ZebraClawvisorAgent) {
+        // Defense in depth — the picker UI disables non-available rows, but
+        // a future keyboard shortcut / accessibility / socket-CLI path could
+        // still hand us a "Coming soon" agent. Drop those at the domain
+        // boundary instead of silently launching the Claude Code onboarding
+        // flow for the wrong agent label.
+        guard agent.isAvailable else { return }
         guard let workspace = tabManager.selectedWorkspace else { return }
         // Ensure `~/.gbrain` exists and is pre-trusted in `~/.claude.json` so
         // the user doesn't see Claude's "Trust this folder?" dialog mid-flow.

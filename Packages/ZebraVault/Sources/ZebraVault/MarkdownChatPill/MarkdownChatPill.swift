@@ -175,12 +175,15 @@ extension View {
     }
 }
 
-/// Captures the agent picker trigger button's bounds so the dropdown can be
-/// rendered at a higher level in the view hierarchy (outside any clipShape
-/// that would otherwise truncate the popup). Used by both the chat pill
-/// (dropdown ABOVE the pill, escaping the pill's RoundedRectangle clip)
-/// and the email connect sidebar (dropdown BELOW the pill).
-struct AgentButtonAnchorKey: PreferenceKey {
+/// Captures the chat pill agent picker trigger button's bounds so the
+/// dropdown can be rendered at the body level (outside `pillShell`'s
+/// `clipShape(RoundedRectangle)` that would otherwise truncate the popup
+/// trying to extend above the pill).
+///
+/// `fileprivate` on purpose — the email sidebar has its own
+/// `EmailAgentButtonAnchorKey` so the two view trees can never leak
+/// anchors into each other if one is ever nested inside the other.
+fileprivate struct AgentButtonAnchorKey: PreferenceKey {
     static let defaultValue: Anchor<CGRect>? = nil
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
         value = nextValue() ?? value
@@ -197,6 +200,11 @@ struct AgentButtonAnchorKey: PreferenceKey {
 enum MarkdownPillPalette {
     static let pillBg = Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.92)
     static let pillBgExpanded = Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.96)
+    /// Slightly more opaque variant for floating popovers (agent picker
+    /// dropdown). Matches md-app.jsx::dropdown's `rgba(20,21,24,0.98)`
+    /// — the dropdown sits over the markdown content and benefits from
+    /// the extra contrast vs. the pill itself.
+    static let popoverBg = Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.98)
     static let text = Color(red: 230.0 / 255, green: 228.0 / 255, blue: 221.0 / 255)
     static let textMuted = Color(red: 154.0 / 255, green: 149.0 / 255, blue: 138.0 / 255)
     static let textDim = Color(red: 108.0 / 255, green: 105.0 / 255, blue: 96.0 / 255)
@@ -837,7 +845,7 @@ public struct MarkdownChatPill: View {
         .frame(width: 220)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.98))
+                .fill(MarkdownPillPalette.popoverBg)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
