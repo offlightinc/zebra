@@ -127,6 +127,7 @@
 		C0DE34020000000000000002 /* CmuxHelpResource.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE34020000000000000004 /* CmuxHelpResource.swift */; };
 		A50019A0 /* SettingsNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50019A1 /* SettingsNavigation.swift */; };
 		ZEBRA0001A0B0C0D0E0F00001 /* Zebra/Settings/ZebraSettingsExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = ZEBRA0002A0B0C0D0E0F00001 /* Zebra/Settings/ZebraSettingsExtension.swift */; };
+		ZEBRA0003A0B0C0D0E0F00001 /* Zebra/Settings/ZebraClawvisorSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ZEBRA0004A0B0C0D0E0F00001 /* Zebra/Settings/ZebraClawvisorSettingsView.swift */; };
 		ZEBRA0005A0B0C0D0E0F00001 /* Zebra/Settings/ZebraSettingsExtensionRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = ZEBRA0006A0B0C0D0E0F00001 /* Zebra/Settings/ZebraSettingsExtensionRegistry.swift */; };
 		A50019B0 /* SettingsSearchAliases.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50019B1 /* SettingsSearchAliases.swift */; };
 		D3610C010000000000000001 /* CmuxSettingsJSONPathSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3610C010000000000000002 /* CmuxSettingsJSONPathSupport.swift */; };
@@ -649,6 +650,7 @@
 		C0DE34020000000000000004 /* CmuxHelpResource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/CmuxHelpResource.swift; sourceTree = "<group>"; };
 		A50019A1 /* SettingsNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsNavigation.swift; sourceTree = "<group>"; };
 		ZEBRA0002A0B0C0D0E0F00001 /* Zebra/Settings/ZebraSettingsExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Settings/ZebraSettingsExtension.swift"; sourceTree = "<group>"; };
+		ZEBRA0004A0B0C0D0E0F00001 /* Zebra/Settings/ZebraClawvisorSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Settings/ZebraClawvisorSettingsView.swift"; sourceTree = "<group>"; };
 		ZEBRA0006A0B0C0D0E0F00001 /* Zebra/Settings/ZebraSettingsExtensionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Settings/ZebraSettingsExtensionRegistry.swift"; sourceTree = "<group>"; };
 		A50019B1 /* SettingsSearchAliases.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSearchAliases.swift; sourceTree = "<group>"; };
 		D3610C010000000000000002 /* CmuxSettingsJSONPathSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxSettingsJSONPathSupport.swift; sourceTree = "<group>"; };
@@ -1201,6 +1203,7 @@
 				C0DE34020000000000000004 /* CmuxHelpResource.swift */,
 				A50019A1 /* SettingsNavigation.swift */,
 				ZEBRA0002A0B0C0D0E0F00001 /* Zebra/Settings/ZebraSettingsExtension.swift */,
+				ZEBRA0004A0B0C0D0E0F00001 /* Zebra/Settings/ZebraClawvisorSettingsView.swift */,
 				ZEBRA0006A0B0C0D0E0F00001 /* Zebra/Settings/ZebraSettingsExtensionRegistry.swift */,
 				A50019B1 /* SettingsSearchAliases.swift */,
 				D3610C010000000000000002 /* CmuxSettingsJSONPathSupport.swift */,
@@ -1933,6 +1936,7 @@
 				C0DE34020000000000000002 /* CmuxHelpResource.swift in Sources */,
 				A50019A0 /* SettingsNavigation.swift in Sources */,
 				ZEBRA0001A0B0C0D0E0F00001 /* Zebra/Settings/ZebraSettingsExtension.swift in Sources */,
+				ZEBRA0003A0B0C0D0E0F00001 /* Zebra/Settings/ZebraClawvisorSettingsView.swift in Sources */,
 				ZEBRA0005A0B0C0D0E0F00001 /* Zebra/Settings/ZebraSettingsExtensionRegistry.swift in Sources */,
 				A50019B0 /* SettingsSearchAliases.swift in Sources */,
 				D3610C010000000000000001 /* CmuxSettingsJSONPathSupport.swift in Sources */,

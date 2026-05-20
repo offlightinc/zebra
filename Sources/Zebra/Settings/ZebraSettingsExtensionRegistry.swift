@@ -7,10 +7,21 @@ import SwiftUI
 enum ZebraSettingsExtensionRegistry {
     /// Source-of-truth list. Each tuple wires together the sidebar descriptor
     /// (the `SettingsExtensionSection` that drives sidebar + search) and the
-    /// matching detail-view factory closure. Empty until callers append
-    /// concrete section/view pairs (see commits adding individual Zebra
-    /// settings surfaces).
-    private static let entries: [(SettingsExtensionSection, () -> AnyView)] = []
+    /// matching detail-view factory closure.
+    private static let entries: [(SettingsExtensionSection, () -> AnyView)] = [
+        (
+            SettingsExtensionSection(
+                id: "zebra.clawvisor",
+                title: String(
+                    localized: "settings.section.clawvisor",
+                    defaultValue: "Clawvisor"
+                ),
+                symbolName: "envelope.badge.shield.half.filled",
+                searchText: "clawvisor gmail email brain agent token rpc sync"
+            ),
+            { AnyView(ZebraClawvisorSettingsView()) }
+        )
+    ]
 
     static func sections() -> [SettingsExtensionSection] {
         entries.map { $0.0 }

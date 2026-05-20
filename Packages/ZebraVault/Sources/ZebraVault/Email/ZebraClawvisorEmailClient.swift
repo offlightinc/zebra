@@ -47,6 +47,14 @@ public actor ZebraClawvisorEmailClient {
         self.fileManager = fileManager
     }
 
+    /// Forces the next config-dependent call to re-read `~/.gbrain/.env`. Used
+    /// by `ZebraClawvisorSettingsView` after the user edits the env values
+    /// from inside the app — without this the actor keeps using the snapshot
+    /// it loaded on the previous call.
+    public func invalidateConfig() {
+        cachedConfig = nil
+    }
+
     deinit {
         if let database {
             sqlite3_close(database)
