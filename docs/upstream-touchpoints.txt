@@ -1,0 +1,41 @@
+# Cmux files Zebra is allowed to touch. See docs/upstream-touchpoints.md for
+# the human-readable table. `scripts/check-upstream-touchpoints.sh` reads this
+# allowlist — one path per line, blank lines and `#` comments ignored.
+
+# Adapter / DI seams
+Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment + ZebraSidebarDefaults.defaultWidth fallback
+Sources/ContentView.swift                  # SidebarSlots composer + \.sidebarExtraLeadingInset + commandPalette PanelType.email branches
+Sources/Panels/PanelContentView.swift      # \.markdownPanelViewFactory + \.customPanelViewFactory + PanelType.email render branch
+Sources/Panels/MarkdownPanel.swift         # didCloseNotification + updateFrontmatter
+Sources/Panels/Panel.swift                 # PanelType.email case (Zebra-owned panel kind, rendered via customPanelViewFactory seam)
+Sources/Workspace.swift                    # SurfaceKind.email + PanelType.email branches in surfaceKind / session snapshot / createPanel
+Sources/CmuxLifecycleEventPublishing.swift # cmuxEventSurfaceKind PanelType.email branch
+Sources/TerminalPaneDropTargetView.swift   # PanelType.email branch in pane drop target dispatch
+Sources/Search/GlobalSearchDocuments.swift # PanelType.email branch in browseHit kind mapping
+Sources/WindowDragHandleView.swift         # MinimalModeSidebarTitlebarControlsMetrics.extraLeadingInset seam (Zebra sets it)
+
+# Upstream-only drift (zebra is behind on these — rebase resolves; not a Zebra touch).
+# Listed here so the guard doesn't flag them while waiting for the next rebase.
+Sources/SessionPersistence.swift           # upstream added: SessionRightSidebarToolPanelSnapshot, hasUnreadIndicator
+Sources/WindowChromeMetrics.swift          # upstream added: misc metrics
+Sources/WorkspaceContentView.swift         # upstream added: unread indicator props on PaneTabBar
+
+# Localization (single catalog — see docs note about SwiftUI string tables)
+Resources/Localizable.xcstrings
+
+# Zebra-owned auth tenant — dev Stack Auth project ID + publishable client key
+# differ per fork. The cmux env-var overrides (CMUX_STACK_PROJECT_ID,
+# CMUX_STACK_PUBLISHABLE_CLIENT_KEY) are the proper seam; until reload.sh-side
+# injection lands, Zebra swaps the dev constants in-place.
+Sources/Auth/AuthEnvironment.swift
+
+# Tests + project plumbing
+cmuxTests/FileDropOverlayViewTests.swift
+cmuxTests/MarkdownPanelTests.swift
+cmux.xcodeproj/project.pbxproj
+
+# Docs
+CLAUDE.md
+AGENTS.md
+docs/upstream-touchpoints.md
+docs/upstream-touchpoints.txt

@@ -1,0 +1,11 @@
+#!/bin/bash
+# Auto-installed pre-commit hook (Phase 4 touchpoint guard).
+# Bypass with: git commit --no-verify
+"$(git rev-parse --show-toplevel)"/scripts/check-upstream-touchpoints.sh --staged || {
+  echo ""
+  echo "Touchpoint guard rejected the commit. Either:"
+  echo "  - revert the cmux file change and use a seam from Sources/Zebra/"
+  echo "  - or add the path to docs/upstream-touchpoints.txt (+ note in .md)"
+  echo "  - or bypass once with: git commit --no-verify"
+  exit 1
+}

@@ -15,18 +15,16 @@ final class FileDropOverlayViewTests: XCTestCase {
     private func makeContentViewWindow(windowId: UUID = UUID()) -> NSWindow {
         _ = NSApplication.shared
 
-        let root = ContentView(updateViewModel: UpdateViewModel(), windowId: windowId)
-            .environmentObject(TabManager())
-            .environmentObject(TerminalNotificationStore.shared)
-            .environmentObject(SidebarState())
-            .environmentObject(SidebarSelectionState())
-            .environmentObject(FileExplorerState())
-            .environmentObject(CmuxConfigStore())
-            .environmentObject(VerticalTabsSidebarModeState())
-            .environmentObject(VerticalTabsSidebarVaultState())
-            .environmentObject(MarkdownFileListStore())
-            .environmentObject(GoalFileListStore())
-            .environmentObject(GoalsViewState())
+        let root = ZebraServices.makeDefault().injectIntoEnvironment(
+            ContentView(updateViewModel: UpdateViewModel(), windowId: windowId)
+                .zebraStoreBindings()
+                .environmentObject(TabManager())
+                .environmentObject(TerminalNotificationStore.shared)
+                .environmentObject(SidebarState())
+                .environmentObject(SidebarSelectionState())
+                .environmentObject(FileExplorerState())
+                .environmentObject(CmuxConfigStore())
+        )
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 340),

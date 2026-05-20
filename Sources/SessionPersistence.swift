@@ -7,7 +7,7 @@ enum SessionSnapshotSchema {
 }
 
 enum SessionPersistencePolicy {
-    static let defaultSidebarWidth: Double = 300
+    static let defaultSidebarWidth: Double = 200
     static let minimumSidebarWidth: Double = 180
     static let maximumSidebarWidth: Double = 600
     static let minimumWindowWidth: Double = 300
@@ -244,6 +244,10 @@ struct SessionFilePreviewPanelSnapshot: Codable, Sendable {
     var filePath: String
 }
 
+struct SessionRightSidebarToolPanelSnapshot: Codable, Sendable {
+    var mode: RightSidebarMode
+}
+
 struct SessionPanelSnapshot: Codable, Sendable {
     var id: UUID
     var type: PanelType
@@ -252,6 +256,7 @@ struct SessionPanelSnapshot: Codable, Sendable {
     var directory: String?
     var isPinned: Bool
     var isManuallyUnread: Bool
+    var hasUnreadIndicator: Bool? = nil
     var gitBranch: SessionGitBranchSnapshot?
     var listeningPorts: [Int]
     var ttyName: String?
@@ -259,6 +264,7 @@ struct SessionPanelSnapshot: Codable, Sendable {
     var browser: SessionBrowserPanelSnapshot?
     var markdown: SessionMarkdownPanelSnapshot?
     var filePreview: SessionFilePreviewPanelSnapshot?
+    var rightSidebarTool: SessionRightSidebarToolPanelSnapshot?
 }
 
 enum SessionSplitOrientation: String, Codable, Sendable {
@@ -338,6 +344,8 @@ struct SessionWorkspaceSnapshot: Codable, Sendable {
     var customDescription: String?
     var customColor: String?
     var isPinned: Bool
+    var isManuallyUnread: Bool? = nil
+    var hasUnreadIndicator: Bool? = nil
     var terminalScrollBarHidden: Bool?
     var currentDirectory: String
     var focusedPanelId: UUID?

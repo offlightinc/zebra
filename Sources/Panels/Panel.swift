@@ -8,6 +8,11 @@ public enum PanelType: String, Codable, Sendable {
     case browser
     case markdown
     case filePreview = "filepreview"
+    case rightSidebarTool
+    // Zebra-owned panel kinds. cmux only needs to know the case exists so
+    // exhaustive switches stay total; rendering goes through the generic
+    // `customPanelViewFactory` seam in `PanelContentView`.
+    case email
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -18,6 +23,10 @@ public enum PanelType: String, Codable, Sendable {
         }
         if rawValue.lowercased() == Self.filePreview.rawValue {
             self = .filePreview
+            return
+        }
+        if rawValue.lowercased() == Self.rightSidebarTool.rawValue.lowercased() {
+            self = .rightSidebarTool
             return
         }
         throw DecodingError.dataCorruptedError(

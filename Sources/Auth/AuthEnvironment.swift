@@ -1,8 +1,8 @@
 import Foundation
 
 enum AuthEnvironment {
-    private static let developmentStackProjectID = "454ecd03-1db2-4050-845e-4ce5b0cd9895"
-    private static let developmentStackPublishableClientKey = "pck_xb63160bwe9699vtxfzfj6emmxpafg5mkjrtp6ehzxv5g"
+    private static let developmentStackProjectID = "d74a40f2-8f03-4c04-a33b-29f2dcce41be"
+    private static let developmentStackPublishableClientKey = "pck_fqzk62g1tsgbdc3hka0bh87dsf6zx9zn2tswj6fvxkrn0"
     private static let productionStackProjectID = "9790718f-14cd-4f7e-824d-eaf527a82b82"
     private static let productionStackPublishableClientKey = "pck_kzj80gx4mh2jrzn1cx6y5e8jk0kwa01vkevh2p9zd4twr"
 
