@@ -185,13 +185,32 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
 
     func testAllSurfacesShareCommonGbrainAdvisory() {
         let path = "/tmp/x.md"
+        // `.email` 도 같은 회귀 가드에 들어간다 — 빈 messages 의
+        // EmailThreadDetail 을 써서 advisory + commonBbrainAdvisoryLine
+        // 만 검사. 본문 inline 직렬화는 의도된 별 영역이라 tone guard /
+        // no-body-inline guard 에는 추가하지 않는다.
+        let emptyEmailDetail = EmailThreadDetail(
+            threadId: "test-thread",
+            providerThreadId: nil,
+            accountEmail: "han@example.com",
+            cached: true,
+            messages: []
+        )
         let surfaces: [MarkdownChatPillContextSurface] = [
-            .task, .goal, .fallback(typeLabel: "person")
+            .task,
+            .goal,
+            .fallback(typeLabel: "person"),
+            .email(detail: emptyEmailDetail, threadSubject: "Re: ping"),
         ]
         let commonHint = "b-brain's `search` / `query` / `get`"
         for surface in surfaces {
+            // email surface 는 markdownFilePath 가 의미 없어서 nil 로 빌드한다.
+            let pathArg: String? = {
+                if case .email = surface { return nil }
+                return path
+            }()
             let out = MarkdownChatPillContextPrefix.build(
-                markdownFilePath: path,
+                markdownFilePath: pathArg,
                 surface: surface
             )
             XCTAssertTrue(
