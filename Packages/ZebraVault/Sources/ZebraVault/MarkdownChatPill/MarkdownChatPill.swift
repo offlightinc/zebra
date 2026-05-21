@@ -22,6 +22,16 @@ private extension MarkdownPillAgent {
         }
     }
 
+    /// Two-line description shown under the label in the picker. Matches
+    /// md-app.jsx's `AGENTS.desc` strings — "vendor · tagline" monospace.
+    var desc: String {
+        switch self {
+        case .codex: return "OpenAI · code-first"
+        case .claude: return "Anthropic · reasoning"
+        case .gemini: return "Google · long context"
+        }
+    }
+
     // Mockup-faithful (placeholder marks, not real brands) — md-chat.jsx::AgentDot
     var glyph: String {
         switch self {
@@ -58,6 +68,122 @@ struct MarkdownPillAgentDot: View {
             .frame(width: size, height: size)
             .background(agent.glyphBg)
             .clipShape(RoundedRectangle(cornerRadius: size / 4))
+    }
+}
+
+/// Rich agent row used inside the chat pill's agent picker popover.
+/// Mirrors md-app.jsx::AgentSelector dropdown rows:
+///   [dot]  label              [⌥1]
+///          vendor · tagline
+/// Active row tints its background with the accent mint.
+fileprivate struct MarkdownPillAgentMenuRow: View {
+    let agent: MarkdownPillAgent
+    let active: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            MarkdownPillAgentDot(agent: agent, size: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(agent.label)
+                    .font(.system(size: 12.5))
+                    .foregroundColor(MarkdownPillPalette.text)
+                Text(agent.desc)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundColor(MarkdownPillPalette.textDim)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            MarkdownPillKbd(text: agent.shortcutHint)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(active ? MarkdownPillPalette.accent.opacity(0.10) : .clear)
+        )
+        .contentShape(Rectangle())
+    }
+}
+
+/// Mockup-faithful kbd chip — small monospace label inside a faint
+/// white-tinted rounded rect.
+fileprivate struct MarkdownPillKbd: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10.5, design: .monospaced))
+            .foregroundColor(MarkdownPillPalette.textMuted)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3)
+                            .stroke(Color.white.opacity(0.08))
+                    )
+            )
+    }
+}
+
+/// SwiftUI's native `.popover` on macOS auto-dismisses on outside clicks,
+/// but the custom overlay-based dropdowns used by the chat pill and the
+/// email connect picker don't. This modifier installs a local NSEvent
+/// `.leftMouseUp` monitor while `isPresented` is true, then closes the
+/// menu on the next-frame run-loop tick. Buttons inside the dropdown
+/// rows fire their actions before the async closure runs (and set
+/// `isPresented = false` themselves), so the closure becomes a no-op for
+/// hits inside the menu. Outside clicks land in nothing else, so the
+/// closure does the dismiss.
+struct DismissOnOutsideMouseUp: ViewModifier {
+    @Binding var isPresented: Bool
+    @State private var monitor: Any?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: isPresented) { _, open in
+                if open { install() } else { remove() }
+            }
+            .onDisappear { remove() }
+    }
+
+    private func install() {
+        remove()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { event in
+            DispatchQueue.main.async {
+                if isPresented {
+                    isPresented = false
+                }
+            }
+            return event
+        }
+    }
+
+    private func remove() {
+        if let m = monitor {
+            NSEvent.removeMonitor(m)
+            monitor = nil
+        }
+    }
+}
+
+extension View {
+    func dismissOnOutsideMouseUp(isPresented: Binding<Bool>) -> some View {
+        modifier(DismissOnOutsideMouseUp(isPresented: isPresented))
+    }
+}
+
+/// Captures the agent picker trigger button's bounds so the dropdown can be
+/// rendered at a higher level in the view hierarchy (outside any clipShape
+/// that would otherwise truncate the popup). Used by both the chat pill
+/// (dropdown ABOVE the pill, escaping the pill's RoundedRectangle clip)
+/// and the email connect sidebar (dropdown BELOW the pill).
+struct AgentButtonAnchorKey: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
     }
 }
 
@@ -229,6 +355,9 @@ public struct MarkdownChatPill: View {
         // its translucent fill.
         pillShell
             .frame(maxWidth: Self.maxWidth)
+            .overlayPreferenceValue(AgentButtonAnchorKey.self) { anchor in
+                agentDropdownOverlay(anchor: anchor)
+            }
         // Lazy-load the gbrain manifest the first time the user types a
         // slash. Empty array is a valid result (gbrain not installed) — it
         // still satisfies "cached", so we won't keep retrying every
@@ -654,39 +783,68 @@ public struct MarkdownChatPill: View {
         // Keep the agent label on a single line even when the pill is narrow;
         // the context and prompt slots truncate before this button wraps.
         .fixedSize(horizontal: true, vertical: false)
-        .popover(isPresented: $agentMenuOpen, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(MarkdownPillAgent.allCases) { option in
-                    Button {
-                        agent = option
-                        agentMenuOpen = false
-                    } label: {
-                        HStack(spacing: 8) {
-                            MarkdownPillAgentDot(agent: option, size: 14)
-                            Text(option.label)
-                                .font(.system(size: 12, weight: .medium))
-                            Spacer(minLength: 12)
-                            if option == agent {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(MarkdownPillPalette.accent)
-                            }
-                            Text(option.shortcutHint)
-                                .font(.system(size: 10.5, design: .monospaced))
-                                .foregroundColor(MarkdownPillPalette.textDim)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .frame(minWidth: 140, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(4)
-        }
+        // Publish the button's bounds so the body-level `.overlayPreferenceValue`
+        // can render the dropdown ABOVE the pill, OUTSIDE the pill's clipShape
+        // boundary (which would otherwise clip the popup).
+        .anchorPreference(key: AgentButtonAnchorKey.self, value: .bounds) { $0 }
         .help(compact ? agent.label : "\(agent.label) (\(agent.shortcutHint))")
         .accessibilityLabel(Text(String(localized: "markdownChat.pill.agent.a11y", defaultValue: "Choose CLI agent")))
+    }
+
+    /// Renders the agent picker dropdown above the agent button. Anchored
+    /// to the button's bounds via `AgentButtonAnchorKey`. Lives at the body
+    /// level (outside the pillShell's clipShape) so the popup can extend
+    /// above the pill without being clipped.
+    @ViewBuilder
+    private func agentDropdownOverlay(anchor: Anchor<CGRect>?) -> some View {
+        GeometryReader { geo in
+            if let anchor, agentMenuOpen {
+                let rect = geo[anchor]
+                let dropdownWidth: CGFloat = 220
+                let gap: CGFloat = 6
+                ZStack(alignment: .bottomLeading) {
+                    Color.clear
+                    agentDropdownPanel
+                        .offset(x: max(0, min(geo.size.width - dropdownWidth, rect.midX - dropdownWidth / 2)))
+                }
+                .frame(
+                    width: geo.size.width,
+                    height: max(0, rect.minY - gap),
+                    alignment: .bottomLeading
+                )
+                .allowsHitTesting(true)
+            }
+        }
+        .dismissOnOutsideMouseUp(isPresented: $agentMenuOpen)
+    }
+
+    private var agentDropdownPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(MarkdownPillAgent.allCases) { option in
+                Button {
+                    agent = option
+                    agentMenuOpen = false
+                } label: {
+                    MarkdownPillAgentMenuRow(
+                        agent: option,
+                        active: option == agent
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .frame(width: 220)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.98))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(MarkdownPillPalette.borderStrong, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.55), radius: 30, x: 0, y: 24)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var skillsButton: some View {

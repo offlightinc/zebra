@@ -122,6 +122,16 @@ final class ZebraEmailListStore: ObservableObject {
     private static let lastConnectedKey = "ZebraEmailListStore.lastKnownConnected"
     private static let lastThreadsKey = "ZebraEmailListStore.lastThreadsSnapshot"
 
+    // ~/.gbrain/.env watcher state. `fileWatchSource` watches the .env file
+    // itself; `directoryWatchSource` watches `~/.gbrain` for the .env's
+    // creation (atomic writes show up as a new inode here). One of the two
+    // is active at any given time. See `startDotEnvWatching()`.
+    private nonisolated(unsafe) var fileWatchSource: DispatchSourceFileSystemObject?
+    private nonisolated(unsafe) var directoryWatchSource: DispatchSourceFileSystemObject?
+    private let dotEnvWatcherQueue = DispatchQueue(
+        label: "com.cmux.zebra.dotenv-watcher", qos: .utility
+    )
+
     init() {
         self.client = .shared
         self.isConnected = UserDefaults.standard.bool(forKey: Self.lastConnectedKey)
@@ -132,6 +142,129 @@ final class ZebraEmailListStore: ObservableObject {
             self.threads = restored
         }
         Self.perfLog("init isConnected=\(self.isConnected) cachedThreads=\(self.threads.count)")
+        // Auto-reload whenever ~/.gbrain/.env is created or rewritten — that's
+        // the file Clawvisor onboarding (via the chat-pill agent) ends with,
+        // so this catches the moment without a manual sidebar refresh.
+        startDotEnvWatching()
+    }
+
+    deinit {
+        fileWatchSource?.cancel()
+        directoryWatchSource?.cancel()
+    }
+
+    // MARK: - ~/.gbrain/.env file watcher
+
+    private var dotEnvPath: String {
+        (NSHomeDirectory() as NSString).appendingPathComponent(".gbrain/.env")
+    }
+
+    private var gbrainDirectoryPath: String {
+        (NSHomeDirectory() as NSString).appendingPathComponent(".gbrain")
+    }
+
+    /// Bootstrap whichever watcher matches the current state of
+    /// `~/.gbrain/.env`. If the file already exists, watch it directly; if
+    /// it doesn't, watch the parent directory so we can pick up its first
+    /// creation. The two paths self-correct each other on every event.
+    private func startDotEnvWatching() {
+        if FileManager.default.fileExists(atPath: dotEnvPath) {
+            startFileWatcher()
+        } else {
+            startDirectoryWatcher()
+        }
+    }
+
+    private func startFileWatcher() {
+        stopFileWatcher()
+        let fd = open(dotEnvPath, O_EVTONLY)
+        guard fd >= 0 else {
+            startDirectoryWatcher()
+            return
+        }
+        stopDirectoryWatcher()
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .delete, .rename, .extend],
+            queue: dotEnvWatcherQueue
+        )
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            let flags = source.data
+            DispatchQueue.main.async {
+                if flags.contains(.delete) || flags.contains(.rename) {
+                    // Atomic writes look like "old inode renamed/deleted,
+                    // new file created" — re-attach via the directory
+                    // watcher so we land on the replacement.
+                    self.stopFileWatcher()
+                    self.startDirectoryWatcher()
+                }
+                self.scheduleConfigReload()
+            }
+        }
+        source.setCancelHandler {
+            Darwin.close(fd)
+        }
+        source.resume()
+        fileWatchSource = source
+    }
+
+    private func startDirectoryWatcher() {
+        stopDirectoryWatcher()
+        // Make sure `~/.gbrain/` exists so the watcher has something to
+        // attach to. Idempotent — the directory may already be there from
+        // earlier gbrain tooling.
+        try? FileManager.default.createDirectory(
+            atPath: gbrainDirectoryPath,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let fd = open(gbrainDirectoryPath, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .delete, .rename, .extend],
+            queue: dotEnvWatcherQueue
+        )
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                // The directory just changed — check whether `.env` exists
+                // now and graduate to the file watcher if so.
+                if FileManager.default.fileExists(atPath: self.dotEnvPath) {
+                    self.startFileWatcher()
+                    self.scheduleConfigReload()
+                }
+            }
+        }
+        source.setCancelHandler {
+            Darwin.close(fd)
+        }
+        source.resume()
+        directoryWatchSource = source
+    }
+
+    private func stopFileWatcher() {
+        if let source = fileWatchSource {
+            source.cancel()
+            fileWatchSource = nil
+        }
+    }
+
+    private func stopDirectoryWatcher() {
+        if let source = directoryWatchSource {
+            source.cancel()
+            directoryWatchSource = nil
+        }
+    }
+
+    /// Invalidate the actor's cached config so the next call picks up the
+    /// new env values, then trigger a sidebar refresh.
+    private func scheduleConfigReload() {
+        Task { [weak self] in
+            await ZebraClawvisorEmailClient.shared.invalidateConfig()
+            await self?.refresh()
+        }
     }
 
     private func persistThreads(_ value: [EmailThreadItem]) {
