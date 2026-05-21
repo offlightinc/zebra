@@ -14,7 +14,7 @@ struct TaskStatusPicker: View {
             ordered: BrainTaskStatus.primaryCases,
             title: String(localized: "brain.status.picker.title", defaultValue: "Change status"),
             label: { $0.localizedLabel },
-            glyph: { StatusGlyph(status: $0) },
+            glyph: { StatusGlyph(shape: $0.glyphShape) },
             onSelect: { selected in
                 if let selected { onSelect(selected) }
             }

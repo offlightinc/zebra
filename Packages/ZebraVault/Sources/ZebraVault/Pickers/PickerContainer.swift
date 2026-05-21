@@ -68,7 +68,7 @@ struct PickerRow<Glyph: View>: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: omitGlyph ? 0 : 8) {
+            HStack(spacing: omitGlyph ? 0 : 6.5) {
                 if !omitGlyph {
                     glyph().frame(width: 14, height: 14)
                 }

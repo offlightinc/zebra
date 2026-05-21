@@ -13,7 +13,7 @@ struct TaskFilterFieldPicker: View {
             ForEach(TaskFilterField.allCases, id: \.self) { field in
                 let existing = existingFields.contains(field)
                 PickerRow(
-                    glyph: { EmptyView() },
+                    glyph: { glyph(for: field) },
                     label: field.label,
                     isCurrent: false,
                     // HTML prototype: 기존 필드 옆에 "편집" 텍스트 힌트. 새 필드와
@@ -23,10 +23,23 @@ struct TaskFilterFieldPicker: View {
                     keyLabel: existing
                         ? String(localized: "task.filter.edit", defaultValue: "편집")
                         : nil,
-                    action: { onSelect(field) },
-                    omitGlyph: true
+                    action: { onSelect(field) }
                 )
             }
+        }
+    }
+
+    @ViewBuilder
+    private func glyph(for field: TaskFilterField) -> some View {
+        switch field {
+        case .status:
+            StatusGlyph(shape: .openCircle)
+        case .priority:
+            TaskPriorityIcon(priority: .high)
+        case .owner:
+            Image(systemName: "person")
+                .font(.system(size: 11))
+                .foregroundColor(BVColor.fgMute)
         }
     }
 }
