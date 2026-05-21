@@ -430,6 +430,49 @@ final class BrainStatusMutatorTests: XCTestCase {
         XCTAssertEqual(mtimeBefore, mtimeAfter, "no-op 호출이 파일을 다시 쓰면 안 됨")
     }
 
+    /// `applyPropertyChange(at:)` 의 file-IO 라운드트립. applyStatusChange
+    /// 의 동일 형태 테스트와 symmetry 확보.
+    func testApplyPropertyChangeAtFilePathRoundTrip() throws {
+        let tmpDir = NSTemporaryDirectory()
+        let path = (tmpDir as NSString).appendingPathComponent("brain-property-mutator-\(UUID().uuidString).md")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let initial = wrap(frontmatter: """
+            type: task
+            status: todo
+            priority: low
+            updated: 2026-05-18
+            """, body: "")
+        try initial.write(toFile: path, atomically: true, encoding: .utf8)
+
+        BrainStatusMutator.applyPropertyChange(
+            at: path,
+            field: "priority",
+            oldValue: "low",
+            newValue: "high",
+            today: Self.day
+        )
+
+        let reread = try String(contentsOfFile: path, encoding: .utf8)
+        XCTAssertTrue(reread.contains("priority: high"))
+        XCTAssertTrue(reread.contains("updated: 2026-05-21"))
+        XCTAssertTrue(reread.contains(
+            "- **2026-05-21** | priority: low → high — priority changed in Zebra."
+        ))
+
+        // 동일 값 재호출 → didChange == false → mtime 변하지 않아야.
+        let mtimeBefore = try FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date
+        BrainStatusMutator.applyPropertyChange(
+            at: path,
+            field: "priority",
+            oldValue: "high",
+            newValue: "high",
+            today: Self.day
+        )
+        let mtimeAfter = try FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date
+        XCTAssertEqual(mtimeBefore, mtimeAfter, "no-op 호출이 파일을 다시 쓰면 안 됨")
+    }
+
     // MARK: - Helpers
 
     private func wrap(frontmatter: String, body: String) -> String {

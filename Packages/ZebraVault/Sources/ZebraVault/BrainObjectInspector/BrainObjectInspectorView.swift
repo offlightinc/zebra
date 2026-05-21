@@ -119,8 +119,12 @@ public struct TaskInspectorView: View {
                     }
                     PropertyRow(label: String(localized: "brain.row.due", defaultValue: "Due"), icon: "calendar") {
                         EditableDateBadge(value: task.due) { newDate in
-                            let serialized = newDate.map { Self.isoDateFormatter.string(from: $0) }
-                            onChangeProperty?("due", task.due?.source, serialized)
+                            // 양쪽 다 같은 formatter 를 통과시켜 비교 — task.due?.source 의
+                            // 비정규 포맷(예: '2026-5-22')이 새 값과 spurious mismatch 를
+                            // 만드는 걸 막는다.
+                            let oldSerialized = task.due.map { Self.isoDateFormatter.string(from: $0.date) }
+                            let newSerialized = newDate.map { Self.isoDateFormatter.string(from: $0) }
+                            onChangeProperty?("due", oldSerialized, newSerialized)
                         }
                     }
                     PropertyRow(label: String(localized: "brain.row.tags", defaultValue: "Tags"), icon: "number") {
@@ -242,8 +246,11 @@ public struct GoalInspectorView: View {
                         }
                         PropertyRow(label: String(localized: "brain.row.target", defaultValue: "Target"), icon: "calendar") {
                             EditableDateBadge(value: goal.targetDate) { newDate in
-                                let serialized = newDate.map { Self.isoDateFormatter.string(from: $0) }
-                                onChangeProperty?("target_date", goal.targetDate?.source, serialized)
+                                // 양쪽 같은 formatter 통과시켜 비교 — source 의 비정규
+                                // 포맷이 spurious normalization-only write 를 만들지 않게.
+                                let oldSerialized = goal.targetDate.map { Self.isoDateFormatter.string(from: $0.date) }
+                                let newSerialized = newDate.map { Self.isoDateFormatter.string(from: $0) }
+                                onChangeProperty?("target_date", oldSerialized, newSerialized)
                             }
                         }
                         PropertyRow(label: String(localized: "brain.row.cadence", defaultValue: "Cadence"), icon: "clock") {

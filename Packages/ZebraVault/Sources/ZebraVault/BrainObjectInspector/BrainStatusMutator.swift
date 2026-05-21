@@ -107,8 +107,10 @@ public enum BrainStatusMutator {
             return Outcome(newSource: source, didChange: false)
         }
         // 보호: status 는 별도 의미론(`completed:`, kind 분기)을 가지므로
-        // 호출자가 잘못 라우팅한 경우 silent no-op 으로 막는다.
+        // 호출자가 잘못 라우팅한 경우 no-op + diagnostic. silent 로 두면
+        // 디버깅 단서가 없어 회귀가 잘 안 드러나기 때문에 NSLog 남긴다.
         if field == "status" {
+            NSLog("BrainStatusMutator.applyPropertyChange refused field=status — use applyStatusChange for status transitions")
             return Outcome(newSource: source, didChange: false)
         }
 
