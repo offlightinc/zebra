@@ -224,13 +224,18 @@ final class ZebraEmailThreadPanel: Panel, ObservableObject {
     // code never has to know about `ZebraEmailThreadPanel` directly.
     let panelType: PanelType = .email
     let threadId: String
+    /// Owning workspace id. Needed by the panel host to look the workspace
+    /// up from `TabManager` for chat-pill split/tab creation — same pattern
+    /// `MarkdownPanel.workspaceId` follows on the markdown side.
+    let workspaceId: UUID
     var displayIcon: String? { "envelope" }
 
     @Published private(set) var displayTitle: String
     @Published private(set) var focusFlashToken: Int = 0
 
-    init(threadId: String, subject: String) {
+    init(workspaceId: UUID, threadId: String, subject: String) {
         self.id = UUID()
+        self.workspaceId = workspaceId
         self.threadId = threadId
         self.displayTitle = Self.title(from: subject)
     }
@@ -353,6 +358,7 @@ extension Workspace {
         guard let paneId = sourcePaneId else { return nil }
 
         let emailPanel = ZebraEmailThreadPanel(
+            workspaceId: id,
             threadId: thread.id,
             subject: thread.subject
         )
@@ -403,6 +409,7 @@ extension Workspace {
         focus: Bool
     ) -> ZebraEmailThreadPanel? {
         let emailPanel = ZebraEmailThreadPanel(
+            workspaceId: id,
             threadId: thread.id,
             subject: thread.subject
         )

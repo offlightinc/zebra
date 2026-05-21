@@ -1,4 +1,5 @@
 import AppKit
+import Bonsplit
 import SwiftUI
 import ZebraVault
 
@@ -556,6 +557,32 @@ final class ZebraEmailDetailStore: ObservableObject {
         threadStates[threadId]?.expandedMessageIds ?? []
     }
 
+    // MARK: - Per-thread chat companion pane state
+    //
+    // Email thread 마다 한 짝의 에이전트 터미널 split 을 기억한다.
+    // markdown panel 의 `MarkdownPanelController.chatCompanionPaneId` 가
+    // panel-scoped 인 것과 같은 결로, email surface 도 thread 단위로 격리.
+
+    func chatCompanionPaneId(threadId: String) -> PaneID? {
+        threadStates[threadId]?.chatCompanionPaneId
+    }
+
+    func setChatCompanionPaneId(_ paneId: PaneID?, threadId: String) {
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        state.chatCompanionPaneId = paneId
+        threadStates[threadId] = state
+    }
+
+    func chatCompanionAgent(threadId: String) -> MarkdownPillAgent? {
+        threadStates[threadId]?.chatCompanionAgent
+    }
+
+    func setChatCompanionAgent(_ agent: MarkdownPillAgent?, threadId: String) {
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        state.chatCompanionAgent = agent
+        threadStates[threadId] = state
+    }
+
     private func defaultExpandedMessageIds(_ detail: EmailThreadDetail) -> Set<String> {
         var expanded = Set(detail.messages.filter(\.isUnread).map(\.id))
         if let latest = detail.messages.last {
@@ -580,4 +607,6 @@ private struct ZebraEmailThreadUIState {
     var isLoading = false
     var errorMessage: String?
     var expandedMessageIds: Set<String>?
+    var chatCompanionPaneId: PaneID?
+    var chatCompanionAgent: MarkdownPillAgent?
 }

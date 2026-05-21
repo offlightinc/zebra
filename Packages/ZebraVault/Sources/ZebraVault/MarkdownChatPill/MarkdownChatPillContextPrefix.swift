@@ -16,6 +16,10 @@ public enum MarkdownChatPillContextSurface: Equatable {
     case task
     case goal
     case fallback(typeLabel: String)
+    /// Email panel 호출 사이트 전용. detail.messages 의 bodyText 가
+    /// prefix 안에 전문으로 직렬화된다. threadSubject 는 thread-level
+    /// 표시명 (보통 첫 메시지의 subject).
+    case email(detail: EmailThreadDetail, threadSubject: String)
 
     /// **Markdown panel 전용 helper.** frontmatter 첫 `type:` 스칼라를 보고
     /// `.task` / `.goal` / `.fallback(typeLabel:)` 중 하나를 반환한다.
@@ -104,22 +108,118 @@ public enum MarkdownChatPillContextPrefix {
     private static let fallbackAdvisoryTemplate =
         "This terminal opened on top of a `<type>` b-brain document at <path>. Its body and frontmatter are the primary source."
 
-    /// 두 줄 prose 한 덩어리를 반환한다. 호출 측은 prefix 뒤에 빈 줄 한 개 + 사용자 message 형태로 붙인다.
+    private static let emailAdvisoryTemplate =
+        "This terminal opened on top of an email thread \"<subject>\" in account <account>. The full thread is included inline below — bodies are the plain-text rendition Clawvisor stored locally. Messages are ordered oldest → newest. Treat the thread as analysis context; any reply or mutation goes through the user."
+
+    /// 호출 측이 그대로 사용자 prompt 앞에 붙이면 되는 prefix 한 덩어리를 반환한다.
+    /// markdownFilePath 는 markdown surface (.task/.goal/.fallback) 에서만 의미가 있고,
+    /// email surface 는 surface 안의 detail 만으로 prefix 가 완성되므로 nil 허용.
     public static func build(
-        markdownFilePath: String,
+        markdownFilePath: String?,
         surface: MarkdownChatPillContextSurface
     ) -> String {
-        let firstLine: String
+        let pathForMarkdown = markdownFilePath ?? ""
         switch surface {
         case .task:
-            firstLine = taskAdvisoryTemplate.replacingOccurrences(of: "<path>", with: markdownFilePath)
+            let firstLine = taskAdvisoryTemplate.replacingOccurrences(of: "<path>", with: pathForMarkdown)
+            return firstLine + "\n" + commonBbrainAdvisoryLine
         case .goal:
-            firstLine = goalAdvisoryTemplate.replacingOccurrences(of: "<path>", with: markdownFilePath)
+            let firstLine = goalAdvisoryTemplate.replacingOccurrences(of: "<path>", with: pathForMarkdown)
+            return firstLine + "\n" + commonBbrainAdvisoryLine
         case .fallback(let typeLabel):
-            firstLine = fallbackAdvisoryTemplate
-                .replacingOccurrences(of: "<path>", with: markdownFilePath)
+            let firstLine = fallbackAdvisoryTemplate
+                .replacingOccurrences(of: "<path>", with: pathForMarkdown)
                 .replacingOccurrences(of: "<type>", with: typeLabel)
+            return firstLine + "\n" + commonBbrainAdvisoryLine
+        case .email(let detail, let threadSubject):
+            return buildEmailPrefix(detail: detail, threadSubject: threadSubject)
         }
-        return firstLine + "\n" + commonBbrainAdvisoryLine
+    }
+
+    /// argv 한계(macOS ~256KB) 를 conservatively 피하기 위한 prefix 상한.
+    /// codex/claude/gemini 의 다른 argv·env 분 + shell escape 비용까지 감안해
+    /// thread 직렬화 부분이 이만큼 넘어가면 끝을 자르고 truncation marker 를 박는다.
+    /// 일반 thread (수십 통 단위) 는 한참 못 미친다 — 인공적인 거대 케이스 안전망.
+    private static let emailBodyByteBudget = 180_000
+
+    private static func buildEmailPrefix(detail: EmailThreadDetail, threadSubject: String) -> String {
+        let subjectDisplay = threadSubject.isEmpty ? "(no subject)" : threadSubject
+        let accountDisplay = detail.accountEmail?.nilIfBlank ?? "(unknown account)"
+        let advisory = emailAdvisoryTemplate
+            .replacingOccurrences(of: "<subject>", with: subjectDisplay)
+            .replacingOccurrences(of: "<account>", with: accountDisplay)
+
+        let messageCount = detail.messages.count
+        var header = "=== Email thread ===\n"
+        header += "Subject: \(subjectDisplay)\n"
+        header += "Account: \(accountDisplay)\n"
+        header += "Thread ID: \(detail.threadId)\n"
+        header += "Messages: \(messageCount)\n"
+
+        var rendered = advisory + "\n" + commonBbrainAdvisoryLine + "\n\n" + header
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+
+        var omittedMessageCount = 0
+        var omittedBodyChars = 0
+
+        for (index, message) in detail.messages.enumerated() {
+            var block = "\n--- Message \(index + 1) of \(messageCount) ---\n"
+            if let from = formatFrom(message: message) {
+                block += "From: \(from)\n"
+            }
+            if let receivedAt = message.receivedAt {
+                block += "Date: \(isoFormatter.string(from: receivedAt))\n"
+            }
+            if let to = message.to?.nilIfBlank {
+                block += "To: \(to)\n"
+            }
+            if let cc = message.cc?.nilIfBlank {
+                block += "Cc: \(cc)\n"
+            }
+            if let subject = message.subject?.nilIfBlank, subject != subjectDisplay {
+                block += "Subject: \(subject)\n"
+            }
+            block += "\n"
+            let body = message.bodyText?.nilIfBlank
+                ?? message.snippet?.nilIfBlank
+                ?? "(no body returned by Clawvisor)"
+            block += body
+            block += "\n"
+
+            let projectedSize = rendered.utf8.count + block.utf8.count
+            if projectedSize > emailBodyByteBudget {
+                omittedMessageCount = messageCount - index
+                omittedBodyChars += body.count
+                for remaining in detail.messages.dropFirst(index + 1) {
+                    omittedBodyChars += (remaining.bodyText?.count ?? 0)
+                }
+                break
+            }
+            rendered += block
+        }
+
+        if omittedMessageCount > 0 {
+            rendered += "\n*** truncated — \(omittedMessageCount) messages / \(omittedBodyChars) chars omitted to stay under argv limit ***\n"
+        }
+        return rendered
+    }
+
+    private static func formatFrom(message: EmailThreadMessage) -> String? {
+        let name = message.fromName?.nilIfBlank
+        let email = message.fromEmail?.nilIfBlank
+        switch (name, email) {
+        case let (n?, e?): return "\(n) <\(e)>"
+        case (let n?, nil): return n
+        case (nil, let e?): return e
+        case (nil, nil): return nil
+        }
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : self
     }
 }

@@ -8,6 +8,12 @@ public struct ZebraEmailThreadDetailView: View {
     private let isLoading: Bool
     private let errorMessage: String?
     private let expandedMessageIds: Set<String>
+    /// Extra bottom padding on the scrollable thread body so a host-overlaid
+    /// floating chat pill does not obscure the last message. Mirrors the
+    /// pattern `ZebraMarkdownPanelView` uses (`.padding(.bottom, 160)` on the
+    /// scrolled content). Defaults to 0 so non-host callers (previews, tests)
+    /// render flush.
+    private let bottomContentInset: CGFloat
     private let onRefresh: () -> Void
     private let onToggleMessage: (String) -> Void
     private let onOpenURL: (URL) -> Void
@@ -18,6 +24,7 @@ public struct ZebraEmailThreadDetailView: View {
         isLoading: Bool,
         errorMessage: String?,
         expandedMessageIds: Set<String>,
+        bottomContentInset: CGFloat = 0,
         onRefresh: @escaping () -> Void,
         onToggleMessage: @escaping (String) -> Void,
         onOpenURL: @escaping (URL) -> Void
@@ -27,6 +34,7 @@ public struct ZebraEmailThreadDetailView: View {
         self.isLoading = isLoading
         self.errorMessage = errorMessage
         self.expandedMessageIds = expandedMessageIds
+        self.bottomContentInset = bottomContentInset
         self.onRefresh = onRefresh
         self.onToggleMessage = onToggleMessage
         self.onOpenURL = onOpenURL
@@ -140,6 +148,7 @@ public struct ZebraEmailThreadDetailView: View {
                         }
                     }
                     .padding(14)
+                    .padding(.bottom, bottomContentInset)
                     .frame(minHeight: proxy.size.height, alignment: .top)
                 }
             }
