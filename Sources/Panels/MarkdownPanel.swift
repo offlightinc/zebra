@@ -124,6 +124,56 @@ final class MarkdownPanel: Panel, ObservableObject, FilePreviewTextEditingPanel 
         }
     }
 
+    /// brain-offlight 컨벤션에 맞춰 task/goal status 전이를 한 묶음으로
+    /// 처리. status 외에 updated/completed/waiting_on 자동 갱신 + body
+    /// `## Timeline` bullet append. 상세는 `BrainStatusMutator` 주석 참고.
+    /// Optimistic content 갱신을 panel 이 직접 해야 해서 `setScalar`
+    /// 처럼 in-memory variant 를 거치는 IO 패턴을 유지한다.
+    func applyStatusChange(
+        kind: BrainStatusMutator.Kind,
+        oldStatusRaw: String?,
+        newStatusRaw: String
+    ) {
+        let snapshot = content
+        let outcome = BrainStatusMutator.applyStatusChange(
+            in: snapshot,
+            kind: kind,
+            oldStatusRaw: oldStatusRaw,
+            newStatusRaw: newStatusRaw
+        )
+        guard outcome.didChange else { return }
+        do {
+            try outcome.newSource.write(toFile: filePath, atomically: true, encoding: .utf8)
+            content = outcome.newSource
+        } catch {
+            NSLog("MarkdownPanel.applyStatusChange failed: \(error)")
+        }
+    }
+
+    /// status 외의 property pill (priority/owner/due 등) 편집 시 호출.
+    /// `applyStatusChange` 와 동일하게 in-memory mutator → atomic write →
+    /// optimistic `content` 갱신 패턴.
+    func applyPropertyChange(
+        field: String,
+        oldValue: String?,
+        newValue: String?
+    ) {
+        let snapshot = content
+        let outcome = BrainStatusMutator.applyPropertyChange(
+            in: snapshot,
+            field: field,
+            oldValue: oldValue,
+            newValue: newValue
+        )
+        guard outcome.didChange else { return }
+        do {
+            try outcome.newSource.write(toFile: filePath, atomically: true, encoding: .utf8)
+            content = outcome.newSource
+        } catch {
+            NSLog("MarkdownPanel.applyPropertyChange failed: \(error)")
+        }
+    }
+
     func triggerFlash(reason: WorkspaceAttentionFlashReason) {
         _ = reason
         guard NotificationPaneFlashSettings.isEnabled() else { return }

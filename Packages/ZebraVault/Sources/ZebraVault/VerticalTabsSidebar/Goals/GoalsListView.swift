@@ -37,10 +37,15 @@ struct GoalsListView: View {
                 // 재파싱 라운드트립 없이 반영됨. unrecognizedStatusRaw 도 같이
                 // 클리어 (picker 로 선택한 valid 값이라 이전 raw 무효).
                 store.replace(entry.with(status: .some(newStatus), unrecognizedStatusRaw: .some(nil)))
-                BrainFrontmatterWriter.applyScalar(
+                // brain convention: status/updated/completed + body Timeline
+                // 까지 한 묶음으로 처리. inspector pill 경로와 동일한 의미론.
+                // unrecognizedStatusRaw 가 있으면 그게 실제 이전 raw — Timeline
+                // 에 legacy 값까지 보존하도록 fallback 순서 적용.
+                BrainStatusMutator.applyStatusChange(
                     at: entry.absolutePath,
-                    key: "status",
-                    value: newStatus.rawValue
+                    kind: .goal,
+                    oldStatusRaw: entry.unrecognizedStatusRaw ?? entry.status?.rawValue,
+                    newStatusRaw: newStatus.rawValue
                 )
             }
         )

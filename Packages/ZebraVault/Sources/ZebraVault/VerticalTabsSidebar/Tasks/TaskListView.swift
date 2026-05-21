@@ -201,12 +201,29 @@ struct TaskListView: View {
         // updates without waiting for the file-system round-trip. Watcher
         // reparse later reconciles (same value → no visible jump).
         store.replace(task.with(status: .some(newStatus), unrecognizedStatusRaw: .some(nil)))
-        applyFrontmatter(task: task, key: "status", value: newStatus.rawValue)
+        // status 변경은 brain convention 에 따라 status/updated/completed/
+        // waiting_on + body Timeline 까지 한 묶음으로 처리. 다른 필드(priority/
+        // due) 는 기존 단일-키 writeback 경로 유지.
+        // oldStatusRaw 는 unrecognizedStatusRaw 를 먼저 보고(legacy raw 보존),
+        // 없을 때만 status enum 의 rawValue 로 fall back — Timeline 에 'doing'
+        // 같은 legacy 값도 살아남도록.
+        BrainStatusMutator.applyStatusChange(
+            at: task.absolutePath,
+            kind: .task,
+            oldStatusRaw: task.unrecognizedStatusRaw ?? task.status?.rawValue,
+            newStatusRaw: newStatus.rawValue
+        )
+        // File watcher in TaskFileListStore picks the change up and reparses.
     }
 
     private func writePriority(task: TaskItem, newPriority: BrainPriority?) {
         store.replace(task.with(priority: .some(newPriority)))
-        applyFrontmatter(task: task, key: "priority", value: newPriority?.rawValue)
+        BrainStatusMutator.applyPropertyChange(
+            at: task.absolutePath,
+            field: "priority",
+            oldValue: task.priority?.rawValue,
+            newValue: newPriority?.rawValue
+        )
     }
 
     private func writeDue(task: TaskItem, newDate: Date?) {
@@ -215,11 +232,13 @@ struct TaskListView: View {
         df.locale = Locale(identifier: "en_US_POSIX")
         df.dateFormat = "yyyy-MM-dd"
         df.timeZone = TimeZone(identifier: "UTC")
-        applyFrontmatter(task: task, key: "due", value: newDate.map { df.string(from: $0) })
-    }
-
-    private func applyFrontmatter(task: TaskItem, key: String, value: String?) {
-        BrainFrontmatterWriter.applyScalar(at: task.absolutePath, key: key, value: value)
-        // File watcher in TaskFileListStore picks the change up and reparses.
+        let oldSerialized = task.dueDate.map { df.string(from: $0) }
+        let newSerialized = newDate.map { df.string(from: $0) }
+        BrainStatusMutator.applyPropertyChange(
+            at: task.absolutePath,
+            field: "due",
+            oldValue: oldSerialized,
+            newValue: newSerialized
+        )
     }
 }

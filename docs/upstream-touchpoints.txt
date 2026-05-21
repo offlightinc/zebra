@@ -6,7 +6,7 @@
 Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment + ZebraSidebarDefaults.defaultWidth fallback
 Sources/ContentView.swift                  # SidebarSlots composer + \.sidebarExtraLeadingInset + commandPalette PanelType.email branches
 Sources/Panels/PanelContentView.swift      # \.markdownPanelViewFactory + \.customPanelViewFactory + PanelType.email render branch
-Sources/Panels/MarkdownPanel.swift         # didCloseNotification + updateFrontmatter
+Sources/Panels/MarkdownPanel.swift         # didCloseNotification + updateFrontmatter + applyStatusChange + applyPropertyChange
 Sources/Panels/Panel.swift                 # PanelType.email case (Zebra-owned panel kind, rendered via customPanelViewFactory seam)
 Sources/Workspace.swift                    # SurfaceKind.email + PanelType.email branches in surfaceKind / session snapshot / createPanel
 Sources/CmuxLifecycleEventPublishing.swift # cmuxEventSurfaceKind PanelType.email branch

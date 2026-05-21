@@ -18,6 +18,22 @@ public protocol ZebraMarkdownPanelModel: ObservableObject {
     /// Drives a SwiftUI `.onChange` in `ZebraMarkdownPanelView`.
     var focusFlashToken: Int { get }
     func updateFrontmatter(key: String, value: String?)
+    /// brain-offlight 컨벤션에 맞춰 task/goal status 전이를 한 묶음으로 처리
+    /// (status/updated/completed 필드 + body Timeline append).
+    /// 상세는 `BrainStatusMutator.applyStatusChange`.
+    func applyStatusChange(
+        kind: BrainStatusMutator.Kind,
+        oldStatusRaw: String?,
+        newStatusRaw: String
+    )
+    /// 일반 property (priority/owner/reviewer/due/target_date/review_cadence 등)
+    /// 변경. `<field>:` 갱신 + `updated:` bump + body Timeline append 를 한
+    /// 묶음으로 처리. status 는 별도 의미론이 있으므로 `applyStatusChange` 사용.
+    func applyPropertyChange(
+        field: String,
+        oldValue: String?,
+        newValue: String?
+    )
 }
 
 @MainActor

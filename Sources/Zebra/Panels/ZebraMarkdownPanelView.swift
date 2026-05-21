@@ -152,6 +152,14 @@ struct ZebraMarkdownPanelView<
                 onUpdateFrontmatter: { key, value in
                     panel.updateFrontmatter(key: key, value: value)
                     markdownFileListStore.refreshVaultIndex(reason: "markdownPanel.frontmatter")
+                },
+                onChangeStatus: { kind, oldRaw, newRaw in
+                    panel.applyStatusChange(kind: kind, oldStatusRaw: oldRaw, newStatusRaw: newRaw)
+                    markdownFileListStore.refreshVaultIndex(reason: "markdownPanel.statusChange")
+                },
+                onChangeProperty: { field, oldValue, newValue in
+                    panel.applyPropertyChange(field: field, oldValue: oldValue, newValue: newValue)
+                    markdownFileListStore.refreshVaultIndex(reason: "markdownPanel.propertyChange")
                 }
             )
             .frame(width: CGFloat(resolvedInspectorWidth))
