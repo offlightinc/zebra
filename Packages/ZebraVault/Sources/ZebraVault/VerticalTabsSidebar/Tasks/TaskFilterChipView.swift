@@ -79,6 +79,79 @@ struct TaskFilterChipView: View {
     }
 }
 
+struct TaskMyFilterChipView: View {
+    let filter: TaskFilter
+    let onEdit: () -> Void
+    let onRemove: () -> Void
+
+    @State private var closeHover = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button(action: onEdit) {
+                HStack(spacing: 4) {
+                    MyTasksGlyph()
+                    Text(String(localized: "task.filter.my", defaultValue: "My"))
+                        .foregroundColor(BVColor.fgMute)
+                    Text(filter.op.symbol)
+                        .foregroundColor(BVColor.fgFaint)
+                        .padding(.horizontal, 2)
+                    Text(valueLabel)
+                        .foregroundColor(BVColor.fg)
+                }
+                .font(.system(size: 11))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(closeHover ? BVColor.fg : BVColor.fgFaint)
+                    .frame(width: 14, height: 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(closeHover ? BVColor.bgHover : Color.clear)
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { closeHover = $0 }
+        }
+        .padding(.leading, 7).padding(.trailing, 2)
+        .frame(height: 20)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(BVColor.bgInput)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(BVColor.border))
+        )
+    }
+
+    private var valueLabel: String {
+        if filter.values.isEmpty {
+            return String(localized: "task.filter.empty", defaultValue: "(none)")
+        }
+        let displayed = filter.values.prefix(2).joined(separator: ", ")
+        let extra = filter.values.count > 2 ? " +\(filter.values.count - 2)" : ""
+        return displayed + extra
+    }
+}
+
+struct MyTasksGlyph: View {
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Image(systemName: "person.fill")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(BVColor.accent)
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 6.5, weight: .bold))
+                .foregroundColor(BVColor.statusCompleted)
+                .background(Circle().fill(BVColor.bgElev).frame(width: 5, height: 5))
+                .offset(x: 3, y: 2)
+        }
+        .frame(width: 14, height: 14)
+    }
+}
+
 /// HTML `.chiprow { flex-wrap: wrap; gap: 5px; }` 와 동치인 줄바꿈 HStack.
 /// 컨테이너 너비를 넘는 자식은 다음 줄로 흐른다. Layout 프로토콜 기반(macOS 13+).
 struct TaskChipFlowLayout: Layout {

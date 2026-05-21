@@ -6,6 +6,7 @@ struct TaskListView: View {
     let onSelectFile: (String) -> Void
     @StateObject private var viewModel = TaskListViewModel()
     @State private var filterStep: TaskFilterPopoverStep?
+    @State private var showMyOwnerMenu = false
 
     var body: some View {
         // Read store.tasks directly in body so SwiftUI's ObservedObject
@@ -18,9 +19,11 @@ struct TaskListView: View {
             collapseAllToolbar(tasks: tasksSnapshot)
             TaskListToolbar(
                 groupBy: viewModel.groupBy,
+                myOwnerFilter: viewModel.myOwnerFilter,
                 existingFilterFields: Set(viewModel.filters.map(\.field)),
                 availableOwners: availableOwners,
                 filterStep: $filterStep,
+                showMyOwnerMenu: $showMyOwnerMenu,
                 currentFilter: { field in
                     viewModel.filters.first(where: { $0.field == field })
                         ?? TaskFilter(field: field, op: .is, values: [])
@@ -33,6 +36,9 @@ struct TaskListView: View {
                 },
                 onChangeFilterValues: { updated in
                     viewModel.setFilter(updated)
+                },
+                onChangeMyOwnerFilter: { updated in
+                    viewModel.myOwnerFilter = updated
                 },
                 onCloseFilter: {
                     // Empty values → remove the chip on dismiss.
@@ -108,6 +114,8 @@ struct TaskListView: View {
             placeholder(String(localized: "task.list.empty.error", defaultValue: "Failed to load: \(error)"))
         } else if tasks.isEmpty {
             placeholder(String(localized: "task.list.empty.noTasks", defaultValue: "No tasks in vault"))
+        } else if viewModel.visibleTasks(from: tasks).isEmpty {
+            placeholder(String(localized: "task.list.empty.noMatches", defaultValue: "No matching tasks"))
         } else {
             listScrollView(tasks: tasks)
         }
@@ -151,7 +159,7 @@ struct TaskListView: View {
     }
 
     private func listScrollView(tasks: [TaskItem]) -> some View {
-        let filtered = TaskListViewModel.applyFilters(tasks, viewModel.filters)
+        let filtered = viewModel.visibleTasks(from: tasks)
         let groups = TaskListViewModel.groupTasks(filtered, by: viewModel.groupBy)
         return ScrollView {
             LazyVStack(spacing: 0, pinnedViews: []) {

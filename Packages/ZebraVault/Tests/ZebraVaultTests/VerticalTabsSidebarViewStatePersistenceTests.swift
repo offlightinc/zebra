@@ -5,13 +5,15 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
     func testTaskStateRoundTripsByRootPath() throws {
         let defaults = try makeDefaults()
         let root = "/tmp/zebra/tasks"
+        let myFilter = TaskFilter(field: .owner, op: .is, values: ["여한우리", "홍남호"])
         let state = VerticalTabsSidebarViewStatePersistence.TaskState(
             groupBy: .owner,
             filters: [
                 TaskFilter(field: .status, op: .is, values: ["todo"]),
                 TaskFilter(field: .owner, op: .isNot, values: ["여한우리"]),
             ],
-            collapsedSections: ["todo", "done"]
+            collapsedSections: ["todo", "done"],
+            myOwnerFilter: myFilter
         )
 
         VerticalTabsSidebarViewStatePersistence.saveTaskState(state, rootPath: root, defaults: defaults)
@@ -20,6 +22,23 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
         XCTAssertEqual(restored.resolvedGroupBy, .owner)
         XCTAssertEqual(restored.resolvedFilters, state.resolvedFilters)
         XCTAssertEqual(Set(restored.collapsedSections), ["todo", "done"])
+        XCTAssertEqual(restored.resolvedMyOwnerFilter, myFilter)
+    }
+
+    func testTaskStateNilMyOwnerFilterRoundTrips() throws {
+        let defaults = try makeDefaults()
+        let root = "/tmp/zebra/tasks-empty-my"
+        let state = VerticalTabsSidebarViewStatePersistence.TaskState(
+            groupBy: .status,
+            filters: [],
+            collapsedSections: [],
+            myOwnerFilter: nil
+        )
+
+        VerticalTabsSidebarViewStatePersistence.saveTaskState(state, rootPath: root, defaults: defaults)
+        let restored = VerticalTabsSidebarViewStatePersistence.loadTaskState(rootPath: root, defaults: defaults)
+
+        XCTAssertNil(restored.resolvedMyOwnerFilter)
     }
 
     func testDocumentStateIsScopedByRootPath() throws {

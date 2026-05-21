@@ -1,96 +1,146 @@
 import SwiftUI
 
-/// Two-step filter popover state. Both steps share the same anchor (the
-/// Filter button) so the popover transitions in place rather than moving.
+/// Two-step filter popover state for the Filter button. The "내 것" toolbar
+/// entry uses its own state (`showMyOwnerMenu`) and does not flow through here.
 enum TaskFilterPopoverStep: Equatable {
     case field
     case value(TaskFilterField)
 }
 
-/// Top toolbar: `+ Filter` (left) + `Group: …` (right).
+/// Top toolbar: `+ Filter` (left) + `Group: …` + `내 것` toggle (right).
 struct TaskListToolbar: View {
     let groupBy: TaskGroupBy
+    let myOwnerFilter: TaskFilter?
     let existingFilterFields: Set<TaskFilterField>
     let availableOwners: [String]
     @Binding var filterStep: TaskFilterPopoverStep?
+    @Binding var showMyOwnerMenu: Bool
     let currentFilter: (TaskFilterField) -> TaskFilter
     let onPickGroupBy: (TaskGroupBy) -> Void
     let onPickField: (TaskFilterField) -> Void
     let onChangeFilterValues: (TaskFilter) -> Void
+    let onChangeMyOwnerFilter: (TaskFilter?) -> Void
     let onCloseFilter: () -> Void
 
     @State private var showGroupByMenu = false
     @State private var filterHover = false
     @State private var groupHover = false
+    @State private var myHover = false
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(action: {
-                if filterStep == nil {
-                    filterStep = .field
-                } else {
-                    // 닫기 경로에서도 binding setter처럼 빈 칩을 정리해야 한다.
-                    // (단순히 filterStep=nil만 하면 binding setter가 안 거쳐서
-                    // 값 없이 추가된 필터가 (none) 칩으로 남는다.)
-                    onCloseFilter()
-                    filterStep = nil
-                }
-            }) {
-                HStack(spacing: 5) {
-                    FilterFunnelIcon()
-                        .frame(width: 12, height: 12)
-                    Text(String(localized: "task.toolbar.filter", defaultValue: "Filter"))
-                        .font(.system(size: 11.5))
-                }
-                .foregroundColor(BVColor.fgMute)
-                .padding(.horizontal, 7).padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(filterHover ? BVColor.bgHover : Color.clear)
-                )
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .onHover { filterHover = $0 }
-            .panelPopover(isPresented: filterPopoverPresented, alignment: .leading) {
-                filterPopoverContent
-            }
-            Spacer()
-            Button(action: { showGroupByMenu = true }) {
-                HStack(spacing: 5) {
-                    Text(String(localized: "task.toolbar.group", defaultValue: "Group"))
-                        .font(.system(size: 11.5))
-                        .foregroundColor(BVColor.fgMute)
-                    Text(groupBy.label)
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundColor(BVColor.fg)
-                    // 가로:세로 약 1.8:1 비율의 납작한 down-triangle. macOS SF Pro의
-                    // "▾" U+25BE는 정사각에 가까워 HTML 디자인의 납작한 비율과 다르다.
-                    FlatDownCarat()
-                        .fill(BVColor.fgMute)
-                        .frame(width: 4.5, height: 2.5)
-                        .padding(.leading, 3)
-                }
-                .padding(.horizontal, 7).padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(groupHover ? BVColor.bgHover : Color.clear)
-                )
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .onHover { groupHover = $0 }
-            .panelPopover(isPresented: $showGroupByMenu, alignment: .trailing) {
-                TaskGroupByPicker(current: groupBy) { opt in
-                    showGroupByMenu = false
-                    onPickGroupBy(opt)
-                }
+            filterButton
+            Spacer(minLength: 0)
+            HStack(spacing: 0) {
+                groupButton
+                myToggleButton
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(BVColor.bg)
         .overlay(alignment: .bottom) {
             Rectangle().fill(BVColor.border).frame(height: 1)
+        }
+    }
+
+    private var isMyActive: Bool {
+        guard let mf = myOwnerFilter else { return false }
+        return !mf.values.isEmpty
+    }
+
+    private var filterButton: some View {
+        Button(action: {
+            if filterStep == nil {
+                filterStep = .field
+            } else {
+                // 닫기 경로에서도 binding setter처럼 빈 칩을 정리해야 한다.
+                // (단순히 filterStep=nil만 하면 binding setter가 안 거쳐서
+                // 값 없이 추가된 필터가 (none) 칩으로 남는다.)
+                onCloseFilter()
+                filterStep = nil
+            }
+        }) {
+            HStack(spacing: 5) {
+                FilterFunnelIcon()
+                    .frame(width: 12, height: 12)
+                Text(String(localized: "task.toolbar.filter", defaultValue: "Filter"))
+                    .font(.system(size: 11.5))
+            }
+            .foregroundColor(BVColor.fgMute)
+            .padding(.horizontal, 7).padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(filterHover ? BVColor.bgHover : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { filterHover = $0 }
+        .panelPopover(isPresented: filterPopoverPresented, alignment: .leading) {
+            filterPopoverContent
+        }
+    }
+
+    private var myToggleButton: some View {
+        Button(action: { showMyOwnerMenu = true }) {
+            Image(systemName: isMyActive ? "person.crop.circle.fill" : "person.crop.circle")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(isMyActive ? BVColor.accent : BVColor.fgMute)
+                .padding(.horizontal, 7).padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(myHover ? BVColor.bgHover : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { myHover = $0 }
+        .panelPopover(isPresented: $showMyOwnerMenu, alignment: .trailing) {
+            TaskFilterValuePicker(
+                field: .owner,
+                current: myOwnerFilter ?? TaskFilter(field: .owner, op: .is, values: []),
+                availableOwners: availableOwners,
+                onChange: { updated in
+                    onChangeMyOwnerFilter(updated.values.isEmpty ? nil : updated)
+                },
+                compact: true
+            )
+        }
+        .safeHelp(
+            String(localized: "task.toolbar.my.tooltip", defaultValue: "Show my tasks")
+        )
+    }
+
+    private var groupButton: some View {
+        Button(action: { showGroupByMenu = true }) {
+            HStack(spacing: 5) {
+                Text(String(localized: "task.toolbar.group", defaultValue: "Group"))
+                    .font(.system(size: 11.5))
+                    .foregroundColor(BVColor.fgMute)
+                Text(groupBy.label)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(BVColor.fg)
+                // 가로:세로 약 1.8:1 비율의 납작한 down-triangle. macOS SF Pro의
+                // "▾" U+25BE는 정사각에 가까워 HTML 디자인의 납작한 비율과 다르다.
+                FlatDownCarat()
+                    .fill(BVColor.fgMute)
+                    .frame(width: 4.5, height: 2.5)
+                    .padding(.leading, 3)
+            }
+            .padding(.horizontal, 7).padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(groupHover ? BVColor.bgHover : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { groupHover = $0 }
+        .panelPopover(isPresented: $showGroupByMenu, alignment: .trailing) {
+            TaskGroupByPicker(current: groupBy) { opt in
+                showGroupByMenu = false
+                onPickGroupBy(opt)
+            }
         }
     }
 
@@ -110,10 +160,13 @@ struct TaskListToolbar: View {
     private var filterPopoverContent: some View {
         switch filterStep {
         case .field, .none:
-            TaskFilterFieldPicker(existingFields: existingFilterFields) { field in
-                onPickField(field)
-                filterStep = .value(field)
-            }
+            TaskFilterFieldPicker(
+                existingFields: existingFilterFields,
+                onSelect: { field in
+                    onPickField(field)
+                    filterStep = .value(field)
+                }
+            )
         case .value(let field):
             // `.id(field)` forces a fresh view instance per field so that
             // TaskFilterValuePicker's @State (workingValues/workingOp) does

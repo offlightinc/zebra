@@ -8,11 +8,13 @@ enum VerticalTabsSidebarViewStatePersistence {
         var groupBy: String
         var filters: [TaskFilterState]
         var collapsedSections: [String]
+        var myOwnerFilter: TaskFilterState?
 
         static let empty = TaskState(
             groupBy: TaskGroupBy.status.rawValue,
             filters: [],
-            collapsedSections: []
+            collapsedSections: [],
+            myOwnerFilter: nil
         )
     }
 
@@ -81,11 +83,17 @@ extension VerticalTabsSidebarViewStatePersistence.TaskState {
     init(
         groupBy: TaskGroupBy,
         filters: [TaskFilter],
-        collapsedSections: Set<String>
+        collapsedSections: Set<String>,
+        myOwnerFilter: TaskFilter?
     ) {
         self.groupBy = groupBy.rawValue
         self.filters = filters.map(VerticalTabsSidebarViewStatePersistence.TaskFilterState.init(filter:))
         self.collapsedSections = collapsedSections.sorted()
+        self.myOwnerFilter = myOwnerFilter.map(VerticalTabsSidebarViewStatePersistence.TaskFilterState.init(filter:))
+    }
+
+    var resolvedMyOwnerFilter: TaskFilter? {
+        myOwnerFilter?.resolvedFilter
     }
 
     var resolvedGroupBy: TaskGroupBy {

@@ -8,6 +8,9 @@ struct TaskFilterValuePicker: View {
     let current: TaskFilter
     let availableOwners: [String]
     let onChange: (TaskFilter) -> Void
+    /// `true` 일 때 헤더 ("담당자 =") 와 하단 op 토글을 숨긴다. "내 것" toolbar
+    /// 진입처럼 op 가 항상 `.is` 고정인 컨텍스트에서 사용.
+    let compact: Bool
 
     @State private var workingValues: [String]
     @State private var workingOp: TaskFilterOp
@@ -16,43 +19,47 @@ struct TaskFilterValuePicker: View {
         field: TaskFilterField,
         current: TaskFilter,
         availableOwners: [String],
-        onChange: @escaping (TaskFilter) -> Void
+        onChange: @escaping (TaskFilter) -> Void,
+        compact: Bool = false
     ) {
         self.field = field
         self.current = current
         self.availableOwners = availableOwners
         self.onChange = onChange
+        self.compact = compact
         _workingValues = State(initialValue: current.values)
         _workingOp = State(initialValue: current.op)
     }
 
     var body: some View {
         PickerContainer(
-            title: "\(field.label) \(workingOp.symbol)",
+            title: compact ? nil : "\(field.label) \(workingOp.symbol)",
             width: 200
         ) {
             valueRows
 
-            Divider()
-                .padding(.vertical, 4)
+            if !compact {
+                Divider()
+                    .padding(.vertical, 4)
 
-            Button(action: toggleOp) {
-                HStack {
-                    // ko/ja 번역은 xcstrings에 들어있다 (task.filter.useIs 등).
-                    // defaultValue는 영어 표준 — 런타임에 시스템 언어에 맞춰
-                    // 적절한 번역으로 치환된다.
-                    Text(workingOp == .is
-                        ? String(localized: "task.filter.useIsNot", defaultValue: "Use \"is not\" operator")
-                        : String(localized: "task.filter.useIs", defaultValue: "Use \"is\" operator"))
-                        .font(.system(size: 11.5))
-                        .foregroundColor(BVColor.fgMute)
-                    Spacer()
+                Button(action: toggleOp) {
+                    HStack {
+                        // ko/ja 번역은 xcstrings에 들어있다 (task.filter.useIs 등).
+                        // defaultValue는 영어 표준 — 런타임에 시스템 언어에 맞춰
+                        // 적절한 번역으로 치환된다.
+                        Text(workingOp == .is
+                            ? String(localized: "task.filter.useIsNot", defaultValue: "Use \"is not\" operator")
+                            : String(localized: "task.filter.useIs", defaultValue: "Use \"is\" operator"))
+                            .font(.system(size: 11.5))
+                            .foregroundColor(BVColor.fgMute)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 8).frame(height: 24)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 8).frame(height: 24)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .padding(.horizontal, 4)
             }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 4)
         }
     }
 
@@ -108,9 +115,11 @@ struct TaskFilterValuePicker: View {
     private func glyphView(raw: String) -> some View {
         switch field {
         case .status:
-            // `__unrecognized__`처럼 rawValue 매핑 실패하면 nil → StatusGlyph가
-            // fgFaint outlined circle로 fallback 렌더.
-            StatusGlyph(status: BrainTaskStatus(rawValue: raw))
+            if raw == "__unrecognized__" {
+                StatusGlyph(shape: .unknown)
+            } else if let status = BrainTaskStatus(rawValue: raw) {
+                StatusGlyph(shape: status.glyphShape)
+            }
         case .priority:
             if raw == "__none__" {
                 TaskNoPriorityGlyph()

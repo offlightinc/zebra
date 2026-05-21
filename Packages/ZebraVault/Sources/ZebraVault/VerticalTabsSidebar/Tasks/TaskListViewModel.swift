@@ -78,6 +78,12 @@ final class TaskListViewModel: ObservableObject {
     @Published var collapsedSections: Set<String> = [] {
         didSet { persistState() }
     }
+    /// Owner filter applied via the "내 것" toolbar entry-point. Kept separate from
+    /// `filters` so the chip row can render it as a distinct chip and the toolbar
+    /// can own its own popover. nil = inactive.
+    @Published var myOwnerFilter: TaskFilter? = nil {
+        didSet { persistState() }
+    }
 
     private var persistenceRootPath: String?
     private var isRestoringState = false
@@ -91,6 +97,7 @@ final class TaskListViewModel: ObservableObject {
         groupBy = restored.resolvedGroupBy
         filters = restored.resolvedFilters
         collapsedSections = Set(restored.collapsedSections)
+        myOwnerFilter = restored.resolvedMyOwnerFilter
         isRestoringState = false
     }
 
@@ -107,7 +114,11 @@ final class TaskListViewModel: ObservableObject {
     }
 
     func visibleTasks(from tasks: [TaskItem]) -> [TaskItem] {
-        Self.applyFilters(tasks, filters)
+        var allFilters = filters
+        if let mf = myOwnerFilter, !mf.values.isEmpty {
+            allFilters.append(mf)
+        }
+        return Self.applyFilters(tasks, allFilters)
     }
 
     private func persistState() {
@@ -117,7 +128,8 @@ final class TaskListViewModel: ObservableObject {
             VerticalTabsSidebarViewStatePersistence.TaskState(
                 groupBy: groupBy,
                 filters: filters,
-                collapsedSections: collapsedSections
+                collapsedSections: collapsedSections,
+                myOwnerFilter: myOwnerFilter
             ),
             rootPath: rootPath
         )
