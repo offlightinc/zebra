@@ -91,10 +91,7 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
         // capture the latest SwiftUI state (text binding, callbacks).
         context.coordinator.parent = self
 
-        if textView.string != text {
-            // External text mutation (e.g. slash-pick replaced the line).
-            // Move the caret to the end to match the prior behavior.
-            textView.string = text
+        if Self.syncExternalTextIfNeeded(textView, text: text) {
             Self.moveCaretToEnd(textView)
         }
 
@@ -110,9 +107,23 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
                 window.makeFirstResponder(textView)
                 // SwiftUI parent re-expanding the pill expects the caret at
                 // the end of the preserved text, not the implicit start.
-                Self.moveCaretToEnd(textView)
+                if !textView.hasMarkedText() {
+                    Self.moveCaretToEnd(textView)
+                }
             }
         }
+    }
+
+    /// Sync external SwiftUI text mutations (e.g. slash-pick replaced the
+    /// line) into the native editor. During IME composition, NSTextView owns
+    /// the in-progress marked text; overwriting `string` here can discard a
+    /// partially-composed Korean syllable.
+    @discardableResult
+    static func syncExternalTextIfNeeded(_ textView: NSTextView, text: String) -> Bool {
+        guard textView.string != text else { return false }
+        guard !textView.hasMarkedText() else { return false }
+        textView.string = text
+        return true
     }
 
     /// Collapse selection to a zero-length range at the end of the text
@@ -151,6 +162,7 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             switch selector {
             case #selector(NSResponder.insertNewline(_:)):
+                guard !textView.hasMarkedText() else { return false }
                 let mods = NSApp.currentEvent?.modifierFlags
                     .intersection(.deviceIndependentFlagsMask)
                     .subtracting([.numericPad, .function, .capsLock]) ?? []
@@ -160,10 +172,13 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
                 parent.onReturn()
                 return true
             case #selector(NSResponder.moveUp(_:)):
+                guard !textView.hasMarkedText() else { return false }
                 return parent.onMoveUp()
             case #selector(NSResponder.moveDown(_:)):
+                guard !textView.hasMarkedText() else { return false }
                 return parent.onMoveDown()
             case #selector(NSResponder.cancelOperation(_:)):
+                guard !textView.hasMarkedText() else { return false }
                 return parent.onCancel()
             default:
                 return false
