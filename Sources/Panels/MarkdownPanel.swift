@@ -103,36 +103,17 @@ final class MarkdownPanel: Panel, ObservableObject, FilePreviewTextEditingPanel 
         NotificationCenter.default.post(name: Self.didCloseNotification, object: self)
     }
 
-    /// Write a single frontmatter key back to disk. `value == nil` removes
-    /// the key. The file watcher will pick up the change, but we also do an
-    /// optimistic local update so the UI snaps before the watcher round-trip
-    /// completes.
-    ///
-    /// Lives on the panel (not on the Zebra side-car controller) because
-    /// it has to mutate `content`, which is `@Published private(set)`.
-    /// `MarkdownPanelController` subscribes to `panel.$content` and re-parses
-    /// automatically — no extra coupling needed.
-    func updateFrontmatter(key: String, value: String?) {
-        let snapshot = content
-        let newText = BrainFrontmatterWriter.setScalar(key, to: value, in: snapshot)
-        guard newText != snapshot else { return }
-        do {
-            try newText.write(toFile: filePath, atomically: true, encoding: .utf8)
-            content = newText
-        } catch {
-            NSLog("MarkdownPanel.updateFrontmatter failed for key=\(key): \(error)")
-        }
-    }
-
     /// brain-offlight 컨벤션에 맞춰 task/goal status 전이를 한 묶음으로
-    /// 처리. status 외에 updated/completed/waiting_on 자동 갱신 + body
-    /// `## Timeline` bullet append. 상세는 `BrainStatusMutator` 주석 참고.
-    /// Optimistic content 갱신을 panel 이 직접 해야 해서 `setScalar`
-    /// 처럼 in-memory variant 를 거치는 IO 패턴을 유지한다.
+    /// 처리. status / updated / completed 자동 갱신 + body `## Timeline`
+    /// bullet append. `newStatusRaw == nil` 이면 status 키 자체를 비움 +
+    /// Timeline 에 비우기 기록. 상세는 `BrainStatusMutator` 주석.
+    ///
+    /// Optimistic content 갱신을 panel 이 직접 해야 해서 in-memory mutator
+    /// 호출 → atomic write → `content` 재대입 IO 패턴을 유지한다.
     func applyStatusChange(
         kind: BrainStatusMutator.Kind,
         oldStatusRaw: String?,
-        newStatusRaw: String
+        newStatusRaw: String?
     ) {
         let snapshot = content
         let outcome = BrainStatusMutator.applyStatusChange(

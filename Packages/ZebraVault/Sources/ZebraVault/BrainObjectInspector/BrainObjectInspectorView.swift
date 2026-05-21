@@ -9,15 +9,11 @@ public struct BrainObjectInspectorView: View {
     /// Best-effort link routing. v0.1 stubs this — the design contract says
     /// rows stay clickable even when the target cannot be resolved.
     public var onActivateRelation: ((BrainObjectRef) -> Void)? = nil
-    /// 단일 키 frontmatter mutation. Status 를 nil 로 비우는 fallback 등
-    /// Timeline 기록을 원하지 않는 희귀 케이스에만 사용. 일반 property 편집은
-    /// `onChangeProperty` 로 라우팅 — Timeline + updated bump 가 같이 따라온다.
-    public var onUpdateFrontmatter: ((String, String?) -> Void)? = nil
     /// Task/goal status 전이. brain convention 에 맞춰 status/updated/
     /// completed 다중 필드 + body Timeline 까지 한 묶음으로 처리. user 가
-    /// status 를 비우는(nil) 케이스는 여기 들어오지 않고
-    /// `onUpdateFrontmatter("status", nil)` 로 fall back.
-    public var onChangeStatus: ((BrainStatusMutator.Kind, _ oldStatusRaw: String?, _ newStatusRaw: String) -> Void)? = nil
+    /// status 를 비우는 케이스도 newStatusRaw == nil 로 같은 경로를 거쳐
+    /// Timeline 에 기록된다.
+    public var onChangeStatus: ((BrainStatusMutator.Kind, _ oldStatusRaw: String?, _ newStatusRaw: String?) -> Void)? = nil
     /// status 외 property (priority/owner/reviewer/due/target_date/
     /// review_cadence 등) 편집. `<field>:` 갱신 + `updated:` bump + body
     /// Timeline bullet 까지 한 묶음으로 처리.
@@ -26,13 +22,11 @@ public struct BrainObjectInspectorView: View {
     public init(
         parse: BrainObjectParse?,
         onActivateRelation: ((BrainObjectRef) -> Void)? = nil,
-        onUpdateFrontmatter: ((String, String?) -> Void)? = nil,
-        onChangeStatus: ((BrainStatusMutator.Kind, String?, String) -> Void)? = nil,
+        onChangeStatus: ((BrainStatusMutator.Kind, String?, String?) -> Void)? = nil,
         onChangeProperty: ((String, String?, String?) -> Void)? = nil
     ) {
         self.parse = parse
         self.onActivateRelation = onActivateRelation
-        self.onUpdateFrontmatter = onUpdateFrontmatter
         self.onChangeStatus = onChangeStatus
         self.onChangeProperty = onChangeProperty
     }
@@ -52,8 +46,8 @@ public struct BrainObjectInspectorView: View {
             LoadingInspectorView()
         case .some(.success(let object)):
             switch object {
-            case .task(let t): TaskInspectorView(task: t, onActivateRelation: onActivateRelation, onUpdateFrontmatter: onUpdateFrontmatter, onChangeStatus: onChangeStatus, onChangeProperty: onChangeProperty)
-            case .goal(let g): GoalInspectorView(goal: g, onActivateRelation: onActivateRelation, onUpdateFrontmatter: onUpdateFrontmatter, onChangeStatus: onChangeStatus, onChangeProperty: onChangeProperty)
+            case .task(let t): TaskInspectorView(task: t, onActivateRelation: onActivateRelation, onChangeStatus: onChangeStatus, onChangeProperty: onChangeProperty)
+            case .goal(let g): GoalInspectorView(goal: g, onActivateRelation: onActivateRelation, onChangeStatus: onChangeStatus, onChangeProperty: onChangeProperty)
             case .note(let n): DocInspectorView(note: n, onActivateRelation: onActivateRelation)
             case .unknown(let u): UnknownInspectorView(unknown: u)
             }
@@ -68,8 +62,7 @@ public struct BrainObjectInspectorView: View {
 public struct TaskInspectorView: View {
     public let task: TaskObject
     public var onActivateRelation: ((BrainObjectRef) -> Void)? = nil
-    public var onUpdateFrontmatter: ((String, String?) -> Void)? = nil
-    public var onChangeStatus: ((BrainStatusMutator.Kind, String?, String) -> Void)? = nil
+    public var onChangeStatus: ((BrainStatusMutator.Kind, String?, String?) -> Void)? = nil
     public var onChangeProperty: ((String, String?, String?) -> Void)? = nil
 
     @EnvironmentObject private var personFileListStore: PersonFileListStore
@@ -93,13 +86,9 @@ public struct TaskInspectorView: View {
                 InspectorSection {
                     PropertyRow(label: String(localized: "brain.row.status", defaultValue: "Status"), icon: "circle.dotted") {
                         EditableTaskStatusPill(value: task.status) { newStatus in
-                            if let newStatus {
-                                onChangeStatus?(.task, task.status?.rawValue, newStatus.rawValue)
-                            } else {
-                                // status 키 자체를 비우는 케이스는 brain 컨벤션상
-                                // 드물어 Timeline 으로 기록하지 않고 단순 키 제거.
-                                onUpdateFrontmatter?("status", nil)
-                            }
+                            // 비우기 케이스도 같은 mutator 경로로 — Timeline 에
+                            // "todo → (none)" 형태로 기록되어 provenance 가 유지된다.
+                            onChangeStatus?(.task, task.status?.rawValue, newStatus?.rawValue)
                         }
                     }
                     PropertyRow(label: String(localized: "brain.row.priority", defaultValue: "Priority"), icon: "flag") {
@@ -205,8 +194,7 @@ public struct TaskInspectorView: View {
 public struct GoalInspectorView: View {
     public let goal: GoalObject
     public var onActivateRelation: ((BrainObjectRef) -> Void)? = nil
-    public var onUpdateFrontmatter: ((String, String?) -> Void)? = nil
-    public var onChangeStatus: ((BrainStatusMutator.Kind, String?, String) -> Void)? = nil
+    public var onChangeStatus: ((BrainStatusMutator.Kind, String?, String?) -> Void)? = nil
     public var onChangeProperty: ((String, String?, String?) -> Void)? = nil
 
     @EnvironmentObject private var personFileListStore: PersonFileListStore
@@ -230,13 +218,10 @@ public struct GoalInspectorView: View {
                     InspectorSection {
                         PropertyRow(label: String(localized: "brain.row.status", defaultValue: "Status"), icon: "circle.dotted") {
                             EditableGoalStatusPill(value: goal.status, unrecognizedRaw: goal.unrecognizedStatusRaw) { newStatus in
-                                if let newStatus {
-                                    // unrecognizedRaw 가 있으면 그게 실제 이전 raw —
-                                    // Timeline 에 legacy 값까지 보존하도록 fallback.
-                                    onChangeStatus?(.goal, goal.unrecognizedStatusRaw ?? goal.status?.rawValue, newStatus.rawValue)
-                                } else {
-                                    onUpdateFrontmatter?("status", nil)
-                                }
+                                // unrecognizedRaw 가 있으면 그게 실제 이전 raw —
+                                // legacy 값까지 Timeline 에 살아남도록 fallback.
+                                // 비우기 케이스도 같은 경로로.
+                                onChangeStatus?(.goal, goal.unrecognizedStatusRaw ?? goal.status?.rawValue, newStatus?.rawValue)
                             }
                         }
                         PropertyRow(label: String(localized: "brain.row.owner", defaultValue: "Owner"), icon: "person") {

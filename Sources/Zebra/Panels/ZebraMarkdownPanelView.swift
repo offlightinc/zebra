@@ -149,10 +149,6 @@ struct ZebraMarkdownPanelView<
             BrainObjectInspectorView(
                 parse: controller.parse,
                 onActivateRelation: activateRelation,
-                onUpdateFrontmatter: { key, value in
-                    panel.updateFrontmatter(key: key, value: value)
-                    markdownFileListStore.refreshVaultIndex(reason: "markdownPanel.frontmatter")
-                },
                 onChangeStatus: { kind, oldRaw, newRaw in
                     panel.applyStatusChange(kind: kind, oldStatusRaw: oldRaw, newStatusRaw: newRaw)
                     markdownFileListStore.refreshVaultIndex(reason: "markdownPanel.statusChange")

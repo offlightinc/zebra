@@ -99,6 +99,47 @@ final class BrainStatusMutatorTests: XCTestCase {
                        "completed: must be removed when leaving done")
     }
 
+    // MARK: - Status clear (newStatusRaw == nil)
+
+    func testStatusClearRemovesKeyAndRecordsTimeline() {
+        let source = wrap(frontmatter: """
+            type: task
+            status: todo
+            """, body: "")
+        let outcome = BrainStatusMutator.applyStatusChange(
+            in: source, kind: .task,
+            oldStatusRaw: "todo", newStatusRaw: nil,
+            today: Self.day
+        )
+        XCTAssertTrue(outcome.didChange)
+        // status 키가 frontmatter 에서 빠져야 함.
+        let frontmatter = frontmatterBlock(of: outcome.newSource)
+        XCTAssertFalse(frontmatter.contains("status:"),
+                       "비우기 시 status 키가 frontmatter 에서 제거되어야 함")
+        // Timeline 에 비우기 사건이 기록.
+        XCTAssertTrue(outcome.newSource.contains(
+            "- **2026-05-21** | status: todo → (none) — status changed in Zebra."
+        ))
+    }
+
+    func testStatusClearFromDoneAlsoRemovesCompleted() {
+        let source = wrap(frontmatter: """
+            type: task
+            status: done
+            completed: 2026-05-18
+            """, body: "")
+        let outcome = BrainStatusMutator.applyStatusChange(
+            in: source, kind: .task,
+            oldStatusRaw: "done", newStatusRaw: nil,
+            today: Self.day
+        )
+        XCTAssertTrue(outcome.didChange)
+        let frontmatter = frontmatterBlock(of: outcome.newSource)
+        XCTAssertFalse(frontmatter.contains("status:"))
+        XCTAssertFalse(frontmatter.contains("completed:"),
+                       "done 이탈이므로 completed: 도 같이 제거")
+    }
+
     // MARK: - waiting 은 picker UI 비노출 → mutator 가 waiting_on 안 건드림
 
     func testTaskTransitionDoesNotTouchWaitingOnField() {

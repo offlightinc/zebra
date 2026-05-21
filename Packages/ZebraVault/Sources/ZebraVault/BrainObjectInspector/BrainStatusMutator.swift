@@ -5,10 +5,11 @@ import Foundation
 /// 것이 아니라:
 ///
 /// `applyStatusChange` (status 전용):
-///   1. frontmatter `status:` 갱신
+///   1. frontmatter `status:` 갱신 (newStatusRaw == nil 이면 키 제거)
 ///   2. frontmatter `updated:` 를 오늘 날짜로 bump
 ///   3. completed/done 전이 시 `completed:` 부여, 반대 전이 시 제거
 ///   4. body `## Timeline` 섹션에 status 변경 bullet append
+///      (비우기도 "todo → (none)" 형태로 기록)
 ///
 /// `applyPropertyChange` (priority/owner/due 등 일반 필드):
 ///   1. frontmatter `<field>:` 갱신 (value == nil 이면 키 제거)
@@ -49,7 +50,7 @@ public enum BrainStatusMutator {
         in source: String,
         kind: Kind,
         oldStatusRaw: String?,
-        newStatusRaw: String,
+        newStatusRaw: String?,
         today: Date = Date()
     ) -> Outcome {
         // Same value 재적용은 noise 만 남기므로 no-op.
@@ -158,7 +159,7 @@ public enum BrainStatusMutator {
         at filePath: String,
         kind: Kind,
         oldStatusRaw: String?,
-        newStatusRaw: String,
+        newStatusRaw: String?,
         today: Date = Date()
     ) {
         let url = URL(fileURLWithPath: filePath)
