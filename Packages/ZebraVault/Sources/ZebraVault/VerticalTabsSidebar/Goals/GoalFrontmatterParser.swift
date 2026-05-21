@@ -132,14 +132,12 @@ enum GoalFrontmatterParser {
             return nil
         }
         let stripped = raw.trimmedUnquoted
+        if let dateOnly = BrainDateOnlyCodec.date(fromStorageString: stripped) {
+            return dateOnly
+        }
         for f in isoFormatters {
             if let date = f.date(from: stripped) { return date }
         }
-        // try yyyy-MM-dd via DateFormatter as fallback
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.dateFormat = "yyyy-MM-dd"
-        df.timeZone = TimeZone(identifier: "UTC")
-        return df.date(from: stripped)
+        return nil
     }
 }

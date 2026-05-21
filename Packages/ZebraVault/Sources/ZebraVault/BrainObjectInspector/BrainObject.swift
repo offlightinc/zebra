@@ -637,16 +637,11 @@ extension BrainObjectParser {
     /// Accepts `YYYY-MM-DD`. Anything else returns nil — the date badge
     /// then renders the muted em-dash via the `is-empty` styling.
     fileprivate static func parseDate(_ s: String) -> BrainDate? {
-        let source = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        let datePrefix = String(source.prefix(10))
-        guard datePrefix.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil else {
+        guard let source = BrainDateOnlyCodec.normalizedStorageString(from: s),
+              let date = BrainDateOnlyCodec.date(fromStorageString: source) else {
             return nil
         }
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
-        guard let d = f.date(from: datePrefix) else { return nil }
-        return BrainDate(date: d, source: datePrefix)
+        return BrainDate(date: date, source: source)
     }
 
     // MARK: - Body-derived properties

@@ -71,14 +71,6 @@ public struct TaskInspectorView: View {
         personFileListStore.people.map(\.slug)
     }
 
-    private static let isoDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
-        return f
-    }()
-
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -108,11 +100,8 @@ public struct TaskInspectorView: View {
                     }
                     PropertyRow(label: String(localized: "brain.row.due", defaultValue: "Due"), icon: "calendar") {
                         EditableDateBadge(value: task.due) { newDate in
-                            // 양쪽 다 같은 formatter 를 통과시켜 비교 — task.due?.source 의
-                            // 비정규 포맷(예: '2026-5-22')이 새 값과 spurious mismatch 를
-                            // 만드는 걸 막는다.
-                            let oldSerialized = task.due.map { Self.isoDateFormatter.string(from: $0.date) }
-                            let newSerialized = newDate.map { Self.isoDateFormatter.string(from: $0) }
+                            let oldSerialized = task.due?.source
+                            let newSerialized = newDate.map { BrainDateOnlyCodec.storageString(fromPickerDate: $0) }
                             onChangeProperty?("due", oldSerialized, newSerialized)
                         }
                     }
@@ -203,14 +192,6 @@ public struct GoalInspectorView: View {
         personFileListStore.people.map(\.slug)
     }
 
-    private static let isoDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
-        return f
-    }()
-
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
@@ -231,10 +212,8 @@ public struct GoalInspectorView: View {
                         }
                         PropertyRow(label: String(localized: "brain.row.target", defaultValue: "Target"), icon: "calendar") {
                             EditableDateBadge(value: goal.targetDate) { newDate in
-                                // 양쪽 같은 formatter 통과시켜 비교 — source 의 비정규
-                                // 포맷이 spurious normalization-only write 를 만들지 않게.
-                                let oldSerialized = goal.targetDate.map { Self.isoDateFormatter.string(from: $0.date) }
-                                let newSerialized = newDate.map { Self.isoDateFormatter.string(from: $0) }
+                                let oldSerialized = goal.targetDate?.source
+                                let newSerialized = newDate.map { BrainDateOnlyCodec.storageString(fromPickerDate: $0) }
                                 onChangeProperty?("target_date", oldSerialized, newSerialized)
                             }
                         }

@@ -124,10 +124,6 @@ enum TaskFrontmatterParser {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed.isEmpty || trimmed == "null" || trimmed == "~" { return nil }
         let stripped = raw.trimmedUnquoted
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.dateFormat = "yyyy-MM-dd"
-        df.timeZone = TimeZone(identifier: "UTC")
-        return df.date(from: stripped)
+        return BrainDateOnlyCodec.date(fromStorageString: stripped)
     }
 }

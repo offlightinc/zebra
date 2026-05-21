@@ -228,12 +228,8 @@ struct TaskListView: View {
 
     private func writeDue(task: TaskItem, newDate: Date?) {
         store.replace(task.with(dueDate: .some(newDate)))
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.dateFormat = "yyyy-MM-dd"
-        df.timeZone = TimeZone(identifier: "UTC")
-        let oldSerialized = task.dueDate.map { df.string(from: $0) }
-        let newSerialized = newDate.map { df.string(from: $0) }
+        let oldSerialized = task.dueDate.map { BrainDateOnlyCodec.storageString(fromPickerDate: $0) }
+        let newSerialized = newDate.map { BrainDateOnlyCodec.storageString(fromPickerDate: $0) }
         BrainStatusMutator.applyPropertyChange(
             at: task.absolutePath,
             field: "due",
