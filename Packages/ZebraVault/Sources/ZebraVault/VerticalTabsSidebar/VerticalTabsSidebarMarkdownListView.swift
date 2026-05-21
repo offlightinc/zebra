@@ -6,6 +6,7 @@ struct VerticalTabsSidebarMarkdownListView: View {
     let onSelectFile: (String) -> Void
 
     @State private var collapsedFolders: Set<String> = []
+    @State private var persistenceRootPath: String?
 
     var body: some View {
         let entries = store.mdFiles
@@ -35,7 +36,7 @@ struct VerticalTabsSidebarMarkdownListView: View {
                                     folder: folder,
                                     depth: 0,
                                     activePaths: activePaths,
-                                    collapsedFolders: $collapsedFolders,
+                                    collapsedFolders: collapsedFoldersBinding,
                                     onSelectFile: onSelectFile
                                 )
                             }
@@ -56,6 +57,12 @@ struct VerticalTabsSidebarMarkdownListView: View {
                     .accessibilityIdentifier("VerticalTabsSidebarMarkdownList.scroll")
                 }
             }
+        }
+        .onAppear {
+            bindPersistence(rootPath: store.rootPath)
+        }
+        .onChange(of: store.rootPath) { newRootPath in
+            bindPersistence(rootPath: newRootPath)
         }
     }
 
@@ -87,7 +94,7 @@ struct VerticalTabsSidebarMarkdownListView: View {
     private func collapseAll(root: MarkdownTreeFolder) {
         var paths: Set<String> = []
         collectFolderPaths(folder: root, into: &paths)
-        collapsedFolders = paths
+        setCollapsedFolders(paths)
     }
 
     private func collectFolderPaths(folder: MarkdownTreeFolder, into set: inout Set<String>) {
@@ -97,6 +104,28 @@ struct VerticalTabsSidebarMarkdownListView: View {
         for sub in folder.subfolders {
             collectFolderPaths(folder: sub, into: &set)
         }
+    }
+
+    private var collapsedFoldersBinding: Binding<Set<String>> {
+        Binding(
+            get: { collapsedFolders },
+            set: { setCollapsedFolders($0) }
+        )
+    }
+
+    private func bindPersistence(rootPath: String?) {
+        guard rootPath != persistenceRootPath else { return }
+        persistenceRootPath = rootPath
+        let restored = VerticalTabsSidebarViewStatePersistence.loadDocumentState(rootPath: rootPath)
+        collapsedFolders = Set(restored.collapsedFolders)
+    }
+
+    private func setCollapsedFolders(_ next: Set<String>) {
+        collapsedFolders = next
+        VerticalTabsSidebarViewStatePersistence.saveDocumentState(
+            VerticalTabsSidebarViewStatePersistence.DocumentState(collapsedFolders: next.sorted()),
+            rootPath: persistenceRootPath
+        )
     }
 
     private var loadingState: some View {

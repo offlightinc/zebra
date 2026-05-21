@@ -69,9 +69,30 @@ struct TaskGroup: Identifiable, Sendable {
 
 @MainActor
 final class TaskListViewModel: ObservableObject {
-    @Published var groupBy: TaskGroupBy = .status
-    @Published var filters: [TaskFilter] = []
-    @Published var collapsedSections: Set<String> = []
+    @Published var groupBy: TaskGroupBy = .status {
+        didSet { persistState() }
+    }
+    @Published var filters: [TaskFilter] = [] {
+        didSet { persistState() }
+    }
+    @Published var collapsedSections: Set<String> = [] {
+        didSet { persistState() }
+    }
+
+    private var persistenceRootPath: String?
+    private var isRestoringState = false
+
+    func bindPersistence(rootPath: String?) {
+        guard rootPath != persistenceRootPath else { return }
+        persistenceRootPath = rootPath
+
+        let restored = VerticalTabsSidebarViewStatePersistence.loadTaskState(rootPath: rootPath)
+        isRestoringState = true
+        groupBy = restored.resolvedGroupBy
+        filters = restored.resolvedFilters
+        collapsedSections = Set(restored.collapsedSections)
+        isRestoringState = false
+    }
 
     func setFilter(_ filter: TaskFilter) {
         if let idx = filters.firstIndex(where: { $0.field == filter.field }) {
@@ -83,6 +104,23 @@ final class TaskListViewModel: ObservableObject {
 
     func removeFilter(field: TaskFilterField) {
         filters.removeAll { $0.field == field }
+    }
+
+    func visibleTasks(from tasks: [TaskItem]) -> [TaskItem] {
+        Self.applyFilters(tasks, filters)
+    }
+
+    private func persistState() {
+        guard !isRestoringState,
+              let rootPath = persistenceRootPath else { return }
+        VerticalTabsSidebarViewStatePersistence.saveTaskState(
+            VerticalTabsSidebarViewStatePersistence.TaskState(
+                groupBy: groupBy,
+                filters: filters,
+                collapsedSections: collapsedSections
+            ),
+            rootPath: rootPath
+        )
     }
 
     /// Filter chain: 필드 내 OR (values 배열 포함), 필드 간 AND (every).

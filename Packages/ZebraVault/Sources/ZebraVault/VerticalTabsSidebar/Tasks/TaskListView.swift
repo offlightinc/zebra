@@ -50,6 +50,12 @@ struct TaskListView: View {
             listContent(tasks: tasksSnapshot)
         }
         .background(BVColor.bg)
+        .onAppear {
+            viewModel.bindPersistence(rootPath: store.rootPath)
+        }
+        .onChange(of: store.rootPath) { newRootPath in
+            viewModel.bindPersistence(rootPath: newRootPath)
+        }
     }
 
     // 같은 위치/모양/단축키 의도로 Goals 의 collapseAllToolbar 와 1:1 — 모드
@@ -57,7 +63,7 @@ struct TaskListView: View {
     // 중 펼친 게 한 개라도 있을 때". 그룹이 0개 (no tasks / no grouping=all 만)
     // 인 경우는 비활성화하지만 자리는 유지 → 첫 줄이 점프 안 함.
     private func collapseAllToolbar(tasks: [TaskItem]) -> some View {
-        let filtered = TaskListViewModel.applyFilters(tasks, viewModel.filters)
+        let filtered = viewModel.visibleTasks(from: tasks)
         let groups = TaskListViewModel.groupTasks(filtered, by: viewModel.groupBy)
         let allCollapsed = !groups.isEmpty && groups.allSatisfy { viewModel.collapsedSections.contains($0.key.raw) }
         let canCollapse = store.rootPath != nil && !groups.isEmpty && !allCollapsed
