@@ -151,13 +151,19 @@ struct DismissOnOutsideMouseUp: ViewModifier {
 
     private func install() {
         remove()
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { event in
-            DispatchQueue.main.async {
-                if isPresented {
-                    isPresented = false
+        // chip click 의 자기 mouseUp 까지 monitor 가 catch 해서 dropdown 이 즉시
+        // 다시 닫히는 race 회피 — install 자체를 next run loop tick 으로 미룸.
+        // 그 사이 trigger button 의 mouseUp 은 이미 dispatch 되어 무사. 그 다음
+        // mouseUp 부터 catch.
+        DispatchQueue.main.async {
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { event in
+                DispatchQueue.main.async {
+                    if isPresented {
+                        isPresented = false
+                    }
                 }
+                return event
             }
-            return event
         }
     }
 

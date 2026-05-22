@@ -1,0 +1,178 @@
+import SwiftUI
+
+/// Sidebar footer 의 brain sync indicator. 7×7 dot + label.
+///
+/// 디자인 (`/Users/han/zebra_design/zebra_sync/`) 의 `SyncEl` 컴포넌트 spec 대로:
+/// - synced: dot green / label "Synced" / `BVColor.fg`
+/// - failed (모든 reason, conflict 포함): dot red / label "Sync failed" / `BVColor.syncRedLabel`
+/// - syncing (transient, in-flight): dot amber + 회전 glyph / label "Syncing…" / `BVColor.fg`
+///
+/// Conflict 케이스의 시각 차이는 **dot/label 색이 아니라 tooltip 내용** (별도 view).
+///
+/// 클릭 = 즉시 `BrainSyncService.triggerSync()` 호출 (= 사용자 수동 retry).
+/// in-flight 중에는 disabled — 서비스 자체가 idempotent 라 안전망까지 둠.
+public struct BrainSyncIndicatorView: View {
+    @ObservedObject public var service: BrainSyncService
+    /// Conflict reason 일 때 picker 에서 agent 선택 / indicator click 시 호출.
+    /// nil 이면 generic retry 로 fall back. 단계 3-b 에서 cmux app module 의
+    /// caller 가 terminal split + agent CLI 실행을 wire up.
+    public var onConflictAgentSelect: ((MarkdownPillAgent) -> Void)?
+
+    // Two hover detectors so that the tooltip area itself can keep the
+    // popover open. SwiftUI's `.onHover` only fires within a view's layout
+    // frame; the tooltip is `.offset`-ed above the indicator so its frame
+    // stays in the indicator's row. Without a second detector on the tooltip
+    // itself, the moment the mouse leaves the indicator's row the hover
+    // goes false and the popover vanishes — exactly the bug the user hit.
+    @State private var buttonHovering = false
+    @State private var tooltipHovering = false
+    private var hovering: Bool { buttonHovering || tooltipHovering }
+
+    public init(
+        service: BrainSyncService,
+        onConflictAgentSelect: ((MarkdownPillAgent) -> Void)? = nil
+    ) {
+        self.service = service
+        self.onConflictAgentSelect = onConflictAgentSelect
+    }
+
+    public var body: some View {
+        // VStack: invisible hover bridge 위/아래 5pt 씩 분산 + button (24pt).
+        // 양쪽 분산이 핵심 — bridge 를 위쪽에만 두면 VStack center 가 button center
+        // 보다 위로 치우쳐 HStack 의 vertical center 정렬 시 indicator 가 옆 vault
+        // chip 보다 아래쪽으로 5pt 어긋남. 위/아래 분산하면 VStack center = button
+        // center 라 chip 과 baseline 맞음. 시각상 위쪽 5pt 만 tooltip 으로 가는
+        // hover bridge 역할 (아래쪽 5pt 는 footer padding 의 일부로 무관).
+        VStack(spacing: 0) {
+            Color.clear
+                .frame(height: 5)
+                .contentShape(Rectangle())
+            Button(action: handleClick) {
+                HStack(spacing: 6) {
+                    dot
+                    Text(label)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundColor(labelColor)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .frame(height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(hovering ? BVColor.bgHover : Color.clear)
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(service.isSyncing)
+            Color.clear
+                .frame(height: 5)
+                .contentShape(Rectangle())
+        }
+        .onHover { buttonHovering = $0 }
+        // Tooltip overlay — VStack 이 bridge-top(5) + button(24) + bridge-bottom(5)
+        // = 34pt 구조. 디자인 spec: tooltip bottom 이 button top 위 10pt 에 정렬.
+        // VStack bottom 으로부터 위로 (bridge-bottom 5 + button 24 + gap 10) = 39pt.
+        .overlay(alignment: .bottomTrailing) {
+            if hovering {
+                BrainSyncTooltipView(
+                    service: service,
+                    onConflictAgentSelect: onConflictAgentSelect
+                )
+                    .offset(y: -39)
+                    .onHover { tooltipHovering = $0 }
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .accessibilityIdentifier("BrainSyncIndicator")
+        .accessibilityLabel(label)
+    }
+
+    @ViewBuilder
+    private var dot: some View {
+        if service.isSyncing {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(BVColor.syncAmber)
+                .rotationEffect(.degrees(spinAngle))
+                .onAppear { startSpin() }
+                .onDisappear { stopSpin() }
+        } else {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 7, height: 7)
+        }
+    }
+
+    private var label: String {
+        if service.isSyncing {
+            return String(localized: "brainSync.label.syncing", defaultValue: "Syncing…")
+        }
+        switch service.state {
+        case .synced?:
+            return String(localized: "brainSync.label.synced", defaultValue: "Synced")
+        case .failed?:
+            return String(localized: "brainSync.label.failed", defaultValue: "Sync failed")
+        case nil:
+            return String(localized: "brainSync.label.idle", defaultValue: "Sync pending")
+        }
+    }
+
+    private var dotColor: Color {
+        switch service.state {
+        case .synced?:
+            return BVColor.syncGreen
+        case .failed?:
+            return BVColor.syncRed
+        case nil:
+            return BVColor.fgFaint
+        }
+    }
+
+    private var labelColor: Color {
+        switch service.state {
+        case .failed?:
+            return BVColor.syncRedLabel
+        default:
+            return BVColor.fg
+        }
+    }
+
+    private func handleClick() {
+        #if DEBUG
+        NSLog("[BrainSync] indicator clicked. isSyncing=\(service.isSyncing) state=\(String(describing: service.state))")
+        #endif
+        // Conflict reason 일 때 click = default agent (UserDefaults 의 preferred,
+        // 첫 사용 시 codex) 로 즉시 agent terminal. 디자인 spec path (b).
+        // 다른 reason 또는 synced 일 때는 sync retry.
+        if case .failed(_, .conflict, _)? = service.state, let onConflictAgentSelect {
+            onConflictAgentSelect(BrainSyncAgentPreference.current)
+            return
+        }
+        guard !service.isSyncing else { return }
+        service.triggerSync()
+    }
+
+    // MARK: - Spin animation
+
+    @State private var spinAngle: Double = 0
+    @State private var spinTimer: Timer?
+
+    private func startSpin() {
+        stopSpin()
+        let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in
+            DispatchQueue.main.async {
+                spinAngle = (spinAngle + 12).truncatingRemainder(dividingBy: 360)
+            }
+        }
+        RunLoop.current.add(timer, forMode: .common)
+        spinTimer = timer
+    }
+
+    private func stopSpin() {
+        spinTimer?.invalidate()
+        spinTimer = nil
+    }
+}

@@ -34,6 +34,36 @@ public enum MarkdownChatPillCommand {
         }
     }
 
+    /// Brain-sync conflict 전용 prep. cwd = vaultPath. Claude 분기는 vault path 를
+    /// `~/.claude.json` 에 trusted 로 박는다.
+    public static func prepareLaunchEnvironmentForBrainSyncConflict(
+        agent: MarkdownPillAgent,
+        vaultPath: String
+    ) -> Bool {
+        switch agent {
+        case .codex:
+            return true
+        case .claude:
+            guard let cwd = safeTrustCwd(vaultPath) else { return false }
+            return markClaudeProjectTrusted(cwd: cwd)
+        case .gemini:
+            return true
+        }
+    }
+
+    /// Brain-sync conflict 전용 entry. ChatPill 의 `invocation` 을 재사용해 agent
+    /// CLI 명령을 만들되 prefix 는 `BrainSyncConflictContextPrefix.build(...)` 의
+    /// 결과를 사용. user prompt 는 default 빈 문자열 — agent 가 conflict prefix 만
+    /// 받고 사용자 답을 기다림.
+    public static func shellStartupLineForBrainSyncConflict(
+        agent: MarkdownPillAgent,
+        vaultPath: String,
+        userPrompt: String = ""
+    ) -> String {
+        let conflictPrefix = BrainSyncConflictContextPrefix.build(vaultPath: vaultPath)
+        return "\(invocation(agent: agent, cwd: vaultPath, trustEligible: true, contextPrefix: conflictPrefix, prompt: userPrompt))\r"
+    }
+
     public static func shellStartupLine(
         agent: MarkdownPillAgent,
         markdownFilePath: String?,

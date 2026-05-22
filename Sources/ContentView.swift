@@ -10903,15 +10903,22 @@ private struct SidebarFooterButtons: View {
 
 struct VerticalTabsSidebarFooter: View {
     @ObservedObject var vaultState: VerticalTabsSidebarVaultState
+    @ObservedObject var brainSync: BrainSyncService
     let onSendFeedback: () -> Void
+    let onBrainSyncConflictAgent: (MarkdownPillAgent) -> Void
 
     var body: some View {
+        // ?/⚙ 두 버튼은 이 footer 에서 빠지고 ModeRail 하단으로 이동
+        // (디자인 spec: /Users/han/zebra_design/zebra_sync/ — SECTION 1 layout change).
+        // Footer 우측 공간엔 brain sync indicator 가 자리잡음.
         HStack(spacing: 6) {
             VerticalTabsSidebarVaultMenu(vaultState: vaultState)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            SidebarHelpMenuButton(onSendFeedback: onSendFeedback)
-            VerticalTabsSidebarSettingsButton()
+            BrainSyncIndicatorView(
+                service: brainSync,
+                onConflictAgentSelect: onBrainSyncConflictAgent
+            )
         }
         .padding(.leading, 6)
         .padding(.trailing, 10)
@@ -11001,9 +11008,9 @@ private struct VerticalTabsSidebarVaultMenu: View {
     }
 }
 
-private struct VerticalTabsSidebarSettingsButton: View {
-    private let buttonSize: CGFloat = 22
-    private let iconSize: CGFloat = 11
+struct VerticalTabsSidebarSettingsButton: View {
+    var buttonSize: CGFloat = 22
+    var iconSize: CGFloat = 11
     private let settingsTitle = String(localized: "menu.app.settings", defaultValue: "Settings…")
 
     var body: some View {
@@ -11777,15 +11784,15 @@ enum FeedbackComposerBridge {
     }
 }
 
-private struct SidebarHelpMenuButton: View {
+struct SidebarHelpMenuButton: View {
     private let docsURL = URL(string: "https://cmux.com/docs")
     private let changelogURL = URL(string: "https://cmux.com/docs/changelog")
     private let githubURL = URL(string: "https://github.com/manaflow-ai/cmux")
     private let githubIssuesURL = URL(string: "https://github.com/manaflow-ai/cmux/issues")
     private let discordURL = URL(string: "https://discord.gg/xsgFEVrWCZ")
     private let helpTitle = String(localized: "sidebar.help.button", defaultValue: "Help")
-    private let buttonSize: CGFloat = 22
-    private let iconSize: CGFloat = 11
+    var buttonSize: CGFloat = 22
+    var iconSize: CGFloat = 11
     @ObservedObject private var keyboardShortcutSettingsObserver = KeyboardShortcutSettingsObserver.shared
 
     let onSendFeedback: () -> Void

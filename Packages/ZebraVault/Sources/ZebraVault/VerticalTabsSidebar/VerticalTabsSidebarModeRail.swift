@@ -5,9 +5,11 @@ public struct VerticalTabsSidebarModeRail: View {
     public static let topInset: CGFloat = ZebraSidebarMetrics.firstRowTopOffset
 
     @ObservedObject public var state: VerticalTabsSidebarModeState
+    private let footer: AnyView?
 
-    public init(state: VerticalTabsSidebarModeState) {
+    public init(state: VerticalTabsSidebarModeState, footer: AnyView? = nil) {
         self.state = state
+        self.footer = footer
     }
 
     public var body: some View {
@@ -16,6 +18,15 @@ public struct VerticalTabsSidebarModeRail: View {
                 iconButton(for: mode)
             }
             Spacer(minLength: 0)
+            // Footer slot — `?` / `⚙` 같은 글로벌 액션 (이전엔 sidebar footer 에
+            // 있었음). 디자인 spec (`/Users/han/zebra_design/zebra_sync/`) SECTION 1
+            // layout change. ZebraVault 안의 ModeRail 은 view type 만 제공, 실제
+            // help / settings button 은 cmux app module 의 ZebraSidebarBody 가
+            // AnyView 로 wrapping 해 넘김 (cmux app module 안의 internal struct
+            // 라 ZebraVault 가 직접 type 명시 불가능).
+            if let footer {
+                footer
+            }
         }
         .padding(.top, Self.topInset)
         .padding(.bottom, 6)

@@ -69,6 +69,16 @@ enum BVColor {
     static let priorityNormal = Color(nsColor: NSColor(srgbRed: 0x6c / 255.0, green: 0xae / 255.0, blue: 0xdb / 255.0, alpha: 1.0))
     static let priorityLow = Color(nsColor: NSColor(srgbRed: 0x77 / 255.0, green: 0x77 / 255.0, blue: 0x77 / 255.0, alpha: 1.0))
 
+    // Brain sync indicator. Designed in `/Users/han/zebra_design/zebra_sync/`.
+    // syncAmber / syncRed 는 의도상 statusWaiting / statusBlocked 와 같은 hue
+    // (`#e0b341` / `#ef4444`) 지만 sync 의미와 status 의미 결합 막으려고 별도 명명.
+    // syncGreen 은 designer 가 sync-only 로 정의한 새 hue (#22c55e), syncRedLabel
+    // 은 어두운 배경 위 가독성을 위한 lighter red text variant (#f87878).
+    static let syncGreen = Color(nsColor: NSColor(srgbRed: 0x22 / 255.0, green: 0xc5 / 255.0, blue: 0x5e / 255.0, alpha: 1.0))
+    static let syncAmber = statusWaiting
+    static let syncRed = statusBlocked
+    static let syncRedLabel = Color(nsColor: NSColor(srgbRed: 0xf8 / 255.0, green: 0x78 / 255.0, blue: 0x78 / 255.0, alpha: 1.0))
+
     private static func adaptiveColor(light: NSColor, dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
             appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
