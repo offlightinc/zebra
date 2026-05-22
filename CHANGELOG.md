@@ -2,6 +2,11 @@
 
 All notable changes to cmux are documented here.
 
+## [0.64.7] - 2026-05-22
+
+### Fixed
+- Fix Zebra email ordering when Gmail list timestamps include comments such as `(UTC)`, and repair cached thread dates that had fallen back to sync time.
+
 ## [0.64.6] - 2026-05-14
 
 ### Added

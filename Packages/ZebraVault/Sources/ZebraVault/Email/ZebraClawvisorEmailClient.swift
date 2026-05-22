@@ -86,6 +86,7 @@ public actor ZebraClawvisorEmailClient {
         )
         let messages = try normalizedListMessages(from: response, accountEmail: config.accountEmail)
         try upsertThreads(messages)
+        await backfillMissingReceivedDates(in: messages, config: config)
         try updateLastSyncedAt(Date())
         return messages.count
     }
@@ -211,6 +212,28 @@ public actor ZebraClawvisorEmailClient {
         }
     }
 
+    private func backfillMissingReceivedDates(
+        in messages: [NormalizedMessage],
+        config: ClawvisorConfig,
+        limit: Int = 24
+    ) async {
+        var fetched = 0
+        for message in messages where message.receivedAt == nil {
+            guard fetched < limit else { return }
+            do {
+                if try latestCachedMessageReceivedAt(threadId: message.threadId) != nil {
+                    continue
+                }
+                let rows = try await fetchThreadMessages(config: config, threadId: message.threadId)
+                guard !rows.isEmpty else { continue }
+                try upsertMessages(rows, threadId: message.threadId)
+                fetched += 1
+            } catch {
+                continue
+            }
+        }
+    }
+
     private func invoke(
         config: ClawvisorConfig,
         action: String,
@@ -301,7 +324,7 @@ private extension ZebraClawvisorEmailClient {
         let fromEmail: String?
         let to: String?
         let cc: String?
-        let receivedAt: Date
+        let receivedAt: Date?
         let snippet: String?
         let labelIds: [String]
         let isUnread: Bool
@@ -333,6 +356,8 @@ private extension ZebraClawvisorEmailClient {
             "EEE, d MMM yyyy HH:mm:ss ZZZZ",
             "EEE, dd MMM yyyy HH:mm:ss Z",
             "d MMM yyyy HH:mm:ss Z",
+            "EEE, d MMM yyyy HH:mm:ss zzz",
+            "EEE, dd MMM yyyy HH:mm:ss zzz",
         ].map(makeDateFormatter)
     }
 
@@ -446,7 +471,7 @@ private extension ZebraClawvisorEmailClient {
             fromEmail: sender.email,
             to: stringValue(raw["to"]) ?? headers["to"],
             cc: stringValue(raw["cc"]) ?? headers["cc"],
-            receivedAt: parseDate(dateValue) ?? Date(),
+            receivedAt: parseDate(dateValue),
             snippet: stringValue(raw["snippet"])?.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression),
             labelIds: labelIds,
             isUnread: boolValue(raw["is_unread"]) ?? boolValue(raw["isUnread"]) ?? labelIds.contains("UNREAD"),
@@ -564,6 +589,26 @@ private extension ZebraClawvisorEmailClient {
 
     func parseDate(_ value: String?) -> Date? {
         guard let raw = value?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        let candidates = [
+            raw,
+            raw.replacingOccurrences(
+                of: #"\s+\([^)]*\)$"#,
+                with: "",
+                options: .regularExpression
+            ),
+        ]
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+
+        for candidate in candidates {
+            if let date = parseDateCandidate(candidate) {
+                return date
+            }
+        }
+        return nil
+    }
+
+    func parseDateCandidate(_ raw: String) -> Date? {
         if let millis = Double(raw), millis > 1_000_000_000_000 {
             return Date(timeIntervalSince1970: millis / 1000)
         }
@@ -692,6 +737,7 @@ private extension ZebraClawvisorEmailClient {
             """)
             try execute("CREATE INDEX IF NOT EXISTS email_threads_received_idx ON email_threads(received_at DESC)")
             try execute("CREATE INDEX IF NOT EXISTS email_messages_thread_received_idx ON email_messages(thread_id, received_at)")
+            try repairThreadSummaryDatesFromMessages()
             databaseInitialized = true
         } catch {
             if let database {
@@ -745,7 +791,7 @@ private extension ZebraClawvisorEmailClient {
                         message.subject,
                         message.fromName ?? message.fromEmail ?? "",
                         message.fromEmail as Any,
-                        message.receivedAt.timeIntervalSince1970,
+                        try threadSummaryReceivedAt(for: message).timeIntervalSince1970,
                         message.snippet as Any,
                         jsonString(message.labelIds),
                         message.hasAttachment ? 1 : 0,
@@ -801,7 +847,7 @@ private extension ZebraClawvisorEmailClient {
                         message.fromEmail as Any,
                         message.to as Any,
                         message.cc as Any,
-                        message.receivedAt.timeIntervalSince1970,
+                        message.receivedAt?.timeIntervalSince1970 as Any,
                         message.snippet as Any,
                         jsonString(message.labelIds),
                         message.isUnread ? 1 : 0,
@@ -825,7 +871,7 @@ private extension ZebraClawvisorEmailClient {
     }
 
     func upsertThreadSummary(_ messages: [NormalizedMessage], storageThreadId: String) throws {
-        guard let latest = messages.max(by: { $0.receivedAt < $1.receivedAt }) else { return }
+        guard let latest = messages.max(by: { ($0.receivedAt ?? .distantPast) < ($1.receivedAt ?? .distantPast) }) else { return }
         let labelIds = Array(Set(messages.flatMap(\.labelIds))).sorted()
         try execute(
             """
@@ -850,7 +896,7 @@ private extension ZebraClawvisorEmailClient {
                 latest.subject,
                 latest.fromName ?? latest.fromEmail ?? "",
                 latest.fromEmail as Any,
-                latest.receivedAt.timeIntervalSince1970,
+                try threadSummaryReceivedAt(for: latest, storageThreadId: storageThreadId).timeIntervalSince1970,
                 latest.snippet as Any,
                 jsonString(labelIds),
                 messages.contains(where: \.hasAttachment) ? 1 : 0,
@@ -882,6 +928,77 @@ private extension ZebraClawvisorEmailClient {
             ))
         }
         return rows
+    }
+
+    func threadSummaryReceivedAt(for message: NormalizedMessage, storageThreadId: String? = nil) throws -> Date {
+        if let receivedAt = message.receivedAt {
+            return receivedAt
+        }
+
+        let threadIds = Array(Set([storageThreadId, message.threadId].compactMap { $0 }))
+        for threadId in threadIds {
+            if let cachedMessageDate = try latestCachedMessageReceivedAt(threadId: threadId) {
+                return cachedMessageDate
+            }
+            if let existingThreadDate = try existingThreadReceivedAt(threadId: threadId) {
+                return existingThreadDate
+            }
+        }
+
+        return Date()
+    }
+
+    func latestCachedMessageReceivedAt(threadId: String) throws -> Date? {
+        try queryDouble(
+            """
+            SELECT MAX(received_at)
+            FROM email_messages
+            WHERE thread_id = ?
+              AND received_at IS NOT NULL
+            """,
+            [threadId]
+        )
+        .map(Date.init(timeIntervalSince1970:))
+    }
+
+    func existingThreadReceivedAt(threadId: String) throws -> Date? {
+        try queryDouble(
+            """
+            SELECT received_at
+            FROM email_threads
+            WHERE thread_id = ?
+            LIMIT 1
+            """,
+            [threadId]
+        )
+        .map(Date.init(timeIntervalSince1970:))
+    }
+
+    func repairThreadSummaryDatesFromMessages() throws {
+        try execute(
+            """
+            UPDATE email_threads
+            SET received_at = (
+              SELECT MAX(email_messages.received_at)
+              FROM email_messages
+              WHERE email_messages.thread_id = email_threads.thread_id
+                AND email_messages.received_at IS NOT NULL
+            )
+            WHERE ABS(received_at - updated_at) < 2
+              AND EXISTS (
+                SELECT 1
+                FROM email_messages
+                WHERE email_messages.thread_id = email_threads.thread_id
+                  AND email_messages.received_at IS NOT NULL
+              )
+              AND ABS(received_at - (
+                SELECT MAX(email_messages.received_at)
+                FROM email_messages
+                WHERE email_messages.thread_id = email_threads.thread_id
+                  AND email_messages.received_at IS NOT NULL
+              )) > 60
+            """
+        )
     }
 
     func loadStoredThreadId(forLookupId lookupId: String) throws -> String? {
