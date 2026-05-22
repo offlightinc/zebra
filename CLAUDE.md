@@ -20,6 +20,20 @@ Run the setup script to initialize submodules and build GhosttyKit:
 ./scripts/setup.sh
 ```
 
+If this machine had the legacy external `local-offlight-brain-sync` plist
+installed (via `~/brain-offlight/bin/install-local-offlight-brain-sync`),
+disable it once now that zebra ships its own built-in brain sync:
+
+```bash
+./scripts/disable-legacy-brainsync.sh
+```
+
+The script `launchctl bootout` + `launchctl disable`s the
+`ai.offlight.local-brain-sync` label and archives the plist to
+`~/Library/Application Support/zebra/disabled-launchagents/`. It's a no-op
+on machines that never installed the legacy plist. Reverse with
+`./scripts/revert-legacy-brainsync.sh` if needed.
+
 ## Local dev
 
 After making code changes, always run the reload script with a tag to build the Debug app:
