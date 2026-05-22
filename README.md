@@ -2,7 +2,7 @@
 <p align="center">A Ghostty-based macOS terminal with vertical tabs and notifications for AI coding agents</p>
 
 <p align="center">
-  <a href="https://github.com/manaflow-ai/cmux/releases/latest/download/cmux-macos.dmg">
+  <a href="https://github.com/offlightinc/zebra/releases/latest/download/Zebra.dmg">
     <img src="./docs/assets/macos-badge.png" alt="Download cmux for macOS" width="180" />
   </a>
 </p>
@@ -95,7 +95,7 @@ Sidebar shows git branch, linked PR status/number, working directory, listening 
 
 ### DMG (recommended)
 
-<a href="https://github.com/manaflow-ai/cmux/releases/latest/download/cmux-macos.dmg">
+<a href="https://github.com/offlightinc/zebra/releases/latest/download/Zebra.dmg">
   <img src="./docs/assets/macos-badge.png" alt="Download cmux for macOS" width="180" />
 </a>
 
