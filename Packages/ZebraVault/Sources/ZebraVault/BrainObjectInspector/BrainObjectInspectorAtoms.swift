@@ -390,10 +390,22 @@ enum BrainPersonColor {
 
     static func color(for handle: String) -> Color {
         if let c = known[handle] { return c }
-        var hasher = Hasher(); hasher.combine(handle)
-        let h = abs(hasher.finalize())
+        // Swift.Hasher 는 process 마다 seed 가 randomized 라 같은 슬러그도 앱
+        // 재시작마다 다른 색을 얻는다. picker row 에선 14pt 라 덜 눈에 띄었지만
+        // toolbar 헤더 아바타가 prominent 해진 만큼 안정성을 깐다 — deterministic
+        // FNV-1a 32bit 로 교체하면 한글·비팔레트 슬러그도 launch 간 색이 고정된다.
+        let h = fnv1a32(handle.utf8)
         let hue = Double(h % 360) / 360.0
         return Color(hue: hue, saturation: 0.55, brightness: 0.78)
+    }
+
+    private static func fnv1a32<S: Sequence>(_ bytes: S) -> UInt32 where S.Element == UInt8 {
+        var hash: UInt32 = 2_166_136_261
+        for byte in bytes {
+            hash ^= UInt32(byte)
+            hash = hash &* 16_777_619
+        }
+        return hash
     }
 }
 
@@ -846,14 +858,8 @@ struct EditableOwnerChip: View {
     }
 
     private func ownerChipView(handle: String) -> some View {
-        let initial = String(handle.prefix(1)).uppercased()
-        let color = colorFor(handle: handle)
-        return HStack(spacing: 5) {
-            Text(initial)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(.white)
-                .frame(width: 14, height: 14)
-                .background(Circle().fill(color))
+        HStack(spacing: 5) {
+            PersonAvatarGlyph(slug: handle, size: 14)
             Text(handle)
                 .font(.system(size: 11.5))
                 .foregroundColor(BVColor.fg)
@@ -871,10 +877,6 @@ struct EditableOwnerChip: View {
                 .foregroundColor(BVColor.fgFaint)
         }
         .inspectorPillChrome()
-    }
-
-    private func colorFor(handle: String) -> Color {
-        BrainPersonColor.color(for: handle)
     }
 }
 
@@ -937,13 +939,7 @@ struct OwnerPickerView: View {
                     } else {
                         ForEach(filtered, id: \.self) { slug in
                             PickerRow(
-                                glyph: {
-                                    Text(String(slug.prefix(1)).uppercased())
-                                        .font(.system(size: 9, weight: .semibold))
-                                        .foregroundColor(.white)
-                                        .frame(width: 14, height: 14)
-                                        .background(Circle().fill(slugColor(slug)))
-                                },
+                                glyph: { PersonAvatarGlyph(slug: slug, size: 14) },
                                 label: slug,
                                 isCurrent: currentSlug == slug,
                                 keyLabel: nil,
@@ -978,10 +974,6 @@ struct OwnerPickerView: View {
         let totalRows = 1 + bodyRows
         let estimated = CGFloat(totalRows) * rowHeight + 8 + 1 // +divider +vpad
         return min(estimated, 240)
-    }
-
-    private func slugColor(_ slug: String) -> Color {
-        BrainPersonColor.color(for: slug)
     }
 }
 

@@ -48,6 +48,20 @@ struct TaskListToolbar: View {
         return !mf.values.isEmpty
     }
 
+    /// "내 것" picker 는 single-select 라 아바타로 노출 가능한 경우는 값이 한 개이고
+    /// `__unassigned__` 가 아닐 때뿐. op 가 `.isNot` 이면 의미가 반대(그 사람 제외)
+    /// 이므로 아바타로 표시하면 오해를 부른다 — fallback silhouette 으로 돌린다.
+    /// 그 외(0개·미지정·legacy multi 잔재)도 마찬가지.
+    private var selectedOwnerSlug: String? {
+        guard let mf = myOwnerFilter,
+              mf.op == .is,
+              mf.values.count == 1,
+              let v = mf.values.first,
+              v != "__unassigned__"
+        else { return nil }
+        return v
+    }
+
     private var filterButton: some View {
         Button(action: {
             if filterStep == nil {
@@ -83,15 +97,21 @@ struct TaskListToolbar: View {
 
     private var myToggleButton: some View {
         Button(action: { showMyOwnerMenu = true }) {
-            Image(systemName: isMyActive ? "person.crop.circle.fill" : "person.crop.circle")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(isMyActive ? BVColor.accent : BVColor.fgMute)
-                .padding(.horizontal, 7).padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(myHover ? BVColor.bgHover : Color.clear)
-                )
-                .contentShape(Rectangle())
+            Group {
+                if let slug = selectedOwnerSlug {
+                    PersonAvatarGlyph(slug: slug, size: 16)
+                } else {
+                    Image(systemName: isMyActive ? "person.crop.circle.fill" : "person.crop.circle")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(isMyActive ? BVColor.accent : BVColor.fgMute)
+                }
+            }
+            .padding(.horizontal, 7).padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(myHover ? BVColor.bgHover : Color.clear)
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { myHover = $0 }
@@ -103,7 +123,9 @@ struct TaskListToolbar: View {
                 onChange: { updated in
                     onChangeMyOwnerFilter(updated.values.isEmpty ? nil : updated)
                 },
-                compact: true
+                compact: true,
+                singleSelect: true,
+                onCommit: { showMyOwnerMenu = false }
             )
         }
         .safeHelp(
