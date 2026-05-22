@@ -203,10 +203,23 @@ public enum BrainSyncConflictContextPrefix {
         } catch {
             return nil
         }
+        // pipe 버퍼 fill 시 deadlock 방지 — 두 pipe 동시 drain (`git status` 같은
+        // 명령은 보통 작지만 large brain repo + 많은 UU 마커면 64KB 초과 가능).
+        let group = DispatchGroup()
+        let drainQueue = DispatchQueue(label: "com.zebra.brainsync.git-drain", attributes: .concurrent)
+        nonisolated(unsafe) var stdoutData = Data()
+        nonisolated(unsafe) var stderrData = Data()
+        drainQueue.async(group: group) {
+            stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
+        }
+        drainQueue.async(group: group) {
+            stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
+        }
         process.waitUntilExit()
+        group.wait()
+        _ = stderrData   // captured for symmetry; current callers only use stdout.
         guard process.terminationStatus == 0 else { return nil }
-        let data = (try? stdout.fileHandleForReading.readToEnd()) ?? Data()
-        let raw = String(data: data, encoding: .utf8) ?? ""
+        let raw = String(data: stdoutData, encoding: .utf8) ?? ""
         return raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

@@ -317,9 +317,24 @@ public final class BrainSyncService: ObservableObject {
         } catch {
             return .failure(reason: .hookFailed, detail: "failed to launch zebra-brain-sync: \(error.localizedDescription)")
         }
+        // macOS pipe 버퍼는 ~64KB. `git fetch` 같은 명령은 큰 brain repo 에서
+        // 그 한계를 쉽게 넘어. `waitUntilExit()` 후에 read 하면 subprocess 가
+        // write 못 해서 block 하고 부모가 exit 기다리며 block → deadlock.
+        // 두 pipe 를 별도 background queue 에서 동시 drain 한 뒤 waitUntilExit.
+        let group = DispatchGroup()
+        let drainQueue = DispatchQueue(label: "com.zebra.brainsync.drain", attributes: .concurrent)
+        nonisolated(unsafe) var stdoutData = Data()
+        nonisolated(unsafe) var stderrData = Data()
+        drainQueue.async(group: group) {
+            stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        }
+        drainQueue.async(group: group) {
+            stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        }
         process.waitUntilExit()
-        let stdout = (try? stdoutPipe.fileHandleForReading.readToEnd()).flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        let stderr = (try? stderrPipe.fileHandleForReading.readToEnd()).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        group.wait()
+        let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+        let stderr = String(data: stderrData, encoding: .utf8) ?? ""
         appendLog(vaultRoot: vaultRoot, exit: process.terminationStatus, stdout: stdout, stderr: stderr)
 
         if process.terminationStatus == 0 {
@@ -353,42 +368,81 @@ public final class BrainSyncService: ObservableObject {
         if let (reason, detail) = parseReasonTag(stderr: stderr) {
             return (reason, detail)
         }
-        // Source B — git 명령 stderr 패턴 매칭.
+        // Source B — git stderr 패턴 매칭, **specific → general** 우선순위.
+        //
+        // 같은 stderr 에 여러 keyword 가 같이 나오는 경우 (예: `! [remote rejected]
+        // permission denied (403)`) 가장 좁은 의미의 패턴이 winner 여야 사용자
+        // hint 가 올바른 행동을 가리킨다. 예) "permission denied" 가 "rejected"
+        // 보다 위 = 권한 issue 가 push workflow 의 일반 reject 보다 구체적.
+        //
+        // 패턴 출처 = git source code (push.c / transport.c / http.c) 의 hardcoded
+        // string + GitHub 의 표준 troubleshooting 페이지. 상세 = docs/upstream/git
+        // 변경 시 갱신 필요.
         let haystack = (stderr + "\n" + stdout).lowercased()
         let lastStderrLine = stderr
             .split(separator: "\n", omittingEmptySubsequences: true)
             .last
             .map(String.init) ?? ""
 
+        // 1. conflict — 가장 구체. merge/rebase 도중 충돌이 stderr 에 명시.
+        if haystack.contains("conflict (content)")
+            || haystack.contains("conflict (modify/delete)")
+            || haystack.contains("conflict (rename")
+            || haystack.contains("automatic merge failed")
+            || haystack.contains("conflict marker") {
+            return (.conflict, lastStderrLine)
+        }
+        // 2. permissionDenied — 권한 issue 명시. `pushRejected` 의 "rejected" 와
+        //    같이 나오는 경우가 흔해서 (`! [remote rejected] permission denied`)
+        //    더 위에. GH006/Protected branch + 403/404 (Repository not found =
+        //    private repo + 권한 없음) 도 여기.
+        if haystack.contains("gh006: protected branch")
+            || haystack.contains("cannot force-push to this protected branch")
+            || haystack.contains("remote: permission to")
+            || haystack.contains("permission denied")
+            || haystack.contains("repository not found")
+            || haystack.contains("write access to repository not granted")
+            || haystack.contains(" 403 ")
+            || haystack.hasSuffix(" 403")
+            || haystack.contains(" 404 ")
+            || haystack.hasSuffix(" 404") {
+            return (.permissionDenied, lastStderrLine)
+        }
+        // 3. authExpired — 인증 issue 명시. `pushRejected` 보다 위에 (push 가
+        //    auth fail 로도 reject 됨).
         if haystack.contains("authentication failed")
             || haystack.contains("could not read username")
+            || haystack.contains("permission denied (publickey)")
             || haystack.contains(" 401 ")
             || haystack.hasSuffix(" 401") {
             return (.authExpired, lastStderrLine)
         }
+        // 4. pushRejected — push 의 일반 거절 (non-fast-forward). 권한/인증 둘 다
+        //    못 잡은 reject 만 여기. "rejected" 단어 단독은 ambiguous 라 안 보고
+        //    "non-fast-forward" / "fetch first" / "failed to push some refs" 만.
+        if haystack.contains("non-fast-forward")
+            || haystack.contains("fetch first")
+            || haystack.contains("failed to push some refs") {
+            return (.pushRejected, lastStderrLine)
+        }
+        // 5. offline — 네트워크 자체 못 닿음.
         if haystack.contains("could not resolve host")
             || haystack.contains("connection refused")
             || haystack.contains("network is unreachable")
-            || haystack.contains("timeout") {
+            || haystack.contains("operation timed out")
+            || haystack.contains("connection timed out") {
             return (.offline, lastStderrLine)
         }
-        if haystack.contains("merge conflict") || haystack.contains("conflict marker") {
-            return (.conflict, lastStderrLine)
-        }
-        if haystack.contains("non-fast-forward") || haystack.contains("rejected") {
-            return (.pushRejected, lastStderrLine)
-        }
-        if haystack.contains(" 403 ")
-            || haystack.hasSuffix(" 403")
-            || haystack.contains("permission denied")
-            || haystack.contains("repository not found")
-            || haystack.contains("write access to repository not granted") {
-            return (.permissionDenied, lastStderrLine)
-        }
+        // 6. diskFull — 시스템 자원.
         if haystack.contains("no space left on device") || haystack.contains("enospc") {
             return (.diskFull, lastStderrLine)
         }
-        if haystack.contains("api rate limit") || haystack.contains(" 429 ") || haystack.hasSuffix(" 429") {
+        // 7. rateLimit — server-side throttle.
+        if haystack.contains("api rate limit")
+            || haystack.contains("rate limit exceeded")
+            || haystack.contains(" 429 ")
+            || haystack.hasSuffix(" 429")
+            || haystack.contains("retry-after:") {
             return (.rateLimit, lastStderrLine)
         }
         return (.unknown, lastStderrLine)
