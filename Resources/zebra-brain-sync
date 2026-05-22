@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# zebra-brain-sync
+#
+# Generic per-vault git sync. Phases:
+#   lock -> fetch -> validate -> commit -> pull --rebase -> push -> gbrain ping
+#
+# Emitted on stderr first line of every fail: `[REASON:<id>] <message>` where
+# <id> ∈ authExpired|offline|pushRejected|permissionDenied|diskFull|hookFailed|rateLimit|conflict|unknown.
+# Zebra's `BrainSyncService` parses the tag to classify the FailureReason.
+#
+# Originates from offlightinc/b-brain-offlight's `local-offlight-brain-sync`,
+# generic-fied here (no brand-bound repo basename / remote URL / gbrain CLI
+# path checks). That source script remains in the brain repo and is not
+# touched by zebra.
+
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+zebra-brain-sync --repo <path> [--no-ping] [--dry-run]
+
+Options:
+  --repo <path>   Required. Path to the brain git repo to sync.
+  --no-ping       Skip `gbrain remote ping` after a successful push.
+  --dry-run       Validate and print what would happen, without changing git state.
+  --help          Show this help.
+USAGE
+}
+
+DRY_RUN=0
+PING=1
+REPO_ROOT=""
+
+# user shell PATH 의 일부 (zebra 가 Process 환경에 보강하지만 안전망).
+export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo)
+      REPO_ROOT="${2:-}"
+      shift 2
+      ;;
+    --no-ping)
+      PING=0
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'unknown option: %s\n\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+log() {
+  printf '[zebra-brain-sync] %s\n' "$*"
+}
+
+# fail "<reason_id>" "<human message>"
+# zebra 가 stderr 첫 줄의 [REASON:<id>] 태그를 파싱해서 FailureReason enum 으로 변환.
+fail() {
+  local reason="$1"
+  shift
+  printf '[REASON:%s] %s\n' "$reason" "$*" >&2
+  exit 1
+}
+
+[[ -n "$REPO_ROOT" ]] || fail "hookFailed" "missing --repo <path>"
+[[ -d "$REPO_ROOT" ]] || fail "hookFailed" "repo path does not exist: $REPO_ROOT"
+[[ -d "$REPO_ROOT/.git" ]] || fail "hookFailed" "not a git repo: $REPO_ROOT"
+
+cd "$REPO_ROOT"
+
+remote="${ZEBRA_SYNC_REMOTE:-origin}"
+
+current_branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+[[ -n "$current_branch" ]] || fail "hookFailed" "detached HEAD; refusing to sync"
+
+branch="${ZEBRA_SYNC_BRANCH:-$current_branch}"
+[[ "$current_branch" == "$branch" ]] || fail "hookFailed" "expected branch $branch, got $current_branch"
+
+remote_url="$(git remote get-url "$remote" 2>/dev/null || true)"
+[[ -n "$remote_url" ]] || fail "hookFailed" "missing git remote: $remote"
+
+git_dir="$(git rev-parse --git-dir)"
+for state_dir in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+  [[ ! -e "$git_dir/$state_dir" ]] || fail "hookFailed" "git operation in progress ($state_dir); resolve it first"
+done
+
+lock_key="$(printf '%s' "$REPO_ROOT" | cksum | awk '{print $1}')"
+lock_dir="${TMPDIR:-/tmp}/zebra-brain-sync.${lock_key}.lock"
+if ! mkdir "$lock_dir" 2>/dev/null; then
+  log "already running for $REPO_ROOT; exiting"
+  exit 0
+fi
+trap 'rm -rf "$lock_dir"' EXIT
+
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/zebra-brain-sync.XXXXXX")"
+trap 'rm -rf "$tmp_dir"; rm -rf "$lock_dir"' EXIT
+tracked_changes="$tmp_dir/tracked.z"
+untracked_changes="$tmp_dir/untracked.z"
+
+has_nul_records() {
+  [[ -s "$1" ]]
+}
+
+print_nul_records() {
+  while IFS= read -r -d '' path; do
+    printf '  %s\n' "$path"
+  done < "$1"
+}
+
+# 14 self-validation checks below. 13 of them → hookFailed reason. The lone
+# exception `conflict markers found` → conflict reason (it's the residue of an
+# external git merge that produced markers in a .md file).
+validate_path() {
+  local path="$1"
+
+  [[ -n "$path" ]] || fail "hookFailed" "empty git path"
+  [[ "$path" != /* ]] || fail "hookFailed" "absolute path is not allowed: $path"
+  [[ "$path" != *".."* ]] || fail "hookFailed" "path traversal is not allowed: $path"
+  [[ "$path" != .* ]] || fail "hookFailed" "hidden files are not auto-committed: $path"
+  [[ "$path" != ".git/"* ]] || fail "hookFailed" "git internals are not allowed: $path"
+  [[ "$path" != ".gbrain/"* ]] || fail "hookFailed" "local gbrain state is not allowed: $path"
+  [[ "$path" != "supabase/.temp/"* ]] || fail "hookFailed" "supabase temp state is not allowed: $path"
+  [[ "$path" == *.md ]] || fail "hookFailed" "only markdown brain files are auto-committed: $path"
+
+  if [[ -e "$path" ]]; then
+    [[ -f "$path" ]] || fail "hookFailed" "not a regular file: $path"
+    [[ ! -L "$path" ]] || fail "hookFailed" "symlinks are not auto-committed: $path"
+
+    if grep -nE '^(<<<<<<<|=======|>>>>>>>)' "$path" >/dev/null; then
+      fail "conflict" "conflict markers found in $path"
+    fi
+
+    if grep -nE '(gbrain_cs_|postgres(ql)?://[^[:space:]]+:[^[:space:]]+@|OPENAI_API_KEY=sk-|ANTHROPIC_API_KEY=sk-ant-|GBRAIN_REMOTE_CLIENT_SECRET=[^<[:space:]]+)' "$path" >/dev/null; then
+      fail "hookFailed" "possible secret found in $path"
+    fi
+  fi
+}
+
+validate_file_list() {
+  local list_file="$1"
+  while IFS= read -r -d '' path; do
+    validate_path "$path"
+  done < "$list_file"
+}
+
+log "repo: $REPO_ROOT"
+log "phase: fetch"
+if [[ "$DRY_RUN" == "1" ]]; then
+  log "dry run: would run git fetch $remote $branch"
+else
+  # git fetch failure (network / auth / 403 / etc) — emit stderr 그대로 + reason 분류는
+  # zebra 측 패턴 매칭에 위임. (stderr 가 길어 reason 태그 안 박음. 사용 사례 적음.)
+  if ! git fetch "$remote" "$branch" 2>&1; then
+    fail "unknown" "git fetch failed (see stderr above for cause)"
+  fi
+fi
+
+git update-index -q --refresh || true
+git diff --name-only -z HEAD -- > "$tracked_changes"
+git ls-files --others --exclude-standard -z > "$untracked_changes"
+
+log "phase: validate"
+if has_nul_records "$tracked_changes" || has_nul_records "$untracked_changes"; then
+  validate_file_list "$tracked_changes"
+  validate_file_list "$untracked_changes"
+else
+  log "no local markdown changes to commit"
+fi
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  if has_nul_records "$tracked_changes"; then
+    log "dry run: tracked changes"
+    print_nul_records "$tracked_changes"
+  fi
+  if has_nul_records "$untracked_changes"; then
+    log "dry run: untracked changes"
+    print_nul_records "$untracked_changes"
+  fi
+  log "dry run: would commit allowed changes, pull --rebase, push if ahead, and ping if pushed"
+  exit 0
+fi
+
+log "phase: commit"
+committed_sha=""
+if has_nul_records "$tracked_changes" || has_nul_records "$untracked_changes"; then
+  while IFS= read -r -d '' path; do
+    git add -- "$path"
+  done < "$tracked_changes"
+  while IFS= read -r -d '' path; do
+    git add -- "$path"
+  done < "$untracked_changes"
+
+  if git diff --cached --quiet --exit-code; then
+    log "nothing staged after validation"
+  else
+    commit_msg="${ZEBRA_SYNC_COMMIT_MSG:-brain: sync local changes}"
+    git commit -m "$commit_msg"
+    committed_sha="$(git rev-parse --short HEAD)"
+  fi
+else
+  log "nothing to commit"
+fi
+
+log "phase: pull --rebase"
+if ! git pull --rebase "$remote" "$branch" 2>&1; then
+  # pull --rebase 실패 = 대개 conflict. git status --porcelain 로 UU 마커 확인.
+  if git status --porcelain 2>/dev/null | grep -q '^UU'; then
+    fail "conflict" "git pull --rebase produced conflicts; resolve in working tree"
+  fi
+  fail "unknown" "git pull --rebase failed (see stderr above for cause)"
+fi
+
+ahead_count="$(git rev-list --count "$remote/$branch"..HEAD 2>/dev/null || printf '0')"
+if [[ "$ahead_count" =~ ^[0-9]+$ ]] && [[ "$ahead_count" -gt 0 ]]; then
+  log "phase: push ($ahead_count commit(s) ahead)"
+  if ! git push "$remote" "$branch" 2>&1; then
+    # push stderr 의 reason 분류는 zebra 측 패턴 매칭에 위임.
+    fail "unknown" "git push failed (see stderr above for cause)"
+  fi
+  pushed=1
+else
+  log "phase: push skipped; no local commits ahead"
+  pushed=0
+fi
+
+# 마지막 정상 HEAD SHA 를 stdout 에 emit. zebra 가 `committed <sha>` 라인을 파싱해
+# SyncState.synced 에 commit 으로 저장. push 했으면 그 SHA, 안 했으면 현재 HEAD.
+final_sha="$(git rev-parse --short HEAD 2>/dev/null || true)"
+if [[ -n "$final_sha" ]]; then
+  printf 'committed %s\n' "$final_sha"
+fi
+
+if [[ "$pushed" == "1" && "$PING" == "1" ]]; then
+  gbrain_cli="$(command -v gbrain || true)"
+  if [[ -n "$gbrain_cli" ]]; then
+    log "phase: remote ping"
+    if ! "$gbrain_cli" remote ping --timeout "${ZEBRA_SYNC_PING_TIMEOUT:-5m}" 2>&1; then
+      log "remote ping failed after push; GitHub is updated, Railway autopilot will pick it up"
+    fi
+  else
+    log "remote ping skipped; gbrain CLI not found in PATH"
+  fi
+else
+  log "phase: remote ping skipped"
+fi
+
+log "done"

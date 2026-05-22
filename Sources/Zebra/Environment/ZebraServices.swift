@@ -29,6 +29,7 @@ struct ZebraServices {
     let goalsViewState: GoalsViewState
     let email: ZebraEmailListStore
     let emailDetail: ZebraEmailDetailStore
+    let brainSync: BrainSyncService
 
     /// Per-panel side-car controllers for markdown panels. Owner of all
     /// `MarkdownPanelController` instances — views may only `@ObservedObject`
@@ -44,9 +45,16 @@ struct ZebraServices {
         // every call so racing main-window creation is harmless.
         MinimalModeSidebarTitlebarControlsMetrics.extraLeadingInset =
             VerticalTabsSidebarModeRail.fixedWidth
+        let vault = VerticalTabsSidebarVaultState()
+        let brainSync = BrainSyncService()
+        // sync target 이 사용자 vault 선택을 따라가도록 publisher sink.
+        // start() 가 NSApplication.willTerminate observer 도 자체 등록하므로
+        // cmux upstream AppDelegate 는 안 만짐.
+        brainSync.attachVaultSource(vault)
+        brainSync.start()
         return ZebraServices(
             sidebarMode: VerticalTabsSidebarModeState(),
-            vault: VerticalTabsSidebarVaultState(),
+            vault: vault,
             markdownFiles: MarkdownFileListStore(),
             goals: GoalFileListStore(),
             tasks: TaskFileListStore(),
@@ -54,6 +62,7 @@ struct ZebraServices {
             goalsViewState: GoalsViewState(),
             email: ZebraEmailListStore(),
             emailDetail: ZebraEmailDetailStore(),
+            brainSync: brainSync,
             panelControllers: MarkdownPanelControllerRegistry()
         )
     }
@@ -85,6 +94,7 @@ struct ZebraServices {
             .environmentObject(goalsViewState)
             .environmentObject(email)
             .environmentObject(emailDetail)
+            .environmentObject(brainSync)
     }
 }
 
