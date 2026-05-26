@@ -17,6 +17,7 @@ struct BrainSyncTooltipView: View {
     var onConflictAgentSelect: ((MarkdownPillAgent) -> Void)?
 
     @State private var preferredAgent: MarkdownPillAgent = BrainSyncAgentPreference.current
+    @State private var hintHovering = false
 
     var body: some View {
         VStack(alignment: .center, spacing: 0) {
@@ -72,16 +73,33 @@ struct BrainSyncTooltipView: View {
             .padding(.top, 2)
     }
 
+    /// hint 줄 ("click to resync" / reason 별 "click to …"). 디자인이 클릭을
+    /// 유도하므로 indicator 버튼과 동일하게 여기서도 클릭 → `triggerSync()`.
+    /// conflict reason 은 `conflictPicker` 가 대신 그려지므로 여기 안 옴.
+    /// in-flight 면 비활성 (서비스가 idempotent 라 이중 안전망).
     @ViewBuilder
     private var hintRow: some View {
         Divider()
             .background(BVColor.border)
             .padding(.top, 6)
-        Text(hintText)
-            .font(.system(size: 10.5))
-            .foregroundColor(BVColor.fgFaint)
-            .multilineTextAlignment(.center)
-            .padding(.top, 6)
+        Button(action: { service.triggerSync() }) {
+            Text(hintText)
+                .font(.system(size: 10.5))
+                .foregroundColor(hintHovering && !service.isSyncing ? BVColor.fg : BVColor.fgFaint)
+                .multilineTextAlignment(.center)
+                .padding(.top, 6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(service.isSyncing)
+        .onHover { hovering in
+            hintHovering = hovering
+            if hovering && !service.isSyncing {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
     }
 
     /// conflict reason 일 때 hint 자리에 표시되는 agent picker (chip + dropdown).
