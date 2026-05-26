@@ -683,6 +683,12 @@ final class ZebraEmailDetailStore: ObservableObject {
         } catch {
             var failedState = threadStates[threadId] ?? ZebraEmailThreadUIState()
             failedState.isArchiving = false
+            if let repairState = Self.connectionRepairState(for: error) {
+                failedState.archiveErrorMessage = nil
+                threadStates[threadId] = failedState
+                onConnectionRepairRequired(repairState)
+                return false
+            }
             failedState.archiveErrorMessage = String.localizedStringWithFormat(
                 String(localized: "email.detail.archiveFailed", defaultValue: "Archive failed: %@"),
                 displayError(error)
