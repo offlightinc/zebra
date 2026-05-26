@@ -436,6 +436,10 @@ final class ZebraEmailListStore: ObservableObject {
         EmailUserLabel(id: "local-\(UUID().uuidString)", name: name, color: labelColor(for: name))
     }
 
+    func removeLocalThread(threadId: String) {
+        threads.removeAll { $0.id == threadId }
+    }
+
     private func readableLabelName(_ id: String) -> String {
         id
             .replacingOccurrences(of: "_", with: " ")
@@ -519,6 +523,7 @@ final class ZebraEmailDetailStore: ObservableObject {
         if loadingState.isLoading { return }
         loadingState.isLoading = true
         loadingState.errorMessage = nil
+        loadingState.archiveErrorMessage = nil
         threadStates[threadId] = loadingState
 
         do {
@@ -551,6 +556,55 @@ final class ZebraEmailDetailStore: ObservableObject {
         threadStates[threadId] = state
     }
 
+    func archiveThread(threadId: String) async -> Bool {
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        if state.isArchiving { return false }
+        state.isArchiving = true
+        state.archiveErrorMessage = nil
+        threadStates[threadId] = state
+
+        do {
+            let detail: EmailThreadDetail
+            if let cached = state.detail {
+                detail = cached
+            } else {
+                detail = try await client.threadMessages(threadId: threadId, forceRefresh: false)
+            }
+            try await client.archiveThread(
+                threadId: threadId,
+                providerThreadId: detail.providerThreadId,
+                messageIds: detail.messages.map(\.id)
+            )
+            var archivedState = threadStates[threadId] ?? ZebraEmailThreadUIState()
+            archivedState.detail = nil
+            archivedState.isLoading = false
+            archivedState.isArchiving = false
+            archivedState.errorMessage = nil
+            archivedState.archiveErrorMessage = nil
+            archivedState.expandedMessageIds = nil
+            threadStates[threadId] = archivedState
+            if selectedThreadId == threadId {
+                selectedThreadId = nil
+            }
+            return true
+        } catch {
+            var failedState = threadStates[threadId] ?? ZebraEmailThreadUIState()
+            failedState.isArchiving = false
+            failedState.archiveErrorMessage = String.localizedStringWithFormat(
+                String(localized: "email.detail.archiveFailed", defaultValue: "Archive failed: %@"),
+                displayError(error)
+            )
+            threadStates[threadId] = failedState
+            return false
+        }
+    }
+
+    func clearArchiveError(threadId: String) {
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        state.archiveErrorMessage = nil
+        threadStates[threadId] = state
+    }
+
     func detail(threadId: String) -> EmailThreadDetail? {
         threadStates[threadId]?.detail
     }
@@ -561,6 +615,14 @@ final class ZebraEmailDetailStore: ObservableObject {
 
     func errorMessage(threadId: String) -> String? {
         threadStates[threadId]?.errorMessage
+    }
+
+    func isArchiving(threadId: String) -> Bool {
+        threadStates[threadId]?.isArchiving ?? false
+    }
+
+    func archiveErrorMessage(threadId: String) -> String? {
+        threadStates[threadId]?.archiveErrorMessage
     }
 
     func expandedMessageIds(threadId: String) -> Set<String> {
@@ -615,7 +677,9 @@ final class ZebraEmailDetailStore: ObservableObject {
 private struct ZebraEmailThreadUIState {
     var detail: EmailThreadDetail?
     var isLoading = false
+    var isArchiving = false
     var errorMessage: String?
+    var archiveErrorMessage: String?
     var expandedMessageIds: Set<String>?
     var chatCompanionPaneId: PaneID?
     var chatCompanionAgent: MarkdownPillAgent?

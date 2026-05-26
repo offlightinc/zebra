@@ -98,7 +98,8 @@ enum ZebraCustomPanelViewFactoryProvider {
                 return AnyView(
                     ZebraEmailPanelHost(
                         panel: emailPanel,
-                        store: services.emailDetail
+                        detailStore: services.emailDetail,
+                        listStore: services.email
                     )
                 )
             }
@@ -109,7 +110,8 @@ enum ZebraCustomPanelViewFactoryProvider {
 
 private struct ZebraEmailPanelHost: View {
     let panel: ZebraEmailThreadPanel
-    @ObservedObject var store: ZebraEmailDetailStore
+    @ObservedObject var detailStore: ZebraEmailDetailStore
+    let listStore: ZebraEmailListStore
     @EnvironmentObject private var tabManager: TabManager
     /// Chat pill expand state. Per-thread persistence isn't needed — the
     /// pill collapses cleanly when the user dismisses it, and a fresh
@@ -121,19 +123,31 @@ private struct ZebraEmailPanelHost: View {
 
         ZebraEmailThreadDetailView(
             subject: panel.displayTitle,
-            detail: store.detail(threadId: panel.threadId),
-            isLoading: store.isLoading(threadId: panel.threadId),
-            errorMessage: store.errorMessage(threadId: panel.threadId),
-            expandedMessageIds: store.expandedMessageIds(threadId: panel.threadId),
+            detail: detailStore.detail(threadId: panel.threadId),
+            isLoading: detailStore.isLoading(threadId: panel.threadId),
+            isArchiving: detailStore.isArchiving(threadId: panel.threadId),
+            errorMessage: detailStore.errorMessage(threadId: panel.threadId),
+            archiveErrorMessage: detailStore.archiveErrorMessage(threadId: panel.threadId),
+            expandedMessageIds: detailStore.expandedMessageIds(threadId: panel.threadId),
             // Markdown 측 `ZebraMarkdownPanelView` 가 ScrollView 본문에 부여하는
             // bottom 여백과 같은 값. 마지막 메시지가 floating chat pill 뒤로
             // 가리지 않도록 한다.
             bottomContentInset: 160,
+            onArchive: {
+                Task {
+                    if await detailStore.archiveThread(threadId: panel.threadId) {
+                        listStore.removeLocalThread(threadId: panel.threadId)
+                    }
+                }
+            },
+            onDismissArchiveError: {
+                detailStore.clearArchiveError(threadId: panel.threadId)
+            },
             onRefresh: {
-                Task { await store.reloadThread(threadId: panel.threadId, forceRefresh: true) }
+                Task { await detailStore.reloadThread(threadId: panel.threadId, forceRefresh: true) }
             },
             onToggleMessage: { messageId in
-                store.toggleMessage(threadId: panel.threadId, messageId: messageId)
+                detailStore.toggleMessage(threadId: panel.threadId, messageId: messageId)
             },
             onOpenURL: { url in
                 let ok = NSWorkspace.shared.open(url)
@@ -145,11 +159,11 @@ private struct ZebraEmailPanelHost: View {
             }
         )
         .overlay(alignment: .bottom) {
-            if let workspace, store.detail(threadId: panel.threadId) != nil {
+            if let workspace, detailStore.detail(threadId: panel.threadId) != nil {
                 MarkdownChatPill(
                     isExpanded: $pillExpanded,
                     displayTitle: panel.displayTitle,
-                    activeAgent: store.chatCompanionAgent(threadId: panel.threadId),
+                    activeAgent: detailStore.chatCompanionAgent(threadId: panel.threadId),
                     onSubmit: { text, agent in
                         handlePillSubmit(text: text, agent: agent, workspace: workspace)
                     }
@@ -160,7 +174,7 @@ private struct ZebraEmailPanelHost: View {
             }
         }
         .task(id: panel.threadId) {
-            await store.loadThreadIfNeeded(threadId: panel.threadId)
+            await detailStore.loadThreadIfNeeded(threadId: panel.threadId)
         }
     }
 
@@ -168,9 +182,9 @@ private struct ZebraEmailPanelHost: View {
     /// lives on the email thread's companion pane. First submit on a
     /// thread creates the split; subsequent submits add tabs.
     private func handlePillSubmit(text: String, agent: MarkdownPillAgent, workspace: Workspace) {
-        guard let detail = store.detail(threadId: panel.threadId) else { return }
+        guard let detail = detailStore.detail(threadId: panel.threadId) else { return }
         guard let newPanel = createAgentTerminalTab(workspace: workspace) else { return }
-        store.setChatCompanionAgent(agent, threadId: panel.threadId)
+        detailStore.setChatCompanionAgent(agent, threadId: panel.threadId)
 
         let launchEnvironmentReady = MarkdownChatPillCommand.prepareLaunchEnvironment(
             agent: agent,
@@ -200,7 +214,7 @@ private struct ZebraEmailPanelHost: View {
     /// tabs to that remembered pane (per thread).
     private func createAgentTerminalTab(workspace: Workspace) -> (any ZebraTerminalPanel)? {
         let zebraWorkspace: any ZebraMarkdownWorkspace = workspace
-        if let paneId = store.chatCompanionPaneId(threadId: panel.threadId),
+        if let paneId = detailStore.chatCompanionPaneId(threadId: panel.threadId),
            zebraWorkspace.allPaneIds.contains(paneId),
            let reusedPanel: any ZebraTerminalPanel = zebraWorkspace.newTerminalSurface(
                inPane: paneId,
@@ -210,13 +224,13 @@ private struct ZebraEmailPanelHost: View {
             return reusedPanel
         }
 
-        store.setChatCompanionPaneId(nil, threadId: panel.threadId)
+        detailStore.setChatCompanionPaneId(nil, threadId: panel.threadId)
         guard let newPanel: any ZebraTerminalPanel = zebraWorkspace.newTerminalSplit(
             from: panel.id,
             orientation: .horizontal,
             initialCommand: nil
         ) else { return nil }
-        store.setChatCompanionPaneId(
+        detailStore.setChatCompanionPaneId(
             zebraWorkspace.paneId(forPanelId: newPanel.id),
             threadId: panel.threadId
         )

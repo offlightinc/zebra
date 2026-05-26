@@ -6,7 +6,9 @@ public struct ZebraEmailThreadDetailView: View {
     private let subject: String
     private let detail: EmailThreadDetail?
     private let isLoading: Bool
+    private let isArchiving: Bool
     private let errorMessage: String?
+    private let archiveErrorMessage: String?
     private let expandedMessageIds: Set<String>
     /// Extra bottom padding on the scrollable thread body so a host-overlaid
     /// floating chat pill does not obscure the last message. Mirrors the
@@ -14,6 +16,8 @@ public struct ZebraEmailThreadDetailView: View {
     /// scrolled content). Defaults to 0 so non-host callers (previews, tests)
     /// render flush.
     private let bottomContentInset: CGFloat
+    private let onArchive: () -> Void
+    private let onDismissArchiveError: () -> Void
     private let onRefresh: () -> Void
     private let onToggleMessage: (String) -> Void
     private let onOpenURL: (URL) -> Void
@@ -22,9 +26,13 @@ public struct ZebraEmailThreadDetailView: View {
         subject: String,
         detail: EmailThreadDetail?,
         isLoading: Bool,
+        isArchiving: Bool = false,
         errorMessage: String?,
+        archiveErrorMessage: String? = nil,
         expandedMessageIds: Set<String>,
         bottomContentInset: CGFloat = 0,
+        onArchive: @escaping () -> Void = {},
+        onDismissArchiveError: @escaping () -> Void = {},
         onRefresh: @escaping () -> Void,
         onToggleMessage: @escaping (String) -> Void,
         onOpenURL: @escaping (URL) -> Void
@@ -32,9 +40,13 @@ public struct ZebraEmailThreadDetailView: View {
         self.subject = subject
         self.detail = detail
         self.isLoading = isLoading
+        self.isArchiving = isArchiving
         self.errorMessage = errorMessage
+        self.archiveErrorMessage = archiveErrorMessage
         self.expandedMessageIds = expandedMessageIds
         self.bottomContentInset = bottomContentInset
+        self.onArchive = onArchive
+        self.onDismissArchiveError = onDismissArchiveError
         self.onRefresh = onRefresh
         self.onToggleMessage = onToggleMessage
         self.onOpenURL = onOpenURL
@@ -43,6 +55,9 @@ public struct ZebraEmailThreadDetailView: View {
     public var body: some View {
         VStack(spacing: 0) {
             header
+            if let archiveErrorMessage, !archiveErrorMessage.isEmpty {
+                archiveErrorBanner(archiveErrorMessage)
+            }
             Divider()
             content
         }
@@ -71,42 +86,90 @@ public struct ZebraEmailThreadDetailView: View {
 
             Spacer(minLength: 8)
 
-            if let gmailURL = EmailThreadGmailURL.build(
-                accountEmail: detail?.accountEmail,
-                providerThreadId: detail?.providerThreadId
-            ) {
-                Button(action: { onOpenURL(gmailURL) }) {
-                    Image(systemName: "arrow.up.right.square")
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(width: 22, height: 22)
+            HStack(spacing: 4) {
+                if detail != nil {
+                    Button(action: onArchive) {
+                        if isArchiving {
+                            ProgressView()
+                                .controlSize(.small)
+                                .scaleEffect(0.72)
+                                .frame(height: 22)
+                        } else {
+                            Image(systemName: "archivebox")
+                                .font(.system(size: 12))
+                                .frame(height: 22)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(BVColor.fgMute)
+                    .disabled(isLoading || isArchiving)
+                    .help(String(localized: "email.detail.archive", defaultValue: "Archive"))
+                    .accessibilityLabel(String(localized: "email.detail.archive", defaultValue: "Archive"))
+                }
+
+                if let gmailURL = EmailThreadGmailURL.build(
+                    accountEmail: detail?.accountEmail,
+                    providerThreadId: detail?.providerThreadId
+                ) {
+                    Button(action: { onOpenURL(gmailURL) }) {
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.system(size: 12))
+                            .frame(height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(BVColor.fgMute)
+                    .help(String(localized: "email.detail.openInGmail", defaultValue: "Open in Gmail"))
+                    .accessibilityLabel(String(localized: "email.detail.openInGmail", defaultValue: "Open in Gmail"))
+                }
+
+                Button(action: onRefresh) {
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.72)
+                            .frame(height: 22)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12))
+                            .frame(height: 22)
+                    }
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(BVColor.fgMute)
-                .help(String(localized: "email.detail.openInGmail", defaultValue: "Open in Gmail"))
-                .accessibilityLabel(String(localized: "email.detail.openInGmail", defaultValue: "Open in Gmail"))
+                .disabled(isLoading)
+                .help(String(localized: "email.detail.refresh", defaultValue: "Refresh"))
+                .accessibilityLabel(String(localized: "email.detail.refresh", defaultValue: "Refresh"))
             }
-
-            Button(action: onRefresh) {
-                if isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.72)
-                        .frame(width: 22, height: 22)
-                } else {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(width: 22, height: 22)
-                }
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(BVColor.fgMute)
-            .disabled(isLoading)
-            .help(String(localized: "email.detail.refresh", defaultValue: "Refresh"))
-            .accessibilityLabel(String(localized: "email.detail.refresh", defaultValue: "Refresh"))
         }
-        .padding(.horizontal, 14)
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
         .frame(height: 48)
         .background(BVColor.bg)
+    }
+
+    private func archiveErrorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(BVColor.fgMute)
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(BVColor.fgMute)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button(action: onDismissArchiveError) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(BVColor.fgFaint)
+            .help(String(localized: "common.close", defaultValue: "Close"))
+            .accessibilityLabel(String(localized: "common.close", defaultValue: "Close"))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(BVColor.bgInput)
     }
 
     @ViewBuilder

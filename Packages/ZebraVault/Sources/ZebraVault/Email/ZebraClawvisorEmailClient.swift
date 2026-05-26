@@ -151,6 +151,33 @@ public actor ZebraClawvisorEmailClient {
         )
     }
 
+    public func archiveThread(
+        threadId: String,
+        providerThreadId: String?,
+        messageIds: [String]
+    ) async throws {
+        let config = try loadConfig()
+        let normalizedProviderThreadId = providerThreadId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let providerThreadId = normalizedProviderThreadId?.isEmpty == false ? normalizedProviderThreadId : nil
+        let targetThreadId = providerThreadId ?? threadId
+        do {
+            _ = try await invoke(
+                config: config,
+                action: "archive_message",
+                params: ["thread_id": targetThreadId],
+                reason: "Archive the selected Gmail thread after the user pressed Zebra's archive button in the email detail view."
+            )
+        } catch {
+            try await archiveMessageFallback(
+                config: config,
+                threadId: threadId,
+                messageIds: messageIds,
+                originalError: error
+            )
+        }
+        try removeThreadFromCache(threadId: threadId, providerThreadId: providerThreadId)
+    }
+
     private func fetchThreadMessages(config: ClawvisorConfig, threadId: String) async throws -> [NormalizedMessage] {
         var lastError: Error?
 
@@ -210,6 +237,37 @@ public actor ZebraClawvisorEmailClient {
         } catch {
             return nil
         }
+    }
+
+    private func archiveMessageFallback(
+        config: ClawvisorConfig,
+        threadId: String,
+        messageIds: [String],
+        originalError: Error
+    ) async throws {
+        var lastError = originalError
+        let candidates = ([threadId] + messageIds)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .uniquedPreservingOrder()
+        var archivedAnyMessage = false
+        for messageId in candidates {
+            do {
+                _ = try await invoke(
+                    config: config,
+                    action: "archive_message",
+                    params: ["message_id": messageId],
+                    reason: "Archive the selected Gmail thread after the user pressed Zebra's archive button in the email detail view."
+                )
+                archivedAnyMessage = true
+            } catch {
+                lastError = error
+            }
+        }
+        if archivedAnyMessage {
+            return
+        }
+        throw lastError
     }
 
     private func backfillMissingReceivedDates(
@@ -930,6 +988,40 @@ private extension ZebraClawvisorEmailClient {
         return rows
     }
 
+    func removeThreadFromCache(threadId: String, providerThreadId: String?) throws {
+        try openDatabaseIfNeeded()
+        let lookupIds = ([threadId, providerThreadId].compactMap { $0 })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .uniquedPreservingOrder()
+        guard !lookupIds.isEmpty else { return }
+
+        var storageThreadIds = Set(lookupIds)
+        for lookupId in lookupIds {
+            try query("""
+            SELECT thread_id
+            FROM email_messages
+            WHERE thread_id = ? OR message_id = ?
+            """, [lookupId, lookupId]) { stmt in
+                if let value = sqliteText(stmt, 0), !value.isEmpty {
+                    storageThreadIds.insert(value)
+                }
+            }
+        }
+
+        try execute("BEGIN IMMEDIATE")
+        do {
+            for id in storageThreadIds {
+                try execute("DELETE FROM email_threads WHERE thread_id = ?", [id])
+                try execute("DELETE FROM email_messages WHERE thread_id = ? OR message_id = ?", [id, id])
+            }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
     func threadSummaryReceivedAt(for message: NormalizedMessage, storageThreadId: String? = nil) throws -> Date {
         if let receivedAt = message.receivedAt {
             return receivedAt
@@ -1177,6 +1269,13 @@ extension Optional: OptionalStringConvertible {
 private extension Array {
     var nilIfEmpty: [Element]? {
         isEmpty ? nil : self
+    }
+}
+
+private extension Array where Element: Hashable {
+    func uniquedPreservingOrder() -> [Element] {
+        var seen = Set<Element>()
+        return filter { seen.insert($0).inserted }
     }
 }
 
