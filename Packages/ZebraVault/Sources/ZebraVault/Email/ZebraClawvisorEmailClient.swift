@@ -159,22 +159,29 @@ public actor ZebraClawvisorEmailClient {
         let config = try loadConfig()
         let normalizedProviderThreadId = providerThreadId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let providerThreadId = normalizedProviderThreadId?.isEmpty == false ? normalizedProviderThreadId : nil
-        let targetThreadId = providerThreadId ?? threadId
-        do {
+
+        // clawvisor 의 archive_message 는 단일 메시지에서 INBOX 라벨만 떼는 멱등
+        // 연산이라(thread_id 는 받지 않는다) 스레드 전체를 아카이브하려면 메시지를
+        // 하나씩 돌려야 한다. 하나라도 실패하면 즉시 throw 해서 로컬 캐시는 그대로
+        // 둔다 — Gmail 은 진짜 롤백이 안 되지만, "전부 성공했을 때만 로컬 캐시 커밋"
+        // + 멱등 재시도(이미 아카이브된 메시지는 no-op)로 원격/로컬 상태가 수렴한다.
+        let targets = messageIds
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .uniquedPreservingOrder()
+        guard !targets.isEmpty else {
+            throw ZebraClawvisorEmailClientError.malformedResponse("no messages to archive in thread")
+        }
+
+        for messageId in targets {
             _ = try await invoke(
                 config: config,
                 action: "archive_message",
-                params: ["thread_id": targetThreadId],
+                params: ["message_id": messageId],
                 reason: "Archive the selected Gmail thread after the user pressed Zebra's archive button in the email detail view."
             )
-        } catch {
-            try await archiveMessageFallback(
-                config: config,
-                threadId: threadId,
-                messageIds: messageIds,
-                originalError: error
-            )
         }
+
         try removeThreadFromCache(threadId: threadId, providerThreadId: providerThreadId)
     }
 
@@ -237,37 +244,6 @@ public actor ZebraClawvisorEmailClient {
         } catch {
             return nil
         }
-    }
-
-    private func archiveMessageFallback(
-        config: ClawvisorConfig,
-        threadId: String,
-        messageIds: [String],
-        originalError: Error
-    ) async throws {
-        var lastError = originalError
-        let candidates = ([threadId] + messageIds)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .uniquedPreservingOrder()
-        var archivedAnyMessage = false
-        for messageId in candidates {
-            do {
-                _ = try await invoke(
-                    config: config,
-                    action: "archive_message",
-                    params: ["message_id": messageId],
-                    reason: "Archive the selected Gmail thread after the user pressed Zebra's archive button in the email detail view."
-                )
-                archivedAnyMessage = true
-            } catch {
-                lastError = error
-            }
-        }
-        if archivedAnyMessage {
-            return
-        }
-        throw lastError
     }
 
     private func backfillMissingReceivedDates(
