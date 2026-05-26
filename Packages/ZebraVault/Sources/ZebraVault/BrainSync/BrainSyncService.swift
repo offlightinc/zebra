@@ -33,6 +33,7 @@ public final class BrainSyncService: ObservableObject {
         case hookFailed
         case rateLimit
         case conflict
+        case notGbrainRepo
         case unknown
 
         public var humanLabel: String {
@@ -45,6 +46,7 @@ public final class BrainSyncService: ObservableObject {
             case .hookFailed: return String(localized: "brainSync.reason.hookFailed", defaultValue: "Pre-commit hook 실패")
             case .rateLimit: return String(localized: "brainSync.reason.rateLimit", defaultValue: "Rate limit")
             case .conflict: return String(localized: "brainSync.reason.conflict", defaultValue: "동기화 충돌")
+            case .notGbrainRepo: return String(localized: "brainSync.reason.notGbrainRepo", defaultValue: "GBrain repo 아님")
             case .unknown: return String(localized: "brainSync.reason.unknown", defaultValue: "기타 오류")
             }
         }

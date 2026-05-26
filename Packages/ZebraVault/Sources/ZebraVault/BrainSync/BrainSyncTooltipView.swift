@@ -4,12 +4,12 @@ import SwiftUI
 /// (`/Users/han/zebra_design/zebra_sync/`) 의 `.ss-tip` 컴포넌트.
 ///
 /// 3 분기:
-/// - synced: row "[Last synced] [3m ago]" + hint "click to resync"
-/// - failed (reason ≠ conflict): row "[{한글 reason}] [14m ago]" + detail + hint
+/// - synced: row "[Last synced] [3m ago]" + passive status hint
+/// - failed (reason ≠ conflict): row "[{한글 reason}] [14m ago]" + detail + passive next-step hint
 /// - failed (reason = conflict): row "[동기화 충돌] [7m ago]" + detail + conflict CTA
 ///
 /// Conflict 의 agent picker chip 자체는 단계 3 에서 별도 view (`BrainSyncAgentPicker`).
-/// 단계 2 에선 hint 자리에 "click to resolve · agent in terminal" 텍스트만 표시.
+/// 단계 2 에선 hint 자리에 passive 안내 텍스트만 표시.
 struct BrainSyncTooltipView: View {
     @ObservedObject var service: BrainSyncService
     /// Conflict reason 일 때 agent 선택 callback. nil 이면 picker 안 보이고
@@ -17,7 +17,6 @@ struct BrainSyncTooltipView: View {
     var onConflictAgentSelect: ((MarkdownPillAgent) -> Void)?
 
     @State private var preferredAgent: MarkdownPillAgent = BrainSyncAgentPreference.current
-    @State private var hintHovering = false
 
     var body: some View {
         VStack(alignment: .center, spacing: 0) {
@@ -73,33 +72,19 @@ struct BrainSyncTooltipView: View {
             .padding(.top, 2)
     }
 
-    /// hint 줄 ("click to resync" / reason 별 "click to …"). 디자인이 클릭을
-    /// 유도하므로 indicator 버튼과 동일하게 여기서도 클릭 → `triggerSync()`.
-    /// conflict reason 은 `conflictPicker` 가 대신 그려지므로 여기 안 옴.
-    /// in-flight 면 비활성 (서비스가 idempotent 라 이중 안전망).
+    /// Passive hint row. Only the conflict picker below owns an explicit
+    /// action; generic failure hints describe the next step but do not pretend
+    /// to open logs, auth flows, or repo pickers that do not exist yet.
     @ViewBuilder
     private var hintRow: some View {
         Divider()
             .background(BVColor.border)
             .padding(.top, 6)
-        Button(action: { service.triggerSync() }) {
-            Text(hintText)
-                .font(.system(size: 10.5))
-                .foregroundColor(hintHovering && !service.isSyncing ? BVColor.fg : BVColor.fgFaint)
-                .multilineTextAlignment(.center)
-                .padding(.top, 6)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(service.isSyncing)
-        .onHover { hovering in
-            hintHovering = hovering
-            if hovering && !service.isSyncing {
-                NSCursor.pointingHand.push()
-            } else {
-                NSCursor.pop()
-            }
-        }
+        Text(hintText)
+            .font(.system(size: 10.5))
+            .foregroundColor(BVColor.fgFaint)
+            .multilineTextAlignment(.center)
+            .padding(.top, 6)
     }
 
     /// conflict reason 일 때 hint 자리에 표시되는 agent picker (chip + dropdown).
@@ -165,7 +150,7 @@ struct BrainSyncTooltipView: View {
     private var hintText: String {
         switch service.state {
         case .synced?:
-            return String(localized: "brainSync.hint.resync", defaultValue: "click to resync")
+            return String(localized: "brainSync.hint.synced", defaultValue: "sync is up to date")
         case .failed(_, let reason, _)?:
             return reason.hintText
         case nil:
@@ -214,27 +199,29 @@ struct BrainSyncTooltipView: View {
 }
 
 extension BrainSyncService.FailureReason {
-    /// 디자인 카탈로그의 hint 줄 ("click to ...").
+    /// Tooltip's passive next-step hint.
     var hintText: String {
         switch self {
         case .authExpired:
-            return String(localized: "brainSync.hint.reauth", defaultValue: "click to reauth · then retry")
+            return String(localized: "brainSync.hint.reauth", defaultValue: "reauthenticate, then retry")
         case .offline:
             return String(localized: "brainSync.hint.offline", defaultValue: "queued · retry in 30s")
         case .pushRejected:
-            return String(localized: "brainSync.hint.pullAndRetry", defaultValue: "click to pull & retry")
+            return String(localized: "brainSync.hint.pullAndRetry", defaultValue: "pull remote changes, then retry")
         case .permissionDenied:
-            return String(localized: "brainSync.hint.requestAccess", defaultValue: "click to request access")
+            return String(localized: "brainSync.hint.requestAccess", defaultValue: "check repository access")
         case .diskFull:
-            return String(localized: "brainSync.hint.diskUsage", defaultValue: "click to open disk usage")
+            return String(localized: "brainSync.hint.diskUsage", defaultValue: "free disk space, then retry")
         case .hookFailed:
-            return String(localized: "brainSync.hint.viewLog", defaultValue: "click to view hook log")
+            return String(localized: "brainSync.hint.viewLog", defaultValue: "check the sync log")
         case .rateLimit:
             return String(localized: "brainSync.hint.rateLimit", defaultValue: "rate limited · auto retry")
         case .conflict:
-            return String(localized: "brainSync.hint.resolve", defaultValue: "click to resolve · agent in terminal")
+            return String(localized: "brainSync.hint.resolve", defaultValue: "resolve with an agent in terminal")
+        case .notGbrainRepo:
+            return String(localized: "brainSync.hint.chooseGbrainRepo", defaultValue: "choose a GBrain repo")
         case .unknown:
-            return String(localized: "brainSync.hint.retry", defaultValue: "click to retry")
+            return String(localized: "brainSync.hint.retry", defaultValue: "retry from the sync indicator")
         }
     }
 }

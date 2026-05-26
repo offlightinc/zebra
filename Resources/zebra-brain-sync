@@ -5,7 +5,7 @@
 #   lock -> fetch -> validate -> commit -> pull --rebase -> push -> gbrain ping
 #
 # Emitted on stderr first line of every fail: `[REASON:<id>] <message>` where
-# <id> ∈ authExpired|offline|pushRejected|permissionDenied|diskFull|hookFailed|rateLimit|conflict|unknown.
+# <id> ∈ authExpired|offline|pushRejected|permissionDenied|diskFull|hookFailed|rateLimit|conflict|notGbrainRepo|unknown.
 # Zebra's `BrainSyncService` parses the tag to classify the FailureReason.
 #
 # Originates from offlightinc/b-brain-offlight's `local-offlight-brain-sync`,
@@ -78,6 +78,13 @@ fail() {
 [[ -d "$REPO_ROOT/.git" ]] || fail "hookFailed" "not a git repo: $REPO_ROOT"
 
 cd "$REPO_ROOT"
+
+# Require an explicit GBrain routing marker at the selected vault root. Do not
+# walk ancestors here: sync mutates and pushes this repo, so an unrelated git
+# repo under a mounted parent directory must not inherit the parent's marker.
+if [[ ! -f ".gbrain-mount" && ! -f ".gbrain-source" ]]; then
+  fail "notGbrainRepo" "not a GBrain repo: missing .gbrain-mount or .gbrain-source at repo root"
+fi
 
 remote="${ZEBRA_SYNC_REMOTE:-origin}"
 
