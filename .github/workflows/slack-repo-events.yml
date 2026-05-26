@@ -1,0 +1,147 @@
+name: Slack repo events
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "**"
+  pull_request:
+    types:
+      - closed
+  workflow_dispatch:
+    inputs:
+      message:
+        description: Test message to send to Slack
+        required: false
+        default: Manual Slack notification test
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  notify-slack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack notification
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          WORKFLOW_DISPATCH_MESSAGE: ${{ github.event.inputs.message }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "::notice::SLACK_WEBHOOK_URL is not set. Add a GitHub repository secret for the #zebra Slack incoming webhook."
+            exit 0
+          fi
+
+          repo_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          run_url="${repo_url}/actions/runs/${GITHUB_RUN_ID}"
+          should_send="true"
+
+          case "${GITHUB_EVENT_NAME}" in
+            pull_request)
+              merged="$(jq -r '.pull_request.merged // false' "$GITHUB_EVENT_PATH")"
+              if [ "$merged" != "true" ]; then
+                echo "Pull request was closed without merge; skipping Slack notification."
+                exit 0
+              fi
+
+              pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+              pr_title="$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH")"
+              pr_url="$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")"
+              base_ref="$(jq -r '.pull_request.base.ref' "$GITHUB_EVENT_PATH")"
+              head_ref="$(jq -r '.pull_request.head.ref' "$GITHUB_EVENT_PATH")"
+              merged_by="$(jq -r '.pull_request.merged_by.login // .sender.login // "unknown"' "$GITHUB_EVENT_PATH")"
+              title="Zebra PR merged"
+              body="<${pr_url}|#${pr_number} ${pr_title}> merged by ${merged_by} (${head_ref} -> ${base_ref})"
+              ;;
+            push)
+              ref_name="$(jq -r '.ref | sub("^refs/heads/"; "") | sub("^refs/tags/"; "")' "$GITHUB_EVENT_PATH")"
+              ref_kind="$(jq -r 'if .ref | startswith("refs/tags/") then "tag" else "branch" end' "$GITHUB_EVENT_PATH")"
+              deleted="$(jq -r '.deleted // false' "$GITHUB_EVENT_PATH")"
+
+              if [ "$deleted" = "true" ]; then
+                title="Zebra ${ref_kind} deleted"
+                body="${GITHUB_ACTOR} deleted ${ref_kind} ${ref_name}"
+              else
+                if [ "$ref_kind" = "branch" ] && [ "$ref_name" = "$DEFAULT_BRANCH" ]; then
+                  associated_prs="$(gh api \
+                    -H "Accept: application/vnd.github+json" \
+                    "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" 2>/dev/null || echo "[]")"
+                  if printf '%s' "$associated_prs" | jq -e 'map(select(.merged_at != null)) | length > 0' >/dev/null; then
+                    echo "Default-branch push is already covered by a merged PR notification; skipping duplicate push notification."
+                    should_send="false"
+                  fi
+                fi
+
+                commit_count="$(jq -r '.commits | length' "$GITHUB_EVENT_PATH")"
+                head_message="$(jq -r '.head_commit.message // "No head commit" | split("\n")[0]' "$GITHUB_EVENT_PATH")"
+                compare_url="$(jq -r '.compare // empty' "$GITHUB_EVENT_PATH")"
+                pusher="$(jq -r '.pusher.name // .sender.login // "unknown"' "$GITHUB_EVENT_PATH")"
+                title="Zebra push"
+                body="${pusher} pushed ${commit_count} commit(s) to ${ref_kind} ${ref_name}: ${head_message}"
+                if [ -n "$compare_url" ]; then
+                  body="${body} (<${compare_url}|compare>)"
+                fi
+              fi
+              ;;
+            workflow_dispatch)
+              title="Zebra Slack notification test"
+              body="${WORKFLOW_DISPATCH_MESSAGE:-Manual Slack notification test}"
+              ;;
+            *)
+              title="Zebra repo event"
+              body="${GITHUB_EVENT_NAME} in <${repo_url}|${GITHUB_REPOSITORY}>"
+              ;;
+          esac
+
+          if [ "$should_send" != "true" ]; then
+            exit 0
+          fi
+
+          payload="$(jq -n \
+            --arg channel "#zebra" \
+            --arg title "$title" \
+            --arg body "$body" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg actor "$GITHUB_ACTOR" \
+            --arg run_url "$run_url" \
+            '{
+              text: ($title + ": " + $body),
+              blocks: [
+                {
+                  type: "header",
+                  text: {
+                    type: "plain_text",
+                    text: $title,
+                    emoji: true
+                  }
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: $body
+                  }
+                },
+                {
+                  type: "context",
+                  elements: [
+                    {
+                      type: "mrkdwn",
+                      text: ("Repo: " + $repo + " | Actor: " + $actor + " | Channel: " + $channel + " | <" + $run_url + "|workflow run>")
+                    }
+                  ]
+                }
+              ]
+            }')"
+
+          curl --fail --show-error --silent \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --data "$payload" \
+            "$SLACK_WEBHOOK_URL"
