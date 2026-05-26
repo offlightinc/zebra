@@ -66,15 +66,11 @@ public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
                 detail: detail
             )
         }
-        if lowercased.contains("task_expired") ||
-            lowercased.contains("expired") {
-            return ZebraEmailConnectionRepairState(
-                kind: .taskExpired,
-                detail: detail
-            )
-        }
         if lowercased.contains("unauthorized") ||
             lowercased.contains("forbidden") ||
+            lowercased.contains("token_expired") ||
+            lowercased.contains("agent token has expired") ||
+            lowercased.contains("invalid agent token") ||
             lowercased.contains("401") ||
             lowercased.contains("403") {
             return ZebraEmailConnectionRepairState(
@@ -85,10 +81,20 @@ public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
         if lowercased.contains("task_not_found") ||
             lowercased.contains("invalid_task") ||
             lowercased.contains("missing_task") ||
+            lowercased.contains("task not found") ||
+            (lowercased.contains("task \"") && lowercased.contains("\" not found")) ||
+            lowercased.contains("task is revoked") ||
             lowercased.contains("task revoked") ||
             lowercased.contains("task_revoked") {
             return ZebraEmailConnectionRepairState(
                 kind: .taskUnavailable,
+                detail: detail
+            )
+        }
+        if lowercased.contains("task_expired") ||
+            (lowercased.contains("task") && lowercased.contains("expired")) {
+            return ZebraEmailConnectionRepairState(
+                kind: .taskExpired,
                 detail: detail
             )
         }
