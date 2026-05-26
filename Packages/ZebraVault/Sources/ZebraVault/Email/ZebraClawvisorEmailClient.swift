@@ -13,6 +13,14 @@ public struct ZebraEmailStatus: Equatable, Sendable {
     }
 }
 
+public struct ZebraClawvisorStandingTaskProvisioningResult: Equatable, Sendable {
+    public let taskId: String
+
+    public init(taskId: String) {
+        self.taskId = taskId
+    }
+}
+
 public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
     case notConfigured(String)
     case gateway(String)
@@ -30,6 +38,69 @@ public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
         case .malformedResponse(let detail):
             return "Clawvisor Gmail response was malformed: \(detail)"
         }
+    }
+
+    public var connectionRepairState: ZebraEmailConnectionRepairState? {
+        switch self {
+        case .notConfigured(let detail):
+            return ZebraEmailConnectionRepairState(
+                kind: .configurationMissing,
+                detail: detail
+            )
+        case .gateway(let detail):
+            return Self.gatewayRepairState(detail: detail)
+        case .sqlite, .malformedResponse:
+            return nil
+        }
+    }
+
+    private static func gatewayRepairState(detail: String) -> ZebraEmailConnectionRepairState? {
+        let lowercased = detail.lowercased()
+        if lowercased.contains("pending_task_approval") ||
+            lowercased.contains("pending_approval") ||
+            lowercased.contains("pending approval") ||
+            lowercased.contains("task is pending") ||
+            lowercased.contains("request status=pending") {
+            return ZebraEmailConnectionRepairState(
+                kind: .taskPendingApproval,
+                detail: detail
+            )
+        }
+        if lowercased.contains("unauthorized") ||
+            lowercased.contains("forbidden") ||
+            lowercased.contains("token_expired") ||
+            lowercased.contains("agent token has expired") ||
+            lowercased.contains("invalid agent token") ||
+            lowercased.contains("401") ||
+            lowercased.contains("403") {
+            return ZebraEmailConnectionRepairState(
+                kind: .authorizationFailed,
+                detail: detail
+            )
+        }
+        if lowercased.contains("task_not_found") ||
+            lowercased.contains("invalid_task") ||
+            lowercased.contains("missing_task") ||
+            lowercased.contains("task not found") ||
+            (lowercased.contains("task \"") && lowercased.contains("\" not found")) ||
+            lowercased.contains("task is revoked") ||
+            lowercased.contains("task is denied") ||
+            lowercased.contains("denied, not active") ||
+            lowercased.contains("task revoked") ||
+            lowercased.contains("task_revoked") {
+            return ZebraEmailConnectionRepairState(
+                kind: .taskUnavailable,
+                detail: detail
+            )
+        }
+        if lowercased.contains("task_expired") ||
+            (lowercased.contains("task") && lowercased.contains("expired")) {
+            return ZebraEmailConnectionRepairState(
+                kind: .taskExpired,
+                detail: detail
+            )
+        }
+        return nil
     }
 }
 
@@ -58,6 +129,91 @@ public actor ZebraClawvisorEmailClient {
     /// loaded on the previous call.
     public func invalidateConfig() {
         cachedConfig = nil
+    }
+
+    @discardableResult
+    public func provisionStandingGmailTask() async throws -> ZebraClawvisorStandingTaskProvisioningResult {
+        let config = try loadProvisioningConfig()
+        let service = "google.gmail:\(config.accountEmail)"
+        let body: [String: Any] = [
+            "purpose": "Zebra desktop email client: continuous inbox sync, read message bodies on user open, draft and send replies on user submit, and archive messages on user action.",
+            "lifetime": "standing",
+            "authorized_actions": [
+                [
+                    "service": service,
+                    "action": "list_messages",
+                    "auto_execute": true,
+                    "expected_use": "List recent Gmail messages to keep Zebra's inbox sidebar in sync.",
+                ],
+                [
+                    "service": service,
+                    "action": "get_message",
+                    "auto_execute": true,
+                    "expected_use": "Read message bodies when the user opens an email in Zebra.",
+                ],
+                [
+                    "service": service,
+                    "action": "get_thread",
+                    "auto_execute": true,
+                    "expected_use": "Read Gmail thread messages when the user opens a conversation in Zebra.",
+                ],
+                [
+                    "service": service,
+                    "action": "get_attachment",
+                    "auto_execute": true,
+                    "expected_use": "Fetch Gmail attachments when the user opens an attached file in Zebra.",
+                ],
+                [
+                    "service": service,
+                    "action": "create_draft",
+                    "auto_execute": true,
+                    "expected_use": "Create Gmail reply drafts from explicit user actions in Zebra.",
+                ],
+                [
+                    "service": service,
+                    "action": "send_message",
+                    "auto_execute": false,
+                    "expected_use": "Send Gmail messages only after the user explicitly submits them in Zebra.",
+                ],
+                [
+                    "service": service,
+                    "action": "archive_message",
+                    "auto_execute": true,
+                    "expected_use": "Archive Gmail messages when the user triggers archive in Zebra.",
+                ],
+            ],
+        ]
+        let bodyData = try JSONSerialization.data(withJSONObject: body, options: [])
+        guard let url = URL(string: config.url.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/tasks") else {
+            throw ZebraClawvisorEmailClientError.notConfigured("bad CLAWVISOR_URL")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(config.agentToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = bodyData
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw ZebraClawvisorEmailClientError.gateway(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw ZebraClawvisorEmailClientError.gateway("non-HTTP response")
+        }
+        let json = try decodeJSONObject(data)
+        guard (200..<300).contains(http.statusCode) else {
+            throw ZebraClawvisorEmailClientError.gateway(Self.errorSummary(json, status: http.statusCode))
+        }
+        guard let taskId = Self.taskId(from: json) else {
+            throw ZebraClawvisorEmailClientError.malformedResponse("no task id in task creation response")
+        }
+        try Self.upsertDotEnv(values: ["CLAWVISOR_GMAIL_TASK_ID": taskId])
+        cachedConfig = nil
+        return ZebraClawvisorStandingTaskProvisioningResult(taskId: taskId)
     }
 
     deinit {
@@ -156,6 +312,40 @@ public actor ZebraClawvisorEmailClient {
             cached: false,
             messages: saved
         )
+    }
+
+    public func archiveThread(
+        threadId: String,
+        providerThreadId: String?,
+        messageIds: [String]
+    ) async throws {
+        let config = try loadConfig()
+        let normalizedProviderThreadId = providerThreadId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let providerThreadId = normalizedProviderThreadId?.isEmpty == false ? normalizedProviderThreadId : nil
+
+        // clawvisor 의 archive_message 는 단일 메시지에서 INBOX 라벨만 떼는 멱등
+        // 연산이라(thread_id 는 받지 않는다) 스레드 전체를 아카이브하려면 메시지를
+        // 하나씩 돌려야 한다. 하나라도 실패하면 즉시 throw 해서 로컬 캐시는 그대로
+        // 둔다 — Gmail 은 진짜 롤백이 안 되지만, "전부 성공했을 때만 로컬 캐시 커밋"
+        // + 멱등 재시도(이미 아카이브된 메시지는 no-op)로 원격/로컬 상태가 수렴한다.
+        let targets = messageIds
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .uniquedPreservingOrder()
+        guard !targets.isEmpty else {
+            throw ZebraClawvisorEmailClientError.malformedResponse("no messages to archive in thread")
+        }
+
+        for messageId in targets {
+            _ = try await invoke(
+                config: config,
+                action: "archive_message",
+                params: ["message_id": messageId],
+                reason: "Archive the selected Gmail thread after the user pressed Zebra's archive button in the email detail view."
+            )
+        }
+
+        try removeThreadFromCache(threadId: threadId, providerThreadId: providerThreadId)
     }
 
     private func fetchThreadMessages(config: ClawvisorConfig, threadId: String) async throws -> [NormalizedMessage] {
@@ -320,6 +510,20 @@ public actor ZebraClawvisorEmailClient {
         cachedConfig = config
         return config
     }
+
+    private func loadProvisioningConfig() throws -> ClawvisorProvisioningConfig {
+        var env = ProcessInfo.processInfo.environment
+        for (key, value) in Self.readDotEnv() where env[key]?.isEmpty ?? true {
+            env[key] = value
+        }
+        let url = env["CLAWVISOR_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let token = env["CLAWVISOR_AGENT_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let accountEmail = env["ZEBRA_CLAWVISOR_GMAIL_ACCOUNT"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !url.isEmpty else { throw ZebraClawvisorEmailClientError.notConfigured("missing CLAWVISOR_URL") }
+        guard !token.isEmpty else { throw ZebraClawvisorEmailClientError.notConfigured("missing CLAWVISOR_AGENT_TOKEN") }
+        guard !accountEmail.isEmpty else { throw ZebraClawvisorEmailClientError.notConfigured("missing ZEBRA_CLAWVISOR_GMAIL_ACCOUNT") }
+        return ClawvisorProvisioningConfig(url: url, agentToken: token, accountEmail: accountEmail)
+    }
 }
 
 private extension ZebraClawvisorEmailClient {
@@ -327,6 +531,12 @@ private extension ZebraClawvisorEmailClient {
         let url: String
         let agentToken: String
         let taskId: String
+        let accountEmail: String
+    }
+
+    struct ClawvisorProvisioningConfig: Sendable {
+        let url: String
+        let agentToken: String
         let accountEmail: String
     }
 
@@ -413,6 +623,59 @@ private extension ZebraClawvisorEmailClient {
         return result
     }
 
+    static func upsertDotEnv(values: [String: String]) throws {
+        let directory = (NSHomeDirectory() as NSString).appendingPathComponent(".gbrain")
+        let path = (directory as NSString).appendingPathComponent(".env")
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(
+            atPath: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+
+        let raw = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        var lines = raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var remaining = values
+        for index in lines.indices {
+            guard let key = dotEnvKey(in: lines[index]),
+                  let value = remaining[key] else {
+                continue
+            }
+            lines[index] = "\(key)=\(dotEnvValue(value))"
+            remaining.removeValue(forKey: key)
+        }
+        if !remaining.isEmpty, !lines.isEmpty, lines.last?.isEmpty == false {
+            lines.append("")
+        }
+        for key in remaining.keys.sorted() {
+            lines.append("\(key)=\(dotEnvValue(remaining[key] ?? ""))")
+        }
+        let output = lines.joined(separator: "\n") + "\n"
+        try output.write(toFile: path, atomically: true, encoding: .utf8)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+    }
+
+    static func dotEnvKey(in line: String) -> String? {
+        var text = line.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty, !text.hasPrefix("#") else { return nil }
+        if text.hasPrefix("export ") {
+            text = String(text.dropFirst("export ".count))
+        }
+        guard let equals = text.firstIndex(of: "=") else { return nil }
+        let key = String(text[..<equals]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return key.isEmpty ? nil : key
+    }
+
+    static func dotEnvValue(_ value: String) -> String {
+        let safeCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-.@:/")
+        if value.unicodeScalars.allSatisfy({ safeCharacters.contains($0) }) {
+            return value
+        }
+        return "\"" + value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+
     func decodeJSONObject(_ data: Data) throws -> Any {
         do {
             return try JSONSerialization.jsonObject(with: data, options: [])
@@ -430,6 +693,23 @@ private extension ZebraClawvisorEmailClient {
             return "HTTP \(status) \(code) \(error) \(message)".trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return "HTTP \(status)"
+    }
+
+    static func taskId(from json: Any) -> String? {
+        guard let dict = json as? [String: Any] else { return nil }
+        for key in ["task_id", "id"] {
+            if let value = dict[key] as? String,
+               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return value
+            }
+        }
+        for key in ["task", "data", "result"] {
+            if let nested = dict[key] as? [String: Any],
+               let value = taskId(from: nested) {
+                return value
+            }
+        }
+        return nil
     }
 
     func normalizedListMessages(from response: Any, accountEmail: String) throws -> [NormalizedMessage] {
@@ -958,6 +1238,40 @@ private extension ZebraClawvisorEmailClient {
         return rows
     }
 
+    func removeThreadFromCache(threadId: String, providerThreadId: String?) throws {
+        try openDatabaseIfNeeded()
+        let lookupIds = ([threadId, providerThreadId].compactMap { $0 })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .uniquedPreservingOrder()
+        guard !lookupIds.isEmpty else { return }
+
+        var storageThreadIds = Set(lookupIds)
+        for lookupId in lookupIds {
+            try query("""
+            SELECT thread_id
+            FROM email_messages
+            WHERE thread_id = ? OR message_id = ?
+            """, [lookupId, lookupId]) { stmt in
+                if let value = sqliteText(stmt, 0), !value.isEmpty {
+                    storageThreadIds.insert(value)
+                }
+            }
+        }
+
+        try execute("BEGIN IMMEDIATE")
+        do {
+            for id in storageThreadIds {
+                try execute("DELETE FROM email_threads WHERE thread_id = ?", [id])
+                try execute("DELETE FROM email_messages WHERE thread_id = ? OR message_id = ?", [id, id])
+            }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
     func threadSummaryReceivedAt(for message: NormalizedMessage, storageThreadId: String? = nil) throws -> Date {
         if let receivedAt = message.receivedAt {
             return receivedAt
@@ -1205,6 +1519,13 @@ extension Optional: OptionalStringConvertible {
 private extension Array {
     var nilIfEmpty: [Element]? {
         isEmpty ? nil : self
+    }
+}
+
+private extension Array where Element: Hashable {
+    func uniquedPreservingOrder() -> [Element] {
+        var seen = Set<Element>()
+        return filter { seen.insert($0).inserted }
     }
 }
 

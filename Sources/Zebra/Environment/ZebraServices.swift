@@ -52,6 +52,10 @@ struct ZebraServices {
         // cmux upstream AppDelegate 는 안 만짐.
         brainSync.attachVaultSource(vault)
         brainSync.start()
+        let email = ZebraEmailListStore()
+        let emailDetail = ZebraEmailDetailStore { repairState in
+            email.beginConnectionRepair(repairState)
+        }
         return ZebraServices(
             sidebarMode: VerticalTabsSidebarModeState(),
             vault: vault,
@@ -60,8 +64,8 @@ struct ZebraServices {
             tasks: TaskFileListStore(),
             people: PersonFileListStore(),
             goalsViewState: GoalsViewState(),
-            email: ZebraEmailListStore(),
-            emailDetail: ZebraEmailDetailStore(),
+            email: email,
+            emailDetail: emailDetail,
             brainSync: brainSync,
             panelControllers: MarkdownPanelControllerRegistry()
         )
@@ -127,10 +131,12 @@ final class ZebraEmailListStore: ObservableObject {
     // sidebar 의 sync 버튼 spinner 가 이걸로 판정.
     @Published private(set) var isSyncing = false
     @Published private(set) var lastError: String?
+    @Published private(set) var connectionRepairState: ZebraEmailConnectionRepairState?
 
     private let client: ZebraClawvisorEmailClient
     private var prefetchTask: Task<Void, Never>?
     private var periodicSyncTask: Task<Void, Never>?
+    private var provisioningTask: Task<Void, Never>?
     private static let lastConnectedKey = "ZebraEmailListStore.lastKnownConnected"
     private static let lastThreadsKey = "ZebraEmailListStore.lastThreadsSnapshot"
     private static let startupSyncDelayNanoseconds: UInt64 = 3 * 1_000_000_000
@@ -173,6 +179,7 @@ final class ZebraEmailListStore: ObservableObject {
         directoryWatchSource?.cancel()
         configReloadWorkItem?.cancel()
         periodicSyncTask?.cancel()
+        provisioningTask?.cancel()
     }
 
     // MARK: - ~/.gbrain/.env file watcher
@@ -340,6 +347,68 @@ final class ZebraEmailListStore: ObservableObject {
         }
     }
 
+    func beginConnectionRepair(_ state: ZebraEmailConnectionRepairState) {
+        recordConnected(false)
+        threads = []
+        lastError = nil
+        connectionRepairState = state
+        if shouldProvisionStandingTask(for: state) {
+            provisionStandingTaskIfNeeded()
+        }
+    }
+
+    private func clearConnectionRepair() {
+        connectionRepairState = nil
+    }
+
+    private func handleConnectionFailure(_ error: Error) -> Bool {
+        guard let state = Self.connectionRepairState(for: error) else {
+            return false
+        }
+        beginConnectionRepair(state)
+        return true
+    }
+
+    private static func connectionRepairState(for error: Error) -> ZebraEmailConnectionRepairState? {
+        guard let clawvisorError = error as? ZebraClawvisorEmailClientError else {
+            return nil
+        }
+        return clawvisorError.connectionRepairState
+    }
+
+    private func shouldProvisionStandingTask(for state: ZebraEmailConnectionRepairState) -> Bool {
+        switch state.kind {
+        case .configurationMissing:
+            return state.detail?.contains("CLAWVISOR_GMAIL_TASK_ID") == true
+        case .taskExpired, .taskUnavailable:
+            return true
+        case .taskPendingApproval, .authorizationFailed, .provisioning, .provisioningFailed:
+            return false
+        }
+    }
+
+    private func provisionStandingTaskIfNeeded() {
+        guard provisioningTask == nil else { return }
+        connectionRepairState = ZebraEmailConnectionRepairState(kind: .provisioning)
+        provisioningTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.client.provisionStandingGmailTask()
+                self.connectionRepairState = ZebraEmailConnectionRepairState(
+                    kind: .taskPendingApproval,
+                    taskId: result.taskId
+                )
+            } catch {
+                let repairState = Self.connectionRepairState(for: error)
+                self.connectionRepairState = ZebraEmailConnectionRepairState(
+                    kind: .provisioningFailed,
+                    detail: repairState?.detail ?? self.displayError(error)
+                )
+            }
+            self.provisioningTask = nil
+        }
+    }
+
     var userLabels: [EmailUserLabel] {
         let ids = Set(threads.flatMap { $0.labelIds })
             .subtracting(Self.gmailSystemLabelIDs)
@@ -361,6 +430,10 @@ final class ZebraEmailListStore: ObservableObject {
         let tStart = Date()
         Self.perfLog("refreshIfNeeded entry isLoading=\(isLoading)")
         if isLoading { return }
+        if !isConnected {
+            await refresh()
+            return
+        }
         isLoading = true
         defer {
             isLoading = false
@@ -378,12 +451,14 @@ final class ZebraEmailListStore: ObservableObject {
             if status.connected {
                 startBodyPrefetchIfNeeded(for: loadedThreads)
             }
+            clearConnectionRepair()
             lastError = nil
-        } catch ZebraClawvisorEmailClientError.notConfigured(_) {
-            recordConnected(false)
-            threads = []
-            lastError = nil
+        } catch let error as ZebraClawvisorEmailClientError {
+            if !handleConnectionFailure(error) {
+                lastError = displayError(error)
+            }
         } catch {
+            if handleConnectionFailure(error) { return }
             lastError = displayError(error)
         }
     }
@@ -409,6 +484,7 @@ final class ZebraEmailListStore: ObservableObject {
             recordConnected(status.connected)
             guard status.connected else {
                 threads = []
+                clearConnectionRepair()
                 lastError = nil
                 return
             }
@@ -417,17 +493,20 @@ final class ZebraEmailListStore: ObservableObject {
                 let syncedCount = try await client.syncRecentInbox()
                 Self.perfLog("syncRecentInbox synced=\(syncedCount)")
             } catch {
+                if handleConnectionFailure(error) { return }
                 syncError = displayError(error)
             }
             let loadedThreads = try await client.threads()
             threads = loadedThreads
+            clearConnectionRepair()
             lastError = loadedThreads.isEmpty ? syncError : nil
             startBodyPrefetchIfNeeded(for: loadedThreads)
-        } catch ZebraClawvisorEmailClientError.notConfigured(_) {
-            recordConnected(false)
-            threads = []
-            lastError = nil
+        } catch let error as ZebraClawvisorEmailClientError {
+            if !handleConnectionFailure(error) {
+                lastError = displayError(error)
+            }
         } catch {
+            if handleConnectionFailure(error) { return }
             lastError = displayError(error)
         }
     }
@@ -466,17 +545,24 @@ final class ZebraEmailListStore: ObservableObject {
                 threads = try await client.threads()
                 startBodyPrefetchIfNeeded(for: threads)
             }
+            clearConnectionRepair()
             lastError = nil
-        } catch ZebraClawvisorEmailClientError.notConfigured(_) {
-            recordConnected(false)
-            lastError = String(localized: "email.error.clawvisorRequired", defaultValue: "Clawvisor Gmail 설정이 필요합니다")
+        } catch let error as ZebraClawvisorEmailClientError {
+            if !handleConnectionFailure(error) {
+                lastError = displayError(error)
+            }
         } catch {
+            if handleConnectionFailure(error) { return }
             lastError = displayError(error)
         }
     }
 
     func localLabel(named name: String) -> EmailUserLabel {
         EmailUserLabel(id: "local-\(UUID().uuidString)", name: name, color: labelColor(for: name))
+    }
+
+    func removeLocalThread(threadId: String) {
+        threads.removeAll { $0.id == threadId }
     }
 
     private func readableLabelName(_ id: String) -> String {
@@ -517,6 +603,9 @@ final class ZebraEmailListStore: ObservableObject {
                 Self.perfLog("prefetchRecentMessageBodies fetched=\(fetched)")
             } catch {
                 Self.perfLog("prefetchRecentMessageBodies failed=\(error.localizedDescription)")
+                if let repairState = Self.connectionRepairState(for: error) {
+                    self?.beginConnectionRepair(repairState)
+                }
             }
         }
     }
@@ -546,6 +635,11 @@ final class ZebraEmailDetailStore: ObservableObject {
     @Published private var threadStates: [String: ZebraEmailThreadUIState] = [:]
 
     private let client = ZebraClawvisorEmailClient.shared
+    private let onConnectionRepairRequired: (ZebraEmailConnectionRepairState) -> Void
+
+    init(onConnectionRepairRequired: @escaping (ZebraEmailConnectionRepairState) -> Void = { _ in }) {
+        self.onConnectionRepairRequired = onConnectionRepairRequired
+    }
 
     func selectThread(_ thread: EmailThreadItem) {
         selectedThreadId = thread.id
@@ -562,6 +656,7 @@ final class ZebraEmailDetailStore: ObservableObject {
         if loadingState.isLoading { return }
         loadingState.isLoading = true
         loadingState.errorMessage = nil
+        loadingState.archiveErrorMessage = nil
         threadStates[threadId] = loadingState
 
         do {
@@ -575,6 +670,9 @@ final class ZebraEmailDetailStore: ObservableObject {
             }
             threadStates[threadId] = loadedState
         } catch {
+            if let repairState = Self.connectionRepairState(for: error) {
+                onConnectionRepairRequired(repairState)
+            }
             var failedState = threadStates[threadId] ?? ZebraEmailThreadUIState()
             failedState.isLoading = false
             failedState.errorMessage = displayError(error)
@@ -594,6 +692,61 @@ final class ZebraEmailDetailStore: ObservableObject {
         threadStates[threadId] = state
     }
 
+    func archiveThread(threadId: String) async -> Bool {
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        if state.isArchiving { return false }
+        state.isArchiving = true
+        state.archiveErrorMessage = nil
+        threadStates[threadId] = state
+
+        do {
+            let detail: EmailThreadDetail
+            if let cached = state.detail {
+                detail = cached
+            } else {
+                detail = try await client.threadMessages(threadId: threadId, forceRefresh: false)
+            }
+            try await client.archiveThread(
+                threadId: threadId,
+                providerThreadId: detail.providerThreadId,
+                messageIds: detail.messages.map(\.id)
+            )
+            var archivedState = threadStates[threadId] ?? ZebraEmailThreadUIState()
+            archivedState.detail = nil
+            archivedState.isLoading = false
+            archivedState.isArchiving = false
+            archivedState.errorMessage = nil
+            archivedState.archiveErrorMessage = nil
+            archivedState.expandedMessageIds = nil
+            threadStates[threadId] = archivedState
+            if selectedThreadId == threadId {
+                selectedThreadId = nil
+            }
+            return true
+        } catch {
+            var failedState = threadStates[threadId] ?? ZebraEmailThreadUIState()
+            failedState.isArchiving = false
+            if let repairState = Self.connectionRepairState(for: error) {
+                failedState.archiveErrorMessage = nil
+                threadStates[threadId] = failedState
+                onConnectionRepairRequired(repairState)
+                return false
+            }
+            failedState.archiveErrorMessage = String.localizedStringWithFormat(
+                String(localized: "email.detail.archiveFailed", defaultValue: "Archive failed: %@"),
+                displayError(error)
+            )
+            threadStates[threadId] = failedState
+            return false
+        }
+    }
+
+    func clearArchiveError(threadId: String) {
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        state.archiveErrorMessage = nil
+        threadStates[threadId] = state
+    }
+
     func detail(threadId: String) -> EmailThreadDetail? {
         threadStates[threadId]?.detail
     }
@@ -604,6 +757,14 @@ final class ZebraEmailDetailStore: ObservableObject {
 
     func errorMessage(threadId: String) -> String? {
         threadStates[threadId]?.errorMessage
+    }
+
+    func isArchiving(threadId: String) -> Bool {
+        threadStates[threadId]?.isArchiving ?? false
+    }
+
+    func archiveErrorMessage(threadId: String) -> String? {
+        threadStates[threadId]?.archiveErrorMessage
     }
 
     func expandedMessageIds(threadId: String) -> Set<String> {
@@ -653,12 +814,21 @@ final class ZebraEmailDetailStore: ObservableObject {
         let index = raw.index(raw.startIndex, offsetBy: 240)
         return String(raw[..<index]) + "..."
     }
+
+    private static func connectionRepairState(for error: Error) -> ZebraEmailConnectionRepairState? {
+        guard let clawvisorError = error as? ZebraClawvisorEmailClientError else {
+            return nil
+        }
+        return clawvisorError.connectionRepairState
+    }
 }
 
 private struct ZebraEmailThreadUIState {
     var detail: EmailThreadDetail?
     var isLoading = false
+    var isArchiving = false
     var errorMessage: String?
+    var archiveErrorMessage: String?
     var expandedMessageIds: Set<String>?
     var chatCompanionPaneId: PaneID?
     var chatCompanionAgent: MarkdownPillAgent?

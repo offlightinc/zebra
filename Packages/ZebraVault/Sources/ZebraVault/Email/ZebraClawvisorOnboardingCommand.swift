@@ -185,7 +185,75 @@ The flow:
      After approval, `/clawvisor-setup` finishes automatically and
      runs a smoke test.
 
-  6. **Write the credentials into `~/.gbrain/.env`** (NOT
+  6. **Create Zebra's standing Gmail task.** Zebra's inbox sync is
+     an ongoing workflow, not a 30-minute session task. When you
+     create the Clawvisor task whose id Zebra will store, call
+     `POST /api/tasks` with `"lifetime": "standing"` and do not set
+     `expires_in_seconds`. The standing task remains active until the
+     user revokes it from the Clawvisor dashboard.
+
+     Use this scope exactly, replacing `<account>` with the user's
+     Gmail address:
+
+         curl -s -X POST "$CLAWVISOR_URL/api/tasks?wait=true" \\
+           -H "Authorization: Bearer $CLAWVISOR_AGENT_TOKEN" \\
+           -H "Content-Type: application/json" \\
+           -d '{
+             "purpose": "Zebra desktop email client: continuous inbox sync, read message bodies on user open, draft and send replies on user submit, archive on user action",
+             "lifetime": "standing",
+             "authorized_actions": [
+               {
+                 "service": "google.gmail:<account>",
+                 "action": "list_messages",
+                 "auto_execute": true,
+                 "expected_use": "List recent Gmail messages so Zebra can keep the inbox sidebar in sync"
+               },
+               {
+                 "service": "google.gmail:<account>",
+                 "action": "get_message",
+                 "auto_execute": true,
+                 "expected_use": "Read one selected Gmail message when the user opens it in Zebra"
+               },
+               {
+                 "service": "google.gmail:<account>",
+                 "action": "get_thread",
+                 "auto_execute": true,
+                 "expected_use": "Read a selected Gmail thread so Zebra can show the conversation"
+               },
+               {
+                 "service": "google.gmail:<account>",
+                 "action": "get_attachment",
+                 "auto_execute": true,
+                 "expected_use": "Fetch an attachment only when the user opens it from a message in Zebra"
+               },
+               {
+                 "service": "google.gmail:<account>",
+                 "action": "create_draft",
+                 "auto_execute": true,
+                 "expected_use": "Create or update a Gmail draft from text the user composed in Zebra"
+               },
+               {
+                 "service": "google.gmail:<account>",
+                 "action": "send_message",
+                 "auto_execute": false,
+                 "expected_use": "Send a Gmail reply only after the user explicitly submits it in Zebra"
+               },
+               {
+                 "service": "google.gmail:<account>",
+                 "action": "archive_message",
+                 "auto_execute": true,
+                 "expected_use": "Archive a Gmail message only when the user triggers archive in Zebra"
+               }
+             ]
+           }'
+
+     The read actions, draft creation, and archive may auto-execute
+     because they are repeated in-product operations. `send_message`
+     must keep `"auto_execute": false` so each send still requires
+     explicit user approval. The task id returned by this standing
+     task is the value for `CLAWVISOR_GMAIL_TASK_ID` in the next step.
+
+  7. **Write the credentials into `~/.gbrain/.env`** (NOT
      `~/.claude/settings.json`). The Clawvisor setup skill suggests
      writing the agent token to `~/.claude/settings.json` so Claude
      Code itself can call Clawvisor APIs. **That path is not what
@@ -201,7 +269,7 @@ The flow:
 
          CLAWVISOR_URL=https://app.clawvisor.com
          CLAWVISOR_AGENT_TOKEN=<the cvis_... token from /clawvisor-setup>
-         CLAWVISOR_GMAIL_TASK_ID=<the task id the setup flow reported>
+         CLAWVISOR_GMAIL_TASK_ID=<the standing Gmail task id from step 6>
          ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=<the user's Gmail address>
 
      Preserve any other lines already in `~/.gbrain/.env` — only
@@ -217,10 +285,13 @@ on its own; do NOT tell the user to switch tabs or click an inbox
 refresh button.
 
 Style:
-  • Greet briefly, then ask which step they're on (1 through 6).
-    Don't re-explain steps the user has already finished.
-  • One short paragraph + a single question per turn. Korean is fine;
-    the user's UI is Korean.
+  • On the first response, greet briefly, show the 7-step flow as a
+    numbered list with one step per line, then ask which step the user
+    is on. Don't compress the steps into one paragraph.
+  • After the user answers, don't re-explain steps the user has already
+    finished.
+  • After the first response, use one short paragraph + a single question
+    per turn. Korean is fine; the user's UI is Korean.
   • Never fabricate URLs, agent install commands, slash command
     names, or `user_id` values. The `curl` line in step 3 carries
     a personalized `user_id` — only the user can read it off their
