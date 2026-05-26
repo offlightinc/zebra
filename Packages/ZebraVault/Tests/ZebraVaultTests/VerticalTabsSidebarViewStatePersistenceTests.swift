@@ -2,6 +2,64 @@ import XCTest
 @testable import ZebraVault
 
 final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
+    @MainActor
+    func testVaultSelectionDefaultsToHomeDirectoryWhenNothingStored() throws {
+        let defaults = try makeDefaults()
+        let home = try makeTemporaryDirectory(named: "home")
+        try makeDirectory(named: "brain-offlight", in: home)
+        try makeDirectory(named: "b-brain", in: home)
+
+        let state = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
+
+        XCTAssertEqual(state.selectedVaultPath, home.path)
+        XCTAssertEqual(state.vaults.map(\.path), [home.path])
+    }
+
+    @MainActor
+    func testVaultSelectionRestoresStoredCustomVault() throws {
+        let defaults = try makeDefaults()
+        let home = try makeTemporaryDirectory(named: "home")
+        let custom = try makeDirectory(named: "custom-vault", in: home)
+        let brainOfflight = try makeDirectory(named: "brain-offlight", in: home)
+
+        let firstState = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
+        firstState.addVault(url: custom)
+        let restoredState = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
+
+        XCTAssertEqual(restoredState.selectedVaultPath, custom.path)
+        XCTAssertTrue(restoredState.vaults.contains { $0.path == custom.path })
+        XCTAssertFalse(restoredState.vaults.contains { $0.path == brainOfflight.path })
+    }
+
+    @MainActor
+    func testVaultSelectionFallsBackToHomeWhenStoredVaultMissing() throws {
+        let defaults = try makeDefaults()
+        let home = try makeTemporaryDirectory(named: "home")
+        let custom = try makeDirectory(named: "custom-vault", in: home)
+
+        let firstState = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
+        firstState.addVault(url: custom)
+        try FileManager.default.removeItem(at: custom)
+        let restoredState = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
+
+        XCTAssertEqual(restoredState.selectedVaultPath, home.path)
+        XCTAssertEqual(restoredState.vaults.map(\.path), [home.path])
+    }
+
+    @MainActor
+    func testVaultSelectionRestoresBrainOfflightOnlyWhenUserSelectedIt() throws {
+        let defaults = try makeDefaults()
+        let home = try makeTemporaryDirectory(named: "home")
+        let brainOfflight = try makeDirectory(named: "brain-offlight", in: home)
+
+        let firstState = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
+        firstState.addVault(url: brainOfflight)
+        let restoredState = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
+
+        XCTAssertEqual(restoredState.selectedVaultPath, brainOfflight.path)
+        XCTAssertTrue(restoredState.vaults.contains { $0.path == brainOfflight.path })
+    }
+
     func testTaskStateRoundTripsByRootPath() throws {
         let defaults = try makeDefaults()
         let root = "/tmp/zebra/tasks"
@@ -67,5 +125,23 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defaults.removePersistentDomain(forName: name)
         return defaults
+    }
+
+    private func makeTemporaryDirectory(named name: String) throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ZebraVaultTests-\(UUID().uuidString)", isDirectory: true)
+        let directory = root.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: root)
+        }
+        return directory.standardizedFileURL
+    }
+
+    @discardableResult
+    private func makeDirectory(named name: String, in parent: URL) throws -> URL {
+        let directory = parent.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.standardizedFileURL
     }
 }

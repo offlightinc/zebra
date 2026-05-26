@@ -11,6 +11,9 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
     private static let vaultPathsDefaultsKey = "verticalTabsSidebar.vaultPaths"
     private static let selectedVaultPathDefaultsKey = "verticalTabsSidebar.selectedVaultPath"
 
+    private let defaults: UserDefaults
+    private let homeDirectoryPath: String
+
     @Published public private(set) var vaults: [VerticalTabsSidebarVault]
     @Published public var selectedVaultPath: String? {
         didSet {
@@ -26,21 +29,32 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
 
     public init(
         vaultPaths: [String]? = nil,
-        selectedVaultPath: String? = nil
+        selectedVaultPath: String? = nil,
+        defaults: UserDefaults = .standard,
+        homeDirectoryPath: String = NSHomeDirectory()
     ) {
-        let resolvedPaths = vaultPaths ?? Self.loadVaultPaths()
+        self.defaults = defaults
+        self.homeDirectoryPath = Self.normalizedPath(homeDirectoryPath)
+
+        let resolvedPaths = vaultPaths ?? Self.loadVaultPaths(
+            defaults: defaults,
+            homeDirectoryPath: self.homeDirectoryPath
+        )
         self.vaults = Self.makeVaults(paths: resolvedPaths)
 
         let restoredSelectedPath = selectedVaultPath
-            ?? UserDefaults.standard.string(forKey: Self.selectedVaultPathDefaultsKey)
-        if Self.shouldPreferOfflightVault(over: restoredSelectedPath),
-           let preferredDefaultPath = Self.preferredDefaultVaultPath(in: self.vaults) {
-            self.selectedVaultPath = preferredDefaultPath
-        } else if let restoredSelectedPath,
-           self.vaults.contains(where: { $0.path == restoredSelectedPath }) {
-            self.selectedVaultPath = restoredSelectedPath
-        } else if let preferredDefaultPath = Self.preferredDefaultVaultPath(in: self.vaults) {
-            self.selectedVaultPath = preferredDefaultPath
+            ?? defaults.string(forKey: Self.selectedVaultPathDefaultsKey)
+        let normalizedSelectedPath = restoredSelectedPath.map(Self.normalizedPath)
+        if let normalizedSelectedPath,
+           Self.isDirectory(normalizedSelectedPath) {
+            if !self.vaults.contains(where: { $0.path == normalizedSelectedPath }) {
+                self.vaults.append(Self.makeVault(path: normalizedSelectedPath))
+                self.vaults.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            }
+            self.selectedVaultPath = normalizedSelectedPath
+        } else if let homeDefaultPath = Self.homeDefaultVaultPath(homeDirectoryPath: self.homeDirectoryPath),
+                  self.vaults.contains(where: { $0.path == homeDefaultPath }) {
+            self.selectedVaultPath = homeDefaultPath
         } else {
             self.selectedVaultPath = self.vaults.first?.path
         }
@@ -62,57 +76,40 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
     }
 
     private func persist() {
-        UserDefaults.standard.set(vaults.map(\.path), forKey: Self.vaultPathsDefaultsKey)
+        defaults.set(vaults.map(\.path), forKey: Self.vaultPathsDefaultsKey)
         if let selectedVaultPath {
-            UserDefaults.standard.set(selectedVaultPath, forKey: Self.selectedVaultPathDefaultsKey)
+            defaults.set(selectedVaultPath, forKey: Self.selectedVaultPathDefaultsKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: Self.selectedVaultPathDefaultsKey)
+            defaults.removeObject(forKey: Self.selectedVaultPathDefaultsKey)
         }
     }
 
-    private static func loadVaultPaths() -> [String] {
-        let defaults = UserDefaults.standard
+    private static func loadVaultPaths(
+        defaults: UserDefaults,
+        homeDirectoryPath: String
+    ) -> [String] {
         let stored = defaults.stringArray(forKey: vaultPathsDefaultsKey) ?? []
-        let candidates = stored + defaultVaultPathCandidates()
+        let candidates = stored + defaultVaultPathCandidates(homeDirectoryPath: homeDirectoryPath)
         var seen = Set<String>()
         return candidates.compactMap { candidate in
             let path = normalizedPath(candidate)
             guard !path.isEmpty,
                   !seen.contains(path),
-                  !isDeprecatedDefaultVaultPath(path),
                   isDirectory(path) else { return nil }
             seen.insert(path)
             return path
         }
     }
 
-    private static func defaultVaultPathCandidates() -> [String] {
-        let home = NSHomeDirectory()
-        return [
-            "\(home)/brain-offlight",
-            "\(home)/b-brain",
-        ]
+    private static func defaultVaultPathCandidates(homeDirectoryPath: String) -> [String] {
+        guard let homeDefaultPath = homeDefaultVaultPath(homeDirectoryPath: homeDirectoryPath) else { return [] }
+        return [homeDefaultPath]
     }
 
-    private static func preferredDefaultVaultPath(in vaults: [VerticalTabsSidebarVault]) -> String? {
-        let home = NSHomeDirectory()
-        let preferredPath = normalizedPath("\(home)/brain-offlight")
-        return vaults.first { $0.path == preferredPath }?.path
-    }
-
-    private static func shouldPreferOfflightVault(over restoredSelectedPath: String?) -> Bool {
-        guard let restoredSelectedPath else { return true }
-        let home = NSHomeDirectory()
-        return normalizedPath(restoredSelectedPath) == normalizedPath("\(home)/b-brain")
-    }
-
-    private static func isDeprecatedDefaultVaultPath(_ path: String) -> Bool {
-        let home = NSHomeDirectory()
-        let deprecatedPaths = [
-            normalizedPath("\(home)/brain"),
-            normalizedPath("\(home)/b-brain-offlight"),
-        ]
-        return deprecatedPaths.contains(normalizedPath(path))
+    private static func homeDefaultVaultPath(homeDirectoryPath: String) -> String? {
+        let normalized = normalizedPath(homeDirectoryPath)
+        guard !normalized.isEmpty, isDirectory(normalized) else { return nil }
+        return normalized
     }
 
     private static func makeVaults(paths: [String]) -> [VerticalTabsSidebarVault] {
