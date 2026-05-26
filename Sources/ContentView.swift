@@ -10912,14 +10912,20 @@ struct VerticalTabsSidebarFooter: View {
         // (디자인 spec: /Users/han/zebra_design/zebra_sync/ — SECTION 1 layout change).
         // Footer 우측 공간엔 brain sync indicator 가 자리잡음.
         HStack(spacing: 6) {
+            // vault chip 은 콘텐츠 크기로 고정, sync indicator 는 Spacer 너머
+            // 오른쪽 끝으로 — vault 와 sync 가 footer 양 끝에 최대한 떨어짐.
             VerticalTabsSidebarVaultMenu(vaultState: vaultState)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+
+            Spacer(minLength: 8)
 
             BrainSyncIndicatorView(
                 service: brainSync,
                 onConflictAgentSelect: onBrainSyncConflictAgent
             )
+            .fixedSize(horizontal: true, vertical: false)
         }
+        .frame(maxWidth: .infinity)
         .padding(.leading, 6)
         .padding(.trailing, 10)
         .padding(.bottom, 6)

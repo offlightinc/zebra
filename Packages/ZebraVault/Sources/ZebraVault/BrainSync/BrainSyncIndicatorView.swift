@@ -37,43 +37,32 @@ public struct BrainSyncIndicatorView: View {
     }
 
     public var body: some View {
-        // VStack: invisible hover bridge 위/아래 5pt 씩 분산 + button (24pt).
-        // 양쪽 분산이 핵심 — bridge 를 위쪽에만 두면 VStack center 가 button center
-        // 보다 위로 치우쳐 HStack 의 vertical center 정렬 시 indicator 가 옆 vault
-        // chip 보다 아래쪽으로 5pt 어긋남. 위/아래 분산하면 VStack center = button
-        // center 라 chip 과 baseline 맞음. 시각상 위쪽 5pt 만 tooltip 으로 가는
-        // hover bridge 역할 (아래쪽 5pt 는 footer padding 의 일부로 무관).
-        VStack(spacing: 0) {
-            Color.clear
-                .frame(height: 5)
-                .contentShape(Rectangle())
-            Button(action: handleClick) {
-                HStack(spacing: 6) {
-                    dot
-                    Text(label)
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundColor(labelColor)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 7)
-                .padding(.vertical, 4)
-                .frame(height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(hovering ? BVColor.bgHover : Color.clear)
-                )
-                .contentShape(Rectangle())
+        Button(action: handleClick) {
+            HStack(spacing: 6) {
+                dot
+                Text(label)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundColor(labelColor)
+                    .lineLimit(1)
             }
-            .buttonStyle(.plain)
-            .disabled(service.isSyncing)
-            Color.clear
-                .frame(height: 5)
-                .contentShape(Rectangle())
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(hovering ? BVColor.bgHover : Color.clear)
+            )
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .disabled(service.isSyncing)
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .fixedSize(horizontal: true, vertical: false)
         .onHover { buttonHovering = $0 }
-        // Tooltip overlay — VStack 이 bridge-top(5) + button(24) + bridge-bottom(5)
+        // Tooltip overlay — button padding-top(5) + button(24) + padding-bottom(5)
         // = 34pt 구조. 디자인 spec: tooltip bottom 이 button top 위 10pt 에 정렬.
-        // VStack bottom 으로부터 위로 (bridge-bottom 5 + button 24 + gap 10) = 39pt.
+        // View bottom 으로부터 위로 (padding-bottom 5 + button 24 + gap 10) = 39pt.
         .overlay(alignment: .bottomTrailing) {
             if hovering {
                 BrainSyncTooltipView(
