@@ -84,6 +84,8 @@ public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
             lowercased.contains("task not found") ||
             (lowercased.contains("task \"") && lowercased.contains("\" not found")) ||
             lowercased.contains("task is revoked") ||
+            lowercased.contains("task is denied") ||
+            lowercased.contains("denied, not active") ||
             lowercased.contains("task revoked") ||
             lowercased.contains("task_revoked") {
             return ZebraEmailConnectionRepairState(
