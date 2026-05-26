@@ -57,7 +57,9 @@ public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
     private static func gatewayRepairState(detail: String) -> ZebraEmailConnectionRepairState? {
         let lowercased = detail.lowercased()
         if lowercased.contains("pending_task_approval") ||
+            lowercased.contains("pending_approval") ||
             lowercased.contains("pending approval") ||
+            lowercased.contains("task is pending") ||
             lowercased.contains("request status=pending") {
             return ZebraEmailConnectionRepairState(
                 kind: .taskPendingApproval,
