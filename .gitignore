@@ -23,7 +23,7 @@ GhosttyKit.xcframework.bak-*/
 
 # Release artifacts
 build-universal/
-build-zebra-release/
+build-zebra-release*/
 dist/
 cmux-*.zip
 cmux-macos.dmg

@@ -432,12 +432,10 @@ final class ZebraEmailListStore: ObservableObject {
         }
     }
 
-    private func startPeriodicSyncIfNeeded(
-        initialDelay: UInt64 = Self.periodicSyncIntervalNanoseconds
-    ) {
+    private func startPeriodicSyncIfNeeded(initialDelay: UInt64? = nil) {
         guard periodicSyncTask == nil else { return }
         periodicSyncTask = Task { [weak self] in
-            var delay = initialDelay
+            var delay = initialDelay ?? Self.periodicSyncIntervalNanoseconds
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(nanoseconds: delay)
