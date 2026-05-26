@@ -126,6 +126,7 @@ struct ZebraSidebarBody: View {
                     isLoading: emailListStore.isLoading,
                     isSyncing: emailListStore.isSyncing,
                     errorMessage: emailListStore.lastError,
+                    connectionRepairState: emailListStore.connectionRepairState,
                     selectedThreadId: emailDetailStore.selectedThreadId,
                     onConnect: { agent in startClawvisorOnboardingAgent(agent: agent) },
                     onRefresh: { Task { await emailListStore.refresh() } },
