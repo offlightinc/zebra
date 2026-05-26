@@ -35,6 +35,11 @@ public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
 
 public actor ZebraClawvisorEmailClient {
     public static let shared = ZebraClawvisorEmailClient()
+    private static let initialSyncLookbackDays = 30
+    private static let incrementalSyncOverlapDays = 1
+    private static let initialSyncMaxResults = 100
+    private static let incrementalSyncMaxResults = 50
+    private static let missingDateBackfillDelayNanoseconds: UInt64 = 2 * 1_000_000_000
 
     private let session: URLSession
     private let fileManager: FileManager
@@ -73,21 +78,23 @@ public actor ZebraClawvisorEmailClient {
     @discardableResult
     public func syncRecentInbox() async throws -> Int {
         let config = try loadConfig()
-        let afterDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        let previousSync = try lastSyncedAt()
+        let afterDate = Self.syncQueryStartDate(lastSyncedAt: previousSync)
         let queryDate = Self.formatGmailQueryDate(afterDate)
+        let maxResults = previousSync == nil ? Self.initialSyncMaxResults : Self.incrementalSyncMaxResults
         let response = try await invoke(
             config: config,
             action: "list_messages",
             params: [
                 "query": "after:\(queryDate) (in:inbox OR is:important)",
-                "max_results": 100,
+                "max_results": maxResults,
             ],
-            reason: "Pull recent inbox messages from the brain daily collection window to populate the local email triage and digest view."
+            reason: "Incrementally pull recent inbox messages from the last Zebra sync window to keep the local email triage view current."
         )
         let messages = try normalizedListMessages(from: response, accountEmail: config.accountEmail)
         try upsertThreads(messages)
-        await backfillMissingReceivedDates(in: messages, config: config)
         try updateLastSyncedAt(Date())
+        startMissingDateBackfill(messages: messages, config: config)
         return messages.count
     }
 
@@ -234,6 +241,14 @@ public actor ZebraClawvisorEmailClient {
         }
     }
 
+    private func startMissingDateBackfill(messages: [NormalizedMessage], config: ClawvisorConfig) {
+        Task {
+            try? await Task.sleep(nanoseconds: Self.missingDateBackfillDelayNanoseconds)
+            guard !Task.isCancelled else { return }
+            await backfillMissingReceivedDates(in: messages, config: config)
+        }
+    }
+
     private func invoke(
         config: ClawvisorConfig,
         action: String,
@@ -315,7 +330,7 @@ private extension ZebraClawvisorEmailClient {
         let accountEmail: String
     }
 
-    struct NormalizedMessage {
+    struct NormalizedMessage: Sendable {
         let id: String
         let threadId: String
         let internetMessageId: String?
@@ -345,6 +360,19 @@ private extension ZebraClawvisorEmailClient {
 
     static func formatGmailQueryDate(_ date: Date) -> String {
         makeDateFormatter("yyyy/MM/dd").string(from: date)
+    }
+
+    static func syncQueryStartDate(lastSyncedAt: Date?, now: Date = Date()) -> Date {
+        let calendar = Calendar.current
+        if let lastSyncedAt,
+           let overlapped = calendar.date(
+                byAdding: .day,
+                value: -incrementalSyncOverlapDays,
+                to: lastSyncedAt
+           ) {
+            return overlapped
+        }
+        return calendar.date(byAdding: .day, value: -initialSyncLookbackDays, to: now) ?? now
     }
 
     static func parseRFC2822Date(_ value: String) -> Date? {

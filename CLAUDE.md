@@ -12,6 +12,17 @@
 - **SwiftUI 의 `@ObservedObject var X: any P` 패턴은 피하고 generic struct 로.** Protocol existential 위에 `@ObservedObject` 를 두면 SwiftUI 의 redraw 가 호출 사이트의 concrete type 정보를 못 받아 invalidation 이 어긋날 수 있다. 대신 view 를 `struct ZebraXView<Model: P>: View { @ObservedObject var model: Model }` 식으로 protocol 위에 generic 화. cmux 호출 사이트가 concrete type 으로 instantiate → SwiftUI 가 정상 publish/sink. Reference: `ZebraMarkdownPanelView<Model: ZebraMarkdownPanelModel>`.
 - **`Resources/Localizable.xcstrings` 의 upstream 영역은 byte-identical 유지.** Zebra 신규 문자열은 같은 파일 끝의 Zebra append 블록에 추가. 별도 `.xcstrings` 카탈로그로 분리 금지 (SwiftUI 가 별도 table 로 컴파일해서 `String(localized:)` 가 못 찾음). ZebraVault 안의 신규 문자열도 같은 cmux 카탈로그에 둔다 — `Packages/ZebraVault/` 안에 별도 카탈로그를 만들면 `bundle: .module` 을 호출 사이트마다 명시해야 하는데, 누락 시 silent fallback 으로 영문만 노출되는 회귀 위험이 크다 (Phase 1.3 회귀 학습).
 
+## Zebra overlay operating model (필수)
+
+이 repo 의 기본값은 upstream cmux 이고, 최종 제품 판단은 Zebra overlay 를 통해 적용된다. 빌드/릴리즈/브랜딩/앱 ID/패키징/사용자 노출 기능을 다룰 때는 cmux 기본값을 곧바로 최종 Zebra 기본값으로 보지 말고, 먼저 Zebra overlay 가 있는지 확인한다.
+
+- **작업 분류를 먼저 한다.** 요청이 upstream cmux 공통 동작인지, Zebra 제품 동작인지, 둘을 잇는 adapter/touchpoint 인지 구분한 뒤 진행한다.
+- **Zebra 판단은 Zebra-owned overlay 에 둔다.** 새 정책/브랜딩/릴리즈 흐름/제품 전용 동작은 `Packages/ZebraVault/**`, `Sources/Zebra/**`, `scripts/build-zebra-*.sh`, 또는 명시된 adapter/touchpoint 로 둔다. upstream cmux 파일 변경은 마지막 선택지다.
+- **앱 이름이 중요하면 Debug 빌드와 Zebra 릴리즈 빌드를 구분한다.** `./scripts/reload.sh --tag <tag>` 는 개발용 `cmux DEV <tag>.app` 을 만든다. Zebra 브랜드 산출물은 release overlay 가 만드는 `Zebra.app` / `dist/Zebra.dmg` 이다.
+- **Zebra 브랜드 릴리즈는 `scripts/build-zebra-notarized-dmg.sh` 를 우선 확인한다.** 기본값은 app name `Zebra`, bundle id `com.offlight.zebra`, derived data `build-zebra-release`, DMG `dist/Zebra.dmg`.
+- **`PRODUCT_NAME=Zebra` 를 xcodebuild 에 직접 넘기지 않는다.** 과거에 Swift package resource bundle 이름까지 `Zebra.bundle` 로 바뀌어 duplicate-output 빌드 실패가 났다. 검증된 방식은 upstream `cmux.app` 을 먼저 빌드하고, `Zebra.app` 으로 복사한 뒤 `Info.plist` 의 `CFBundleName`, `CFBundleDisplayName`, `CFBundleIdentifier` 를 패치하고 서명/노타라이즈하는 것이다.
+- **히스토리가 필요하면 `/Users/dan/brain-offlight/ops/zebra-notarized-dmg-release.md` 를 먼저 확인한다.** 이 파일은 Zebra release overlay 의 런북이고, `AGENTS.md` 는 그 원칙을 작업 중 자동으로 따르게 하는 가드레일이다.
+
 ## Initial setup
 
 Run the setup script to initialize submodules and build GhosttyKit:

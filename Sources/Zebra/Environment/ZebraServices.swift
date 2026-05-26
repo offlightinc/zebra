@@ -130,8 +130,11 @@ final class ZebraEmailListStore: ObservableObject {
 
     private let client: ZebraClawvisorEmailClient
     private var prefetchTask: Task<Void, Never>?
+    private var periodicSyncTask: Task<Void, Never>?
     private static let lastConnectedKey = "ZebraEmailListStore.lastKnownConnected"
     private static let lastThreadsKey = "ZebraEmailListStore.lastThreadsSnapshot"
+    private static let startupSyncDelayNanoseconds: UInt64 = 3 * 1_000_000_000
+    private static let periodicSyncIntervalNanoseconds: UInt64 = 5 * 60 * 1_000_000_000
 
     // ~/.gbrain/.env watcher state. `fileWatchSource` watches the .env file
     // itself; `directoryWatchSource` watches `~/.gbrain` for the .env's
@@ -160,12 +163,16 @@ final class ZebraEmailListStore: ObservableObject {
         // the file Clawvisor onboarding (via the chat-pill agent) ends with,
         // so this catches the moment without a manual sidebar refresh.
         startDotEnvWatching()
+        if isConnected {
+            startPeriodicSyncIfNeeded(initialDelay: Self.startupSyncDelayNanoseconds)
+        }
     }
 
     deinit {
         fileWatchSource?.cancel()
         directoryWatchSource?.cancel()
         configReloadWorkItem?.cancel()
+        periodicSyncTask?.cancel()
     }
 
     // MARK: - ~/.gbrain/.env file watcher
@@ -326,6 +333,11 @@ final class ZebraEmailListStore: ObservableObject {
     private func recordConnected(_ value: Bool) {
         isConnected = value
         UserDefaults.standard.set(value, forKey: Self.lastConnectedKey)
+        if value {
+            startPeriodicSyncIfNeeded()
+        } else {
+            stopPeriodicSync()
+        }
     }
 
     var userLabels: [EmailUserLabel] {
@@ -377,12 +389,20 @@ final class ZebraEmailListStore: ObservableObject {
     }
 
     func refresh() async {
+        await syncInboxAndReload(showSyncIndicator: true)
+    }
+
+    private func syncInboxAndReload(showSyncIndicator: Bool) async {
         if isLoading { return }
         isLoading = true
-        isSyncing = true
+        if showSyncIndicator {
+            isSyncing = true
+        }
         defer {
             isLoading = false
-            isSyncing = false
+            if showSyncIndicator {
+                isSyncing = false
+            }
         }
         do {
             let status = try await client.status()
@@ -394,7 +414,8 @@ final class ZebraEmailListStore: ObservableObject {
             }
             var syncError: String?
             do {
-                _ = try await client.syncRecentInbox()
+                let syncedCount = try await client.syncRecentInbox()
+                Self.perfLog("syncRecentInbox synced=\(syncedCount)")
             } catch {
                 syncError = displayError(error)
             }
@@ -409,6 +430,30 @@ final class ZebraEmailListStore: ObservableObject {
         } catch {
             lastError = displayError(error)
         }
+    }
+
+    private func startPeriodicSyncIfNeeded(
+        initialDelay: UInt64 = Self.periodicSyncIntervalNanoseconds
+    ) {
+        guard periodicSyncTask == nil else { return }
+        periodicSyncTask = Task { [weak self] in
+            var delay = initialDelay
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    break
+                }
+                guard !Task.isCancelled else { break }
+                await self?.syncInboxAndReload(showSyncIndicator: false)
+                delay = Self.periodicSyncIntervalNanoseconds
+            }
+        }
+    }
+
+    private func stopPeriodicSync() {
+        periodicSyncTask?.cancel()
+        periodicSyncTask = nil
     }
 
     func connect() async {
