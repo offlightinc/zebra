@@ -3,10 +3,10 @@ name: Slack repo events
 on:
   push:
     branches:
-      - "**"
-    tags:
-      - "**"
+      - main
   pull_request:
+    branches:
+      - main
     types:
       - closed
   workflow_dispatch:
@@ -40,6 +40,7 @@ jobs:
 
           repo_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           run_url="${repo_url}/actions/runs/${GITHUB_RUN_ID}"
+          newline=$'\n'
           should_send="true"
 
           case "${GITHUB_EVENT_NAME}" in
@@ -79,13 +80,32 @@ jobs:
                 fi
 
                 commit_count="$(jq -r '.commits | length' "$GITHUB_EVENT_PATH")"
-                head_message="$(jq -r '.head_commit.message // "No head commit" | split("\n")[0]' "$GITHUB_EVENT_PATH")"
                 compare_url="$(jq -r '.compare // empty' "$GITHUB_EVENT_PATH")"
                 pusher="$(jq -r '.pusher.name // .sender.login // "unknown"' "$GITHUB_EVENT_PATH")"
-                title="Zebra push"
-                body="${pusher} pushed ${commit_count} commit(s) to ${ref_kind} ${ref_name}: ${head_message}"
+                commit_summary="$(jq -r '
+                  .commits[:10]
+                  | map(
+                      . as $commit
+                      | ($commit.message | split("\n")) as $lines
+                      | ($lines[0] // "No commit message") as $subject
+                      | ($lines[1:] | map(select(length > 0)) | .[0] // "") as $detail
+                      | "- <" + $commit.url + "|" + ($commit.id[0:7]) + "> " + $subject
+                        + (if $detail == "" then "" else "\n  " + $detail end)
+                    )
+                  | join("\n")
+                ' "$GITHUB_EVENT_PATH")"
+                if [ -z "$commit_summary" ]; then
+                  commit_summary="- No commit messages were included in the push payload."
+                fi
+                if [ "$commit_count" -gt 10 ]; then
+                  remaining_count=$((commit_count - 10))
+                  commit_summary="${commit_summary}${newline}- ...and ${remaining_count} more commit(s)"
+                fi
+
+                title="Zebra main updated"
+                body="${pusher} pushed ${commit_count} commit(s) to ${ref_kind} ${ref_name}.${newline}${newline}*Changes:*${newline}${commit_summary}"
                 if [ -n "$compare_url" ]; then
-                  body="${body} (<${compare_url}|compare>)"
+                  body="${body}${newline}${newline}<${compare_url}|Compare changes>"
                 fi
               fi
               ;;
