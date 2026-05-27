@@ -85,7 +85,7 @@ jobs:
                   commit_subjects="$(jq -r '
                     .commits[:5]
                     | map(.message | split("\n")[0])
-                    | join("', '")
+                    | join("\u0027, \u0027")
                   ' "$GITHUB_EVENT_PATH")"
                   body="${pusher} pushed ${commit_count} commits: '${commit_subjects}'"
                 fi
