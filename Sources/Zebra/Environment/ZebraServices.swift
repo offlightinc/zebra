@@ -53,9 +53,14 @@ struct ZebraServices {
         brainSync.attachVaultSource(vault)
         brainSync.start()
         let email = ZebraEmailListStore()
-        let emailDetail = ZebraEmailDetailStore { repairState in
-            email.beginConnectionRepair(repairState)
-        }
+        let emailDetail = ZebraEmailDetailStore(
+            onConnectionRepairRequired: { repairState in
+                email.beginConnectionRepair(repairState)
+            },
+            onThreadSummariesChanged: {
+                Task { await email.reloadCachedThreads() }
+            }
+        )
         return ZebraServices(
             sidebarMode: VerticalTabsSidebarModeState(),
             vault: vault,
@@ -467,6 +472,20 @@ final class ZebraEmailListStore: ObservableObject {
         await syncInboxAndReload(showSyncIndicator: true)
     }
 
+    func reloadCachedThreads() async {
+        do {
+            threads = try await client.threads()
+            lastError = nil
+        } catch let error as ZebraClawvisorEmailClientError {
+            if !handleConnectionFailure(error) {
+                lastError = displayError(error)
+            }
+        } catch {
+            if handleConnectionFailure(error) { return }
+            lastError = displayError(error)
+        }
+    }
+
     private func syncInboxAndReload(showSyncIndicator: Bool) async {
         if isLoading { return }
         isLoading = true
@@ -636,10 +655,15 @@ final class ZebraEmailDetailStore: ObservableObject {
 
     private let client = ZebraClawvisorEmailClient.shared
     private let onConnectionRepairRequired: (ZebraEmailConnectionRepairState) -> Void
+    private let onThreadSummariesChanged: () -> Void
     private var draftUpdateQueues: [String: ZebraEmailDraftUpdateQueue] = [:]
 
-    init(onConnectionRepairRequired: @escaping (ZebraEmailConnectionRepairState) -> Void = { _ in }) {
+    init(
+        onConnectionRepairRequired: @escaping (ZebraEmailConnectionRepairState) -> Void = { _ in },
+        onThreadSummariesChanged: @escaping () -> Void = {}
+    ) {
         self.onConnectionRepairRequired = onConnectionRepairRequired
+        self.onThreadSummariesChanged = onThreadSummariesChanged
     }
 
     func selectThread(_ thread: EmailThreadItem) {
@@ -783,10 +807,6 @@ final class ZebraEmailDetailStore: ObservableObject {
 
     func sendingDraftIds(threadId: String) -> Set<String> {
         threadStates[threadId]?.sendingDraftIds ?? []
-    }
-
-    func pendingApprovalDraftIds(threadId: String) -> Set<String> {
-        threadStates[threadId]?.pendingApprovalDraftIds ?? []
     }
 
     func clearDraftError(threadId: String) {
@@ -947,35 +967,9 @@ final class ZebraEmailDetailStore: ObservableObject {
             do {
                 let sentDraft = try await client.sendEmailDraft(localDraftId: localDraftId)
                 completeDraftSend(sentDraft, threadId: threadId)
+                onThreadSummariesChanged()
                 await reloadThread(threadId: threadId, forceRefresh: true)
-            } catch let error as ZebraClawvisorEmailClientError {
-                if case .approvalPending = error {
-                    markDraftApprovalPending(threadId: threadId, localDraftId: localDraftId)
-                    pollDraftSendApproval(localDraftId: localDraftId, threadId: threadId)
-                } else {
-                    failDraftSend(localDraftId: localDraftId, threadId: threadId, error: error)
-                }
-            } catch {
-                failDraftSend(localDraftId: localDraftId, threadId: threadId, error: error)
-            }
-        }
-    }
-
-    private func pollDraftSendApproval(localDraftId: String, threadId: String) {
-        Task {
-            do {
-                try await Task.sleep(nanoseconds: 2_000_000_000)
-                guard draftUpdateQueues[localDraftId]?.isProcessing == true else { return }
-                let sentDraft = try await client.sendEmailDraft(localDraftId: localDraftId)
-                completeDraftSend(sentDraft, threadId: threadId)
-                await reloadThread(threadId: threadId, forceRefresh: true)
-            } catch let error as ZebraClawvisorEmailClientError {
-                if case .approvalPending = error {
-                    markDraftApprovalPending(threadId: threadId, localDraftId: localDraftId)
-                    pollDraftSendApproval(localDraftId: localDraftId, threadId: threadId)
-                } else {
-                    failDraftSend(localDraftId: localDraftId, threadId: threadId, error: error)
-                }
+                onThreadSummariesChanged()
             } catch {
                 failDraftSend(localDraftId: localDraftId, threadId: threadId, error: error)
             }
@@ -987,7 +981,6 @@ final class ZebraEmailDetailStore: ObservableObject {
         draftUpdateQueues[localDraftId] = nil
         var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
         state.sendingDraftIds.remove(localDraftId)
-        state.pendingApprovalDraftIds.remove(localDraftId)
         state.draftErrorMessages[localDraftId] = nil
         state.drafts.removeAll { $0.localDraftId == localDraftId }
         if let detail = state.detail {
@@ -1048,19 +1041,10 @@ final class ZebraEmailDetailStore: ObservableObject {
         setDraftError(error, threadId: threadId, localDraftId: localDraftId)
     }
 
-    private func markDraftApprovalPending(threadId: String, localDraftId: String) {
-        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
-        state.sendingDraftIds.remove(localDraftId)
-        state.pendingApprovalDraftIds.insert(localDraftId)
-        state.draftErrorMessages[localDraftId] = nil
-        threadStates[threadId] = state
-    }
-
     private func markDraftSending(threadId: String, localDraftId: String, isSending: Bool) {
         var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
         if isSending {
             state.sendingDraftIds.insert(localDraftId)
-            state.pendingApprovalDraftIds.remove(localDraftId)
             state.draftErrorMessages[localDraftId] = nil
         } else {
             state.sendingDraftIds.remove(localDraftId)
@@ -1080,7 +1064,6 @@ final class ZebraEmailDetailStore: ObservableObject {
                 state.drafts.removeAll { $0.localDraftId == localDraftId }
                 state.draftErrorMessages[localDraftId] = nil
                 state.sendingDraftIds.remove(localDraftId)
-                state.pendingApprovalDraftIds.remove(localDraftId)
                 threadStates[threadId] = state
                 draftUpdateQueues[localDraftId] = nil
             } catch {
@@ -1141,7 +1124,6 @@ final class ZebraEmailDetailStore: ObservableObject {
         var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
         state.draftErrorMessage = nil
         state.draftErrorMessages[draft.localDraftId] = nil
-        state.pendingApprovalDraftIds.remove(draft.localDraftId)
         if let index = state.drafts.firstIndex(where: { $0.localDraftId == draft.localDraftId }) {
             state.drafts[index] = draft
         } else {
@@ -1154,7 +1136,6 @@ final class ZebraEmailDetailStore: ObservableObject {
     private func setDraftError(_ error: Error, threadId: String, localDraftId: String? = nil) {
         var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
         if let localDraftId {
-            state.pendingApprovalDraftIds.remove(localDraftId)
             state.draftErrorMessages[localDraftId] = displayError(error)
         } else {
             state.draftErrorMessage = displayError(error)
@@ -1191,7 +1172,6 @@ private struct ZebraEmailThreadUIState {
     var draftErrorMessage: String?
     var draftErrorMessages: [String: String] = [:]
     var sendingDraftIds: Set<String> = []
-    var pendingApprovalDraftIds: Set<String> = []
     var isLoading = false
     var isArchiving = false
     var errorMessage: String?

@@ -13,7 +13,6 @@ public struct ZebraEmailThreadDetailView: View {
     private let draftErrorMessage: String?
     private let draftErrorMessages: [String: String]
     private let sendingDraftIds: Set<String>
-    private let pendingApprovalDraftIds: Set<String>
     private let expandedMessageIds: Set<String>
     /// Extra bottom padding on the scrollable thread body so a host-overlaid
     /// floating chat pill does not obscure the last message. Mirrors the
@@ -43,7 +42,6 @@ public struct ZebraEmailThreadDetailView: View {
         draftErrorMessage: String? = nil,
         draftErrorMessages: [String: String] = [:],
         sendingDraftIds: Set<String> = [],
-        pendingApprovalDraftIds: Set<String> = [],
         expandedMessageIds: Set<String>,
         bottomContentInset: CGFloat = 0,
         onArchive: @escaping () -> Void = {},
@@ -67,7 +65,6 @@ public struct ZebraEmailThreadDetailView: View {
         self.draftErrorMessage = draftErrorMessage
         self.draftErrorMessages = draftErrorMessages
         self.sendingDraftIds = sendingDraftIds
-        self.pendingApprovalDraftIds = pendingApprovalDraftIds
         self.expandedMessageIds = expandedMessageIds
         self.bottomContentInset = bottomContentInset
         self.onArchive = onArchive
@@ -254,7 +251,6 @@ public struct ZebraEmailThreadDetailView: View {
                                     draft: draft,
                                     errorMessage: draftErrorMessages[draft.localDraftId],
                                     isSending: sendingDraftIds.contains(draft.localDraftId),
-                                    isApprovalPending: pendingApprovalDraftIds.contains(draft.localDraftId),
                                     onUpdateDraft: { baseVersion, patch in
                                         onUpdateDraft(draft.localDraftId, baseVersion, patch)
                                     },
@@ -272,7 +268,6 @@ public struct ZebraEmailThreadDetailView: View {
                                 draft: draft,
                                 errorMessage: draftErrorMessages[draft.localDraftId],
                                 isSending: sendingDraftIds.contains(draft.localDraftId),
-                                isApprovalPending: pendingApprovalDraftIds.contains(draft.localDraftId),
                                 onUpdateDraft: { baseVersion, patch in
                                     onUpdateDraft(draft.localDraftId, baseVersion, patch)
                                 },
@@ -956,7 +951,6 @@ private struct EmailThreadDraftCard: View {
     let draft: EmailDraftSnapshot
     let errorMessage: String?
     let isSending: Bool
-    let isApprovalPending: Bool
     let onUpdateDraft: (Int, EmailDraftPatch) -> Void
     let onSendDraft: (Int, EmailDraftPatch) -> Void
     let onDiscard: () -> Void
@@ -977,7 +971,6 @@ private struct EmailThreadDraftCard: View {
         draft: EmailDraftSnapshot,
         errorMessage: String?,
         isSending: Bool,
-        isApprovalPending: Bool,
         onUpdateDraft: @escaping (Int, EmailDraftPatch) -> Void,
         onSendDraft: @escaping (Int, EmailDraftPatch) -> Void,
         onDiscard: @escaping () -> Void
@@ -985,7 +978,6 @@ private struct EmailThreadDraftCard: View {
         self.draft = draft
         self.errorMessage = errorMessage
         self.isSending = isSending
-        self.isApprovalPending = isApprovalPending
         self.onUpdateDraft = onUpdateDraft
         self.onSendDraft = onSendDraft
         self.onDiscard = onDiscard
@@ -1452,9 +1444,6 @@ private struct EmailThreadDraftCard: View {
         if isSending {
             return String(localized: "email.draft.sync.sending", defaultValue: "Sending")
         }
-        if isApprovalPending {
-            return String(localized: "email.draft.sync.approvalPending", defaultValue: "Approval pending")
-        }
         if let errorMessage, !errorMessage.isEmpty {
             return String.localizedStringWithFormat(
                 String(localized: "email.draft.status.failedWithMessage", defaultValue: "Failed: %@"),
@@ -1473,7 +1462,7 @@ private struct EmailThreadDraftCard: View {
     }
 
     private var isLocked: Bool {
-        isSending || isApprovalPending
+        isSending
     }
 
     private var draftFieldTextColor: Color {

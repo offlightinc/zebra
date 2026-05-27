@@ -24,7 +24,6 @@ public struct ZebraClawvisorStandingTaskProvisioningResult: Equatable, Sendable 
 public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
     case notConfigured(String)
     case gateway(String)
-    case approvalPending(String)
     case sendRequestClosed(String)
     case sqlite(String)
     case malformedResponse(String)
@@ -35,8 +34,6 @@ public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
             return "Clawvisor Gmail is not configured: \(detail)"
         case .gateway(let detail):
             return "Clawvisor Gmail request failed: \(detail)"
-        case .approvalPending(let detail):
-            return "Clawvisor Gmail approval is pending: \(detail)"
         case .sendRequestClosed(let detail):
             return "Clawvisor Gmail send request is closed: \(detail)"
         case .sqlite(let detail):
@@ -51,11 +48,6 @@ public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
         case .notConfigured(let detail):
             return ZebraEmailConnectionRepairState(
                 kind: .configurationMissing,
-                detail: detail
-            )
-        case .approvalPending(let detail):
-            return ZebraEmailConnectionRepairState(
-                kind: .taskPendingApproval,
                 detail: detail
             )
         case .gateway(let detail):
@@ -600,11 +592,6 @@ public actor ZebraClawvisorEmailClient {
         if let dict = json as? [String: Any],
            let status = dict["status"] as? String,
            status != "executed" {
-            if status == "pending" {
-                throw ZebraClawvisorEmailClientError.approvalPending(
-                    Self.errorSummary(json, status: http.statusCode)
-                )
-            }
             if action == "send_message", Self.isClosedSendRequestStatus(status) {
                 throw ZebraClawvisorEmailClientError.sendRequestClosed(
                     Self.errorSummary(json, status: http.statusCode)
@@ -1330,7 +1317,6 @@ private extension ZebraClawvisorEmailClient {
         try openDatabaseIfNeeded()
         try execute("BEGIN IMMEDIATE")
         do {
-            try upsertThreadSummary(messages, storageThreadId: threadId)
             for message in messages {
                 try execute(
                     """
@@ -1380,13 +1366,35 @@ private extension ZebraClawvisorEmailClient {
                     ]
                 )
             }
+            let summaryMessages = try loadStoredNormalizedMessages(threadId: threadId)
+            try upsertThreadSummary(summaryMessages, storageThreadId: threadId)
             try execute("COMMIT")
         } catch {
             try? execute("ROLLBACK")
             throw error
         }
-        if messages.isEmpty {
-            _ = threadId
+    }
+
+    func loadStoredNormalizedMessages(threadId: String) throws -> [NormalizedMessage] {
+        try loadMessages(threadId: threadId).map { message in
+            NormalizedMessage(
+                id: message.id,
+                threadId: threadId,
+                internetMessageId: message.internetMessageId,
+                subject: message.subject ?? "(no subject)",
+                fromName: message.fromName,
+                fromEmail: message.fromEmail,
+                to: message.to,
+                cc: message.cc,
+                receivedAt: message.receivedAt,
+                snippet: message.snippet,
+                labelIds: message.labelIds,
+                isUnread: message.isUnread,
+                isSent: message.isSent,
+                hasAttachment: message.hasAttachment,
+                bodyText: message.bodyText,
+                bodyHtml: message.bodyHtml
+            )
         }
     }
 
