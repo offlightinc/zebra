@@ -129,10 +129,9 @@ private struct ZebraEmailPanelHost: View {
             errorMessage: detailStore.errorMessage(threadId: panel.threadId),
             archiveErrorMessage: detailStore.archiveErrorMessage(threadId: panel.threadId),
             expandedMessageIds: detailStore.expandedMessageIds(threadId: panel.threadId),
-            // Markdown 측 `ZebraMarkdownPanelView` 가 ScrollView 본문에 부여하는
-            // bottom 여백과 같은 값. 마지막 메시지가 floating chat pill 뒤로
-            // 가리지 않도록 한다.
-            bottomContentInset: 160,
+            // Markdown panel 과 같은 floating chat pill inset. 마지막
+            // 메시지가 pill 뒤로 가리지 않도록 한다.
+            bottomContentInset: MarkdownChatPillOverlay.contentBottomInset,
             onArchive: {
                 Task {
                     if await detailStore.archiveThread(threadId: panel.threadId) {
@@ -158,9 +157,9 @@ private struct ZebraEmailPanelHost: View {
                 #endif
             }
         )
-        .overlay(alignment: .bottom) {
+        .overlay {
             if let workspace, detailStore.detail(threadId: panel.threadId) != nil {
-                MarkdownChatPill(
+                MarkdownChatPillOverlay(
                     isExpanded: $pillExpanded,
                     displayTitle: panel.displayTitle,
                     activeAgent: detailStore.chatCompanionAgent(threadId: panel.threadId),
@@ -168,9 +167,6 @@ private struct ZebraEmailPanelHost: View {
                         handlePillSubmit(text: text, agent: agent, workspace: workspace)
                     }
                 )
-                // Markdown 측과 동일한 floating offset.
-                .padding(.horizontal, 24)
-                .padding(.bottom, 22)
             }
         }
         .task(id: panel.threadId) {

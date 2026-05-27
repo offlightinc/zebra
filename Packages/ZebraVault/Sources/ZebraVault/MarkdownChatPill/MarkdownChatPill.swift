@@ -619,8 +619,12 @@ public struct MarkdownChatPill: View {
                     .opacity(collapsedOpacity)
             }
         }
-        .frame(minWidth: 58, alignment: .leading)
-        .fixedSize(horizontal: true, vertical: false)
+        .frame(
+            minWidth: 58,
+            maxWidth: isExpanded ? Self.expandedChipMaxWidth : nil,
+            alignment: .leading
+        )
+        .fixedSize(horizontal: !isExpanded, vertical: false)
         .layoutPriority(0)
     }
 

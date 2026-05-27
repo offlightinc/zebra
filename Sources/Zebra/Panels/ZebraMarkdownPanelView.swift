@@ -23,10 +23,6 @@ fileprivate enum InspectorSplitMetrics {
     }
 }
 
-fileprivate enum MarkdownChatPillOverlayMotion {
-    static let animation = Animation.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.30)
-}
-
 /// SwiftUI view that renders a MarkdownPanel's content using MarkdownUI.
 ///
 /// Generic over the model so SwiftUI's `@ObservedObject` sees a concrete
@@ -231,23 +227,12 @@ struct ZebraMarkdownPanelView<
                     .padding(.top, 16)
                     // Bottom padding leaves room for the floating chat pill
                     // so scrolled-to-end content is not obscured by the pill.
-                    .padding(.bottom, 160)
+                    .padding(.bottom, MarkdownChatPillOverlay.contentBottomInset)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
-            if chatPillExpanded {
-                Rectangle()
-                    .fill(Color.black.opacity(0.001))
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        withAnimation(MarkdownChatPillOverlayMotion.animation) {
-                            chatPillExpanded = false
-                        }
-                    }
-            }
-        }
-        .overlay(alignment: .bottom) {
-            MarkdownChatPill(
+            MarkdownChatPillOverlay(
                 isExpanded: $chatPillExpanded,
                 displayTitle: panel.displayTitle,
                 activeAgent: liveChatCompanionAgent,
@@ -255,8 +240,6 @@ struct ZebraMarkdownPanelView<
                     handlePillSubmit(text: text, agent: agent)
                 }
             )
-            .padding(.horizontal, 24)
-            .padding(.bottom, 22)
         }
     }
 
