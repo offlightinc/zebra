@@ -38,9 +38,6 @@ jobs:
             exit 0
           fi
 
-          repo_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
-          run_url="${repo_url}/actions/runs/${GITHUB_RUN_ID}"
-          newline=$'\n'
           should_send="true"
 
           case "${GITHUB_EVENT_NAME}" in
@@ -80,32 +77,17 @@ jobs:
                 fi
 
                 commit_count="$(jq -r '.commits | length' "$GITHUB_EVENT_PATH")"
-                compare_url="$(jq -r '.compare // empty' "$GITHUB_EVENT_PATH")"
                 pusher="$(jq -r '.pusher.name // .sender.login // "unknown"' "$GITHUB_EVENT_PATH")"
-                commit_summary="$(jq -r '
-                  .commits[:10]
-                  | map(
-                      . as $commit
-                      | ($commit.message | split("\n")) as $lines
-                      | ($lines[0] // "No commit message") as $subject
-                      | ($lines[1:] | map(select(length > 0)) | .[0] // "") as $detail
-                      | "- <" + $commit.url + "|" + ($commit.id[0:7]) + "> " + $subject
-                        + (if $detail == "" then "" else "\n  " + $detail end)
-                    )
-                  | join("\n")
-                ' "$GITHUB_EVENT_PATH")"
-                if [ -z "$commit_summary" ]; then
-                  commit_summary="- No commit messages were included in the push payload."
-                fi
-                if [ "$commit_count" -gt 10 ]; then
-                  remaining_count=$((commit_count - 10))
-                  commit_summary="${commit_summary}${newline}- ...and ${remaining_count} more commit(s)"
-                fi
-
-                title="Zebra main updated"
-                body="${pusher} pushed ${commit_count} commit(s) to ${ref_kind} ${ref_name}.${newline}${newline}*Changes:*${newline}${commit_summary}"
-                if [ -n "$compare_url" ]; then
-                  body="${body}${newline}${newline}<${compare_url}|Compare changes>"
+                if [ "$commit_count" -eq 1 ]; then
+                  commit_subject="$(jq -r '.head_commit.message // "No commit message" | split("\n")[0]' "$GITHUB_EVENT_PATH")"
+                  body="${pusher} pushed '${commit_subject}'"
+                else
+                  commit_subjects="$(jq -r '
+                    .commits[:5]
+                    | map(.message | split("\n")[0])
+                    | join("', '")
+                  ' "$GITHUB_EVENT_PATH")"
+                  body="${pusher} pushed ${commit_count} commits: '${commit_subjects}'"
                 fi
               fi
               ;;
@@ -115,7 +97,7 @@ jobs:
               ;;
             *)
               title="Zebra repo event"
-              body="${GITHUB_EVENT_NAME} in <${repo_url}|${GITHUB_REPOSITORY}>"
+              body="${GITHUB_EVENT_NAME} in ${GITHUB_REPOSITORY}"
               ;;
           esac
 
@@ -123,42 +105,7 @@ jobs:
             exit 0
           fi
 
-          payload="$(jq -n \
-            --arg channel "#zebra" \
-            --arg title "$title" \
-            --arg body "$body" \
-            --arg repo "$GITHUB_REPOSITORY" \
-            --arg actor "$GITHUB_ACTOR" \
-            --arg run_url "$run_url" \
-            '{
-              text: ($title + ": " + $body),
-              blocks: [
-                {
-                  type: "header",
-                  text: {
-                    type: "plain_text",
-                    text: $title,
-                    emoji: true
-                  }
-                },
-                {
-                  type: "section",
-                  text: {
-                    type: "mrkdwn",
-                    text: $body
-                  }
-                },
-                {
-                  type: "context",
-                  elements: [
-                    {
-                      type: "mrkdwn",
-                      text: ("Repo: " + $repo + " | Actor: " + $actor + " | Channel: " + $channel + " | <" + $run_url + "|workflow run>")
-                    }
-                  ]
-                }
-              ]
-            }')"
+          payload="$(jq -n --arg body "$body" '{text: $body}')"
 
           curl --fail --show-error --silent \
             --request POST \
