@@ -418,26 +418,33 @@ private struct EmailThreadMessageCard: View {
                             .font(.system(size: 11))
                             .foregroundColor(BVColor.fgFaint)
                             .lineLimit(1)
-                        Button(action: onCreateReply) {
-                            Image(systemName: "arrowshape.turn.up.left")
-                                .font(.system(size: 10.5, weight: .medium))
-                                .frame(width: 18, height: 18)
+                        HStack(spacing: 2) {
+                            Button(action: onCreateReply) {
+                                Image(systemName: "arrowshape.turn.up.left")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(BVColor.fgMute)
+                            .help(String(localized: "email.draft.reply", defaultValue: "Reply"))
+                            .accessibilityLabel(String(localized: "email.draft.reply", defaultValue: "Reply"))
+
+                            Button(action: onToggle) {
+                                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(BVColor.fgFaint)
+                            .help(isExpanded
+                                ? String(localized: "email.detail.collapseMessage", defaultValue: "Collapse message")
+                                : String(localized: "email.detail.expandMessage", defaultValue: "Expand message")
+                            )
+                            .accessibilityLabel(isExpanded
+                                ? String(localized: "email.detail.collapseMessage", defaultValue: "Collapse message")
+                                : String(localized: "email.detail.expandMessage", defaultValue: "Expand message")
+                            )
                         }
-                        .buttonStyle(.plain)
-                        .foregroundColor(BVColor.fgMute)
-                        .help(String(localized: "email.draft.reply", defaultValue: "Reply"))
-                        .accessibilityLabel(String(localized: "email.draft.reply", defaultValue: "Reply"))
-                        Button(action: onToggle) {
-                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                                .font(.system(size: 10, weight: .semibold))
-                                .frame(width: 18, height: 18)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(BVColor.fgFaint)
-                        .help(isExpanded
-                            ? String(localized: "email.detail.collapseMessage", defaultValue: "Collapse message")
-                            : String(localized: "email.detail.expandMessage", defaultValue: "Expand message")
-                        )
                     }
                     if !isExpanded {
                         Text(collapsedPreview)
@@ -516,8 +523,15 @@ private struct EmailThreadMessageCard: View {
     private var timestampText: String {
         guard let receivedAt = message.receivedAt else { return "" }
         let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
+        formatter.locale = .autoupdatingCurrent
+        let calendar = Calendar.autoupdatingCurrent
+        if calendar.isDateInToday(receivedAt) {
+            formatter.setLocalizedDateFormatFromTemplate("jm")
+        } else if calendar.component(.year, from: receivedAt) == calendar.component(.year, from: Date()) {
+            formatter.setLocalizedDateFormatFromTemplate("MMMMdEEEjm")
+        } else {
+            formatter.setLocalizedDateFormatFromTemplate("yMMMMdEEEjm")
+        }
         return formatter.string(from: receivedAt)
     }
 
