@@ -34,6 +34,7 @@ public final class BrainSyncService: ObservableObject {
         case rateLimit
         case conflict
         case notGbrainRepo
+        case alreadyRunning
         case unknown
 
         public var humanLabel: String {
@@ -47,6 +48,7 @@ public final class BrainSyncService: ObservableObject {
             case .rateLimit: return String(localized: "brainSync.reason.rateLimit", defaultValue: "Rate limit")
             case .conflict: return String(localized: "brainSync.reason.conflict", defaultValue: "동기화 충돌")
             case .notGbrainRepo: return String(localized: "brainSync.reason.notGbrainRepo", defaultValue: "GBrain repo 아님")
+            case .alreadyRunning: return String(localized: "brainSync.reason.alreadyRunning", defaultValue: "Sync already running")
             case .unknown: return String(localized: "brainSync.reason.unknown", defaultValue: "기타 오류")
             }
         }
@@ -341,6 +343,12 @@ public final class BrainSyncService: ObservableObject {
 
         if process.terminationStatus == 0 {
             let commit = parseCommit(stdout: stdout)
+            if commit.isEmpty {
+                return .failure(
+                    reason: .unknown,
+                    detail: "zebra-brain-sync exited successfully without reporting a final commit"
+                )
+            }
             return .success(commit: commit)
         }
         let (reason, detail) = classifyFailure(stderr: stderr, stdout: stdout)
@@ -446,6 +454,10 @@ public final class BrainSyncService: ObservableObject {
             || haystack.hasSuffix(" 429")
             || haystack.contains("retry-after:") {
             return (.rateLimit, lastStderrLine)
+        }
+        if haystack.contains("brain sync already running")
+            || haystack.contains("brain sync lock exists") {
+            return (.alreadyRunning, lastStderrLine)
         }
         return (.unknown, lastStderrLine)
     }

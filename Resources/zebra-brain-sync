@@ -5,7 +5,7 @@
 #   lock -> fetch -> validate -> commit -> pull --rebase -> push -> gbrain ping
 #
 # Emitted on stderr first line of every fail: `[REASON:<id>] <message>` where
-# <id> ∈ authExpired|offline|pushRejected|permissionDenied|diskFull|hookFailed|rateLimit|conflict|notGbrainRepo|unknown.
+# <id> ∈ authExpired|offline|pushRejected|permissionDenied|diskFull|hookFailed|rateLimit|conflict|notGbrainRepo|alreadyRunning|unknown.
 # Zebra's `BrainSyncService` parses the tag to classify the FailureReason.
 #
 # Originates from offlightinc/b-brain-offlight's `local-offlight-brain-sync`,
@@ -73,6 +73,75 @@ fail() {
   exit 1
 }
 
+stat_mtime_epoch() {
+  local path="$1"
+  if mtime="$(stat -f '%m' "$path" 2>/dev/null)"; then
+    printf '%s\n' "$mtime"
+    return 0
+  fi
+  stat -c '%Y' "$path" 2>/dev/null || printf '0\n'
+}
+
+lock_age_seconds() {
+  local path="$1"
+  local now mtime
+  now="$(date +%s)"
+  mtime="$(stat_mtime_epoch "$path")"
+  if [[ "$mtime" =~ ^[0-9]+$ ]] && [[ "$now" =~ ^[0-9]+$ ]] && (( now >= mtime )); then
+    printf '%s\n' "$((now - mtime))"
+  else
+    printf '0\n'
+  fi
+}
+
+read_lock_value() {
+  local key="$1"
+  local file="$2"
+  [[ -f "$file" ]] || return 1
+  awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); exit }' "$file"
+}
+
+process_command() {
+  local pid="$1"
+  ps -p "$pid" -o command= 2>/dev/null || true
+}
+
+is_zebra_sync_process() {
+  local pid="$1"
+  local command
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  command="$(process_command "$pid")"
+  [[ -z "$command" || "$command" == *"zebra-brain-sync"* ]]
+}
+
+write_lock_owner() {
+  local owner_file="$1"
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'started_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf 'repo=%s\n' "$REPO_ROOT"
+    printf 'host=%s\n' "$(hostname 2>/dev/null || printf unknown)"
+  } > "$owner_file"
+}
+
+lock_detail() {
+  local lock_dir="$1"
+  local owner_file="$lock_dir/owner"
+  local age pid started_at repo host command
+  age="$(lock_age_seconds "$lock_dir")"
+  pid="$(read_lock_value pid "$owner_file" 2>/dev/null || true)"
+  started_at="$(read_lock_value started_at "$owner_file" 2>/dev/null || true)"
+  repo="$(read_lock_value repo "$owner_file" 2>/dev/null || true)"
+  host="$(read_lock_value host "$owner_file" 2>/dev/null || true)"
+  command=""
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    command="$(process_command "$pid")"
+  fi
+  printf 'lock=%s age=%ss pid=%s started_at=%s host=%s repo=%s command=%s' \
+    "$lock_dir" "$age" "${pid:-unknown}" "${started_at:-unknown}" "${host:-unknown}" "${repo:-unknown}" "${command:-unknown}"
+}
+
 [[ -n "$REPO_ROOT" ]] || fail "hookFailed" "missing --repo <path>"
 [[ -d "$REPO_ROOT" ]] || fail "hookFailed" "repo path does not exist: $REPO_ROOT"
 [[ -d "$REPO_ROOT/.git" ]] || fail "hookFailed" "not a git repo: $REPO_ROOT"
@@ -104,10 +173,29 @@ done
 
 lock_key="$(printf '%s' "$REPO_ROOT" | cksum | awk '{print $1}')"
 lock_dir="${TMPDIR:-/tmp}/zebra-brain-sync.${lock_key}.lock"
+lock_owner_file="$lock_dir/owner"
+lock_stale_seconds="${ZEBRA_SYNC_LOCK_STALE_SECONDS:-1800}"
 if ! mkdir "$lock_dir" 2>/dev/null; then
-  log "already running for $REPO_ROOT; exiting"
-  exit 0
+  lock_age="$(lock_age_seconds "$lock_dir")"
+  lock_pid="$(read_lock_value pid "$lock_owner_file" 2>/dev/null || true)"
+  if [[ "$lock_pid" =~ ^[0-9]+$ ]] && is_zebra_sync_process "$lock_pid"; then
+    fail "alreadyRunning" "brain sync already running: $(lock_detail "$lock_dir")"
+  fi
+
+  if [[ ! "$lock_age" =~ ^[0-9]+$ ]]; then
+    lock_age=0
+  fi
+  if [[ "$lock_pid" =~ ^[0-9]+$ ]] || (( lock_age >= lock_stale_seconds )); then
+    log "removing stale brain sync lock: $(lock_detail "$lock_dir")"
+    rm -rf "$lock_dir"
+    if ! mkdir "$lock_dir" 2>/dev/null; then
+      fail "alreadyRunning" "brain sync lock still exists after stale cleanup: $(lock_detail "$lock_dir")"
+    fi
+  else
+    fail "alreadyRunning" "brain sync lock exists without owner metadata: $(lock_detail "$lock_dir")"
+  fi
 fi
+write_lock_owner "$lock_owner_file"
 trap 'rm -rf "$lock_dir"' EXIT
 
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/zebra-brain-sync.XXXXXX")"

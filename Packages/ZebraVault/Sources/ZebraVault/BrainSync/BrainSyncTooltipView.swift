@@ -220,6 +220,8 @@ extension BrainSyncService.FailureReason {
             return String(localized: "brainSync.hint.resolve", defaultValue: "resolve with an agent in terminal")
         case .notGbrainRepo:
             return String(localized: "brainSync.hint.chooseGbrainRepo", defaultValue: "choose a GBrain repo")
+        case .alreadyRunning:
+            return String(localized: "brainSync.hint.alreadyRunning", defaultValue: "wait for the current sync, then retry")
         case .unknown:
             return String(localized: "brainSync.hint.retry", defaultValue: "retry from the sync indicator")
         }
