@@ -47,6 +47,16 @@ on machines that never installed the legacy plist. Reverse with
 
 ## Local dev
 
+Codex build rule: when Codex needs to run a Zebra Debug reload, request escalated
+permissions before the first build attempt and run `./scripts/reload.sh --tag <tag>`
+under that approval. Do not try a non-escalated reload first. The script writes
+GhosttyKit cache locks under `~/.cache/cmux/ghosttykit`, which is outside the Codex
+workspace sandbox. Without escalation, `ensure-ghosttykit.sh` may loop forever
+printing `Waiting for GhosttyKit cache lock...` because the lock `mkdir` fails with
+`Operation not permitted`. When requesting approval, keep the prefix narrow to
+`./scripts/reload.sh`; do not request broad shell prefixes such as `bash`, `zsh`, or
+`python3`.
+
 After making code changes, always run the reload script with a tag to build the Debug app:
 
 ```bash
@@ -109,13 +119,6 @@ After making code changes, always use `reload.sh --tag` to build. **Never run ba
 ```bash
 ./scripts/reload.sh --tag <your-branch-slug>
 ```
-
-Codex note: run `./scripts/reload.sh` with escalated permissions from the start. The script writes
-GhosttyKit cache locks under `~/.cache/cmux/ghosttykit`, which is outside the Codex workspace
-sandbox. If Codex runs it without escalation, `ensure-ghosttykit.sh` can loop forever printing
-`Waiting for GhosttyKit cache lock...` because the lock `mkdir` fails with `Operation not permitted`.
-When requesting approval, keep the prefix narrow to `./scripts/reload.sh`; do not request broad
-shell prefixes such as `bash`, `zsh`, or `python3`.
 
 If you only need to verify the build compiles (no launch), use a tagged derivedDataPath:
 
