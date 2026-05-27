@@ -124,6 +124,7 @@ private struct ZebraEmailPanelHost: View {
         ZebraEmailThreadDetailView(
             subject: panel.displayTitle,
             detail: detailStore.detail(threadId: panel.threadId),
+            drafts: detailStore.drafts(threadId: panel.threadId),
             isLoading: detailStore.isLoading(threadId: panel.threadId),
             isArchiving: detailStore.isArchiving(threadId: panel.threadId),
             errorMessage: detailStore.errorMessage(threadId: panel.threadId),
@@ -147,6 +148,22 @@ private struct ZebraEmailPanelHost: View {
             },
             onToggleMessage: { messageId in
                 detailStore.toggleMessage(threadId: panel.threadId, messageId: messageId)
+            },
+            onCreateReply: { targetMessageId in
+                detailStore.createReplyDraft(
+                    threadId: panel.threadId,
+                    targetMessageId: targetMessageId
+                )
+            },
+            onUpdateDraftBody: { localDraftId, bodyText in
+                detailStore.updateDraftBody(
+                    threadId: panel.threadId,
+                    localDraftId: localDraftId,
+                    bodyText: bodyText
+                )
+            },
+            onDiscardDraft: { localDraftId in
+                detailStore.discardDraft(threadId: panel.threadId, localDraftId: localDraftId)
             },
             onOpenURL: { url in
                 let ok = NSWorkspace.shared.open(url)

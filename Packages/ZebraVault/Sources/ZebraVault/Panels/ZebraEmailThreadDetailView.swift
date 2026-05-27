@@ -5,6 +5,7 @@ import WebKit
 public struct ZebraEmailThreadDetailView: View {
     private let subject: String
     private let detail: EmailThreadDetail?
+    private let drafts: [EmailDraftSnapshot]
     private let isLoading: Bool
     private let isArchiving: Bool
     private let errorMessage: String?
@@ -20,11 +21,15 @@ public struct ZebraEmailThreadDetailView: View {
     private let onDismissArchiveError: () -> Void
     private let onRefresh: () -> Void
     private let onToggleMessage: (String) -> Void
+    private let onCreateReply: (String) -> Void
+    private let onUpdateDraftBody: (String, String) -> Void
+    private let onDiscardDraft: (String) -> Void
     private let onOpenURL: (URL) -> Void
 
     public init(
         subject: String,
         detail: EmailThreadDetail?,
+        drafts: [EmailDraftSnapshot] = [],
         isLoading: Bool,
         isArchiving: Bool = false,
         errorMessage: String?,
@@ -35,10 +40,14 @@ public struct ZebraEmailThreadDetailView: View {
         onDismissArchiveError: @escaping () -> Void = {},
         onRefresh: @escaping () -> Void,
         onToggleMessage: @escaping (String) -> Void,
+        onCreateReply: @escaping (String) -> Void = { _ in },
+        onUpdateDraftBody: @escaping (String, String) -> Void = { _, _ in },
+        onDiscardDraft: @escaping (String) -> Void = { _ in },
         onOpenURL: @escaping (URL) -> Void
     ) {
         self.subject = subject
         self.detail = detail
+        self.drafts = drafts
         self.isLoading = isLoading
         self.isArchiving = isArchiving
         self.errorMessage = errorMessage
@@ -49,6 +58,9 @@ public struct ZebraEmailThreadDetailView: View {
         self.onDismissArchiveError = onDismissArchiveError
         self.onRefresh = onRefresh
         self.onToggleMessage = onToggleMessage
+        self.onCreateReply = onCreateReply
+        self.onUpdateDraftBody = onUpdateDraftBody
+        self.onDiscardDraft = onDiscardDraft
         self.onOpenURL = onOpenURL
     }
 
@@ -206,7 +218,30 @@ public struct ZebraEmailThreadDetailView: View {
                                     viewportHeight: proxy.size.height
                                 ),
                                 onToggle: { onToggleMessage(message.id) },
+                                onCreateReply: { onCreateReply(message.id) },
                                 onOpenURL: onOpenURL
+                            )
+                            ForEach(draftsForMessage(message.id)) { draft in
+                                EmailThreadDraftCard(
+                                    draft: draft,
+                                    onUpdateBody: { bodyText in
+                                        onUpdateDraftBody(draft.localDraftId, bodyText)
+                                    },
+                                    onDiscard: {
+                                        onDiscardDraft(draft.localDraftId)
+                                    }
+                                )
+                            }
+                        }
+                        ForEach(draftsWithoutMessage) { draft in
+                            EmailThreadDraftCard(
+                                draft: draft,
+                                onUpdateBody: { bodyText in
+                                    onUpdateDraftBody(draft.localDraftId, bodyText)
+                                },
+                                onDiscard: {
+                                    onDiscardDraft(draft.localDraftId)
+                                }
                             )
                         }
                     }
@@ -222,6 +257,14 @@ public struct ZebraEmailThreadDetailView: View {
                 message: nil
             )
         }
+    }
+
+    private func draftsForMessage(_ messageId: String) -> [EmailDraftSnapshot] {
+        drafts.filter { $0.targetMessageId == messageId }
+    }
+
+    private var draftsWithoutMessage: [EmailDraftSnapshot] {
+        drafts.filter { $0.targetMessageId == nil }
     }
 
     private func htmlBodyMinHeight(
@@ -274,21 +317,46 @@ public struct ZebraEmailThreadDetailView: View {
     }
 }
 
+private struct EmailThreadCardContainer<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            content
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(BVColor.bgInput)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(BVColor.border)
+                )
+        )
+    }
+}
+
 private struct EmailThreadMessageCard: View {
     let message: EmailThreadMessage
     let isExpanded: Bool
     let htmlBodyMinHeight: CGFloat?
     let onToggle: () -> Void
+    let onCreateReply: () -> Void
     let onOpenURL: (URL) -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Button(action: onToggle) {
-                HStack(alignment: .top, spacing: 10) {
-                    EmailDetailAvatarDot(initial: senderInitial, color: BrainPersonColor.color(for: senderTitle))
-                        .frame(width: 24, height: 24)
+        EmailThreadCardContainer {
+            HStack(alignment: .top, spacing: 10) {
+                EmailDetailAvatarDot(initial: senderInitial, color: BrainPersonColor.color(for: senderTitle))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onToggle)
 
-                    VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
                         HStack(spacing: 6) {
                             Text(senderTitle)
                                 .font(.system(size: 12.5, weight: message.isUnread ? .semibold : .medium))
@@ -299,31 +367,52 @@ private struct EmailThreadMessageCard: View {
                                     .fill(BVColor.accent)
                                     .frame(width: 6, height: 6)
                             }
-                            Spacer(minLength: 4)
-                            Text(timestampText)
-                                .font(.system(size: 11))
-                                .foregroundColor(BVColor.fgFaint)
-                                .lineLimit(1)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: onToggle)
+
+                        Spacer(minLength: 4)
+                        Text(timestampText)
+                            .font(.system(size: 11))
+                            .foregroundColor(BVColor.fgFaint)
+                            .lineLimit(1)
+                        Button(action: onCreateReply) {
+                            Image(systemName: "arrowshape.turn.up.left")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .frame(width: 18, height: 18)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(BVColor.fgMute)
+                        .help(String(localized: "email.draft.reply", defaultValue: "Reply"))
+                        .accessibilityLabel(String(localized: "email.draft.reply", defaultValue: "Reply"))
+                        Button(action: onToggle) {
                             Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(BVColor.fgFaint)
-                                .frame(width: 12, height: 12)
+                                .frame(width: 18, height: 18)
                         }
-                        if !isExpanded {
-                            Text(collapsedPreview)
-                                .font(.system(size: 11.5))
-                                .foregroundColor(BVColor.fgMute)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                        } else {
-                            recipientLine
-                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(BVColor.fgFaint)
+                        .help(isExpanded
+                            ? String(localized: "email.detail.collapseMessage", defaultValue: "Collapse message")
+                            : String(localized: "email.detail.expandMessage", defaultValue: "Expand message")
+                        )
+                    }
+                    if !isExpanded {
+                        Text(collapsedPreview)
+                            .font(.system(size: 11.5))
+                            .foregroundColor(BVColor.fgMute)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture(perform: onToggle)
+                    } else {
+                        recipientLine
+                            .contentShape(Rectangle())
+                            .onTapGesture(perform: onToggle)
                     }
                 }
-                .padding(12)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .padding(12)
 
             if isExpanded {
                 Divider()
@@ -333,14 +422,6 @@ private struct EmailThreadMessageCard: View {
                     .padding(.vertical, 12)
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(BVColor.bgInput)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .stroke(BVColor.border)
-                )
-        )
     }
 
     @ViewBuilder
@@ -418,6 +499,183 @@ private struct EmailThreadMessageCard: View {
             )
         }
         return address
+    }
+}
+
+private struct EmailThreadDraftCard: View {
+    let draft: EmailDraftSnapshot
+    let onUpdateBody: (String) -> Void
+    let onDiscard: () -> Void
+
+    @State private var bodyText: String
+    @State private var saveTask: Task<Void, Never>?
+
+    init(
+        draft: EmailDraftSnapshot,
+        onUpdateBody: @escaping (String) -> Void,
+        onDiscard: @escaping () -> Void
+    ) {
+        self.draft = draft
+        self.onUpdateBody = onUpdateBody
+        self.onDiscard = onDiscard
+        _bodyText = State(initialValue: draft.bodyText)
+    }
+
+    var body: some View {
+        EmailThreadCardContainer {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                    .padding(12)
+                Divider()
+                    .padding(.leading, 46)
+                editor
+                    .padding(12)
+            }
+        }
+        .onChange(of: bodyText) { _, newValue in
+            scheduleSave(newValue)
+        }
+        .onChange(of: draft.version) { _, _ in
+            if bodyText != draft.bodyText {
+                bodyText = draft.bodyText
+            }
+        }
+        .onDisappear {
+            saveTask?.cancel()
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 10) {
+            EmailDetailAvatarDot(
+                initial: String(localized: "email.draft.initial", defaultValue: "D"),
+                color: BVColor.accent
+            )
+            .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(displayName)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundColor(BVColor.fg)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(statusText)
+                        .font(.system(size: 11))
+                        .foregroundColor(BVColor.fgFaint)
+                        .lineLimit(1)
+                    Button(action: onDiscard) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11, weight: .medium))
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(BVColor.fgMute)
+                    .help(String(localized: "email.draft.discard", defaultValue: "Discard draft"))
+                    .accessibilityLabel(String(localized: "email.draft.discard", defaultValue: "Discard draft"))
+                }
+
+                Text(recipientsText)
+                    .font(.system(size: 11))
+                    .foregroundColor(BVColor.fgFaint)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+
+                Text(draft.subject.isEmpty ? String(localized: "email.detail.noSubject", defaultValue: "(no subject)") : draft.subject)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundColor(BVColor.fgMute)
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private var editor: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(BVColor.bg)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(BVColor.border.opacity(0.7))
+                )
+
+            TextEditor(text: $bodyText)
+                .font(.system(size: 12))
+                .foregroundColor(BVColor.fg.opacity(0.86))
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .frame(minHeight: 150)
+
+            if bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(String(localized: "email.draft.placeholder", defaultValue: "Write a reply..."))
+                    .font(.system(size: 12))
+                    .foregroundColor(BVColor.fgFaint)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 15)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(minHeight: 150)
+    }
+
+    private var displayName: String {
+        let digits = draft.displayName
+            .split(separator: " ")
+            .last
+            .flatMap { Int($0) }
+        if let digits {
+            return String.localizedStringWithFormat(
+                String(localized: "email.draft.displayName", defaultValue: "Draft %lld"),
+                digits
+            )
+        }
+        return draft.displayName
+    }
+
+    private var statusText: String {
+        String.localizedStringWithFormat(
+            String(localized: "email.draft.statusLine", defaultValue: "%@ · v%lld"),
+            syncStateText,
+            draft.version
+        )
+    }
+
+    private var syncStateText: String {
+        switch draft.syncState {
+        case .localOnly:
+            return String(localized: "email.draft.sync.localOnly", defaultValue: "Local")
+        case .dirty:
+            return String(localized: "email.draft.sync.dirty", defaultValue: "Unsynced")
+        case .saving:
+            return String(localized: "email.draft.sync.saving", defaultValue: "Saving")
+        case .synced:
+            return String(localized: "email.draft.sync.synced", defaultValue: "Synced")
+        case .failed:
+            return String(localized: "email.draft.sync.failed", defaultValue: "Failed")
+        case .sent:
+            return String(localized: "email.draft.sync.sent", defaultValue: "Sent")
+        }
+    }
+
+    private var recipientsText: String {
+        let to = draft.toRecipients.joined(separator: ", ")
+        return String.localizedStringWithFormat(
+            String(localized: "email.draft.toLine", defaultValue: "To %@"),
+            to.isEmpty ? String(localized: "email.draft.noRecipients", defaultValue: "No recipients") : to
+        )
+    }
+
+    private func scheduleSave(_ value: String) {
+        saveTask?.cancel()
+        saveTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 450_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            onUpdateBody(value)
+        }
     }
 }
 

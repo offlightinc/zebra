@@ -647,7 +647,10 @@ final class ZebraEmailDetailStore: ObservableObject {
     }
 
     func loadThreadIfNeeded(threadId: String) async {
-        if threadStates[threadId]?.detail != nil { return }
+        if threadStates[threadId]?.detail != nil {
+            await loadDrafts(threadId: threadId)
+            return
+        }
         await reloadThread(threadId: threadId, forceRefresh: false)
     }
 
@@ -661,8 +664,10 @@ final class ZebraEmailDetailStore: ObservableObject {
 
         do {
             let detail = try await client.threadMessages(threadId: threadId, forceRefresh: forceRefresh)
+            let drafts = try await client.emailDrafts(threadId: detail.threadId)
             var loadedState = threadStates[threadId] ?? ZebraEmailThreadUIState()
             loadedState.detail = detail
+            loadedState.drafts = drafts
             loadedState.isLoading = false
             loadedState.errorMessage = nil
             if loadedState.expandedMessageIds == nil {
@@ -771,6 +776,70 @@ final class ZebraEmailDetailStore: ObservableObject {
         threadStates[threadId]?.expandedMessageIds ?? []
     }
 
+    func drafts(threadId: String) -> [EmailDraftSnapshot] {
+        threadStates[threadId]?.drafts ?? []
+    }
+
+    func createReplyDraft(threadId: String, targetMessageId: String) {
+        guard let detail = threadStates[threadId]?.detail,
+              let targetMessage = detail.messages.first(where: { $0.id == targetMessageId }) else { return }
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        var expanded = state.expandedMessageIds ?? []
+        expanded.insert(targetMessage.id)
+        state.expandedMessageIds = expanded
+        threadStates[threadId] = state
+
+        Task {
+            do {
+                let draft = try await client.createEmailDraft(EmailDraftCreateRequest(
+                    threadId: detail.threadId,
+                    providerThreadId: detail.providerThreadId,
+                    targetMessageId: targetMessage.id,
+                    accountEmail: detail.accountEmail,
+                    mode: .reply,
+                    origin: .user,
+                    toRecipients: targetMessage.fromEmail.map { [$0] } ?? [],
+                    subject: replySubject(for: targetMessage, fallbackSubject: detail.messages.compactMap(\.subject).first),
+                    bodyText: "",
+                    inReplyToHeader: targetMessage.internetMessageId,
+                    referencesHeader: targetMessage.internetMessageId
+                ))
+                upsertDraft(draft, threadId: threadId)
+            } catch {
+                setDraftError(error, threadId: threadId)
+            }
+        }
+    }
+
+    func updateDraftBody(threadId: String, localDraftId: String, bodyText: String) {
+        Task {
+            do {
+                let draft = try await client.updateEmailDraft(
+                    localDraftId: localDraftId,
+                    baseVersion: nil,
+                    patch: EmailDraftPatch(bodyText: bodyText),
+                    origin: .user
+                )
+                upsertDraft(draft, threadId: threadId)
+            } catch {
+                setDraftError(error, threadId: threadId)
+            }
+        }
+    }
+
+    func discardDraft(threadId: String, localDraftId: String) {
+        Task {
+            do {
+                try await client.discardEmailDraft(localDraftId: localDraftId)
+                var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+                state.drafts.removeAll { $0.localDraftId == localDraftId }
+                threadStates[threadId] = state
+            } catch {
+                setDraftError(error, threadId: threadId)
+            }
+        }
+    }
+
     // MARK: - Per-thread chat companion pane state
     //
     // Email thread 마다 한 짝의 에이전트 터미널 split 을 기억한다.
@@ -808,6 +877,43 @@ final class ZebraEmailDetailStore: ObservableObject {
         return expanded
     }
 
+    private func loadDrafts(threadId: String) async {
+        do {
+            let drafts = try await client.emailDrafts(threadId: threadId)
+            var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+            state.drafts = drafts
+            threadStates[threadId] = state
+        } catch {
+            setDraftError(error, threadId: threadId)
+        }
+    }
+
+    private func upsertDraft(_ draft: EmailDraftSnapshot, threadId: String) {
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        state.draftErrorMessage = nil
+        if let index = state.drafts.firstIndex(where: { $0.localDraftId == draft.localDraftId }) {
+            state.drafts[index] = draft
+        } else {
+            state.drafts.append(draft)
+            state.drafts.sort { $0.createdAt < $1.createdAt }
+        }
+        threadStates[threadId] = state
+    }
+
+    private func setDraftError(_ error: Error, threadId: String) {
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        state.draftErrorMessage = displayError(error)
+        threadStates[threadId] = state
+    }
+
+    private func replySubject(for message: EmailThreadMessage, fallbackSubject: String?) -> String {
+        let messageSubject = message.subject?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let fallback = fallbackSubject?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let raw = messageSubject.isEmpty ? fallback : messageSubject
+        guard raw.range(of: "re:", options: [.caseInsensitive, .anchored]) == nil else { return raw }
+        return raw.isEmpty ? "Re:" : "Re: \(raw)"
+    }
+
     private func displayError(_ error: Error) -> String {
         let raw = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         guard raw.count > 240 else { return raw }
@@ -825,6 +931,8 @@ final class ZebraEmailDetailStore: ObservableObject {
 
 private struct ZebraEmailThreadUIState {
     var detail: EmailThreadDetail?
+    var drafts: [EmailDraftSnapshot] = []
+    var draftErrorMessage: String?
     var isLoading = false
     var isArchiving = false
     var errorMessage: String?

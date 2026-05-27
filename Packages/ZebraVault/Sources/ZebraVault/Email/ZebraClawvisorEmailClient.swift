@@ -348,6 +348,48 @@ public actor ZebraClawvisorEmailClient {
         try removeThreadFromCache(threadId: threadId, providerThreadId: providerThreadId)
     }
 
+    public func emailDrafts(threadId: String) throws -> [EmailDraftSnapshot] {
+        try openDatabaseIfNeeded()
+        return try loadEmailDrafts(threadId: threadId)
+    }
+
+    public func createEmailDraft(_ request: EmailDraftCreateRequest) throws -> EmailDraftSnapshot {
+        try openDatabaseIfNeeded()
+        return try createEmailDraftRow(request)
+    }
+
+    public func updateEmailDraft(
+        localDraftId: String,
+        baseVersion: Int?,
+        patch: EmailDraftPatch,
+        origin: EmailDraftOrigin
+    ) throws -> EmailDraftSnapshot {
+        try openDatabaseIfNeeded()
+        return try updateEmailDraftRow(
+            localDraftId: localDraftId,
+            baseVersion: baseVersion,
+            patch: patch,
+            origin: origin
+        )
+    }
+
+    public func discardEmailDraft(localDraftId: String) throws {
+        try openDatabaseIfNeeded()
+        try execute(
+            """
+            UPDATE email_drafts
+            SET status = ?, sync_state = ?, updated_at = ?
+            WHERE local_draft_id = ?
+            """,
+            [
+                EmailDraftStatus.discarded.rawValue,
+                EmailDraftSyncState.dirty.rawValue,
+                Date().timeIntervalSince1970,
+                localDraftId,
+            ]
+        )
+    }
+
     private func fetchThreadMessages(config: ClawvisorConfig, threadId: String) async throws -> [NormalizedMessage] {
         var lastError: Error?
 
@@ -1043,8 +1085,46 @@ private extension ZebraClawvisorEmailClient {
               updated_at REAL NOT NULL
             )
             """)
+            try execute("""
+            CREATE TABLE IF NOT EXISTS email_drafts (
+              local_draft_id TEXT PRIMARY KEY,
+              thread_id TEXT NOT NULL,
+              provider_thread_id TEXT,
+              target_message_id TEXT,
+              provider_draft_id TEXT,
+              provider_message_id TEXT,
+              account_email TEXT,
+              mode TEXT NOT NULL,
+              display_name TEXT NOT NULL,
+              origin TEXT NOT NULL,
+              status TEXT NOT NULL,
+              sync_state TEXT NOT NULL,
+              version INTEGER NOT NULL,
+              to_recipients_json TEXT NOT NULL,
+              cc_recipients_json TEXT NOT NULL,
+              bcc_recipients_json TEXT NOT NULL,
+              subject TEXT NOT NULL,
+              body_html TEXT NOT NULL,
+              body_text TEXT NOT NULL,
+              in_reply_to_header TEXT,
+              references_header TEXT,
+              last_error TEXT,
+              created_at REAL NOT NULL,
+              updated_at REAL NOT NULL,
+              synced_at REAL,
+              sent_at REAL
+            )
+            """)
             try execute("CREATE INDEX IF NOT EXISTS email_threads_received_idx ON email_threads(received_at DESC)")
             try execute("CREATE INDEX IF NOT EXISTS email_messages_thread_received_idx ON email_messages(thread_id, received_at)")
+            try execute("CREATE INDEX IF NOT EXISTS email_drafts_thread_updated_idx ON email_drafts(thread_id, updated_at DESC)")
+            try execute("CREATE INDEX IF NOT EXISTS email_drafts_provider_draft_idx ON email_drafts(provider_draft_id)")
+            try execute("CREATE INDEX IF NOT EXISTS email_drafts_target_message_idx ON email_drafts(target_message_id)")
+            try execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS email_drafts_one_active_per_target_idx
+            ON email_drafts(thread_id, target_message_id)
+            WHERE status = 'active' AND target_message_id IS NOT NULL
+            """)
             try repairThreadSummaryDatesFromMessages()
             databaseInitialized = true
         } catch {
@@ -1394,6 +1474,205 @@ private extension ZebraClawvisorEmailClient {
         return rows
     }
 
+    func loadEmailDrafts(threadId: String) throws -> [EmailDraftSnapshot] {
+        var rows: [EmailDraftSnapshot] = []
+        try query("""
+        SELECT local_draft_id, thread_id, provider_thread_id, target_message_id,
+               provider_draft_id, provider_message_id, account_email, mode,
+               display_name, origin, status, sync_state, version,
+               to_recipients_json, cc_recipients_json, bcc_recipients_json,
+               subject, body_html, body_text, in_reply_to_header,
+               references_header, last_error, created_at, updated_at, synced_at, sent_at
+        FROM email_drafts
+        WHERE thread_id = ? AND status = ?
+        ORDER BY created_at ASC, local_draft_id ASC
+        """, [threadId, EmailDraftStatus.active.rawValue]) { stmt in
+            rows.append(emailDraftSnapshot(from: stmt))
+        }
+        return rows
+    }
+
+    func createEmailDraftRow(_ request: EmailDraftCreateRequest) throws -> EmailDraftSnapshot {
+        if let targetMessageId = request.targetMessageId, !targetMessageId.isEmpty,
+           let existing = try loadActiveEmailDraft(threadId: request.threadId, targetMessageId: targetMessageId) {
+            return existing
+        }
+
+        let existingCount = try queryDouble(
+            "SELECT COUNT(*) FROM email_drafts WHERE thread_id = ?",
+            [request.threadId]
+        ) ?? 0
+        let localDraftId = "draft_\(UUID().uuidString.lowercased())"
+        let displayName = "Draft \(Int(existingCount) + 1)"
+        let now = Date().timeIntervalSince1970
+        let bodyHtml = htmlFromPlainText(request.bodyText)
+
+        try execute(
+            """
+            INSERT INTO email_drafts(
+              local_draft_id, thread_id, provider_thread_id, target_message_id,
+              provider_draft_id, provider_message_id, account_email, mode,
+              display_name, origin, status, sync_state, version,
+              to_recipients_json, cc_recipients_json, bcc_recipients_json,
+              subject, body_html, body_text, in_reply_to_header,
+              references_header, last_error, created_at, updated_at, synced_at, sent_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                localDraftId,
+                request.threadId,
+                sqliteNullable(request.providerThreadId),
+                sqliteNullable(request.targetMessageId),
+                NSNull(),
+                NSNull(),
+                sqliteNullable(request.accountEmail),
+                request.mode.rawValue,
+                displayName,
+                request.origin.rawValue,
+                EmailDraftStatus.active.rawValue,
+                EmailDraftSyncState.localOnly.rawValue,
+                1,
+                jsonString(request.toRecipients),
+                jsonString(request.ccRecipients),
+                jsonString(request.bccRecipients),
+                request.subject,
+                bodyHtml,
+                request.bodyText,
+                sqliteNullable(request.inReplyToHeader),
+                sqliteNullable(request.referencesHeader),
+                NSNull(),
+                now,
+                now,
+                NSNull(),
+                NSNull(),
+            ]
+        )
+
+        guard let created = try loadEmailDraft(localDraftId: localDraftId) else {
+            throw ZebraClawvisorEmailClientError.sqlite("email draft insert did not return a row")
+        }
+        return created
+    }
+
+    func updateEmailDraftRow(
+        localDraftId: String,
+        baseVersion: Int?,
+        patch: EmailDraftPatch,
+        origin: EmailDraftOrigin
+    ) throws -> EmailDraftSnapshot {
+        guard let current = try loadEmailDraft(localDraftId: localDraftId) else {
+            throw ZebraClawvisorEmailClientError.sqlite("email draft not found")
+        }
+        guard current.status == .active else {
+            throw ZebraClawvisorEmailClientError.sqlite("email draft is not active")
+        }
+        if let baseVersion, baseVersion != current.version {
+            throw ZebraClawvisorEmailClientError.sqlite("email draft version conflict")
+        }
+        guard let bodyText = patch.bodyText else {
+            return current
+        }
+
+        try execute(
+            """
+            UPDATE email_drafts
+            SET origin = ?,
+                sync_state = ?,
+                version = version + 1,
+                body_html = ?,
+                body_text = ?,
+                last_error = NULL,
+                updated_at = ?
+            WHERE local_draft_id = ? AND status = ?
+            """,
+            [
+                origin.rawValue,
+                EmailDraftSyncState.dirty.rawValue,
+                htmlFromPlainText(bodyText),
+                bodyText,
+                Date().timeIntervalSince1970,
+                localDraftId,
+                EmailDraftStatus.active.rawValue,
+            ]
+        )
+
+        guard let updated = try loadEmailDraft(localDraftId: localDraftId) else {
+            throw ZebraClawvisorEmailClientError.sqlite("email draft update did not return a row")
+        }
+        return updated
+    }
+
+    func loadActiveEmailDraft(threadId: String, targetMessageId: String) throws -> EmailDraftSnapshot? {
+        var row: EmailDraftSnapshot?
+        try query("""
+        SELECT local_draft_id, thread_id, provider_thread_id, target_message_id,
+               provider_draft_id, provider_message_id, account_email, mode,
+               display_name, origin, status, sync_state, version,
+               to_recipients_json, cc_recipients_json, bcc_recipients_json,
+               subject, body_html, body_text, in_reply_to_header,
+               references_header, last_error, created_at, updated_at, synced_at, sent_at
+        FROM email_drafts
+        WHERE thread_id = ? AND target_message_id = ? AND status = ?
+        LIMIT 1
+        """, [threadId, targetMessageId, EmailDraftStatus.active.rawValue]) { stmt in
+            if row == nil {
+                row = emailDraftSnapshot(from: stmt)
+            }
+        }
+        return row
+    }
+
+    func loadEmailDraft(localDraftId: String) throws -> EmailDraftSnapshot? {
+        var row: EmailDraftSnapshot?
+        try query("""
+        SELECT local_draft_id, thread_id, provider_thread_id, target_message_id,
+               provider_draft_id, provider_message_id, account_email, mode,
+               display_name, origin, status, sync_state, version,
+               to_recipients_json, cc_recipients_json, bcc_recipients_json,
+               subject, body_html, body_text, in_reply_to_header,
+               references_header, last_error, created_at, updated_at, synced_at, sent_at
+        FROM email_drafts
+        WHERE local_draft_id = ?
+        LIMIT 1
+        """, [localDraftId]) { stmt in
+            if row == nil {
+                row = emailDraftSnapshot(from: stmt)
+            }
+        }
+        return row
+    }
+
+    func emailDraftSnapshot(from stmt: OpaquePointer) -> EmailDraftSnapshot {
+        EmailDraftSnapshot(
+            localDraftId: sqliteText(stmt, 0) ?? "",
+            threadId: sqliteText(stmt, 1) ?? "",
+            providerThreadId: sqliteText(stmt, 2),
+            targetMessageId: sqliteText(stmt, 3),
+            providerDraftId: sqliteText(stmt, 4),
+            providerMessageId: sqliteText(stmt, 5),
+            accountEmail: sqliteText(stmt, 6),
+            mode: EmailDraftMode(rawValue: sqliteText(stmt, 7) ?? "") ?? .reply,
+            displayName: sqliteText(stmt, 8) ?? "",
+            origin: EmailDraftOrigin(rawValue: sqliteText(stmt, 9) ?? "") ?? .user,
+            status: EmailDraftStatus(rawValue: sqliteText(stmt, 10) ?? "") ?? .active,
+            syncState: EmailDraftSyncState(rawValue: sqliteText(stmt, 11) ?? "") ?? .localOnly,
+            version: Int(sqlite3_column_int64(stmt, 12)),
+            toRecipients: jsonStringArray(sqliteText(stmt, 13) ?? "[]"),
+            ccRecipients: jsonStringArray(sqliteText(stmt, 14) ?? "[]"),
+            bccRecipients: jsonStringArray(sqliteText(stmt, 15) ?? "[]"),
+            subject: sqliteText(stmt, 16) ?? "",
+            bodyHtml: sqliteText(stmt, 17) ?? "",
+            bodyText: sqliteText(stmt, 18) ?? "",
+            inReplyToHeader: sqliteText(stmt, 19),
+            referencesHeader: sqliteText(stmt, 20),
+            lastError: sqliteText(stmt, 21),
+            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 22)),
+            updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 23)),
+            syncedAt: sqlite3_column_type(stmt, 24) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 24)),
+            sentAt: sqlite3_column_type(stmt, 25) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 25))
+        )
+    }
+
     func category(from labels: [String]) -> EmailCategory? {
         if labels.contains("CATEGORY_UPDATES") { return .updates }
         if labels.contains("CATEGORY_PROMOTIONS") { return .promotions }
@@ -1496,6 +1775,23 @@ private extension ZebraClawvisorEmailClient {
         guard let data = value.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [String] else { return [] }
         return array
+    }
+
+    func sqliteNullable(_ value: String?) -> Any {
+        value ?? NSNull()
+    }
+
+    func htmlFromPlainText(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+        return escaped
+            .components(separatedBy: .newlines)
+            .map { line in line.isEmpty ? "<br>" : "<p>\(line)</p>" }
+            .joined()
     }
 
     static let sqliteTransient = unsafeBitCast(OpaquePointer(bitPattern: -1), to: sqlite3_destructor_type.self)
