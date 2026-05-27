@@ -21,9 +21,9 @@ import Foundation
 /// `BrainFrontmatterWriter` 에 위임하므로 다른 키의 순서/quoting/comment 는
 /// 그대로 보존된다.
 ///
-/// Note: `BrainTaskStatus.waiting` 은 picker UI 의 primaryCases 에서 빠져
-/// 있어 사용자가 UI 로 진입할 수 없다. 따라서 `waiting_on:` 자동 관리는
-/// 의도적으로 다루지 않는다 — 필요한 사용자는 markdown 에서 직접 적는다.
+/// Note: `waiting_on:` 은 free-text 맥락 필드라 status picker 가 `waiting`
+/// 을 노출해도 자동 생성하지 않는다 — 필요한 사용자는 markdown 에서 직접
+/// 적는다.
 public enum BrainStatusMutator {
     public enum Kind {
         case task

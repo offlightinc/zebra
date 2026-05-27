@@ -89,10 +89,8 @@ public struct UnknownObject {
 // MARK: - Property value types
 
 public enum BrainTaskStatus: String, CaseIterable {
-    // HTML 디자인(zebra/project/Zebra - Linear style.html)의 5개 상태가 canonical:
-    // backlog → todo → inprogress → blocked → done.
-    // `waiting`, `canceled`는 기존 vault 호환 위해 case는 유지하되 신규 picker
-    // UI에서는 노출하지 않는다.
+    // brain-offlight task schema 의 7개 상태가 canonical:
+    // backlog → todo → inprogress → blocked → waiting → done → canceled.
     //
     // raw value(= frontmatter에 직렬화되는 문자열)는 HTML schema와 동일:
     //   backlog / todo / inprogress / blocked / waiting / done / canceled
@@ -100,9 +98,9 @@ public enum BrainTaskStatus: String, CaseIterable {
     // parser쪽에서 read-only로 흡수하고, writer는 항상 canonical로 저장한다.
     case backlog, todo, inprogress, blocked, waiting, done, canceled
 
-    /// HTML 5개 상태 — picker/필터 노출용. waiting/canceled 제외.
+    /// Picker/filter 노출용 canonical task status 전체.
     public static var primaryCases: [BrainTaskStatus] {
-        [.backlog, .todo, .inprogress, .blocked, .done]
+        [.backlog, .todo, .inprogress, .blocked, .waiting, .done, .canceled]
     }
 
     public var localizedLabel: String {

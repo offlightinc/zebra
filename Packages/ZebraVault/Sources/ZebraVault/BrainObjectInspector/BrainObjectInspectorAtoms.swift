@@ -293,6 +293,7 @@ struct EmptyValue: View {
 /// 은 schema 위반값 / 키 누락 placeholder.
 struct StatusGlyph: View {
     let shape: StatusGlyphShape
+    @State private var breathing = false
 
     init(shape: StatusGlyphShape) {
         self.shape = shape
@@ -315,12 +316,33 @@ struct StatusGlyph: View {
 
             switch shape {
             case .unknown:
-                ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
+                ctx.fill(Path(ellipseIn: circleRect), with: .color(color.opacity(0.25)))
+                ctx.draw(
+                    Text("?")
+                        .font(.system(size: Swift.max(CGFloat(8), s * 0.68), weight: .bold))
+                        .foregroundColor(color),
+                    at: center
+                )
             case .dashedCircle:
                 ctx.stroke(Path(ellipseIn: circleRect), with: .color(color),
                            style: StrokeStyle(lineWidth: 1.2, dash: [2, 2]))
             case .openCircle:
                 ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
+            case .progressRing:
+                ctx.stroke(Path(ellipseIn: circleRect), with: .color(color.opacity(0.22)), lineWidth: 1.3)
+                var arc = Path()
+                arc.addArc(
+                    center: center,
+                    radius: r - 1,
+                    startAngle: .degrees(-90),
+                    endAngle: .degrees(210),
+                    clockwise: false
+                )
+                ctx.stroke(
+                    arc,
+                    with: .color(color),
+                    style: StrokeStyle(lineWidth: 1.7, lineCap: .round)
+                )
             case .halfFilled:
                 ctx.stroke(Path(ellipseIn: circleRect), with: .color(color), lineWidth: 1.2)
                 var fill = Path()
@@ -356,6 +378,18 @@ struct StatusGlyph: View {
                 line.addLine(to: CGPoint(x: center.x + 2.5, y: center.y))
                 ctx.stroke(line, with: .color(Color(nsColor: .black).opacity(0.85)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
             }
+        }
+        .scaleEffect(shape == .progressRing ? (breathing ? 1.08 : 0.96) : 1)
+        .opacity(shape == .progressRing ? (breathing ? 1.0 : 0.74) : 1)
+        .animation(
+            shape == .progressRing
+                ? .easeInOut(duration: 1.45).repeatForever(autoreverses: true)
+                : .default,
+            value: breathing
+        )
+        .onAppear {
+            guard shape == .progressRing else { return }
+            breathing = true
         }
     }
 }

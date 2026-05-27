@@ -10,7 +10,8 @@ import SwiftUI
 enum StatusGlyphShape: Hashable {
     case dashedCircle    // backlog: 점선 stroke
     case openCircle      // todo / goal.draft: 실선 stroke
-    case halfFilled      // inprogress / goal.active: stroke + 우측 반원 채움
+    case progressRing    // inprogress: blue progress ring + breathing
+    case halfFilled      // goal.active: stroke + 우측 반원 채움
     case blockedCircle   // blocked: stroke + 가운데 가로 막대
     case waitingDots     // waiting: 채움 + 점 3개
     case checkFilled     // done / goal.completed: 채움 + 흰 체크
@@ -20,6 +21,7 @@ enum StatusGlyphShape: Hashable {
     var tint: Color {
         switch self {
         case .dashedCircle, .openCircle: return BVColor.statusTodo
+        case .progressRing:              return Color(red: 0x3b / 255.0, green: 0x82 / 255.0, blue: 0xf6 / 255.0)
         case .halfFilled:                return BVColor.statusDoing
         case .blockedCircle:             return BVColor.statusBlocked
         case .waitingDots:               return BVColor.statusWaiting
@@ -37,7 +39,7 @@ extension BrainTaskStatus {
         switch self {
         case .backlog:    return .dashedCircle
         case .todo:       return .openCircle
-        case .inprogress: return .halfFilled
+        case .inprogress: return .progressRing
         case .blocked:    return .blockedCircle
         case .waiting:    return .waitingDots
         case .done:       return .checkFilled

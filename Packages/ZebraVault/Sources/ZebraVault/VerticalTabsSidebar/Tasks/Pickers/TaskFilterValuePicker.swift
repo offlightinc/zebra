@@ -76,7 +76,7 @@ struct TaskFilterValuePicker: View {
     private var valueRows: some View {
         switch field {
         case .status:
-            // HTML 디자인 filter 옵션: backlog/todo/inprogress/blocked/done 5개만.
+            // brain-offlight task schema filter 옵션: 7개 canonical status 전체.
             let opts: [(String, String)] = BrainTaskStatus.primaryCases.map {
                 ($0.rawValue, $0.localizedLabel)
             } + [("__unrecognized__", String(localized: "task.group.unrecognized", defaultValue: "Unrecognized"))]
