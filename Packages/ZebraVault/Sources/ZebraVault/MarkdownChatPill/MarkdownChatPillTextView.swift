@@ -25,6 +25,7 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
     let font: NSFont
     let textColor: NSColor
     let caretColor: NSColor
+    let onContentHeightChange: (CGFloat) -> Void
     /// Called on bare ⏎. We always consume the keystroke (newline is
     /// reserved for ⇧⏎), so the callback has no return value — it's the
     /// caller's job to decide whether to act (submit, slash-pick) or
@@ -82,6 +83,9 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
         scrollView.contentView.drawsBackground = false
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = .init(top: 0, left: 0, bottom: 0, right: 0)
+        DispatchQueue.main.async {
+            context.coordinator.reportContentHeight(from: textView)
+        }
         return scrollView
     }
 
@@ -100,6 +104,8 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
         if textView.insertionPointColor != caretColor {
             textView.insertionPointColor = caretColor
         }
+        Self.syncTextContainerWidth(scrollView, textView: textView)
+        context.coordinator.reportContentHeight(from: textView)
 
         if isFocused, textView.window?.firstResponder !== textView {
             DispatchQueue.main.async {
@@ -135,15 +141,45 @@ struct MarkdownChatPillTextView: NSViewRepresentable {
         textView.setSelectedRange(NSRange(location: end, length: 0))
     }
 
+    private static func syncTextContainerWidth(_ scrollView: NSScrollView, textView: NSTextView) {
+        let width = max(0, scrollView.contentSize.width)
+        guard width > 0 else { return }
+        textView.textContainer?.containerSize = NSSize(
+            width: width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        if abs(textView.frame.width - width) > 0.5 {
+            textView.setFrameSize(NSSize(width: width, height: max(textView.frame.height, 1)))
+        }
+    }
+
+    static func measuredContentHeight(_ textView: NSTextView) -> CGFloat {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else {
+            return 0
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        return ceil(usedRect.height + textView.textContainerInset.height * 2)
+    }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MarkdownChatPillTextView
         init(_ parent: MarkdownChatPillTextView) { self.parent = parent }
+
+        func reportContentHeight(from textView: NSTextView) {
+            let height = MarkdownChatPillTextView.measuredContentHeight(textView)
+            DispatchQueue.main.async { [parent] in
+                parent.onContentHeightChange(height)
+            }
+        }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             if parent.text != textView.string {
                 parent.text = textView.string
             }
+            reportContentHeight(from: textView)
         }
 
         /// NSTextView's `interpretKeyEvents(_:)` routes every key gesture

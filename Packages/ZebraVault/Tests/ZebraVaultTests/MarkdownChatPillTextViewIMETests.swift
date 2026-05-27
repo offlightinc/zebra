@@ -155,6 +155,7 @@ final class MarkdownChatPillTextViewIMETests: XCTestCase {
             font: NSFont.systemFont(ofSize: 14),
             textColor: .textColor,
             caretColor: .controlAccentColor,
+            onContentHeightChange: { _ in },
             onReturn: onReturn,
             onMoveUp: onMoveUp,
             onMoveDown: onMoveDown,

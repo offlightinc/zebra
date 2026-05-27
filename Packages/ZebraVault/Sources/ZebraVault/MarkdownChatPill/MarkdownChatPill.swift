@@ -227,21 +227,72 @@ enum MarkdownPillPalette {
     static let selectionTint = Color(red: 232.0 / 255, green: 183.0 / 255, blue: 92.0 / 255)
 }
 
-public struct MarkdownChatPill: View {
-    private static let maxWidth: CGFloat = 720
-    private static let collapsedHeight: CGFloat = 46
-    private static let collapsedContentHeight: CGFloat = 30
-    private static let expandedHeight: CGFloat = 156
+public enum MarkdownChatPillLayout {
+    public static let maxWidth: CGFloat = 720
+    public static let collapsedHeight: CGFloat = 46
+    public static let collapsedContentHeight: CGFloat = 30
+    public static let baseInputHeight: CGFloat = 38
+    public static let expandedHeight: CGFloat = 156
+    public static let maxExpandedInputHeight: CGFloat = 112
     /// Slot height the pill grows by when the slash picker is open.
     /// Matches the picker's own maxHeight (200 for the scroll area) plus
     /// header (~24), inner padding (~10), and the spacing between input
     /// and picker (~8). Conservative so a fully-populated picker doesn't
     /// overflow the pill.
-    private static let skillsPickerSlotHeight: CGFloat = 244
+    public static let skillsPickerSlotHeight: CGFloat = 244
+    public static let floatingBottomPadding: CGFloat = 22
+    public static let baseContentBottomInset: CGFloat = 160
+    public static let minimumVisibleContentHeight: CGFloat = 120
+
+    public static var maxExpandedHeight: CGFloat {
+        expandedHeight + max(0, maxExpandedInputHeight - baseInputHeight)
+    }
+
+    public static func maxShellHeight(availableContentHeight: CGFloat?) -> CGFloat {
+        guard let availableContentHeight,
+              availableContentHeight.isFinite,
+              availableContentHeight > 0 else {
+            return maxExpandedHeight
+        }
+
+        let panelAwareMax = availableContentHeight - floatingBottomPadding - minimumVisibleContentHeight
+        return min(maxExpandedHeight, max(expandedHeight, panelAwareMax))
+    }
+
+    public static func inputHeight(
+        measuredContentHeight: CGFloat,
+        availableContentHeight: CGFloat?
+    ) -> CGFloat {
+        let measuredHeight = measuredContentHeight.isFinite
+            ? measuredContentHeight.rounded(.up)
+            : baseInputHeight
+        let desiredHeight = max(baseInputHeight, measuredHeight)
+        let shellHeightCap = maxShellHeight(availableContentHeight: availableContentHeight)
+        let inputHeightCap = max(baseInputHeight, baseInputHeight + shellHeightCap - expandedHeight)
+        return min(desiredHeight, inputHeightCap)
+    }
+
+    public static func shellHeight(
+        isExpanded: Bool,
+        pickerOpen: Bool,
+        inputHeight: CGFloat
+    ) -> CGFloat {
+        guard isExpanded else { return collapsedHeight }
+        let normalHeight = expandedHeight + max(0, inputHeight - baseInputHeight)
+        return pickerOpen ? normalHeight + skillsPickerSlotHeight : normalHeight
+    }
+
+    public static func contentBottomInset(shellHeight: CGFloat) -> CGFloat {
+        baseContentBottomInset + max(0, shellHeight - expandedHeight)
+    }
+}
+
+public struct MarkdownChatPill: View {
     private static let expandedChipMaxWidth: CGFloat = 320
     private static let motion = Animation.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.30)
 
     let displayTitle: String
+    let availableContentHeight: CGFloat?
     /// Non-nil when this markdown already has a companion pane for agent
     /// tabs. Submit still creates a fresh terminal tab; this only changes
     /// the collapsed affordance.
@@ -249,17 +300,22 @@ public struct MarkdownChatPill: View {
     /// Parent handles the actual split/tab creation and terminal input.
     /// The pill just emits the user's intent.
     let onSubmit: (_ text: String, _ agent: MarkdownPillAgent) -> Void
+    let onHeightChange: ((CGFloat) -> Void)?
 
     public init(
         isExpanded: Binding<Bool>,
         displayTitle: String,
+        availableContentHeight: CGFloat? = nil,
         activeAgent: MarkdownPillAgent?,
-        onSubmit: @escaping (_ text: String, _ agent: MarkdownPillAgent) -> Void
+        onSubmit: @escaping (_ text: String, _ agent: MarkdownPillAgent) -> Void,
+        onHeightChange: ((CGFloat) -> Void)? = nil
     ) {
         self._isExpanded = isExpanded
         self.displayTitle = displayTitle
+        self.availableContentHeight = availableContentHeight
         self.activeAgent = activeAgent
         self.onSubmit = onSubmit
+        self.onHeightChange = onHeightChange
     }
 
     @Binding private var isExpanded: Bool
@@ -280,6 +336,8 @@ public struct MarkdownChatPill: View {
     /// SwiftUI-land. Not a `@FocusState` because that only binds to SwiftUI
     /// focusable views, and our input is an NSView underneath.
     @State private var textFieldFocused: Bool = false
+    @State private var measuredInputContentHeight: CGFloat = MarkdownChatPillLayout.baseInputHeight
+    @State private var inputHeight: CGFloat = MarkdownChatPillLayout.baseInputHeight
 
     /// True while the user is mid-slash — input begins with `/` and has no
     /// whitespace yet, so we can offer skill completions. Once they type a
@@ -326,6 +384,24 @@ public struct MarkdownChatPill: View {
         text = "/\(skill.name) "
         DispatchQueue.main.async { textFieldFocused = true }
     }
+
+    private func updateInputHeight(measuredContentHeight: CGFloat, animated: Bool) {
+        measuredInputContentHeight = measuredContentHeight
+        let nextHeight = MarkdownChatPillLayout.inputHeight(
+            measuredContentHeight: measuredContentHeight,
+            availableContentHeight: availableContentHeight
+        )
+        guard abs(nextHeight - inputHeight) > 0.5 else { return }
+
+        if animated {
+            withAnimation(Self.motion) {
+                inputHeight = nextHeight
+            }
+        } else {
+            inputHeight = nextHeight
+        }
+    }
+
     private var contextChipTitle: String {
         if !isExpanded || displayTitle.isEmpty {
             return String(localized: "markdownChat.pill.chip.thisDoc", defaultValue: "this doc")
@@ -336,18 +412,21 @@ public struct MarkdownChatPill: View {
         String(localized: "markdownChat.pill.placeholder.doc", defaultValue: "Ask about this doc")
     }
     private var shellCornerRadius: CGFloat {
-        isExpanded ? 18 : Self.collapsedHeight / 2
+        isExpanded ? 18 : MarkdownChatPillLayout.collapsedHeight / 2
     }
     /// Pill height. Three states:
     ///   - collapsed (capsule strip): `collapsedHeight`
     ///   - expanded, no slash picker: `expandedHeight`
     ///   - expanded with slash picker open: + `skillsPickerSlotHeight`
     private var shellHeight: CGFloat {
-        guard isExpanded else { return Self.collapsedHeight }
-        let pickerOpen = isSlashMode && (matchingSkills?.isEmpty == false)
-        return pickerOpen
-            ? Self.expandedHeight + Self.skillsPickerSlotHeight
-            : Self.expandedHeight
+        MarkdownChatPillLayout.shellHeight(
+            isExpanded: isExpanded,
+            pickerOpen: pickerOpen,
+            inputHeight: inputHeight
+        )
+    }
+    private var pickerOpen: Bool {
+        isSlashMode && (matchingSkills?.isEmpty == false)
     }
     private var shellPadding: CGFloat {
         isExpanded ? 14 : 8
@@ -368,7 +447,7 @@ public struct MarkdownChatPill: View {
         // a floating sibling that lets the markdown content bleed through
         // its translucent fill.
         pillShell
-            .frame(maxWidth: Self.maxWidth)
+            .frame(maxWidth: MarkdownChatPillLayout.maxWidth)
             .overlayPreferenceValue(AgentButtonAnchorKey.self) { anchor in
                 agentDropdownOverlay(anchor: anchor)
             }
@@ -404,6 +483,16 @@ public struct MarkdownChatPill: View {
                 agentMenuOpen = false
             }
         }
+        .onChange(of: availableContentHeight) { _, _ in
+            updateInputHeight(measuredContentHeight: measuredInputContentHeight, animated: true)
+        }
+        .onChange(of: shellHeight) { _, newHeight in
+            onHeightChange?(newHeight)
+        }
+        .onAppear {
+            updateInputHeight(measuredContentHeight: measuredInputContentHeight, animated: false)
+            onHeightChange?(shellHeight)
+        }
         // Focus-loss fallback. Mostly redundant with the parent dismiss
         // overlay, but catches paths where focus leaves without a click in
         // our window — app switch (⌘⇥), another textfield grabbing
@@ -423,10 +512,10 @@ public struct MarkdownChatPill: View {
 
             VStack(alignment: .leading, spacing: isExpanded ? 8 : 0) {
                 headerRow
-                    .frame(height: Self.collapsedContentHeight, alignment: .center)
+                    .frame(height: MarkdownChatPillLayout.collapsedContentHeight, alignment: .center)
 
                 inputArea
-                    .frame(height: isExpanded ? 38 : 0, alignment: .topLeading)
+                    .frame(height: isExpanded ? inputHeight : 0, alignment: .topLeading)
                     .opacity(expandedOpacity)
                     .offset(y: isExpanded ? 0 : -4)
                     .clipped()
@@ -439,7 +528,7 @@ public struct MarkdownChatPill: View {
                 // `skillsPickerSlotHeight` while it's visible.
                 if isExpanded, isSlashMode, let skills = matchingSkills, !skills.isEmpty {
                     skillsPicker(skills)
-                        .frame(maxHeight: Self.skillsPickerSlotHeight - 8, alignment: .top)
+                        .frame(maxHeight: MarkdownChatPillLayout.skillsPickerSlotHeight - 8, alignment: .top)
                 }
 
                 dividerSlot
@@ -448,7 +537,7 @@ public struct MarkdownChatPill: View {
                     .clipped()
 
                 footerRow
-                    .frame(height: isExpanded ? Self.collapsedContentHeight : 0, alignment: .topLeading)
+                    .frame(height: isExpanded ? MarkdownChatPillLayout.collapsedContentHeight : 0, alignment: .topLeading)
                     .opacity(expandedOpacity)
                     .offset(y: isExpanded ? 0 : -4)
                     .clipped()
@@ -551,6 +640,8 @@ public struct MarkdownChatPill: View {
         guard !trimmed.isEmpty else { return }
         onSubmit(trimmed, agent)
         text = ""
+        measuredInputContentHeight = MarkdownChatPillLayout.baseInputHeight
+        inputHeight = MarkdownChatPillLayout.baseInputHeight
         collapse()
         textFieldFocused = false
     }
@@ -699,12 +790,15 @@ public struct MarkdownChatPill: View {
                 font: NSFont.systemFont(ofSize: 14),
                 textColor: NSColor(MarkdownPillPalette.text),
                 caretColor: NSColor(MarkdownPillPalette.accent),
+                onContentHeightChange: { height in
+                    updateInputHeight(measuredContentHeight: height, animated: true)
+                },
                 onReturn: { handleReturn() },
                 onMoveUp: { handleMoveUp() },
                 onMoveDown: { handleMoveDown() },
                 onCancel: { handleCancel() }
             )
-            .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: inputHeight, maxHeight: inputHeight, alignment: .topLeading)
 
             if text.isEmpty {
                 Text(placeholderText)
