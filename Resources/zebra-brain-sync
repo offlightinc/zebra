@@ -317,6 +317,12 @@ truncate_text() {
   fi
 }
 
+strip_source_suffix() {
+  local text="$1"
+  text="${text%% [[]Source:*}"
+  printf '%s\n' "$text"
+}
+
 clean_added_line() {
   local line="$1"
   line="${line#+}"
@@ -418,7 +424,8 @@ write_generated_commit_message() {
     while IFS= read -r timeline_line; do
       [[ -n "$timeline_line" ]] || continue
       timeline_line="${timeline_line#- }"
-      timeline_line="$(truncate_text "$timeline_line" 220)"
+      timeline_line="$(strip_source_suffix "$timeline_line")"
+      timeline_line="$(truncate_text "$timeline_line" 180)"
       detail_text="타임라인 추가: ${timeline_line}"
       printf -- '- %s: %s\n' "$title" "$detail_text" >> "$details_file"
       [[ -n "$first_summary_detail" ]] || first_summary_detail="$detail_text"
@@ -428,7 +435,8 @@ write_generated_commit_message() {
       added_line="$(staged_first_meaningful_addition "$path")"
       if [[ -n "$added_line" ]]; then
         added_line="$(clean_added_line "$added_line")"
-        added_line="$(truncate_text "$added_line" 220)"
+        added_line="$(strip_source_suffix "$added_line")"
+        added_line="$(truncate_text "$added_line" 180)"
         detail_text="내용 추가: ${added_line}"
         printf -- '- %s: %s\n' "$title" "$detail_text" >> "$details_file"
         first_summary_detail="$detail_text"
