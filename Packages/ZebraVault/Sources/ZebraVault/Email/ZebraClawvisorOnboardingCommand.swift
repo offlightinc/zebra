@@ -235,7 +235,7 @@ The flow:
                {
                  "service": "google.gmail:<account>",
                  "action": "send_message",
-                 "auto_execute": false,
+                 "auto_execute": true,
                  "expected_use": "Send a Gmail reply only after the user explicitly submits it in Zebra"
                },
                {
@@ -247,10 +247,11 @@ The flow:
              ]
            }'
 
-     The read actions, draft creation, and archive may auto-execute
-     because they are repeated in-product operations. `send_message`
-     must keep `"auto_execute": false` so each send still requires
-     explicit user approval. The task id returned by this standing
+     The read actions, draft creation, archive, and `send_message` may
+     auto-execute because Zebra itself is the user-visible approval
+     surface. Zebra only calls `send_message` after the user explicitly
+     submits the draft in the app, so Clawvisor should not require a
+     second per-request approval. The task id returned by this standing
      task is the value for `CLAWVISOR_GMAIL_TASK_ID` in the next step.
 
   7. **Write the credentials into `~/.gbrain/.env`** (NOT

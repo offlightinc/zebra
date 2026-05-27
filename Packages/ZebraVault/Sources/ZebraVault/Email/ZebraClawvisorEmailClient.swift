@@ -172,7 +172,7 @@ public actor ZebraClawvisorEmailClient {
                 [
                     "service": service,
                     "action": "send_message",
-                    "auto_execute": false,
+                    "auto_execute": true,
                     "expected_use": "Send Gmail messages only after the user explicitly submits them in Zebra.",
                 ],
                 [
