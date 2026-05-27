@@ -685,6 +685,66 @@ Source grep만 하는 test는 추가하지 않는다. Parser, workflow, store be
 - Remote image blocking/proxying.
 - Open email panel session restoration.
 
+## Reply/Draft 후속 설계 메모 (2026-05-27 append)
+
+현재 Zebra draft UI는 draft card를 특정 `target_message_id` 아래에 렌더링할 수
+있지만, 이것만으로 Gmail 전송 시 특정 메시지에 답장한다고 보장되지는 않는다.
+
+Clawvisor Gmail `send_message` adapter는 `thread_id`가 들어오면 thread 전체를
+다시 읽고, 그 thread의 마지막 메시지를 기준으로 `In-Reply-To`, `References`,
+quote body를 재구성한다. 따라서 Zebra가 `thread_id`와 `in_reply_to`를 함께
+넘기는 현재 구조에서는 사용자가 오래된 메시지 header의 Reply 버튼으로 draft를
+만들어도, 실제 전송은 Gmail thread의 최신 메시지에 대한 reply처럼 만들어질 수
+있다.
+
+결정:
+
+- Zebra local draft에는 계속 `thread_id`, `provider_thread_id`,
+  `target_message_id`, `in_reply_to_header`, `references_header`를 저장한다.
+- 하지만 send contract는 UI 위치나 local object id 추론에 의존하지 않는다.
+- Clawvisor Gmail adapter에 명시적 target reply contract를 추가해야 한다.
+  권장 param은 `target_message_id` 또는 `reply_to_message_id`다.
+- Adapter는 이 param이 있으면 thread의 마지막 메시지가 아니라 해당 Gmail
+  message를 fetch/resolve해서 `In-Reply-To`, `References`, quote body를 구성한다.
+  `thread_id`는 Gmail thread payload 지정용으로만 사용한다.
+- Zebra send path는 이 contract가 생기기 전까지 "특정 메시지 답장 보장"을 완료로
+  보지 않는다.
+
+검증 기준:
+
+- 같은 Gmail thread 안에서 최신 메시지가 아닌 중간 메시지에 Reply draft를 만든다.
+- Send 후 raw MIME의 `In-Reply-To`가 draft의 `target_message_id`/Internet
+  Message-ID와 일치해야 한다.
+- Clawvisor가 quote body를 만들 경우 quote 대상도 같은 메시지여야 한다.
+- 최신 메시지에 대한 일반 reply 동작은 기존과 동일해야 한다.
+
+## Sent reply thread 유지 메모 (2026-05-27 append)
+
+Send 성공 후 draft card만 제거하면, Gmail thread reload가 새 sent message를 즉시
+돌려주지 않는 순간 화면에서는 답장이 사라진 것처럼 보인다. 이 UX는 실패처럼
+느껴지므로, Zebra는 send 성공 시점에 draft를 같은 thread의 sent message로
+즉시 치환한다.
+
+결정:
+
+- `sendEmailDraft(localDraftId:)`는 Clawvisor `send_message` 성공 응답의
+  `message_id`/`id`를 `provider_message_id`로 저장한다.
+- 성공한 draft snapshot을 local `email_messages`에 `labelIds = ["SENT"]`,
+  `isSent = true`, `receivedAt = sentAt`인 메시지로 upsert한다.
+- UI state도 같은 sent message를 즉시 `detail.messages`에 삽입하고 해당 메시지를
+  펼친다. 그 뒤 `reloadThread(forceRefresh: true)`로 Gmail/Clawvisor 응답과
+  reconcile한다.
+- provider message id가 있으면 그것을 message id로 쓰고, 없으면 임시
+  `local-sent-<localDraftId>`를 쓴다. 이후 provider id 치환/중복 제거는 remote
+  응답 shape이 확정되면 보강한다.
+
+검증 기준:
+
+- Send 성공 후 draft card는 사라지지만 보낸 답장 본문은 같은 thread 안에 남아야
+  한다.
+- thread를 refresh/reopen해도 sent message가 유지되어야 한다.
+- Gmail/Clawvisor가 늦게 같은 message를 반환해도 중복 카드가 생기지 않아야 한다.
+
 ## 리뷰 피드백 (2026-05-17 append)
 
 아래는 본 plan에 대한 코드 리뷰 결과다. 구현 전에 반드시 lock 해야 할 항목과

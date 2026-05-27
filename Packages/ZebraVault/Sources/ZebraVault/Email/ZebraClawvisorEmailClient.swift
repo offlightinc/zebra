@@ -24,6 +24,8 @@ public struct ZebraClawvisorStandingTaskProvisioningResult: Equatable, Sendable 
 public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
     case notConfigured(String)
     case gateway(String)
+    case approvalPending(String)
+    case sendRequestClosed(String)
     case sqlite(String)
     case malformedResponse(String)
 
@@ -33,6 +35,10 @@ public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
             return "Clawvisor Gmail is not configured: \(detail)"
         case .gateway(let detail):
             return "Clawvisor Gmail request failed: \(detail)"
+        case .approvalPending(let detail):
+            return "Clawvisor Gmail approval is pending: \(detail)"
+        case .sendRequestClosed(let detail):
+            return "Clawvisor Gmail send request is closed: \(detail)"
         case .sqlite(let detail):
             return "Local Gmail cache failed: \(detail)"
         case .malformedResponse(let detail):
@@ -47,9 +53,14 @@ public enum ZebraClawvisorEmailClientError: LocalizedError, Sendable {
                 kind: .configurationMissing,
                 detail: detail
             )
+        case .approvalPending(let detail):
+            return ZebraEmailConnectionRepairState(
+                kind: .taskPendingApproval,
+                detail: detail
+            )
         case .gateway(let detail):
             return Self.gatewayRepairState(detail: detail)
-        case .sqlite, .malformedResponse:
+        case .sendRequestClosed, .sqlite, .malformedResponse:
             return nil
         }
     }
@@ -403,17 +414,36 @@ public actor ZebraClawvisorEmailClient {
             params["in_reply_to"] = inReplyToHeader
         }
 
-        let response = try await invoke(
-            config: config,
-            action: "send_message",
-            params: params,
-            reason: "Send the Zebra email draft after the user pressed the Send button in the draft card."
-        )
+        let reason = "Send the Zebra email draft after the user pressed the Send button in the draft card."
+        let response: Any
+        do {
+            response = try await invoke(
+                config: config,
+                action: "send_message",
+                params: params,
+                requestId: try emailDraftSendRequestId(localDraftId: localDraftId),
+                reason: reason
+            )
+        } catch let error as ZebraClawvisorEmailClientError {
+            if case .sendRequestClosed = error {
+                response = try await invoke(
+                    config: config,
+                    action: "send_message",
+                    params: params,
+                    requestId: try rotateEmailDraftSendRequestId(localDraftId: localDraftId),
+                    reason: reason
+                )
+            } else {
+                throw error
+            }
+        }
         let providerMessageId = sentMessageId(from: response)
-        return try markEmailDraftSentRow(
+        let sentDraft = try markEmailDraftSentRow(
             localDraftId: localDraftId,
             providerMessageId: providerMessageId
         )
+        try? cacheSentDraftMessage(sentDraft)
+        return sentDraft
     }
 
     public func discardEmailDraft(localDraftId: String) throws {
@@ -528,9 +558,10 @@ public actor ZebraClawvisorEmailClient {
         config: ClawvisorConfig,
         action: String,
         params: [String: Any],
+        requestId: String? = nil,
         reason: String
     ) async throws -> Any {
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "task_id": config.taskId,
             "session_id": UUID().uuidString,
             "service": "google.gmail:\(config.accountEmail)",
@@ -538,6 +569,9 @@ public actor ZebraClawvisorEmailClient {
             "params": params,
             "reason": reason,
         ]
+        if let requestId {
+            body["request_id"] = requestId
+        }
         let bodyData = try JSONSerialization.data(withJSONObject: body, options: [])
         guard let url = URL(string: config.url.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/gateway/request?wait=true") else {
             throw ZebraClawvisorEmailClientError.notConfigured("bad CLAWVISOR_URL")
@@ -566,6 +600,16 @@ public actor ZebraClawvisorEmailClient {
         if let dict = json as? [String: Any],
            let status = dict["status"] as? String,
            status != "executed" {
+            if status == "pending" {
+                throw ZebraClawvisorEmailClientError.approvalPending(
+                    Self.errorSummary(json, status: http.statusCode)
+                )
+            }
+            if action == "send_message", Self.isClosedSendRequestStatus(status) {
+                throw ZebraClawvisorEmailClientError.sendRequestClosed(
+                    Self.errorSummary(json, status: http.statusCode)
+                )
+            }
             throw ZebraClawvisorEmailClientError.gateway("request status=\(status)")
         }
         if let dict = json as? [String: Any],
@@ -1072,6 +1116,15 @@ private extension ZebraClawvisorEmailClient {
         }
         return nil
     }
+
+    static func isClosedSendRequestStatus(_ status: String) -> Bool {
+        switch status.lowercased() {
+        case "denied", "expired", "timeout":
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 private extension ZebraClawvisorEmailClient {
@@ -1154,6 +1207,7 @@ private extension ZebraClawvisorEmailClient {
               target_message_id TEXT,
               provider_draft_id TEXT,
               provider_message_id TEXT,
+              send_request_id TEXT,
               account_email TEXT,
               mode TEXT NOT NULL,
               display_name TEXT NOT NULL,
@@ -1176,10 +1230,12 @@ private extension ZebraClawvisorEmailClient {
               sent_at REAL
             )
             """)
+            try ensureEmailDraftSendRequestIdColumn()
             try execute("CREATE INDEX IF NOT EXISTS email_threads_received_idx ON email_threads(received_at DESC)")
             try execute("CREATE INDEX IF NOT EXISTS email_messages_thread_received_idx ON email_messages(thread_id, received_at)")
             try execute("CREATE INDEX IF NOT EXISTS email_drafts_thread_updated_idx ON email_drafts(thread_id, updated_at DESC)")
             try execute("CREATE INDEX IF NOT EXISTS email_drafts_provider_draft_idx ON email_drafts(provider_draft_id)")
+            try execute("CREATE UNIQUE INDEX IF NOT EXISTS email_drafts_send_request_idx ON email_drafts(send_request_id) WHERE send_request_id IS NOT NULL")
             try execute("CREATE INDEX IF NOT EXISTS email_drafts_target_message_idx ON email_drafts(target_message_id)")
             try execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS email_drafts_one_active_per_target_idx
@@ -1196,6 +1252,21 @@ private extension ZebraClawvisorEmailClient {
             databaseInitialized = false
             throw error
         }
+    }
+
+    func ensureEmailDraftSendRequestIdColumn() throws {
+        guard !(try tableHasColumn(table: "email_drafts", column: "send_request_id")) else { return }
+        try execute("ALTER TABLE email_drafts ADD COLUMN send_request_id TEXT")
+    }
+
+    func tableHasColumn(table: String, column: String) throws -> Bool {
+        var found = false
+        try query("PRAGMA table_info(\(table))") { stmt in
+            if sqliteText(stmt, 1) == column {
+                found = true
+            }
+        }
+        return found
     }
 
     func lastSyncedAt() throws -> Date? {
@@ -1317,6 +1388,34 @@ private extension ZebraClawvisorEmailClient {
         if messages.isEmpty {
             _ = threadId
         }
+    }
+
+    func cacheSentDraftMessage(_ draft: EmailDraftSnapshot) throws {
+        let sentAt = draft.sentAt ?? Date()
+        let messageId = draft.providerMessageId?.nilIfEmpty ?? "local-sent-\(draft.localDraftId)"
+        let snippet = draft.bodyText
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+        let message = NormalizedMessage(
+            id: messageId,
+            threadId: draft.threadId,
+            internetMessageId: nil,
+            subject: draft.subject.nilIfEmpty ?? "(no subject)",
+            fromName: nil,
+            fromEmail: draft.accountEmail,
+            to: draft.toRecipients.joined(separator: ", ").nilIfEmpty,
+            cc: draft.ccRecipients.joined(separator: ", ").nilIfEmpty,
+            receivedAt: sentAt,
+            snippet: snippet,
+            labelIds: ["SENT"],
+            isUnread: false,
+            isSent: true,
+            hasAttachment: false,
+            bodyText: draft.bodyText.nilIfEmpty,
+            bodyHtml: nil
+        )
+        try upsertMessages([message], threadId: draft.threadId)
     }
 
     func upsertThreadSummary(_ messages: [NormalizedMessage], storageThreadId: String) throws {
@@ -1682,6 +1781,48 @@ private extension ZebraClawvisorEmailClient {
             throw ZebraClawvisorEmailClientError.sqlite("email draft update did not return a row")
         }
         return updated
+    }
+
+    func emailDraftSendRequestId(localDraftId: String) throws -> String {
+        if let existing = try loadEmailDraftSendRequestId(localDraftId: localDraftId) {
+            return existing
+        }
+
+        return try rotateEmailDraftSendRequestId(localDraftId: localDraftId)
+    }
+
+    func rotateEmailDraftSendRequestId(localDraftId: String) throws -> String {
+        let requestId = "zebra-email-draft-send-\(UUID().uuidString.lowercased())"
+        try execute(
+            """
+            UPDATE email_drafts
+            SET send_request_id = ?
+            WHERE local_draft_id = ?
+            """,
+            [
+                requestId,
+                localDraftId,
+            ]
+        )
+        return try loadEmailDraftSendRequestId(localDraftId: localDraftId) ?? requestId
+    }
+
+    func loadEmailDraftSendRequestId(localDraftId: String) throws -> String? {
+        var requestId: String?
+        try query(
+            """
+            SELECT send_request_id
+            FROM email_drafts
+            WHERE local_draft_id = ?
+            LIMIT 1
+            """,
+            [localDraftId]
+        ) { stmt in
+            if requestId == nil {
+                requestId = sqliteText(stmt, 0)
+            }
+        }
+        return requestId
     }
 
     func markEmailDraftSentRow(

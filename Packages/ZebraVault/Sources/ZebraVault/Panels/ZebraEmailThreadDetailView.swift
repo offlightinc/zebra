@@ -13,6 +13,7 @@ public struct ZebraEmailThreadDetailView: View {
     private let draftErrorMessage: String?
     private let draftErrorMessages: [String: String]
     private let sendingDraftIds: Set<String>
+    private let pendingApprovalDraftIds: Set<String>
     private let expandedMessageIds: Set<String>
     /// Extra bottom padding on the scrollable thread body so a host-overlaid
     /// floating chat pill does not obscure the last message. Mirrors the
@@ -42,6 +43,7 @@ public struct ZebraEmailThreadDetailView: View {
         draftErrorMessage: String? = nil,
         draftErrorMessages: [String: String] = [:],
         sendingDraftIds: Set<String> = [],
+        pendingApprovalDraftIds: Set<String> = [],
         expandedMessageIds: Set<String>,
         bottomContentInset: CGFloat = 0,
         onArchive: @escaping () -> Void = {},
@@ -65,6 +67,7 @@ public struct ZebraEmailThreadDetailView: View {
         self.draftErrorMessage = draftErrorMessage
         self.draftErrorMessages = draftErrorMessages
         self.sendingDraftIds = sendingDraftIds
+        self.pendingApprovalDraftIds = pendingApprovalDraftIds
         self.expandedMessageIds = expandedMessageIds
         self.bottomContentInset = bottomContentInset
         self.onArchive = onArchive
@@ -251,6 +254,7 @@ public struct ZebraEmailThreadDetailView: View {
                                     draft: draft,
                                     errorMessage: draftErrorMessages[draft.localDraftId],
                                     isSending: sendingDraftIds.contains(draft.localDraftId),
+                                    isApprovalPending: pendingApprovalDraftIds.contains(draft.localDraftId),
                                     onUpdateDraft: { baseVersion, patch in
                                         onUpdateDraft(draft.localDraftId, baseVersion, patch)
                                     },
@@ -268,6 +272,7 @@ public struct ZebraEmailThreadDetailView: View {
                                 draft: draft,
                                 errorMessage: draftErrorMessages[draft.localDraftId],
                                 isSending: sendingDraftIds.contains(draft.localDraftId),
+                                isApprovalPending: pendingApprovalDraftIds.contains(draft.localDraftId),
                                 onUpdateDraft: { baseVersion, patch in
                                     onUpdateDraft(draft.localDraftId, baseVersion, patch)
                                 },
@@ -571,7 +576,7 @@ private struct EmailThreadMessageCard: View {
 
     @ViewBuilder
     private var bodyContent: some View {
-        if let html = message.bodyHtml?.trimmingCharacters(in: .whitespacesAndNewlines), !html.isEmpty {
+        if let html = richHTMLBody {
             EmailHTMLBodyView(html: html, onOpenURL: onOpenURL)
                 .frame(maxWidth: .infinity, minHeight: htmlBodyMinHeight ?? 360)
                 .clipShape(RoundedRectangle(cornerRadius: 5))
@@ -629,6 +634,29 @@ private struct EmailThreadMessageCard: View {
         message.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 
+    private var richHTMLBody: String? {
+        guard let html = message.bodyHtml?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
+            return nil
+        }
+        if let plainTextBody, html == Self.htmlFromPlainText(plainTextBody) {
+            return nil
+        }
+        return html
+    }
+
+    private static func htmlFromPlainText(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+        return escaped
+            .components(separatedBy: .newlines)
+            .map { line in line.isEmpty ? "<br>" : "<p>\(line)</p>" }
+            .joined()
+    }
+
     private func addressLine(from address: String) -> String {
         let to = message.to?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         if let to {
@@ -647,6 +675,174 @@ private enum EmailDraftHeaderField: Hashable {
     case cc
     case bcc
     case subject
+}
+
+private struct EmailDraftHeaderTextView: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var focusedField: EmailDraftHeaderField?
+
+    let field: EmailDraftHeaderField
+    let isLocked: Bool
+    let isSubject: Bool
+    let onSubmit: () -> Void
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: EmailDraftHeaderTextView
+        var isProgrammaticMutation = false
+
+        init(parent: EmailDraftHeaderTextView) {
+            self.parent = parent
+        }
+
+        func didFocus() {
+            guard parent.focusedField != parent.field else { return }
+            DispatchQueue.main.async {
+                self.parent.focusedField = self.parent.field
+            }
+        }
+
+        func didBlur() {
+            let field = parent.field
+            DispatchQueue.main.async {
+                if self.parent.focusedField == field {
+                    self.parent.focusedField = nil
+                }
+            }
+        }
+
+        func submit() {
+            parent.onSubmit()
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !isProgrammaticMutation,
+                  let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            didFocus()
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            didBlur()
+        }
+    }
+
+    final class TextView: NSTextView {
+        weak var coordinator: Coordinator?
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func keyDown(with event: NSEvent) {
+            if hasMarkedText() {
+                super.keyDown(with: event)
+                return
+            }
+            if event.keyCode == 36 || event.keyCode == 76 {
+                coordinator?.submit()
+                return
+            }
+            super.keyDown(with: event)
+        }
+
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            if hasMarkedText() {
+                return super.performKeyEquivalent(with: event)
+            }
+            guard window?.firstResponder === self else {
+                return super.performKeyEquivalent(with: event)
+            }
+            switch event.keyCode {
+            case 123, 124, 125, 126:
+                let modifiers = event.modifierFlags
+                    .intersection(.deviceIndependentFlagsMask)
+                    .subtracting([.numericPad, .function, .capsLock])
+                if !modifiers.contains(.command) {
+                    keyDown(with: event)
+                    return true
+                }
+            default:
+                break
+            }
+            return super.performKeyEquivalent(with: event)
+        }
+
+        override func becomeFirstResponder() -> Bool {
+            let ok = super.becomeFirstResponder()
+            if ok {
+                coordinator?.didFocus()
+            }
+            return ok
+        }
+
+        override func resignFirstResponder() -> Bool {
+            let ok = super.resignFirstResponder()
+            if ok {
+                coordinator?.didBlur()
+            }
+            return ok
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> TextView {
+        let textView = TextView(frame: .zero)
+        textView.coordinator = context.coordinator
+        textView.delegate = context.coordinator
+        textView.drawsBackground = false
+        textView.backgroundColor = .clear
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.maximumNumberOfLines = 1
+        textView.textContainer?.lineBreakMode = .byTruncatingTail
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = true
+        textView.string = text
+        applyAppearance(to: textView)
+        return textView
+    }
+
+    func updateNSView(_ nsView: TextView, context: Context) {
+        context.coordinator.parent = self
+        nsView.coordinator = context.coordinator
+        nsView.delegate = context.coordinator
+        applyAppearance(to: nsView)
+
+        if nsView.string != text, !nsView.hasMarkedText() {
+            let selectedRange = nsView.selectedRange()
+            context.coordinator.isProgrammaticMutation = true
+            nsView.string = text
+            let length = (text as NSString).length
+            nsView.setSelectedRange(NSRange(location: min(selectedRange.location, length), length: 0))
+            context.coordinator.isProgrammaticMutation = false
+        }
+
+        if focusedField == field, nsView.window?.firstResponder !== nsView {
+            DispatchQueue.main.async { [weak nsView, weak coordinator = context.coordinator] in
+                guard let nsView, let coordinator,
+                      coordinator.parent.focusedField == coordinator.parent.field,
+                      nsView.window?.firstResponder !== nsView else { return }
+                nsView.window?.makeFirstResponder(nsView)
+            }
+        }
+    }
+
+    private func applyAppearance(to textView: TextView) {
+        textView.font = .systemFont(ofSize: isSubject ? 11.5 : 11, weight: isSubject ? .medium : .regular)
+        textView.textColor = NSColor.labelColor.withAlphaComponent(0.86)
+        textView.insertionPointColor = .controlAccentColor
+        textView.isEditable = !isLocked
+        textView.isSelectable = !isLocked
+        textView.alphaValue = isLocked ? 0.65 : 1
+    }
 }
 
 private struct EmailDraftHeaderEditState: Equatable {
@@ -746,7 +942,7 @@ private struct EmailDraftHeaderSummaryRow: View {
 
             Text(value)
                 .font(.system(size: isSubject ? 11.5 : 11, weight: isSubject ? .semibold : .regular))
-                .foregroundColor(isSubject ? BVColor.fg : BVColor.fgMute)
+                .foregroundColor(BVColor.fg.opacity(0.86))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -760,6 +956,7 @@ private struct EmailThreadDraftCard: View {
     let draft: EmailDraftSnapshot
     let errorMessage: String?
     let isSending: Bool
+    let isApprovalPending: Bool
     let onUpdateDraft: (Int, EmailDraftPatch) -> Void
     let onSendDraft: (Int, EmailDraftPatch) -> Void
     let onDiscard: () -> Void
@@ -774,12 +971,13 @@ private struct EmailThreadDraftCard: View {
     @State private var isApplyingHeaderFields = false
     @State private var lastSubmittedEditState: EmailDraftEditState
     @State private var isEditingHeaderFields = false
-    @FocusState private var focusedHeaderField: EmailDraftHeaderField?
+    @State private var focusedHeaderField: EmailDraftHeaderField?
 
     init(
         draft: EmailDraftSnapshot,
         errorMessage: String?,
         isSending: Bool,
+        isApprovalPending: Bool,
         onUpdateDraft: @escaping (Int, EmailDraftPatch) -> Void,
         onSendDraft: @escaping (Int, EmailDraftPatch) -> Void,
         onDiscard: @escaping () -> Void
@@ -787,6 +985,7 @@ private struct EmailThreadDraftCard: View {
         self.draft = draft
         self.errorMessage = errorMessage
         self.isSending = isSending
+        self.isApprovalPending = isApprovalPending
         self.onUpdateDraft = onUpdateDraft
         self.onSendDraft = onSendDraft
         self.onDiscard = onDiscard
@@ -859,17 +1058,18 @@ private struct EmailThreadDraftCard: View {
 
             Text(statusText)
                 .font(.system(size: 11))
-                .foregroundColor(errorMessage == nil ? BVColor.fgFaint : BVColor.fgMute)
+                .foregroundColor(statusColor)
                 .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .help(errorMessage ?? statusText)
+                .truncationMode(.tail)
+                .frame(maxWidth: 360, alignment: .trailing)
+                .help(statusHelpText)
 
             HStack(alignment: .center, spacing: EmailToolbarActionMetrics.pairedSpacing) {
                 EmailHeaderIconButton(
                     systemName: "trash",
                     label: String(localized: "email.draft.discard", defaultValue: "Discard draft"),
                     boxWidth: EmailToolbarActionMetrics.pairedButtonWidth,
-                    isDisabled: isSending,
+                    isDisabled: isLocked,
                     foregroundColor: BVColor.fgMute,
                     action: onDiscard
                 )
@@ -885,18 +1085,6 @@ private struct EmailThreadDraftCard: View {
                 headerFieldsForm
             } else {
                 headerFieldsSummary
-            }
-
-            if let errorMessage, !errorMessage.isEmpty {
-                Text(String.localizedStringWithFormat(
-                    String(localized: "email.draft.errorLine", defaultValue: "Draft error: %@"),
-                    errorMessage
-                ))
-                .font(.system(size: 11))
-                .foregroundColor(BVColor.fgMute)
-                .lineLimit(2)
-                .padding(.horizontal, 10)
-                .padding(.bottom, 8)
             }
         }
         .draftSubCardChrome()
@@ -933,7 +1121,7 @@ private struct EmailThreadDraftCard: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 7)
                 .frame(minHeight: 132)
-                .disabled(isSending)
+                .disabled(isLocked)
 
             if bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(String(localized: "email.draft.placeholder", defaultValue: "Write a reply..."))
@@ -1006,7 +1194,7 @@ private struct EmailThreadDraftCard: View {
         .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onTapGesture {
-            if !isSending {
+            if !isLocked {
                 beginEditingHeaderFields()
             }
         }
@@ -1102,19 +1290,29 @@ private struct EmailThreadDraftCard: View {
                 .frame(width: 58, alignment: .leading)
 
             if isEditingHeaderFields {
-                TextField(placeholder, text: text)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: isSubject ? 11.5 : 11, weight: isSubject ? .medium : .regular))
-                    .foregroundColor(isSubject ? BVColor.fgMute : BVColor.fgFaint)
-                    .disabled(isSending)
-                    .focused($focusedHeaderField, equals: field)
-                    .onSubmit {
-                        finishEditingHeaderFields()
+                ZStack(alignment: .leading) {
+                    if text.wrappedValue.isEmpty {
+                        Text(placeholder)
+                            .font(.system(size: isSubject ? 11.5 : 11, weight: isSubject ? .medium : .regular))
+                            .foregroundColor(BVColor.fgFaint)
+                            .lineLimit(1)
+                            .allowsHitTesting(false)
                     }
+
+                    EmailDraftHeaderTextView(
+                        text: text,
+                        focusedField: $focusedHeaderField,
+                        field: field,
+                        isLocked: isLocked,
+                        isSubject: isSubject,
+                        onSubmit: finishEditingHeaderFields
+                    )
+                    .frame(height: 16)
+                }
             } else {
                 Text(displayValue)
                     .font(.system(size: isSubject ? 11.5 : 11, weight: isSubject ? .medium : .regular))
-                    .foregroundColor(isSubject ? BVColor.fgMute : BVColor.fgFaint)
+                    .foregroundColor(draftFieldTextColor)
                     .lineLimit(isSubject ? 1 : 2)
             }
         }
@@ -1149,7 +1347,7 @@ private struct EmailThreadDraftCard: View {
     }
 
     private var isSendDisabled: Bool {
-        isSending || !hasSendRecipients || subjectText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        isLocked || !hasSendRecipients || subjectText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var hasSendRecipients: Bool {
@@ -1254,7 +1452,32 @@ private struct EmailThreadDraftCard: View {
         if isSending {
             return String(localized: "email.draft.sync.sending", defaultValue: "Sending")
         }
-        return errorMessage == nil ? syncStateText : String(localized: "email.draft.sync.failed", defaultValue: "Failed")
+        if isApprovalPending {
+            return String(localized: "email.draft.sync.approvalPending", defaultValue: "Approval pending")
+        }
+        if let errorMessage, !errorMessage.isEmpty {
+            return String.localizedStringWithFormat(
+                String(localized: "email.draft.status.failedWithMessage", defaultValue: "Failed: %@"),
+                errorMessage
+            )
+        }
+        return syncStateText
+    }
+
+    private var statusColor: Color {
+        errorMessage == nil ? BVColor.fgFaint : BVColor.fgMute
+    }
+
+    private var statusHelpText: String {
+        errorMessage ?? statusText
+    }
+
+    private var isLocked: Bool {
+        isSending || isApprovalPending
+    }
+
+    private var draftFieldTextColor: Color {
+        BVColor.fg.opacity(0.86)
     }
 
     private var syncStateText: String {
