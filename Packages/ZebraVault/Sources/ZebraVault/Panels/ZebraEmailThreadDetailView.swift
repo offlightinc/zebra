@@ -360,6 +360,26 @@ private struct EmailThreadCardContainer<Content: View>: View {
     }
 }
 
+private extension View {
+    func draftSubCardChrome() -> some View {
+        frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(BVColor.bg)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(BVColor.border.opacity(0.85))
+                    )
+            )
+    }
+}
+
+private enum EmailThreadCardMetrics {
+    static let avatarColumnIndent: CGFloat = 34
+    static let cardPadding: CGFloat = 12
+    static let expandedContentLeading: CGFloat = cardPadding + avatarColumnIndent
+}
+
 private enum EmailToolbarActionMetrics {
     static let buttonWidth: CGFloat = 16
     static let buttonHeight: CGFloat = 22
@@ -514,9 +534,10 @@ private struct EmailThreadMessageCard: View {
 
             if isExpanded {
                 Divider()
-                    .padding(.leading, 46)
+                    .padding(.leading, EmailThreadCardMetrics.expandedContentLeading)
                 bodyContent
-                    .padding(.horizontal, 12)
+                    .padding(.leading, EmailThreadCardMetrics.expandedContentLeading)
+                    .padding(.trailing, EmailThreadCardMetrics.cardPadding)
                     .padding(.vertical, 12)
             }
         }
@@ -657,6 +678,30 @@ private struct EmailDraftHeaderEditState: Equatable {
     }
 }
 
+private struct EmailDraftHeaderSummaryRow: View {
+    let label: String
+    let value: String
+    let isSubject: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 6) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(BVColor.fgFaint)
+                .frame(width: 58, alignment: .leading)
+
+            Text(value)
+                .font(.system(size: isSubject ? 11.5 : 11, weight: isSubject ? .semibold : .regular))
+                .foregroundColor(isSubject ? BVColor.fg : BVColor.fgMute)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(minHeight: 24)
+        .contentShape(Rectangle())
+    }
+}
+
 private struct EmailThreadDraftCard: View {
     let draft: EmailDraftSnapshot
     let errorMessage: String?
@@ -699,14 +744,16 @@ private struct EmailThreadDraftCard: View {
 
     var body: some View {
         EmailThreadCardContainer {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                    .padding(12)
-                Divider()
-                    .padding(.leading, 46)
-                editor
-                    .padding(12)
+            VStack(alignment: .leading, spacing: 8) {
+                titleBar
+                headerCard
+                    .padding(.leading, EmailThreadCardMetrics.avatarColumnIndent)
+                bodyCard
+                    .padding(.leading, EmailThreadCardMetrics.avatarColumnIndent)
             }
+            .padding(.top, EmailThreadCardMetrics.cardPadding)
+            .padding(.horizontal, EmailThreadCardMetrics.cardPadding)
+            .padding(.bottom, EmailThreadCardMetrics.cardPadding)
         }
         .onChange(of: bodyText) { _, newValue in
             guard !isApplyingDraftBody else {
@@ -741,98 +788,193 @@ private struct EmailThreadDraftCard: View {
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .top, spacing: 10) {
+    private var titleBar: some View {
+        HStack(alignment: .center, spacing: 10) {
             EmailDetailAvatarDot(
                 initial: String(localized: "email.draft.initial", defaultValue: "D"),
                 color: BVColor.accent
             )
             .frame(width: 24, height: 24)
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .center, spacing: 6) {
-                    Text(displayName)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundColor(BVColor.fg)
-                        .lineLimit(1)
-                        .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
-                    Spacer(minLength: 4)
-                    Text(statusText)
-                        .font(.system(size: 11))
-                        .foregroundColor(errorMessage == nil ? BVColor.fgFaint : BVColor.fgMute)
-                        .lineLimit(1)
-                        .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .help(errorMessage ?? statusText)
-                    HStack(alignment: .center, spacing: EmailToolbarActionMetrics.pairedSpacing) {
-                        EmailHeaderIconButton(
-                            systemName: isEditingHeaderFields ? "checkmark" : "square.and.pencil",
-                            label: isEditingHeaderFields
-                                ? String(localized: "email.draft.doneEditing", defaultValue: "Done editing")
-                                : String(localized: "email.draft.editFields", defaultValue: "Edit draft fields"),
-                            iconWeight: .semibold,
-                            boxWidth: EmailToolbarActionMetrics.pairedButtonWidth,
-                            foregroundColor: BVColor.fgMute,
-                            action: toggleHeaderEditing
-                        )
-                        EmailHeaderIconButton(
-                            systemName: "trash",
-                            label: String(localized: "email.draft.discard", defaultValue: "Discard draft"),
-                            boxWidth: EmailToolbarActionMetrics.pairedButtonWidth,
-                            foregroundColor: BVColor.fgMute,
-                            action: onDiscard
-                        )
-                    }
-                    .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
-                    .fixedSize(horizontal: true, vertical: false)
-                }
-                .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
+            Text(displayName)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundColor(BVColor.fg)
+                .lineLimit(1)
 
-                headerFields
+            Spacer(minLength: 4)
 
-                if let errorMessage, !errorMessage.isEmpty {
-                    Text(String.localizedStringWithFormat(
-                        String(localized: "email.draft.errorLine", defaultValue: "Draft error: %@"),
-                        errorMessage
-                    ))
-                    .font(.system(size: 11))
-                    .foregroundColor(BVColor.fgMute)
-                    .lineLimit(2)
-                }
+            Text(statusText)
+                .font(.system(size: 11))
+                .foregroundColor(errorMessage == nil ? BVColor.fgFaint : BVColor.fgMute)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .help(errorMessage ?? statusText)
+
+            HStack(alignment: .center, spacing: EmailToolbarActionMetrics.pairedSpacing) {
+                EmailHeaderIconButton(
+                    systemName: "trash",
+                    label: String(localized: "email.draft.discard", defaultValue: "Discard draft"),
+                    boxWidth: EmailToolbarActionMetrics.pairedButtonWidth,
+                    foregroundColor: BVColor.fgMute,
+                    action: onDiscard
+                )
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(height: 24, alignment: .center)
+    }
+
+    private var headerCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if isEditingHeaderFields {
+                headerFieldsForm
+            } else {
+                headerFieldsSummary
+            }
+
+            if let errorMessage, !errorMessage.isEmpty {
+                Text(String.localizedStringWithFormat(
+                    String(localized: "email.draft.errorLine", defaultValue: "Draft error: %@"),
+                    errorMessage
+                ))
+                .font(.system(size: 11))
+                .foregroundColor(BVColor.fgMute)
+                .lineLimit(2)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+            }
+        }
+        .draftSubCardChrome()
+        .overlay(alignment: .topTrailing) {
+            if isEditingHeaderFields {
+                EmailHeaderIconButton(
+                    systemName: "chevron.up",
+                    label: String(localized: "email.draft.collapseFields", defaultValue: "Collapse draft fields"),
+                    iconWeight: .semibold,
+                    boxWidth: 22,
+                    foregroundColor: BVColor.fgFaint,
+                    action: finishEditingHeaderFields
+                )
+                .padding(.top, 9)
+                .padding(.trailing, 10)
             }
         }
     }
 
+    private var bodyCard: some View {
+        VStack(spacing: 0) {
+            editor
+            bodyToolbar
+        }
+        .draftSubCardChrome()
+    }
+
     private var editor: some View {
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 5)
-                .fill(BVColor.bg)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5)
-                        .stroke(BVColor.border.opacity(0.7))
-                )
-
             TextEditor(text: $bodyText)
                 .font(.system(size: 12))
                 .foregroundColor(BVColor.fg.opacity(0.86))
                 .scrollContentBackground(.hidden)
-                .padding(8)
-                .frame(minHeight: 150)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .frame(minHeight: 132)
 
             if bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(String(localized: "email.draft.placeholder", defaultValue: "Write a reply..."))
                     .font(.system(size: 12))
                     .foregroundColor(BVColor.fgFaint)
                     .padding(.horizontal, 14)
-                    .padding(.vertical, 15)
+                    .padding(.vertical, 8)
                     .allowsHitTesting(false)
             }
         }
-        .frame(minHeight: 150)
     }
 
-    private var headerFields: some View {
-        VStack(alignment: .leading, spacing: 3) {
+    private var bodyToolbar: some View {
+        HStack(spacing: 8) {
+            Spacer(minLength: 8)
+            Button(action: {}) {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(String(localized: "email.draft.send", defaultValue: "Send"))
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(BVColor.accent)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(true)
+            .opacity(0.65)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 38)
+    }
+
+    private var headerFieldsSummary: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            summaryRow(
+                label: String(localized: "email.draft.field.to", defaultValue: "To"),
+                value: recipientsDisplay(toText)
+            )
+
+            if !EmailDraftHeaderEditState.parseRecipients(ccText).isEmpty {
+                summaryDivider
+                summaryRow(
+                    label: String(localized: "email.draft.field.cc", defaultValue: "Cc"),
+                    value: recipientsDisplay(ccText)
+                )
+            }
+
+            if !EmailDraftHeaderEditState.parseRecipients(bccText).isEmpty {
+                summaryDivider
+                summaryRow(
+                    label: String(localized: "email.draft.field.bcc", defaultValue: "Bcc"),
+                    value: recipientsDisplay(bccText)
+                )
+            }
+
+            summaryDivider
+            summaryRow(
+                label: String(localized: "email.draft.field.subject", defaultValue: "Subject"),
+                value: subjectDisplay,
+                isSubject: true
+            )
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            beginEditingHeaderFields()
+        }
+    }
+
+    private func summaryRow(
+        label: String,
+        value: String,
+        isSubject: Bool = false
+    ) -> some View {
+        EmailDraftHeaderSummaryRow(
+            label: label,
+            value: value,
+            isSubject: isSubject
+        )
+    }
+
+    private var summaryDivider: some View {
+        Rectangle()
+            .fill(BVColor.border.opacity(0.45))
+            .frame(height: 1)
+            .padding(.leading, 68)
+    }
+
+    private var headerFieldsForm: some View {
+        VStack(alignment: .leading, spacing: 0) {
             headerFieldRow(
                 label: String(localized: "email.draft.field.to", defaultValue: "To"),
                 field: .to,
@@ -840,6 +982,8 @@ private struct EmailThreadDraftCard: View {
                 placeholder: String(localized: "email.draft.placeholder.recipients", defaultValue: "email@example.com"),
                 displayValue: recipientsDisplay(toText)
             )
+
+            formDivider
 
             if isEditingHeaderFields || !EmailDraftHeaderEditState.parseRecipients(ccText).isEmpty {
                 headerFieldRow(
@@ -849,6 +993,7 @@ private struct EmailThreadDraftCard: View {
                     placeholder: String(localized: "email.draft.placeholder.recipients", defaultValue: "email@example.com"),
                     displayValue: recipientsDisplay(ccText)
                 )
+                formDivider
             }
 
             if isEditingHeaderFields || !EmailDraftHeaderEditState.parseRecipients(bccText).isEmpty {
@@ -859,6 +1004,7 @@ private struct EmailThreadDraftCard: View {
                     placeholder: String(localized: "email.draft.placeholder.recipients", defaultValue: "email@example.com"),
                     displayValue: recipientsDisplay(bccText)
                 )
+                formDivider
             }
 
             headerFieldRow(
@@ -871,12 +1017,16 @@ private struct EmailThreadDraftCard: View {
                 isSubject: true
             )
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if !isEditingHeaderFields {
-                beginEditingHeaderFields()
-            }
-        }
+        .padding(.leading, 10)
+        .padding(.trailing, 36)
+        .padding(.vertical, 7)
+    }
+
+    private var formDivider: some View {
+        Rectangle()
+            .fill(BVColor.border.opacity(0.55))
+            .frame(height: 1)
+            .padding(.leading, 68)
     }
 
     private func headerFieldRow(
@@ -887,7 +1037,7 @@ private struct EmailThreadDraftCard: View {
         displayValue: String,
         isSubject: Bool = false
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
             Text(label)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(BVColor.fgFaint)
@@ -902,16 +1052,6 @@ private struct EmailThreadDraftCard: View {
                     .onSubmit {
                         finishEditingHeaderFields()
                     }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5)
-                            .fill(BVColor.bg)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 5)
-                                    .stroke(BVColor.border.opacity(0.7))
-                            )
-                    )
             } else {
                 Text(displayValue)
                     .font(.system(size: isSubject ? 11.5 : 11, weight: isSubject ? .medium : .regular))
@@ -919,6 +1059,7 @@ private struct EmailThreadDraftCard: View {
                     .lineLimit(isSubject ? 1 : 2)
             }
         }
+        .frame(height: 24)
     }
 
     private var displayName: String {
@@ -943,19 +1084,16 @@ private struct EmailThreadDraftCard: View {
         return EmailDraftHeaderEditState.formatRecipients(recipients)
     }
 
-    private func toggleHeaderEditing() {
-        if isEditingHeaderFields {
-            finishEditingHeaderFields()
-        } else {
-            beginEditingHeaderFields()
-        }
+    private var subjectDisplay: String {
+        subjectText.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            ?? String(localized: "email.detail.noSubject", defaultValue: "(no subject)")
     }
 
-    private func beginEditingHeaderFields() {
+    private func beginEditingHeaderFields(focusing field: EmailDraftHeaderField = .to) {
         isEditingHeaderFields = true
-        focusedHeaderField = .to
+        focusedHeaderField = field
         Task { @MainActor in
-            focusedHeaderField = .to
+            focusedHeaderField = field
         }
     }
 
