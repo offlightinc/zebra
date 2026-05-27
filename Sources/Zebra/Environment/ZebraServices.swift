@@ -772,6 +772,20 @@ final class ZebraEmailDetailStore: ObservableObject {
         threadStates[threadId]?.archiveErrorMessage
     }
 
+    func draftErrorMessage(threadId: String) -> String? {
+        threadStates[threadId]?.draftErrorMessage
+    }
+
+    func draftErrorMessage(threadId: String, localDraftId: String) -> String? {
+        threadStates[threadId]?.draftErrorMessages[localDraftId]
+    }
+
+    func clearDraftError(threadId: String) {
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        state.draftErrorMessage = nil
+        threadStates[threadId] = state
+    }
+
     func expandedMessageIds(threadId: String) -> Set<String> {
         threadStates[threadId]?.expandedMessageIds ?? []
     }
@@ -811,18 +825,18 @@ final class ZebraEmailDetailStore: ObservableObject {
         }
     }
 
-    func updateDraftBody(threadId: String, localDraftId: String, bodyText: String) {
+    func updateDraftBody(threadId: String, localDraftId: String, baseVersion: Int, bodyText: String) {
         Task {
             do {
                 let draft = try await client.updateEmailDraft(
                     localDraftId: localDraftId,
-                    baseVersion: nil,
+                    baseVersion: baseVersion,
                     patch: EmailDraftPatch(bodyText: bodyText),
                     origin: .user
                 )
                 upsertDraft(draft, threadId: threadId)
             } catch {
-                setDraftError(error, threadId: threadId)
+                setDraftError(error, threadId: threadId, localDraftId: localDraftId)
             }
         }
     }
@@ -833,9 +847,10 @@ final class ZebraEmailDetailStore: ObservableObject {
                 try await client.discardEmailDraft(localDraftId: localDraftId)
                 var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
                 state.drafts.removeAll { $0.localDraftId == localDraftId }
+                state.draftErrorMessages[localDraftId] = nil
                 threadStates[threadId] = state
             } catch {
-                setDraftError(error, threadId: threadId)
+                setDraftError(error, threadId: threadId, localDraftId: localDraftId)
             }
         }
     }
@@ -891,6 +906,7 @@ final class ZebraEmailDetailStore: ObservableObject {
     private func upsertDraft(_ draft: EmailDraftSnapshot, threadId: String) {
         var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
         state.draftErrorMessage = nil
+        state.draftErrorMessages[draft.localDraftId] = nil
         if let index = state.drafts.firstIndex(where: { $0.localDraftId == draft.localDraftId }) {
             state.drafts[index] = draft
         } else {
@@ -900,9 +916,13 @@ final class ZebraEmailDetailStore: ObservableObject {
         threadStates[threadId] = state
     }
 
-    private func setDraftError(_ error: Error, threadId: String) {
+    private func setDraftError(_ error: Error, threadId: String, localDraftId: String? = nil) {
         var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
-        state.draftErrorMessage = displayError(error)
+        if let localDraftId {
+            state.draftErrorMessages[localDraftId] = displayError(error)
+        } else {
+            state.draftErrorMessage = displayError(error)
+        }
         threadStates[threadId] = state
     }
 
@@ -933,6 +953,7 @@ private struct ZebraEmailThreadUIState {
     var detail: EmailThreadDetail?
     var drafts: [EmailDraftSnapshot] = []
     var draftErrorMessage: String?
+    var draftErrorMessages: [String: String] = [:]
     var isLoading = false
     var isArchiving = false
     var errorMessage: String?

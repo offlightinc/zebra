@@ -129,6 +129,13 @@ private struct ZebraEmailPanelHost: View {
             isArchiving: detailStore.isArchiving(threadId: panel.threadId),
             errorMessage: detailStore.errorMessage(threadId: panel.threadId),
             archiveErrorMessage: detailStore.archiveErrorMessage(threadId: panel.threadId),
+            draftErrorMessage: detailStore.draftErrorMessage(threadId: panel.threadId),
+            draftErrorMessages: Dictionary(uniqueKeysWithValues: detailStore
+                .drafts(threadId: panel.threadId)
+                .compactMap { draft in
+                    detailStore.draftErrorMessage(threadId: panel.threadId, localDraftId: draft.localDraftId)
+                        .map { (draft.localDraftId, $0) }
+                }),
             expandedMessageIds: detailStore.expandedMessageIds(threadId: panel.threadId),
             // Markdown panel 과 같은 floating chat pill inset. 마지막
             // 메시지가 pill 뒤로 가리지 않도록 한다.
@@ -143,6 +150,9 @@ private struct ZebraEmailPanelHost: View {
             onDismissArchiveError: {
                 detailStore.clearArchiveError(threadId: panel.threadId)
             },
+            onDismissDraftError: {
+                detailStore.clearDraftError(threadId: panel.threadId)
+            },
             onRefresh: {
                 Task { await detailStore.reloadThread(threadId: panel.threadId, forceRefresh: true) }
             },
@@ -155,10 +165,11 @@ private struct ZebraEmailPanelHost: View {
                     targetMessageId: targetMessageId
                 )
             },
-            onUpdateDraftBody: { localDraftId, bodyText in
+            onUpdateDraftBody: { localDraftId, baseVersion, bodyText in
                 detailStore.updateDraftBody(
                     threadId: panel.threadId,
                     localDraftId: localDraftId,
+                    baseVersion: baseVersion,
                     bodyText: bodyText
                 )
             },

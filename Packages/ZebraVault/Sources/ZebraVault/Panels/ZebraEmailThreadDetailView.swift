@@ -10,6 +10,8 @@ public struct ZebraEmailThreadDetailView: View {
     private let isArchiving: Bool
     private let errorMessage: String?
     private let archiveErrorMessage: String?
+    private let draftErrorMessage: String?
+    private let draftErrorMessages: [String: String]
     private let expandedMessageIds: Set<String>
     /// Extra bottom padding on the scrollable thread body so a host-overlaid
     /// floating chat pill does not obscure the last message. Mirrors the
@@ -19,10 +21,11 @@ public struct ZebraEmailThreadDetailView: View {
     private let bottomContentInset: CGFloat
     private let onArchive: () -> Void
     private let onDismissArchiveError: () -> Void
+    private let onDismissDraftError: () -> Void
     private let onRefresh: () -> Void
     private let onToggleMessage: (String) -> Void
     private let onCreateReply: (String) -> Void
-    private let onUpdateDraftBody: (String, String) -> Void
+    private let onUpdateDraftBody: (String, Int, String) -> Void
     private let onDiscardDraft: (String) -> Void
     private let onOpenURL: (URL) -> Void
 
@@ -34,14 +37,17 @@ public struct ZebraEmailThreadDetailView: View {
         isArchiving: Bool = false,
         errorMessage: String?,
         archiveErrorMessage: String? = nil,
+        draftErrorMessage: String? = nil,
+        draftErrorMessages: [String: String] = [:],
         expandedMessageIds: Set<String>,
         bottomContentInset: CGFloat = 0,
         onArchive: @escaping () -> Void = {},
         onDismissArchiveError: @escaping () -> Void = {},
+        onDismissDraftError: @escaping () -> Void = {},
         onRefresh: @escaping () -> Void,
         onToggleMessage: @escaping (String) -> Void,
         onCreateReply: @escaping (String) -> Void = { _ in },
-        onUpdateDraftBody: @escaping (String, String) -> Void = { _, _ in },
+        onUpdateDraftBody: @escaping (String, Int, String) -> Void = { _, _, _ in },
         onDiscardDraft: @escaping (String) -> Void = { _ in },
         onOpenURL: @escaping (URL) -> Void
     ) {
@@ -52,10 +58,13 @@ public struct ZebraEmailThreadDetailView: View {
         self.isArchiving = isArchiving
         self.errorMessage = errorMessage
         self.archiveErrorMessage = archiveErrorMessage
+        self.draftErrorMessage = draftErrorMessage
+        self.draftErrorMessages = draftErrorMessages
         self.expandedMessageIds = expandedMessageIds
         self.bottomContentInset = bottomContentInset
         self.onArchive = onArchive
         self.onDismissArchiveError = onDismissArchiveError
+        self.onDismissDraftError = onDismissDraftError
         self.onRefresh = onRefresh
         self.onToggleMessage = onToggleMessage
         self.onCreateReply = onCreateReply
@@ -69,6 +78,9 @@ public struct ZebraEmailThreadDetailView: View {
             header
             if let archiveErrorMessage, !archiveErrorMessage.isEmpty {
                 archiveErrorBanner(archiveErrorMessage)
+            }
+            if let draftErrorMessage, !draftErrorMessage.isEmpty {
+                draftErrorBanner(draftErrorMessage)
             }
             Divider()
             content
@@ -184,6 +196,34 @@ public struct ZebraEmailThreadDetailView: View {
         .background(BVColor.bgInput)
     }
 
+    private func draftErrorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(BVColor.fgMute)
+            Text(String.localizedStringWithFormat(
+                String(localized: "email.draft.errorLine", defaultValue: "Draft error: %@"),
+                message
+            ))
+            .font(.system(size: 11))
+            .foregroundColor(BVColor.fgMute)
+            .lineLimit(2)
+            Spacer(minLength: 8)
+            Button(action: onDismissDraftError) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(BVColor.fgFaint)
+            .help(String(localized: "common.close", defaultValue: "Close"))
+            .accessibilityLabel(String(localized: "common.close", defaultValue: "Close"))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(BVColor.bgInput)
+    }
+
     @ViewBuilder
     private var content: some View {
         if let errorMessage, !errorMessage.isEmpty, detail == nil {
@@ -224,8 +264,9 @@ public struct ZebraEmailThreadDetailView: View {
                             ForEach(draftsForMessage(message.id)) { draft in
                                 EmailThreadDraftCard(
                                     draft: draft,
-                                    onUpdateBody: { bodyText in
-                                        onUpdateDraftBody(draft.localDraftId, bodyText)
+                                    errorMessage: draftErrorMessages[draft.localDraftId],
+                                    onUpdateBody: { baseVersion, bodyText in
+                                        onUpdateDraftBody(draft.localDraftId, baseVersion, bodyText)
                                     },
                                     onDiscard: {
                                         onDiscardDraft(draft.localDraftId)
@@ -236,8 +277,9 @@ public struct ZebraEmailThreadDetailView: View {
                         ForEach(draftsWithoutMessage) { draft in
                             EmailThreadDraftCard(
                                 draft: draft,
-                                onUpdateBody: { bodyText in
-                                    onUpdateDraftBody(draft.localDraftId, bodyText)
+                                errorMessage: draftErrorMessages[draft.localDraftId],
+                                onUpdateBody: { baseVersion, bodyText in
+                                    onUpdateDraftBody(draft.localDraftId, baseVersion, bodyText)
                                 },
                                 onDiscard: {
                                     onDiscardDraft(draft.localDraftId)
@@ -504,21 +546,27 @@ private struct EmailThreadMessageCard: View {
 
 private struct EmailThreadDraftCard: View {
     let draft: EmailDraftSnapshot
-    let onUpdateBody: (String) -> Void
+    let errorMessage: String?
+    let onUpdateBody: (Int, String) -> Void
     let onDiscard: () -> Void
 
     @State private var bodyText: String
     @State private var saveTask: Task<Void, Never>?
+    @State private var isApplyingDraftBody = false
+    @State private var lastSubmittedBodyText: String
 
     init(
         draft: EmailDraftSnapshot,
-        onUpdateBody: @escaping (String) -> Void,
+        errorMessage: String?,
+        onUpdateBody: @escaping (Int, String) -> Void,
         onDiscard: @escaping () -> Void
     ) {
         self.draft = draft
+        self.errorMessage = errorMessage
         self.onUpdateBody = onUpdateBody
         self.onDiscard = onDiscard
         _bodyText = State(initialValue: draft.bodyText)
+        _lastSubmittedBodyText = State(initialValue: draft.bodyText)
     }
 
     var body: some View {
@@ -533,12 +581,29 @@ private struct EmailThreadDraftCard: View {
             }
         }
         .onChange(of: bodyText) { _, newValue in
-            scheduleSave(newValue)
+            guard !isApplyingDraftBody else {
+                isApplyingDraftBody = false
+                return
+            }
+            guard newValue != draft.bodyText else {
+                saveTask?.cancel()
+                return
+            }
+            scheduleSave(newValue, baseVersion: draft.version)
         }
         .onChange(of: draft.version) { _, _ in
-            if bodyText != draft.bodyText {
-                bodyText = draft.bodyText
+            guard bodyText != draft.bodyText else {
+                lastSubmittedBodyText = draft.bodyText
+                return
             }
+            guard draft.bodyText != lastSubmittedBodyText else {
+                scheduleSave(bodyText, baseVersion: draft.version)
+                return
+            }
+            saveTask?.cancel()
+            isApplyingDraftBody = true
+            bodyText = draft.bodyText
+            lastSubmittedBodyText = draft.bodyText
         }
         .onDisappear {
             saveTask?.cancel()
@@ -562,8 +627,9 @@ private struct EmailThreadDraftCard: View {
                     Spacer(minLength: 4)
                     Text(statusText)
                         .font(.system(size: 11))
-                        .foregroundColor(BVColor.fgFaint)
+                        .foregroundColor(errorMessage == nil ? BVColor.fgFaint : BVColor.fgMute)
                         .lineLimit(1)
+                        .help(errorMessage ?? statusText)
                     Button(action: onDiscard) {
                         Image(systemName: "trash")
                             .font(.system(size: 11, weight: .medium))
@@ -586,6 +652,16 @@ private struct EmailThreadDraftCard: View {
                     .foregroundColor(BVColor.fgMute)
                     .lineLimit(1)
                     .textSelection(.enabled)
+
+                if let errorMessage, !errorMessage.isEmpty {
+                    Text(String.localizedStringWithFormat(
+                        String(localized: "email.draft.errorLine", defaultValue: "Draft error: %@"),
+                        errorMessage
+                    ))
+                    .font(.system(size: 11))
+                    .foregroundColor(BVColor.fgMute)
+                    .lineLimit(2)
+                }
             }
         }
     }
@@ -633,11 +709,7 @@ private struct EmailThreadDraftCard: View {
     }
 
     private var statusText: String {
-        String.localizedStringWithFormat(
-            String(localized: "email.draft.statusLine", defaultValue: "%@ · v%lld"),
-            syncStateText,
-            draft.version
-        )
+        errorMessage == nil ? syncStateText : String(localized: "email.draft.sync.failed", defaultValue: "Failed")
     }
 
     private var syncStateText: String {
@@ -665,7 +737,7 @@ private struct EmailThreadDraftCard: View {
         )
     }
 
-    private func scheduleSave(_ value: String) {
+    private func scheduleSave(_ value: String, baseVersion: Int) {
         saveTask?.cancel()
         saveTask = Task { @MainActor in
             do {
@@ -674,7 +746,9 @@ private struct EmailThreadDraftCard: View {
                 return
             }
             guard !Task.isCancelled else { return }
-            onUpdateBody(value)
+            lastSubmittedBodyText = value
+            saveTask = nil
+            onUpdateBody(baseVersion, value)
         }
     }
 }
