@@ -155,6 +155,12 @@ public enum MarkdownChatPillContextPrefix {
         header += "Account: \(accountDisplay)\n"
         header += "Thread ID: \(detail.threadId)\n"
         header += "Messages: \(messageCount)\n"
+        header += "\n=== Zebra draft RPC ===\n"
+        header += "List drafts: cmux rpc zebra.email_draft.list '{\"thread_id\":\"\(detail.threadId)\"}'\n"
+        header += "Create draft: cmux rpc zebra.email_draft.create '{\"thread_id\":\"\(detail.threadId)\",\"target_message_id\":\"<message_id>\",\"body_text\":\"<reply>\"}'\n"
+        header += "Update draft: cmux rpc zebra.email_draft.update '{\"thread_id\":\"\(detail.threadId)\",\"local_draft_id\":\"<draft_id>\",\"body_text\":\"<reply>\"}'\n"
+        header += "Optional draft fields: subject, to, cc, bcc.\n"
+        header += "Focus draft UI: cmux rpc zebra.email_draft.focus '{\"thread_id\":\"\(detail.threadId)\"}'\n"
 
         var rendered = advisory + "\n" + commonBbrainAdvisoryLine + "\n\n" + header
         let isoFormatter = ISO8601DateFormatter()
@@ -165,6 +171,7 @@ public enum MarkdownChatPillContextPrefix {
 
         for (index, message) in detail.messages.enumerated() {
             var block = "\n--- Message \(index + 1) of \(messageCount) ---\n"
+            block += "Message ID: \(message.id)\n"
             if let from = formatFrom(message: message) {
                 block += "From: \(from)\n"
             }

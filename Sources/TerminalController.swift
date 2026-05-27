@@ -183,6 +183,7 @@ class TerminalController {
         "browser.tab.switch",
         "notification.open",
         "notification.jump_to_unread",
+        "zebra.email_draft.focus",
         "debug.command_palette.toggle",
         "debug.notification.focus",
         "debug.app.activate",
@@ -1557,6 +1558,9 @@ class TerminalController {
         "browser.profiles.clear",
         "browser.profiles.delete",
         "browser.import.cookies",
+        "zebra.email_draft.list",
+        "zebra.email_draft.create",
+        "zebra.email_draft.update",
         "system.top",
     ]
 
@@ -1665,6 +1669,8 @@ class TerminalController {
             }
         case "system.top":
             return v2Result(id: request.id, v2SystemTop(params: request.params))
+        case "zebra.email_draft.list", "zebra.email_draft.create", "zebra.email_draft.update":
+            return socketWorkerZebraEmailDraftResponse(method: request.method, id: request.id, params: request.params)
         case let method where method.hasPrefix("vm."):
             return socketWorkerCloudVMResponse(method: method, id: request.id, params: request.params)
         default:
@@ -2852,6 +2858,10 @@ class TerminalController {
         case "file.open":
             return v2Result(id: id, self.v2FileOpen(params: params))
 
+        // Zebra email draft commands
+        case "zebra.email_draft.focus":
+            return v2Result(id: id, self.v2ZebraEmailDraftFocus(params: params))
+
         case "surface.read_text":
             return v2Result(id: id, self.v2SurfaceReadText(params: params))
 
@@ -3117,6 +3127,10 @@ class TerminalController {
             "browser.input_mouse",
             "browser.input_keyboard",
             "browser.input_touch",
+            "zebra.email_draft.list",
+            "zebra.email_draft.create",
+            "zebra.email_draft.update",
+            "zebra.email_draft.focus",
         ]
 #if DEBUG
         methods.append(contentsOf: [

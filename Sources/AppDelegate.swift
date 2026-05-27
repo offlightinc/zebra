@@ -7140,7 +7140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 #endif
 
-        let root = ZebraServices.makeDefault().injectIntoEnvironment(
+        let root = ZebraServices.makeDefault(tabManager: tabManager).injectIntoEnvironment(
             ContentView(updateViewModel: updateViewModel, windowId: windowId)
                 .zebraStoreBindings()
                 .environmentObject(tabManager)
