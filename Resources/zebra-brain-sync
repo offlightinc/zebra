@@ -206,6 +206,11 @@ trap 'rm -rf "$tmp_dir"; rm -rf "$lock_dir"' EXIT
 tracked_changes="$tmp_dir/tracked.z"
 untracked_changes="$tmp_dir/untracked.z"
 
+release_sync_lock() {
+  rm -rf "$lock_dir"
+  trap 'rm -rf "$tmp_dir"' EXIT
+}
+
 has_nul_records() {
   [[ -s "$1" ]]
 }
@@ -577,6 +582,8 @@ final_sha="$(git rev-parse --short HEAD 2>/dev/null || true)"
 if [[ -n "$final_sha" ]]; then
   printf 'committed %s\n' "$final_sha"
 fi
+
+release_sync_lock
 
 if [[ "$pushed" == "1" && "$PING" == "1" ]]; then
   gbrain_cli="$(command -v gbrain || true)"
