@@ -24,6 +24,9 @@ Options:
   --no-ping       Skip `gbrain remote ping` after a successful push.
   --dry-run       Validate and print what would happen, without changing git state.
   --help          Show this help.
+
+Environment:
+  ZEBRA_SYNC_COMMIT_MSG   Override commit message. Must include Slack-Summary.
 USAGE
 }
 
@@ -213,6 +216,15 @@ print_nul_records() {
   done < "$1"
 }
 
+is_allowed_hidden_path() {
+  local path="$1"
+
+  # GBrain adapter skills are installed into a hidden adapter-owned directory
+  # inside the brain repo. Keep the exception narrow so arbitrary dotfiles still
+  # cannot be auto-committed by background sync.
+  [[ "$path" == .gbrain-adapter/skills/*/SKILL.md ]]
+}
+
 # 14 self-validation checks below. 13 of them → hookFailed reason. The lone
 # exception `conflict markers found` → conflict reason (it's the residue of an
 # external git merge that produced markers in a .md file).
@@ -222,7 +234,7 @@ validate_path() {
   [[ -n "$path" ]] || fail "hookFailed" "empty git path"
   [[ "$path" != /* ]] || fail "hookFailed" "absolute path is not allowed: $path"
   [[ "$path" != *".."* ]] || fail "hookFailed" "path traversal is not allowed: $path"
-  [[ "$path" != .* ]] || fail "hookFailed" "hidden files are not auto-committed: $path"
+  [[ "$path" != .* ]] || is_allowed_hidden_path "$path" || fail "hookFailed" "hidden files are not auto-committed: $path"
   [[ "$path" != ".git/"* ]] || fail "hookFailed" "git internals are not allowed: $path"
   [[ "$path" != ".gbrain/"* ]] || fail "hookFailed" "local gbrain state is not allowed: $path"
   [[ "$path" != "supabase/.temp/"* ]] || fail "hookFailed" "supabase temp state is not allowed: $path"
@@ -247,6 +259,217 @@ validate_file_list() {
   while IFS= read -r -d '' path; do
     validate_path "$path"
   done < "$list_file"
+}
+
+frontmatter_title() {
+  local path="$1"
+  awk '
+    BEGIN { in_frontmatter = 0 }
+    NR == 1 && $0 == "---" { in_frontmatter = 1; next }
+    in_frontmatter && $0 == "---" { exit }
+    in_frontmatter && /^title:[[:space:]]*/ {
+      sub(/^title:[[:space:]]*/, "")
+      gsub(/^"|"$/, "")
+      print
+      exit
+    }
+  ' "$path"
+}
+
+staged_field_change() {
+  local path="$1"
+  local field="$2"
+  local old_value new_value
+
+  old_value="$(git diff --cached --unified=0 -- "$path" | awk -v field="$field" '
+    $0 ~ "^-" field ":" {
+      sub("^-" field ":[[:space:]]*", "")
+      print
+      exit
+    }
+  ')"
+  new_value="$(git diff --cached --unified=0 -- "$path" | awk -v field="$field" '
+    $0 ~ "^\\+" field ":" {
+      sub("^\\+" field ":[[:space:]]*", "")
+      print
+      exit
+    }
+  ')"
+
+  if [[ -n "$old_value" && -n "$new_value" && "$old_value" != "$new_value" ]]; then
+    printf '%s\t%s\t%s\n' "$field" "$old_value" "$new_value"
+  fi
+}
+
+staged_timeline_additions() {
+  local path="$1"
+  git diff --cached --unified=0 -- "$path" \
+    | awk '/^\+- \*\*[0-9]{4}-[0-9]{2}-[0-9]{2}\*\*/ { sub(/^\+/, ""); print; count += 1 } count == 2 { exit }'
+}
+
+truncate_text() {
+  local text="$1"
+  local max="${2:-180}"
+  if [[ "${#text}" -gt "$max" ]]; then
+    printf '%s...\n' "${text:0:max}"
+  else
+    printf '%s\n' "$text"
+  fi
+}
+
+clean_added_line() {
+  local line="$1"
+  line="${line#+}"
+  line="${line#- }"
+  line="${line### }"
+  line="${line## }"
+  line="${line#> }"
+  printf '%s\n' "$line"
+}
+
+staged_first_meaningful_addition() {
+  local path="$1"
+  git diff --cached --unified=0 -- "$path" \
+    | awk '
+      /^\+\+\+/ { next }
+      /^\+---$/ { next }
+      /^\+[[:space:]]*$/ { next }
+      /^\+(title|type|status|priority|owner|created|updated|tags|related|goal):/ { next }
+      /^\+/ {
+        sub(/^\+/, "")
+        print
+        exit
+      }
+    '
+}
+
+display_title_for_path() {
+  local path="$1"
+  local title=""
+  if [[ -f "$path" ]]; then
+    title="$(frontmatter_title "$path")"
+  fi
+  if [[ -n "$title" ]]; then
+    printf '%s\n' "$title"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+write_generated_commit_message() {
+  local message_file="$1"
+  local staged_file_list="$2"
+  local changed_count=0
+  local task_count=0
+  local first_title=""
+  local first_summary_detail=""
+  local first_task_title=""
+  local first_task_status_old=""
+  local first_task_status_new=""
+  local first_task_priority_old=""
+  local first_task_priority_new=""
+  local path title field old_value new_value timeline_line added_line detail_text label
+  local items_file details_file
+
+  items_file="$tmp_dir/generated-commit-items.txt"
+  details_file="$tmp_dir/generated-commit-details.txt"
+  : > "$items_file"
+  : > "$details_file"
+
+  while IFS= read -r -d '' path; do
+    changed_count=$((changed_count + 1))
+    title="$(display_title_for_path "$path")"
+    [[ -n "$first_title" ]] || first_title="$title"
+    printf -- '- %s\n' "$title" >> "$items_file"
+
+    if [[ "$path" == tasks/*.md ]]; then
+      task_count=$((task_count + 1))
+      [[ -n "$first_task_title" ]] || first_task_title="$title"
+    fi
+
+    while IFS=$'\t' read -r field old_value new_value; do
+      [[ -n "$field" ]] || continue
+      case "$field" in
+        status) label="상태" ;;
+        priority) label="우선순위" ;;
+        owner) label="담당자" ;;
+        waiting_on) label="대기 사유" ;;
+        title) label="제목" ;;
+        *) label="$field" ;;
+      esac
+      detail_text="${label}: ${old_value} -> ${new_value}"
+      printf -- '- %s: %s\n' "$title" "$detail_text" >> "$details_file"
+      [[ -n "$first_summary_detail" ]] || first_summary_detail="$detail_text"
+      if [[ "$field" == "status" && -z "$first_task_status_old" ]]; then
+        first_task_status_old="$old_value"
+        first_task_status_new="$new_value"
+      elif [[ "$field" == "priority" && -z "$first_task_priority_old" ]]; then
+        first_task_priority_old="$old_value"
+        first_task_priority_new="$new_value"
+      fi
+    done < <(
+      staged_field_change "$path" status
+      staged_field_change "$path" priority
+      staged_field_change "$path" owner
+      staged_field_change "$path" waiting_on
+      staged_field_change "$path" title
+    )
+
+    while IFS= read -r timeline_line; do
+      [[ -n "$timeline_line" ]] || continue
+      timeline_line="${timeline_line#- }"
+      timeline_line="$(truncate_text "$timeline_line" 220)"
+      detail_text="타임라인 추가: ${timeline_line}"
+      printf -- '- %s: %s\n' "$title" "$detail_text" >> "$details_file"
+      [[ -n "$first_summary_detail" ]] || first_summary_detail="$detail_text"
+    done < <(staged_timeline_additions "$path")
+
+    if [[ -z "$first_summary_detail" ]]; then
+      added_line="$(staged_first_meaningful_addition "$path")"
+      if [[ -n "$added_line" ]]; then
+        added_line="$(clean_added_line "$added_line")"
+        added_line="$(truncate_text "$added_line" 220)"
+        detail_text="내용 추가: ${added_line}"
+        printf -- '- %s: %s\n' "$title" "$detail_text" >> "$details_file"
+        first_summary_detail="$detail_text"
+      fi
+    fi
+  done < "$staged_file_list"
+
+  if [[ "$task_count" -eq 1 && -n "$first_task_status_old" ]]; then
+    case "$first_task_status_new" in
+      canceled) printf 'tasks: cancel %s\n\n' "$first_task_title" > "$message_file" ;;
+      done|completed) printf 'tasks: complete %s\n\n' "$first_task_title" > "$message_file" ;;
+      waiting) printf 'tasks: mark waiting %s\n\n' "$first_task_title" > "$message_file" ;;
+      *) printf 'tasks: update status for %s\n\n' "$first_task_title" > "$message_file" ;;
+    esac
+    printf 'Slack-Summary: 태스크 상태가 `%s` -> `%s`로 변경되었습니다.\n\n' "$first_task_status_old" "$first_task_status_new" >> "$message_file"
+  elif [[ "$task_count" -eq 1 && -n "$first_task_priority_old" ]]; then
+    printf 'tasks: update priority for %s\n\n' "$first_task_title" > "$message_file"
+    printf 'Slack-Summary: 태스크 우선순위가 `%s` -> `%s`로 변경되었습니다.\n\n' "$first_task_priority_old" "$first_task_priority_new" >> "$message_file"
+  elif [[ "$changed_count" -eq 1 ]]; then
+    printf 'brain: update %s\n\n' "$first_title" > "$message_file"
+    if [[ -n "$first_summary_detail" ]]; then
+      printf 'Slack-Summary: %s — %s\n\n' "$first_title" "$first_summary_detail" >> "$message_file"
+    else
+      printf 'Slack-Summary: %s 문서를 업데이트했습니다.\n\n' "$first_title" >> "$message_file"
+    fi
+  else
+    printf 'brain: update %s markdown file(s)\n\n' "$changed_count" > "$message_file"
+    printf 'Slack-Summary: 브레인 문서 %s개를 업데이트했습니다.\n\n' "$changed_count" >> "$message_file"
+  fi
+
+  printf 'Changed items:\n' >> "$message_file"
+  cat "$items_file" >> "$message_file"
+
+  printf '\nDetails:\n' >> "$message_file"
+  if [[ -s "$details_file" ]]; then
+    cat "$details_file" >> "$message_file"
+  else
+    sed 's/$/ 문서를 업데이트함/' "$items_file" >> "$message_file"
+  fi
+
+  printf '\nGenerated by zebra-brain-sync.\n' >> "$message_file"
 }
 
 log "repo: $REPO_ROOT"
@@ -299,8 +522,19 @@ if has_nul_records "$tracked_changes" || has_nul_records "$untracked_changes"; t
   if git diff --cached --quiet --exit-code; then
     log "nothing staged after validation"
   else
-    commit_msg="${ZEBRA_SYNC_COMMIT_MSG:-brain: sync local changes}"
-    git commit -m "$commit_msg"
+    commit_msg_file="$tmp_dir/commit-message.txt"
+    if [[ -n "${ZEBRA_SYNC_COMMIT_MSG:-}" ]]; then
+      printf '%s\n' "$ZEBRA_SYNC_COMMIT_MSG" > "$commit_msg_file"
+      if ! grep -q '^Slack-Summary:' "$commit_msg_file"; then
+        fail "hookFailed" "ZEBRA_SYNC_COMMIT_MSG must include a Slack-Summary line"
+      fi
+    else
+      staged_commit_files="$tmp_dir/staged-commit-files.z"
+      git diff --cached --name-only -z -- > "$staged_commit_files"
+      write_generated_commit_message "$commit_msg_file" "$staged_commit_files"
+      log "commit message: generated from staged markdown diff"
+    fi
+    git commit -F "$commit_msg_file"
     committed_sha="$(git rev-parse --short HEAD)"
   fi
 else

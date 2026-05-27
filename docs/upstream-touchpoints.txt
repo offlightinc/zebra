@@ -22,6 +22,7 @@ Sources/WorkspaceContentView.swift         # upstream added: unread indicator pr
 
 # Localization (single catalog — see docs note about SwiftUI string tables)
 Resources/Localizable.xcstrings
+Resources/zebra-brain-sync               # Zebra-owned bundled brain sync script
 
 # Zebra-owned auth tenant — dev Stack Auth project ID + publishable client key
 # differ per fork. The cmux env-var overrides (CMUX_STACK_PROJECT_ID,
