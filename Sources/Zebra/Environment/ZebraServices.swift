@@ -636,6 +636,7 @@ final class ZebraEmailDetailStore: ObservableObject {
 
     private let client = ZebraClawvisorEmailClient.shared
     private let onConnectionRepairRequired: (ZebraEmailConnectionRepairState) -> Void
+    private var draftUpdateQueues: [String: ZebraEmailDraftUpdateQueue] = [:]
 
     init(onConnectionRepairRequired: @escaping (ZebraEmailConnectionRepairState) -> Void = { _ in }) {
         self.onConnectionRepairRequired = onConnectionRepairRequired
@@ -835,6 +836,41 @@ final class ZebraEmailDetailStore: ObservableObject {
     }
 
     func updateDraft(threadId: String, localDraftId: String, baseVersion: Int, patch: EmailDraftPatch) {
+        enqueueDraftUpdate(
+            threadId: threadId,
+            localDraftId: localDraftId,
+            baseVersion: baseVersion,
+            patch: patch
+        )
+    }
+
+    private func enqueueDraftUpdate(
+        threadId: String,
+        localDraftId: String,
+        baseVersion: Int,
+        patch: EmailDraftPatch
+    ) {
+        guard !patch.isEmpty else { return }
+        var queue = draftUpdateQueues[localDraftId] ?? ZebraEmailDraftUpdateQueue(threadId: threadId)
+        queue.threadId = threadId
+        queue.merge(baseVersion: baseVersion, patch: patch)
+        draftUpdateQueues[localDraftId] = queue
+        processNextDraftUpdate(localDraftId: localDraftId)
+    }
+
+    private func processNextDraftUpdate(localDraftId: String) {
+        guard var queue = draftUpdateQueues[localDraftId],
+              !queue.isProcessing,
+              !queue.patch.isEmpty else { return }
+
+        let threadId = queue.threadId
+        let baseVersion = currentDraftVersion(threadId: threadId, localDraftId: localDraftId) ?? queue.fallbackBaseVersion
+        let patch = queue.patch
+        queue.patch = EmailDraftPatch()
+        queue.fallbackBaseVersion = nil
+        queue.isProcessing = true
+        draftUpdateQueues[localDraftId] = queue
+
         Task {
             do {
                 let draft = try await client.updateEmailDraft(
@@ -844,10 +880,38 @@ final class ZebraEmailDetailStore: ObservableObject {
                     origin: .user
                 )
                 upsertDraft(draft, threadId: threadId)
+                completeDraftUpdate(localDraftId: localDraftId)
             } catch {
+                retainFailedDraftUpdate(localDraftId: localDraftId, patch: patch)
                 setDraftError(error, threadId: threadId, localDraftId: localDraftId)
             }
         }
+    }
+
+    private func completeDraftUpdate(localDraftId: String) {
+        guard var queue = draftUpdateQueues[localDraftId] else { return }
+        queue.isProcessing = false
+        if queue.patch.isEmpty {
+            draftUpdateQueues[localDraftId] = nil
+        } else {
+            draftUpdateQueues[localDraftId] = queue
+            processNextDraftUpdate(localDraftId: localDraftId)
+        }
+    }
+
+    private func retainFailedDraftUpdate(localDraftId: String, patch: EmailDraftPatch) {
+        guard var queue = draftUpdateQueues[localDraftId] else { return }
+        let pendingPatch = queue.patch
+        let pendingFallbackBaseVersion = queue.fallbackBaseVersion
+        queue.isProcessing = false
+        queue.patch = patch
+        queue.fallbackBaseVersion = pendingFallbackBaseVersion
+        queue.merge(baseVersion: pendingFallbackBaseVersion, patch: pendingPatch)
+        draftUpdateQueues[localDraftId] = queue
+    }
+
+    private func currentDraftVersion(threadId: String, localDraftId: String) -> Int? {
+        threadStates[threadId]?.drafts.first { $0.localDraftId == localDraftId }?.version
     }
 
     func discardDraft(threadId: String, localDraftId: String) {
@@ -858,6 +922,7 @@ final class ZebraEmailDetailStore: ObservableObject {
                 state.drafts.removeAll { $0.localDraftId == localDraftId }
                 state.draftErrorMessages[localDraftId] = nil
                 threadStates[threadId] = state
+                draftUpdateQueues[localDraftId] = nil
             } catch {
                 setDraftError(error, threadId: threadId, localDraftId: localDraftId)
             }
@@ -970,4 +1035,24 @@ private struct ZebraEmailThreadUIState {
     var expandedMessageIds: Set<String>?
     var chatCompanionPaneId: PaneID?
     var chatCompanionAgent: MarkdownPillAgent?
+}
+
+private struct ZebraEmailDraftUpdateQueue {
+    var threadId: String
+    var patch = EmailDraftPatch()
+    var fallbackBaseVersion: Int?
+    var isProcessing = false
+
+    mutating func merge(baseVersion: Int?, patch nextPatch: EmailDraftPatch) {
+        if fallbackBaseVersion == nil {
+            fallbackBaseVersion = baseVersion
+        }
+        patch = EmailDraftPatch(
+            subject: nextPatch.subject ?? patch.subject,
+            toRecipients: nextPatch.toRecipients ?? patch.toRecipients,
+            ccRecipients: nextPatch.ccRecipients ?? patch.ccRecipients,
+            bccRecipients: nextPatch.bccRecipients ?? patch.bccRecipients,
+            bodyText: nextPatch.bodyText ?? patch.bodyText
+        )
+    }
 }

@@ -678,6 +678,46 @@ private struct EmailDraftHeaderEditState: Equatable {
     }
 }
 
+private struct EmailDraftEditState: Equatable {
+    var headerState: EmailDraftHeaderEditState
+    var bodyText: String
+
+    init(headerState: EmailDraftHeaderEditState, bodyText: String) {
+        self.headerState = headerState
+        self.bodyText = bodyText
+    }
+
+    init(draft: EmailDraftSnapshot) {
+        headerState = EmailDraftHeaderEditState(draft: draft)
+        bodyText = draft.bodyText
+    }
+
+    var persistedState: EmailDraftEditState {
+        let headerPatch = headerState.patch()
+        return EmailDraftEditState(
+            headerState: EmailDraftHeaderEditState(
+                toText: EmailDraftHeaderEditState.formatRecipients(headerPatch.toRecipients ?? []),
+                ccText: EmailDraftHeaderEditState.formatRecipients(headerPatch.ccRecipients ?? []),
+                bccText: EmailDraftHeaderEditState.formatRecipients(headerPatch.bccRecipients ?? []),
+                subjectText: headerPatch.subject ?? ""
+            ),
+            bodyText: bodyText
+        )
+    }
+
+    func patch(relativeTo baseline: EmailDraftEditState) -> EmailDraftPatch {
+        let headerPatch = headerState.patch()
+        let baselineHeaderPatch = baseline.headerState.patch()
+        return EmailDraftPatch(
+            subject: headerPatch.subject != baselineHeaderPatch.subject ? headerPatch.subject : nil,
+            toRecipients: headerPatch.toRecipients != baselineHeaderPatch.toRecipients ? headerPatch.toRecipients : nil,
+            ccRecipients: headerPatch.ccRecipients != baselineHeaderPatch.ccRecipients ? headerPatch.ccRecipients : nil,
+            bccRecipients: headerPatch.bccRecipients != baselineHeaderPatch.bccRecipients ? headerPatch.bccRecipients : nil,
+            bodyText: bodyText != baseline.bodyText ? bodyText : nil
+        )
+    }
+}
+
 private struct EmailDraftHeaderSummaryRow: View {
     let label: String
     let value: String
@@ -711,14 +751,12 @@ private struct EmailThreadDraftCard: View {
     @State private var bodyText: String
     @State private var saveTask: Task<Void, Never>?
     @State private var isApplyingDraftBody = false
-    @State private var lastSubmittedBodyText: String
     @State private var toText: String
     @State private var ccText: String
     @State private var bccText: String
     @State private var subjectText: String
-    @State private var headerSaveTask: Task<Void, Never>?
     @State private var isApplyingHeaderFields = false
-    @State private var lastSubmittedHeaderState: EmailDraftHeaderEditState
+    @State private var lastSubmittedEditState: EmailDraftEditState
     @State private var isEditingHeaderFields = false
     @FocusState private var focusedHeaderField: EmailDraftHeaderField?
 
@@ -733,13 +771,15 @@ private struct EmailThreadDraftCard: View {
         self.onUpdateDraft = onUpdateDraft
         self.onDiscard = onDiscard
         _bodyText = State(initialValue: draft.bodyText)
-        _lastSubmittedBodyText = State(initialValue: draft.bodyText)
         let headerState = EmailDraftHeaderEditState(draft: draft)
         _toText = State(initialValue: headerState.toText)
         _ccText = State(initialValue: headerState.ccText)
         _bccText = State(initialValue: headerState.bccText)
         _subjectText = State(initialValue: headerState.subjectText)
-        _lastSubmittedHeaderState = State(initialValue: headerState)
+        _lastSubmittedEditState = State(initialValue: EmailDraftEditState(
+            headerState: headerState,
+            bodyText: draft.bodyText
+        ))
     }
 
     var body: some View {
@@ -755,20 +795,15 @@ private struct EmailThreadDraftCard: View {
             .padding(.horizontal, EmailThreadCardMetrics.cardPadding)
             .padding(.bottom, EmailThreadCardMetrics.cardPadding)
         }
-        .onChange(of: bodyText) { _, newValue in
+        .onChange(of: bodyText) { _, _ in
             guard !isApplyingDraftBody else {
                 isApplyingDraftBody = false
                 return
             }
-            guard newValue != draft.bodyText else {
-                saveTask?.cancel()
-                return
-            }
-            scheduleSave(newValue, baseVersion: draft.version)
+            handleEditStateChange()
         }
         .onChange(of: draft.version) { _, _ in
-            syncBodyAfterDraftChange()
-            syncHeaderAfterDraftChange()
+            syncEditStateAfterDraftChange()
         }
         .onChange(of: toText) { _, _ in
             handleHeaderTextChange()
@@ -784,7 +819,6 @@ private struct EmailThreadDraftCard: View {
         }
         .onDisappear {
             saveTask?.cancel()
-            headerSaveTask?.cancel()
         }
     }
 
@@ -1121,44 +1155,50 @@ private struct EmailThreadDraftCard: View {
 
     private func handleHeaderTextChange() {
         guard !isApplyingHeaderFields else { return }
-        let headerState = currentHeaderState
-        guard headerState != EmailDraftHeaderEditState(draft: draft) else {
-            headerSaveTask?.cancel()
-            return
-        }
-        scheduleHeaderSave(headerState, baseVersion: draft.version)
+        handleEditStateChange()
     }
 
-    private func syncBodyAfterDraftChange() {
-        guard bodyText != draft.bodyText else {
-            lastSubmittedBodyText = draft.bodyText
+    private var currentEditState: EmailDraftEditState {
+        EmailDraftEditState(headerState: currentHeaderState, bodyText: bodyText)
+    }
+
+    private func handleEditStateChange() {
+        let editState = currentEditState
+        let draftState = EmailDraftEditState(draft: draft)
+        guard editState != draftState else {
+            saveTask?.cancel()
             return
         }
-        guard draft.bodyText != lastSubmittedBodyText else {
-            scheduleSave(bodyText, baseVersion: draft.version)
+        scheduleSave(editState, baseVersion: draft.version, baseline: draftState)
+    }
+
+    private func syncEditStateAfterDraftChange() {
+        let draftState = EmailDraftEditState(draft: draft)
+        let editState = currentEditState
+        guard editState != draftState else {
+            lastSubmittedEditState = draftState
             return
         }
+
+        guard draftState != lastSubmittedEditState else {
+            scheduleSave(editState, baseVersion: draft.version, baseline: draftState)
+            return
+        }
+
         saveTask?.cancel()
-        isApplyingDraftBody = true
-        bodyText = draft.bodyText
-        lastSubmittedBodyText = draft.bodyText
+        applyEditState(draftState)
+        lastSubmittedEditState = draftState
     }
 
-    private func syncHeaderAfterDraftChange() {
-        let draftHeaderState = EmailDraftHeaderEditState(draft: draft)
-        let headerState = currentHeaderState
-        guard headerState != draftHeaderState else {
-            lastSubmittedHeaderState = draftHeaderState
-            return
+    private func applyEditState(_ state: EmailDraftEditState) {
+        if bodyText != state.bodyText {
+            isApplyingDraftBody = true
+            bodyText = state.bodyText
         }
-        guard draftHeaderState != lastSubmittedHeaderState else {
-            scheduleHeaderSave(headerState, baseVersion: draft.version)
-            return
-        }
-        headerSaveTask?.cancel()
+
+        guard currentHeaderState != state.headerState else { return }
         isApplyingHeaderFields = true
-        applyHeaderState(draftHeaderState)
-        lastSubmittedHeaderState = draftHeaderState
+        applyHeaderState(state.headerState)
         Task { @MainActor in
             isApplyingHeaderFields = false
         }
@@ -1185,7 +1225,11 @@ private struct EmailThreadDraftCard: View {
         }
     }
 
-    private func scheduleSave(_ value: String, baseVersion: Int) {
+    private func scheduleSave(
+        _ value: EmailDraftEditState,
+        baseVersion: Int,
+        baseline: EmailDraftEditState
+    ) {
         saveTask?.cancel()
         saveTask = Task { @MainActor in
             do {
@@ -1194,24 +1238,13 @@ private struct EmailThreadDraftCard: View {
                 return
             }
             guard !Task.isCancelled else { return }
-            lastSubmittedBodyText = value
+            let patch = value.patch(relativeTo: baseline)
             saveTask = nil
-            onUpdateDraft(baseVersion, EmailDraftPatch(bodyText: value))
-        }
-    }
-
-    private func scheduleHeaderSave(_ value: EmailDraftHeaderEditState, baseVersion: Int) {
-        headerSaveTask?.cancel()
-        headerSaveTask = Task { @MainActor in
-            do {
-                try await Task.sleep(nanoseconds: 450_000_000)
-            } catch {
+            guard !patch.isEmpty else {
                 return
             }
-            guard !Task.isCancelled else { return }
-            lastSubmittedHeaderState = value
-            headerSaveTask = nil
-            onUpdateDraft(baseVersion, value.patch())
+            lastSubmittedEditState = value.persistedState
+            onUpdateDraft(baseVersion, patch)
         }
     }
 }
