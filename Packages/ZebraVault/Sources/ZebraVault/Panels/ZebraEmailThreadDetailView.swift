@@ -12,6 +12,7 @@ public struct ZebraEmailThreadDetailView: View {
     private let archiveErrorMessage: String?
     private let draftErrorMessage: String?
     private let draftErrorMessages: [String: String]
+    private let sendingDraftIds: Set<String>
     private let expandedMessageIds: Set<String>
     /// Extra bottom padding on the scrollable thread body so a host-overlaid
     /// floating chat pill does not obscure the last message. Mirrors the
@@ -26,6 +27,7 @@ public struct ZebraEmailThreadDetailView: View {
     private let onToggleMessage: (String) -> Void
     private let onCreateReply: (String) -> Void
     private let onUpdateDraft: (String, Int, EmailDraftPatch) -> Void
+    private let onSendDraft: (String, Int, EmailDraftPatch) -> Void
     private let onDiscardDraft: (String) -> Void
     private let onOpenURL: (URL) -> Void
 
@@ -39,6 +41,7 @@ public struct ZebraEmailThreadDetailView: View {
         archiveErrorMessage: String? = nil,
         draftErrorMessage: String? = nil,
         draftErrorMessages: [String: String] = [:],
+        sendingDraftIds: Set<String> = [],
         expandedMessageIds: Set<String>,
         bottomContentInset: CGFloat = 0,
         onArchive: @escaping () -> Void = {},
@@ -48,6 +51,7 @@ public struct ZebraEmailThreadDetailView: View {
         onToggleMessage: @escaping (String) -> Void,
         onCreateReply: @escaping (String) -> Void = { _ in },
         onUpdateDraft: @escaping (String, Int, EmailDraftPatch) -> Void = { _, _, _ in },
+        onSendDraft: @escaping (String, Int, EmailDraftPatch) -> Void = { _, _, _ in },
         onDiscardDraft: @escaping (String) -> Void = { _ in },
         onOpenURL: @escaping (URL) -> Void
     ) {
@@ -60,6 +64,7 @@ public struct ZebraEmailThreadDetailView: View {
         self.archiveErrorMessage = archiveErrorMessage
         self.draftErrorMessage = draftErrorMessage
         self.draftErrorMessages = draftErrorMessages
+        self.sendingDraftIds = sendingDraftIds
         self.expandedMessageIds = expandedMessageIds
         self.bottomContentInset = bottomContentInset
         self.onArchive = onArchive
@@ -69,6 +74,7 @@ public struct ZebraEmailThreadDetailView: View {
         self.onToggleMessage = onToggleMessage
         self.onCreateReply = onCreateReply
         self.onUpdateDraft = onUpdateDraft
+        self.onSendDraft = onSendDraft
         self.onDiscardDraft = onDiscardDraft
         self.onOpenURL = onOpenURL
     }
@@ -244,8 +250,12 @@ public struct ZebraEmailThreadDetailView: View {
                                 EmailThreadDraftCard(
                                     draft: draft,
                                     errorMessage: draftErrorMessages[draft.localDraftId],
+                                    isSending: sendingDraftIds.contains(draft.localDraftId),
                                     onUpdateDraft: { baseVersion, patch in
                                         onUpdateDraft(draft.localDraftId, baseVersion, patch)
+                                    },
+                                    onSendDraft: { baseVersion, patch in
+                                        onSendDraft(draft.localDraftId, baseVersion, patch)
                                     },
                                     onDiscard: {
                                         onDiscardDraft(draft.localDraftId)
@@ -257,8 +267,12 @@ public struct ZebraEmailThreadDetailView: View {
                             EmailThreadDraftCard(
                                 draft: draft,
                                 errorMessage: draftErrorMessages[draft.localDraftId],
+                                isSending: sendingDraftIds.contains(draft.localDraftId),
                                 onUpdateDraft: { baseVersion, patch in
                                     onUpdateDraft(draft.localDraftId, baseVersion, patch)
+                                },
+                                onSendDraft: { baseVersion, patch in
+                                    onSendDraft(draft.localDraftId, baseVersion, patch)
                                 },
                                 onDiscard: {
                                     onDiscardDraft(draft.localDraftId)
@@ -745,7 +759,9 @@ private struct EmailDraftHeaderSummaryRow: View {
 private struct EmailThreadDraftCard: View {
     let draft: EmailDraftSnapshot
     let errorMessage: String?
+    let isSending: Bool
     let onUpdateDraft: (Int, EmailDraftPatch) -> Void
+    let onSendDraft: (Int, EmailDraftPatch) -> Void
     let onDiscard: () -> Void
 
     @State private var bodyText: String
@@ -763,12 +779,16 @@ private struct EmailThreadDraftCard: View {
     init(
         draft: EmailDraftSnapshot,
         errorMessage: String?,
+        isSending: Bool,
         onUpdateDraft: @escaping (Int, EmailDraftPatch) -> Void,
+        onSendDraft: @escaping (Int, EmailDraftPatch) -> Void,
         onDiscard: @escaping () -> Void
     ) {
         self.draft = draft
         self.errorMessage = errorMessage
+        self.isSending = isSending
         self.onUpdateDraft = onUpdateDraft
+        self.onSendDraft = onSendDraft
         self.onDiscard = onDiscard
         _bodyText = State(initialValue: draft.bodyText)
         let headerState = EmailDraftHeaderEditState(draft: draft)
@@ -849,6 +869,7 @@ private struct EmailThreadDraftCard: View {
                     systemName: "trash",
                     label: String(localized: "email.draft.discard", defaultValue: "Discard draft"),
                     boxWidth: EmailToolbarActionMetrics.pairedButtonWidth,
+                    isDisabled: isSending,
                     foregroundColor: BVColor.fgMute,
                     action: onDiscard
                 )
@@ -912,6 +933,7 @@ private struct EmailThreadDraftCard: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 7)
                 .frame(minHeight: 132)
+                .disabled(isSending)
 
             if bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(String(localized: "email.draft.placeholder", defaultValue: "Write a reply..."))
@@ -927,7 +949,7 @@ private struct EmailThreadDraftCard: View {
     private var bodyToolbar: some View {
         HStack(spacing: 8) {
             Spacer(minLength: 8)
-            Button(action: {}) {
+            Button(action: sendCurrentDraft) {
                 HStack(spacing: 4) {
                     Image(systemName: "checkmark")
                         .font(.system(size: 10, weight: .semibold))
@@ -943,8 +965,8 @@ private struct EmailThreadDraftCard: View {
                 )
             }
             .buttonStyle(.plain)
-            .disabled(true)
-            .opacity(0.65)
+            .disabled(isSendDisabled)
+            .opacity(isSendDisabled ? 0.65 : 1)
         }
         .padding(.horizontal, 10)
         .frame(height: 38)
@@ -984,7 +1006,9 @@ private struct EmailThreadDraftCard: View {
         .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onTapGesture {
-            beginEditingHeaderFields()
+            if !isSending {
+                beginEditingHeaderFields()
+            }
         }
     }
 
@@ -1082,6 +1106,7 @@ private struct EmailThreadDraftCard: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: isSubject ? 11.5 : 11, weight: isSubject ? .medium : .regular))
                     .foregroundColor(isSubject ? BVColor.fgMute : BVColor.fgFaint)
+                    .disabled(isSending)
                     .focused($focusedHeaderField, equals: field)
                     .onSubmit {
                         finishEditingHeaderFields()
@@ -1123,6 +1148,14 @@ private struct EmailThreadDraftCard: View {
             ?? String(localized: "email.detail.noSubject", defaultValue: "(no subject)")
     }
 
+    private var isSendDisabled: Bool {
+        isSending || !hasSendRecipients || subjectText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var hasSendRecipients: Bool {
+        !EmailDraftHeaderEditState.parseRecipients(toText).isEmpty
+    }
+
     private func beginEditingHeaderFields(focusing field: EmailDraftHeaderField = .to) {
         isEditingHeaderFields = true
         focusedHeaderField = field
@@ -1135,6 +1168,19 @@ private struct EmailThreadDraftCard: View {
         isEditingHeaderFields = false
         focusedHeaderField = nil
         handleHeaderTextChange()
+    }
+
+    private func sendCurrentDraft() {
+        guard !isSendDisabled else { return }
+        focusedHeaderField = nil
+        isEditingHeaderFields = false
+        saveTask?.cancel()
+
+        let editState = currentEditState
+        let draftState = EmailDraftEditState(draft: draft)
+        let patch = editState.patch(relativeTo: draftState)
+        lastSubmittedEditState = editState.persistedState
+        onSendDraft(draft.version, patch)
     }
 
     private var currentHeaderState: EmailDraftHeaderEditState {
@@ -1205,7 +1251,10 @@ private struct EmailThreadDraftCard: View {
     }
 
     private var statusText: String {
-        errorMessage == nil ? syncStateText : String(localized: "email.draft.sync.failed", defaultValue: "Failed")
+        if isSending {
+            return String(localized: "email.draft.sync.sending", defaultValue: "Sending")
+        }
+        return errorMessage == nil ? syncStateText : String(localized: "email.draft.sync.failed", defaultValue: "Failed")
     }
 
     private var syncStateText: String {

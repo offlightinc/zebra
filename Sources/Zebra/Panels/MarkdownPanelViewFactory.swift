@@ -138,6 +138,7 @@ private struct ZebraEmailPanelHost: View {
                         detailStore.draftErrorMessage(threadId: panel.threadId, localDraftId: draft.localDraftId)
                             .map { (draft.localDraftId, $0) }
                     }),
+                sendingDraftIds: detailStore.sendingDraftIds(threadId: panel.threadId),
                 expandedMessageIds: detailStore.expandedMessageIds(threadId: panel.threadId),
                 // Markdown 측 `ZebraMarkdownPanelView` 가 ScrollView 본문에 부여하는
                 // bottom 여백과 같은 값. 마지막 메시지가 floating chat pill 뒤로
@@ -170,6 +171,14 @@ private struct ZebraEmailPanelHost: View {
                 },
                 onUpdateDraft: { localDraftId, baseVersion, patch in
                     detailStore.updateDraft(
+                        threadId: panel.threadId,
+                        localDraftId: localDraftId,
+                        baseVersion: baseVersion,
+                        patch: patch
+                    )
+                },
+                onSendDraft: { localDraftId, baseVersion, patch in
+                    detailStore.sendDraft(
                         threadId: panel.threadId,
                         localDraftId: localDraftId,
                         baseVersion: baseVersion,

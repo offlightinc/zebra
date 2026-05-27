@@ -373,6 +373,49 @@ public actor ZebraClawvisorEmailClient {
         )
     }
 
+    public func sendEmailDraft(localDraftId: String) async throws -> EmailDraftSnapshot {
+        try openDatabaseIfNeeded()
+        guard let draft = try loadEmailDraft(localDraftId: localDraftId) else {
+            throw ZebraClawvisorEmailClientError.sqlite("email draft not found")
+        }
+        guard draft.status == .active else {
+            throw ZebraClawvisorEmailClientError.sqlite("email draft is not active")
+        }
+
+        let config = try loadConfig()
+        var params: [String: Any] = [
+            "to": draft.toRecipients.joined(separator: ", "),
+            "subject": draft.subject,
+            "body": draft.bodyText,
+        ]
+        if !draft.ccRecipients.isEmpty {
+            params["cc"] = draft.ccRecipients.joined(separator: ", ")
+        }
+        if !draft.bccRecipients.isEmpty {
+            params["bcc"] = draft.bccRecipients.joined(separator: ", ")
+        }
+        if let providerThreadId = draft.providerThreadId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !providerThreadId.isEmpty {
+            params["thread_id"] = providerThreadId
+        }
+        if let inReplyToHeader = draft.inReplyToHeader?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !inReplyToHeader.isEmpty {
+            params["in_reply_to"] = inReplyToHeader
+        }
+
+        let response = try await invoke(
+            config: config,
+            action: "send_message",
+            params: params,
+            reason: "Send the Zebra email draft after the user pressed the Send button in the draft card."
+        )
+        let providerMessageId = sentMessageId(from: response)
+        return try markEmailDraftSentRow(
+            localDraftId: localDraftId,
+            providerMessageId: providerMessageId
+        )
+    }
+
     public func discardEmailDraft(localDraftId: String) throws {
         try openDatabaseIfNeeded()
         try execute(
@@ -769,6 +812,24 @@ private extension ZebraClawvisorEmailClient {
             return [message]
         }
         return []
+    }
+
+    func sentMessageId(from response: Any) -> String? {
+        if let dict = response as? [String: Any] {
+            for key in ["message_id", "id"] {
+                if let value = stringValue(dict[key])?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !value.isEmpty {
+                    return value
+                }
+            }
+            for key in ["message", "data", "result"] {
+                if let nested = dict[key],
+                   let value = sentMessageId(from: nested) {
+                    return value
+                }
+            }
+        }
+        return nil
     }
 
     func messageArrayCandidates(from response: Any) -> [[String: Any]] {
@@ -1619,6 +1680,38 @@ private extension ZebraClawvisorEmailClient {
 
         guard let updated = try loadEmailDraft(localDraftId: localDraftId) else {
             throw ZebraClawvisorEmailClientError.sqlite("email draft update did not return a row")
+        }
+        return updated
+    }
+
+    func markEmailDraftSentRow(
+        localDraftId: String,
+        providerMessageId: String?
+    ) throws -> EmailDraftSnapshot {
+        let now = Date().timeIntervalSince1970
+        try execute(
+            """
+            UPDATE email_drafts
+            SET status = ?,
+                sync_state = ?,
+                provider_message_id = ?,
+                last_error = NULL,
+                updated_at = ?,
+                sent_at = ?
+            WHERE local_draft_id = ?
+            """,
+            [
+                EmailDraftStatus.sent.rawValue,
+                EmailDraftSyncState.sent.rawValue,
+                sqliteNullable(providerMessageId),
+                now,
+                now,
+                localDraftId,
+            ]
+        )
+
+        guard let updated = try loadEmailDraft(localDraftId: localDraftId) else {
+            throw ZebraClawvisorEmailClientError.sqlite("email draft send did not return a row")
         }
         return updated
     }

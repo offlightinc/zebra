@@ -781,6 +781,10 @@ final class ZebraEmailDetailStore: ObservableObject {
         threadStates[threadId]?.draftErrorMessages[localDraftId]
     }
 
+    func sendingDraftIds(threadId: String) -> Set<String> {
+        threadStates[threadId]?.sendingDraftIds ?? []
+    }
+
     func clearDraftError(threadId: String) {
         var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
         state.draftErrorMessage = nil
@@ -840,7 +844,18 @@ final class ZebraEmailDetailStore: ObservableObject {
             threadId: threadId,
             localDraftId: localDraftId,
             baseVersion: baseVersion,
-            patch: patch
+            patch: patch,
+            sendAfterFlush: false
+        )
+    }
+
+    func sendDraft(threadId: String, localDraftId: String, baseVersion: Int, patch: EmailDraftPatch) {
+        enqueueDraftUpdate(
+            threadId: threadId,
+            localDraftId: localDraftId,
+            baseVersion: baseVersion,
+            patch: patch,
+            sendAfterFlush: true
         )
     }
 
@@ -848,20 +863,32 @@ final class ZebraEmailDetailStore: ObservableObject {
         threadId: String,
         localDraftId: String,
         baseVersion: Int,
-        patch: EmailDraftPatch
+        patch: EmailDraftPatch,
+        sendAfterFlush: Bool
     ) {
-        guard !patch.isEmpty else { return }
+        guard !patch.isEmpty || sendAfterFlush else { return }
         var queue = draftUpdateQueues[localDraftId] ?? ZebraEmailDraftUpdateQueue(threadId: threadId)
         queue.threadId = threadId
-        queue.merge(baseVersion: baseVersion, patch: patch)
+        if !patch.isEmpty {
+            queue.merge(baseVersion: baseVersion, patch: patch)
+        }
+        queue.sendAfterFlush = queue.sendAfterFlush || sendAfterFlush
         draftUpdateQueues[localDraftId] = queue
         processNextDraftUpdate(localDraftId: localDraftId)
     }
 
     private func processNextDraftUpdate(localDraftId: String) {
         guard var queue = draftUpdateQueues[localDraftId],
-              !queue.isProcessing,
-              !queue.patch.isEmpty else { return }
+              !queue.isProcessing else { return }
+
+        if queue.patch.isEmpty {
+            guard queue.sendAfterFlush else { return }
+            queue.sendAfterFlush = false
+            queue.isProcessing = true
+            draftUpdateQueues[localDraftId] = queue
+            sendQueuedDraft(localDraftId: localDraftId, threadId: queue.threadId)
+            return
+        }
 
         let threadId = queue.threadId
         let baseVersion = currentDraftVersion(threadId: threadId, localDraftId: localDraftId) ?? queue.fallbackBaseVersion
@@ -891,7 +918,7 @@ final class ZebraEmailDetailStore: ObservableObject {
     private func completeDraftUpdate(localDraftId: String) {
         guard var queue = draftUpdateQueues[localDraftId] else { return }
         queue.isProcessing = false
-        if queue.patch.isEmpty {
+        if queue.patch.isEmpty && !queue.sendAfterFlush {
             draftUpdateQueues[localDraftId] = nil
         } else {
             draftUpdateQueues[localDraftId] = queue
@@ -910,6 +937,48 @@ final class ZebraEmailDetailStore: ObservableObject {
         draftUpdateQueues[localDraftId] = queue
     }
 
+    private func sendQueuedDraft(localDraftId: String, threadId: String) {
+        markDraftSending(threadId: threadId, localDraftId: localDraftId, isSending: true)
+        Task {
+            do {
+                _ = try await client.sendEmailDraft(localDraftId: localDraftId)
+                completeDraftSend(localDraftId: localDraftId, threadId: threadId)
+                await reloadThread(threadId: threadId, forceRefresh: true)
+            } catch {
+                failDraftSend(localDraftId: localDraftId, threadId: threadId, error: error)
+            }
+        }
+    }
+
+    private func completeDraftSend(localDraftId: String, threadId: String) {
+        draftUpdateQueues[localDraftId] = nil
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        state.sendingDraftIds.remove(localDraftId)
+        state.draftErrorMessages[localDraftId] = nil
+        state.drafts.removeAll { $0.localDraftId == localDraftId }
+        threadStates[threadId] = state
+    }
+
+    private func failDraftSend(localDraftId: String, threadId: String, error: Error) {
+        if var queue = draftUpdateQueues[localDraftId] {
+            queue.isProcessing = false
+            draftUpdateQueues[localDraftId] = queue.patch.isEmpty && !queue.sendAfterFlush ? nil : queue
+        }
+        markDraftSending(threadId: threadId, localDraftId: localDraftId, isSending: false)
+        setDraftError(error, threadId: threadId, localDraftId: localDraftId)
+    }
+
+    private func markDraftSending(threadId: String, localDraftId: String, isSending: Bool) {
+        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
+        if isSending {
+            state.sendingDraftIds.insert(localDraftId)
+            state.draftErrorMessages[localDraftId] = nil
+        } else {
+            state.sendingDraftIds.remove(localDraftId)
+        }
+        threadStates[threadId] = state
+    }
+
     private func currentDraftVersion(threadId: String, localDraftId: String) -> Int? {
         threadStates[threadId]?.drafts.first { $0.localDraftId == localDraftId }?.version
     }
@@ -921,6 +990,7 @@ final class ZebraEmailDetailStore: ObservableObject {
                 var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
                 state.drafts.removeAll { $0.localDraftId == localDraftId }
                 state.draftErrorMessages[localDraftId] = nil
+                state.sendingDraftIds.remove(localDraftId)
                 threadStates[threadId] = state
                 draftUpdateQueues[localDraftId] = nil
             } catch {
@@ -1028,6 +1098,7 @@ private struct ZebraEmailThreadUIState {
     var drafts: [EmailDraftSnapshot] = []
     var draftErrorMessage: String?
     var draftErrorMessages: [String: String] = [:]
+    var sendingDraftIds: Set<String> = []
     var isLoading = false
     var isArchiving = false
     var errorMessage: String?
@@ -1042,6 +1113,7 @@ private struct ZebraEmailDraftUpdateQueue {
     var patch = EmailDraftPatch()
     var fallbackBaseVersion: Int?
     var isProcessing = false
+    var sendAfterFlush = false
 
     mutating func merge(baseVersion: Int?, patch nextPatch: EmailDraftPatch) {
         if fallbackBaseVersion == nil {
