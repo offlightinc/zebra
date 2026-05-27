@@ -826,12 +826,21 @@ final class ZebraEmailDetailStore: ObservableObject {
     }
 
     func updateDraftBody(threadId: String, localDraftId: String, baseVersion: Int, bodyText: String) {
+        updateDraft(
+            threadId: threadId,
+            localDraftId: localDraftId,
+            baseVersion: baseVersion,
+            patch: EmailDraftPatch(bodyText: bodyText)
+        )
+    }
+
+    func updateDraft(threadId: String, localDraftId: String, baseVersion: Int, patch: EmailDraftPatch) {
         Task {
             do {
                 let draft = try await client.updateEmailDraft(
                     localDraftId: localDraftId,
                     baseVersion: baseVersion,
-                    patch: EmailDraftPatch(bodyText: bodyText),
+                    patch: patch,
                     origin: .user
                 )
                 upsertDraft(draft, threadId: threadId)

@@ -1569,7 +1569,20 @@ private extension ZebraClawvisorEmailClient {
         if let baseVersion, baseVersion != current.version {
             throw ZebraClawvisorEmailClientError.sqlite("email draft version conflict")
         }
-        guard let bodyText = patch.bodyText else {
+        guard !patch.isEmpty else {
+            return current
+        }
+
+        let nextSubject = patch.subject ?? current.subject
+        let nextToRecipients = patch.toRecipients ?? current.toRecipients
+        let nextCcRecipients = patch.ccRecipients ?? current.ccRecipients
+        let nextBccRecipients = patch.bccRecipients ?? current.bccRecipients
+        let nextBodyText = patch.bodyText ?? current.bodyText
+        guard nextSubject != current.subject ||
+            nextToRecipients != current.toRecipients ||
+            nextCcRecipients != current.ccRecipients ||
+            nextBccRecipients != current.bccRecipients ||
+            nextBodyText != current.bodyText else {
             return current
         }
 
@@ -1579,6 +1592,10 @@ private extension ZebraClawvisorEmailClient {
             SET origin = ?,
                 sync_state = ?,
                 version = version + 1,
+                to_recipients_json = ?,
+                cc_recipients_json = ?,
+                bcc_recipients_json = ?,
+                subject = ?,
                 body_html = ?,
                 body_text = ?,
                 last_error = NULL,
@@ -1588,8 +1605,12 @@ private extension ZebraClawvisorEmailClient {
             [
                 origin.rawValue,
                 EmailDraftSyncState.dirty.rawValue,
-                htmlFromPlainText(bodyText),
-                bodyText,
+                jsonString(nextToRecipients),
+                jsonString(nextCcRecipients),
+                jsonString(nextBccRecipients),
+                nextSubject,
+                htmlFromPlainText(nextBodyText),
+                nextBodyText,
                 Date().timeIntervalSince1970,
                 localDraftId,
                 EmailDraftStatus.active.rawValue,

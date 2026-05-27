@@ -161,9 +161,31 @@ public struct EmailDraftCreateRequest: Sendable {
 }
 
 public struct EmailDraftPatch: Sendable {
+    public let subject: String?
+    public let toRecipients: [String]?
+    public let ccRecipients: [String]?
+    public let bccRecipients: [String]?
     public let bodyText: String?
 
-    public init(bodyText: String? = nil) {
+    public var isEmpty: Bool {
+        subject == nil &&
+            toRecipients == nil &&
+            ccRecipients == nil &&
+            bccRecipients == nil &&
+            bodyText == nil
+    }
+
+    public init(
+        subject: String? = nil,
+        toRecipients: [String]? = nil,
+        ccRecipients: [String]? = nil,
+        bccRecipients: [String]? = nil,
+        bodyText: String? = nil
+    ) {
+        self.subject = subject
+        self.toRecipients = toRecipients
+        self.ccRecipients = ccRecipients
+        self.bccRecipients = bccRecipients
         self.bodyText = bodyText
     }
 }

@@ -168,12 +168,12 @@ private struct ZebraEmailPanelHost: View {
                         targetMessageId: targetMessageId
                     )
                 },
-                onUpdateDraftBody: { localDraftId, baseVersion, bodyText in
-                    detailStore.updateDraftBody(
+                onUpdateDraft: { localDraftId, baseVersion, patch in
+                    detailStore.updateDraft(
                         threadId: panel.threadId,
                         localDraftId: localDraftId,
                         baseVersion: baseVersion,
-                        bodyText: bodyText
+                        patch: patch
                     )
                 },
                 onDiscardDraft: { localDraftId in

@@ -25,7 +25,7 @@ public struct ZebraEmailThreadDetailView: View {
     private let onRefresh: () -> Void
     private let onToggleMessage: (String) -> Void
     private let onCreateReply: (String) -> Void
-    private let onUpdateDraftBody: (String, Int, String) -> Void
+    private let onUpdateDraft: (String, Int, EmailDraftPatch) -> Void
     private let onDiscardDraft: (String) -> Void
     private let onOpenURL: (URL) -> Void
 
@@ -47,7 +47,7 @@ public struct ZebraEmailThreadDetailView: View {
         onRefresh: @escaping () -> Void,
         onToggleMessage: @escaping (String) -> Void,
         onCreateReply: @escaping (String) -> Void = { _ in },
-        onUpdateDraftBody: @escaping (String, Int, String) -> Void = { _, _, _ in },
+        onUpdateDraft: @escaping (String, Int, EmailDraftPatch) -> Void = { _, _, _ in },
         onDiscardDraft: @escaping (String) -> Void = { _ in },
         onOpenURL: @escaping (URL) -> Void
     ) {
@@ -68,7 +68,7 @@ public struct ZebraEmailThreadDetailView: View {
         self.onRefresh = onRefresh
         self.onToggleMessage = onToggleMessage
         self.onCreateReply = onCreateReply
-        self.onUpdateDraftBody = onUpdateDraftBody
+        self.onUpdateDraft = onUpdateDraft
         self.onDiscardDraft = onDiscardDraft
         self.onOpenURL = onOpenURL
     }
@@ -110,59 +110,38 @@ public struct ZebraEmailThreadDetailView: View {
 
             Spacer(minLength: 8)
 
-            HStack(spacing: 4) {
+            HStack(spacing: EmailToolbarActionMetrics.groupSpacing) {
                 if detail != nil {
-                    Button(action: onArchive) {
-                        if isArchiving {
-                            ProgressView()
-                                .controlSize(.small)
-                                .scaleEffect(0.72)
-                                .frame(height: 22)
-                        } else {
-                            Image(systemName: "archivebox")
-                                .font(.system(size: 12))
-                                .frame(height: 22)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(BVColor.fgMute)
-                    .disabled(isLoading || isArchiving)
-                    .help(String(localized: "email.detail.archive", defaultValue: "Archive"))
-                    .accessibilityLabel(String(localized: "email.detail.archive", defaultValue: "Archive"))
+                    EmailHeaderIconButton(
+                        systemName: "archivebox",
+                        label: String(localized: "email.detail.archive", defaultValue: "Archive"),
+                        isDisabled: isLoading || isArchiving,
+                        isShowingProgress: isArchiving,
+                        foregroundColor: BVColor.fgMute,
+                        action: onArchive
+                    )
                 }
 
                 if let gmailURL = EmailThreadGmailURL.build(
                     accountEmail: detail?.accountEmail,
                     providerThreadId: detail?.providerThreadId
                 ) {
-                    Button(action: { onOpenURL(gmailURL) }) {
-                        Image(systemName: "arrow.up.right.square")
-                            .font(.system(size: 12))
-                            .frame(height: 22)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(BVColor.fgMute)
-                    .help(String(localized: "email.detail.openInGmail", defaultValue: "Open in Gmail"))
-                    .accessibilityLabel(String(localized: "email.detail.openInGmail", defaultValue: "Open in Gmail"))
+                    EmailHeaderIconButton(
+                        systemName: "arrow.up.right.square",
+                        label: String(localized: "email.detail.openInGmail", defaultValue: "Open in Gmail"),
+                        foregroundColor: BVColor.fgMute,
+                        action: { onOpenURL(gmailURL) }
+                    )
                 }
 
-                Button(action: onRefresh) {
-                    if isLoading {
-                        ProgressView()
-                            .controlSize(.small)
-                            .scaleEffect(0.72)
-                            .frame(height: 22)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 12))
-                            .frame(height: 22)
-                    }
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(BVColor.fgMute)
-                .disabled(isLoading)
-                .help(String(localized: "email.detail.refresh", defaultValue: "Refresh"))
-                .accessibilityLabel(String(localized: "email.detail.refresh", defaultValue: "Refresh"))
+                EmailHeaderIconButton(
+                    systemName: "arrow.clockwise",
+                    label: String(localized: "email.detail.refresh", defaultValue: "Refresh"),
+                    isDisabled: isLoading,
+                    isShowingProgress: isLoading,
+                    foregroundColor: BVColor.fgMute,
+                    action: onRefresh
+                )
             }
         }
         .padding(.leading, 14)
@@ -265,8 +244,8 @@ public struct ZebraEmailThreadDetailView: View {
                                 EmailThreadDraftCard(
                                     draft: draft,
                                     errorMessage: draftErrorMessages[draft.localDraftId],
-                                    onUpdateBody: { baseVersion, bodyText in
-                                        onUpdateDraftBody(draft.localDraftId, baseVersion, bodyText)
+                                    onUpdateDraft: { baseVersion, patch in
+                                        onUpdateDraft(draft.localDraftId, baseVersion, patch)
                                     },
                                     onDiscard: {
                                         onDiscardDraft(draft.localDraftId)
@@ -278,8 +257,8 @@ public struct ZebraEmailThreadDetailView: View {
                             EmailThreadDraftCard(
                                 draft: draft,
                                 errorMessage: draftErrorMessages[draft.localDraftId],
-                                onUpdateBody: { baseVersion, bodyText in
-                                    onUpdateDraftBody(draft.localDraftId, baseVersion, bodyText)
+                                onUpdateDraft: { baseVersion, patch in
+                                    onUpdateDraft(draft.localDraftId, baseVersion, patch)
                                 },
                                 onDiscard: {
                                     onDiscardDraft(draft.localDraftId)
@@ -381,6 +360,77 @@ private struct EmailThreadCardContainer<Content: View>: View {
     }
 }
 
+private enum EmailToolbarActionMetrics {
+    static let buttonWidth: CGFloat = 16
+    static let buttonHeight: CGFloat = 22
+    static let groupSpacing: CGFloat = 0
+    static let iconSize: CGFloat = 12
+    static let pairedButtonWidth: CGFloat = 18
+    static let pairedSpacing: CGFloat = 1
+}
+
+private struct EmailHeaderIconButton: View {
+    let systemName: String
+    let label: String
+    let iconSize: CGFloat
+    let iconWeight: Font.Weight
+    let boxWidth: CGFloat
+    let boxHeight: CGFloat
+    let isDisabled: Bool
+    let isShowingProgress: Bool
+    let foregroundColor: Color
+    let action: () -> Void
+
+    init(
+        systemName: String,
+        label: String,
+        iconSize: CGFloat = EmailToolbarActionMetrics.iconSize,
+        iconWeight: Font.Weight = .medium,
+        boxWidth: CGFloat = EmailToolbarActionMetrics.buttonWidth,
+        boxHeight: CGFloat = EmailToolbarActionMetrics.buttonHeight,
+        isDisabled: Bool = false,
+        isShowingProgress: Bool = false,
+        foregroundColor: Color,
+        action: @escaping () -> Void
+    ) {
+        self.systemName = systemName
+        self.label = label
+        self.iconSize = iconSize
+        self.iconWeight = iconWeight
+        self.boxWidth = boxWidth
+        self.boxHeight = boxHeight
+        self.isDisabled = isDisabled
+        self.isShowingProgress = isShowingProgress
+        self.foregroundColor = foregroundColor
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Color.clear
+                if isShowingProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.72)
+                } else {
+                    Image(systemName: systemName)
+                        .font(.system(size: iconSize, weight: iconWeight))
+                        .foregroundColor(foregroundColor)
+                }
+            }
+            .frame(width: boxWidth, height: boxHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(width: boxWidth, height: boxHeight, alignment: .center)
+        .contentShape(Rectangle())
+        .disabled(isDisabled)
+        .help(label)
+        .accessibilityLabel(label)
+    }
+}
+
 private struct EmailThreadMessageCard: View {
     let message: EmailThreadMessage
     let isExpanded: Bool
@@ -398,7 +448,7 @@ private struct EmailThreadMessageCard: View {
                     .onTapGesture(perform: onToggle)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
+                    HStack(alignment: .center, spacing: 6) {
                         HStack(spacing: 6) {
                             Text(senderTitle)
                                 .font(.system(size: 12.5, weight: message.isUnread ? .semibold : .medium))
@@ -410,6 +460,7 @@ private struct EmailThreadMessageCard: View {
                                     .frame(width: 6, height: 6)
                             }
                         }
+                        .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
                         .contentShape(Rectangle())
                         .onTapGesture(perform: onToggle)
 
@@ -418,34 +469,32 @@ private struct EmailThreadMessageCard: View {
                             .font(.system(size: 11))
                             .foregroundColor(BVColor.fgFaint)
                             .lineLimit(1)
-                        HStack(spacing: 2) {
-                            Button(action: onCreateReply) {
-                                Image(systemName: "arrowshape.turn.up.left")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 24, height: 24)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(BVColor.fgMute)
-                            .help(String(localized: "email.draft.reply", defaultValue: "Reply"))
-                            .accessibilityLabel(String(localized: "email.draft.reply", defaultValue: "Reply"))
-
-                            Button(action: onToggle) {
-                                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .frame(width: 24, height: 24)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(BVColor.fgFaint)
-                            .help(isExpanded
-                                ? String(localized: "email.detail.collapseMessage", defaultValue: "Collapse message")
-                                : String(localized: "email.detail.expandMessage", defaultValue: "Expand message")
+                            .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
+                            .fixedSize(horizontal: true, vertical: false)
+                        HStack(alignment: .center, spacing: EmailToolbarActionMetrics.pairedSpacing) {
+                            EmailHeaderIconButton(
+                                systemName: "arrowshape.turn.up.left",
+                                label: String(localized: "email.draft.reply", defaultValue: "Reply"),
+                                boxWidth: EmailToolbarActionMetrics.pairedButtonWidth,
+                                foregroundColor: BVColor.fgMute,
+                                action: onCreateReply
                             )
-                            .accessibilityLabel(isExpanded
-                                ? String(localized: "email.detail.collapseMessage", defaultValue: "Collapse message")
-                                : String(localized: "email.detail.expandMessage", defaultValue: "Expand message")
+
+                            EmailHeaderIconButton(
+                                systemName: isExpanded ? "chevron.up" : "chevron.down",
+                                label: isExpanded
+                                    ? String(localized: "email.detail.collapseMessage", defaultValue: "Collapse message")
+                                    : String(localized: "email.detail.expandMessage", defaultValue: "Expand message"),
+                                iconWeight: .semibold,
+                                boxWidth: EmailToolbarActionMetrics.pairedButtonWidth,
+                                foregroundColor: BVColor.fgFaint,
+                                action: onToggle
                             )
                         }
+                        .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
+                        .fixedSize(horizontal: true, vertical: false)
                     }
+                    .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
                     if !isExpanded {
                         Text(collapsedPreview)
                             .font(.system(size: 11.5))
@@ -558,29 +607,94 @@ private struct EmailThreadMessageCard: View {
     }
 }
 
+private enum EmailDraftHeaderField: Hashable {
+    case to
+    case cc
+    case bcc
+    case subject
+}
+
+private struct EmailDraftHeaderEditState: Equatable {
+    var toText: String
+    var ccText: String
+    var bccText: String
+    var subjectText: String
+
+    init(toText: String, ccText: String, bccText: String, subjectText: String) {
+        self.toText = toText
+        self.ccText = ccText
+        self.bccText = bccText
+        self.subjectText = subjectText
+    }
+
+    init(draft: EmailDraftSnapshot) {
+        toText = Self.formatRecipients(draft.toRecipients)
+        ccText = Self.formatRecipients(draft.ccRecipients)
+        bccText = Self.formatRecipients(draft.bccRecipients)
+        subjectText = draft.subject
+    }
+
+    func patch() -> EmailDraftPatch {
+        EmailDraftPatch(
+            subject: subjectText.trimmingCharacters(in: .whitespacesAndNewlines),
+            toRecipients: Self.parseRecipients(toText),
+            ccRecipients: Self.parseRecipients(ccText),
+            bccRecipients: Self.parseRecipients(bccText)
+        )
+    }
+
+    static func formatRecipients(_ recipients: [String]) -> String {
+        recipients.joined(separator: ", ")
+    }
+
+    static func parseRecipients(_ value: String) -> [String] {
+        value
+            .split { character in
+                character == "," || character == ";" || character == "\n"
+            }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+}
+
 private struct EmailThreadDraftCard: View {
     let draft: EmailDraftSnapshot
     let errorMessage: String?
-    let onUpdateBody: (Int, String) -> Void
+    let onUpdateDraft: (Int, EmailDraftPatch) -> Void
     let onDiscard: () -> Void
 
     @State private var bodyText: String
     @State private var saveTask: Task<Void, Never>?
     @State private var isApplyingDraftBody = false
     @State private var lastSubmittedBodyText: String
+    @State private var toText: String
+    @State private var ccText: String
+    @State private var bccText: String
+    @State private var subjectText: String
+    @State private var headerSaveTask: Task<Void, Never>?
+    @State private var isApplyingHeaderFields = false
+    @State private var lastSubmittedHeaderState: EmailDraftHeaderEditState
+    @State private var isEditingHeaderFields = false
+    @FocusState private var focusedHeaderField: EmailDraftHeaderField?
 
     init(
         draft: EmailDraftSnapshot,
         errorMessage: String?,
-        onUpdateBody: @escaping (Int, String) -> Void,
+        onUpdateDraft: @escaping (Int, EmailDraftPatch) -> Void,
         onDiscard: @escaping () -> Void
     ) {
         self.draft = draft
         self.errorMessage = errorMessage
-        self.onUpdateBody = onUpdateBody
+        self.onUpdateDraft = onUpdateDraft
         self.onDiscard = onDiscard
         _bodyText = State(initialValue: draft.bodyText)
         _lastSubmittedBodyText = State(initialValue: draft.bodyText)
+        let headerState = EmailDraftHeaderEditState(draft: draft)
+        _toText = State(initialValue: headerState.toText)
+        _ccText = State(initialValue: headerState.ccText)
+        _bccText = State(initialValue: headerState.bccText)
+        _subjectText = State(initialValue: headerState.subjectText)
+        _lastSubmittedHeaderState = State(initialValue: headerState)
     }
 
     var body: some View {
@@ -606,21 +720,24 @@ private struct EmailThreadDraftCard: View {
             scheduleSave(newValue, baseVersion: draft.version)
         }
         .onChange(of: draft.version) { _, _ in
-            guard bodyText != draft.bodyText else {
-                lastSubmittedBodyText = draft.bodyText
-                return
-            }
-            guard draft.bodyText != lastSubmittedBodyText else {
-                scheduleSave(bodyText, baseVersion: draft.version)
-                return
-            }
-            saveTask?.cancel()
-            isApplyingDraftBody = true
-            bodyText = draft.bodyText
-            lastSubmittedBodyText = draft.bodyText
+            syncBodyAfterDraftChange()
+            syncHeaderAfterDraftChange()
+        }
+        .onChange(of: toText) { _, _ in
+            handleHeaderTextChange()
+        }
+        .onChange(of: ccText) { _, _ in
+            handleHeaderTextChange()
+        }
+        .onChange(of: bccText) { _, _ in
+            handleHeaderTextChange()
+        }
+        .onChange(of: subjectText) { _, _ in
+            handleHeaderTextChange()
         }
         .onDisappear {
             saveTask?.cancel()
+            headerSaveTask?.cancel()
         }
     }
 
@@ -633,39 +750,45 @@ private struct EmailThreadDraftCard: View {
             .frame(width: 24, height: 24)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+                HStack(alignment: .center, spacing: 6) {
                     Text(displayName)
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundColor(BVColor.fg)
                         .lineLimit(1)
+                        .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
                     Spacer(minLength: 4)
                     Text(statusText)
                         .font(.system(size: 11))
                         .foregroundColor(errorMessage == nil ? BVColor.fgFaint : BVColor.fgMute)
                         .lineLimit(1)
+                        .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
+                        .fixedSize(horizontal: true, vertical: false)
                         .help(errorMessage ?? statusText)
-                    Button(action: onDiscard) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 11, weight: .medium))
-                            .frame(width: 20, height: 20)
+                    HStack(alignment: .center, spacing: EmailToolbarActionMetrics.pairedSpacing) {
+                        EmailHeaderIconButton(
+                            systemName: isEditingHeaderFields ? "checkmark" : "square.and.pencil",
+                            label: isEditingHeaderFields
+                                ? String(localized: "email.draft.doneEditing", defaultValue: "Done editing")
+                                : String(localized: "email.draft.editFields", defaultValue: "Edit draft fields"),
+                            iconWeight: .semibold,
+                            boxWidth: EmailToolbarActionMetrics.pairedButtonWidth,
+                            foregroundColor: BVColor.fgMute,
+                            action: toggleHeaderEditing
+                        )
+                        EmailHeaderIconButton(
+                            systemName: "trash",
+                            label: String(localized: "email.draft.discard", defaultValue: "Discard draft"),
+                            boxWidth: EmailToolbarActionMetrics.pairedButtonWidth,
+                            foregroundColor: BVColor.fgMute,
+                            action: onDiscard
+                        )
                     }
-                    .buttonStyle(.plain)
-                    .foregroundColor(BVColor.fgMute)
-                    .help(String(localized: "email.draft.discard", defaultValue: "Discard draft"))
-                    .accessibilityLabel(String(localized: "email.draft.discard", defaultValue: "Discard draft"))
+                    .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
+                .frame(height: EmailToolbarActionMetrics.buttonHeight, alignment: .center)
 
-                Text(recipientsText)
-                    .font(.system(size: 11))
-                    .foregroundColor(BVColor.fgFaint)
-                    .lineLimit(2)
-                    .textSelection(.enabled)
-
-                Text(draft.subject.isEmpty ? String(localized: "email.detail.noSubject", defaultValue: "(no subject)") : draft.subject)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundColor(BVColor.fgMute)
-                    .lineLimit(1)
-                    .textSelection(.enabled)
+                headerFields
 
                 if let errorMessage, !errorMessage.isEmpty {
                     Text(String.localizedStringWithFormat(
@@ -708,6 +831,96 @@ private struct EmailThreadDraftCard: View {
         .frame(minHeight: 150)
     }
 
+    private var headerFields: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            headerFieldRow(
+                label: String(localized: "email.draft.field.to", defaultValue: "To"),
+                field: .to,
+                text: $toText,
+                placeholder: String(localized: "email.draft.placeholder.recipients", defaultValue: "email@example.com"),
+                displayValue: recipientsDisplay(toText)
+            )
+
+            if isEditingHeaderFields || !EmailDraftHeaderEditState.parseRecipients(ccText).isEmpty {
+                headerFieldRow(
+                    label: String(localized: "email.draft.field.cc", defaultValue: "Cc"),
+                    field: .cc,
+                    text: $ccText,
+                    placeholder: String(localized: "email.draft.placeholder.recipients", defaultValue: "email@example.com"),
+                    displayValue: recipientsDisplay(ccText)
+                )
+            }
+
+            if isEditingHeaderFields || !EmailDraftHeaderEditState.parseRecipients(bccText).isEmpty {
+                headerFieldRow(
+                    label: String(localized: "email.draft.field.bcc", defaultValue: "Bcc"),
+                    field: .bcc,
+                    text: $bccText,
+                    placeholder: String(localized: "email.draft.placeholder.recipients", defaultValue: "email@example.com"),
+                    displayValue: recipientsDisplay(bccText)
+                )
+            }
+
+            headerFieldRow(
+                label: String(localized: "email.draft.field.subject", defaultValue: "Subject"),
+                field: .subject,
+                text: $subjectText,
+                placeholder: String(localized: "email.draft.placeholder.subject", defaultValue: "Subject"),
+                displayValue: subjectText.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                    ?? String(localized: "email.detail.noSubject", defaultValue: "(no subject)"),
+                isSubject: true
+            )
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if !isEditingHeaderFields {
+                beginEditingHeaderFields()
+            }
+        }
+    }
+
+    private func headerFieldRow(
+        label: String,
+        field: EmailDraftHeaderField,
+        text: Binding<String>,
+        placeholder: String,
+        displayValue: String,
+        isSubject: Bool = false
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(BVColor.fgFaint)
+                .frame(width: 58, alignment: .leading)
+
+            if isEditingHeaderFields {
+                TextField(placeholder, text: text)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: isSubject ? 11.5 : 11, weight: isSubject ? .medium : .regular))
+                    .foregroundColor(isSubject ? BVColor.fgMute : BVColor.fgFaint)
+                    .focused($focusedHeaderField, equals: field)
+                    .onSubmit {
+                        finishEditingHeaderFields()
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(BVColor.bg)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .stroke(BVColor.border.opacity(0.7))
+                            )
+                    )
+            } else {
+                Text(displayValue)
+                    .font(.system(size: isSubject ? 11.5 : 11, weight: isSubject ? .medium : .regular))
+                    .foregroundColor(isSubject ? BVColor.fgMute : BVColor.fgFaint)
+                    .lineLimit(isSubject ? 1 : 2)
+            }
+        }
+    }
+
     private var displayName: String {
         let digits = draft.displayName
             .split(separator: " ")
@@ -720,6 +933,97 @@ private struct EmailThreadDraftCard: View {
             )
         }
         return draft.displayName
+    }
+
+    private func recipientsDisplay(_ value: String) -> String {
+        let recipients = EmailDraftHeaderEditState.parseRecipients(value)
+        guard !recipients.isEmpty else {
+            return String(localized: "email.draft.noRecipients", defaultValue: "No recipients")
+        }
+        return EmailDraftHeaderEditState.formatRecipients(recipients)
+    }
+
+    private func toggleHeaderEditing() {
+        if isEditingHeaderFields {
+            finishEditingHeaderFields()
+        } else {
+            beginEditingHeaderFields()
+        }
+    }
+
+    private func beginEditingHeaderFields() {
+        isEditingHeaderFields = true
+        focusedHeaderField = .to
+        Task { @MainActor in
+            focusedHeaderField = .to
+        }
+    }
+
+    private func finishEditingHeaderFields() {
+        isEditingHeaderFields = false
+        focusedHeaderField = nil
+        handleHeaderTextChange()
+    }
+
+    private var currentHeaderState: EmailDraftHeaderEditState {
+        EmailDraftHeaderEditState(
+            toText: toText,
+            ccText: ccText,
+            bccText: bccText,
+            subjectText: subjectText
+        )
+    }
+
+    private func applyHeaderState(_ state: EmailDraftHeaderEditState) {
+        toText = state.toText
+        ccText = state.ccText
+        bccText = state.bccText
+        subjectText = state.subjectText
+    }
+
+    private func handleHeaderTextChange() {
+        guard !isApplyingHeaderFields else { return }
+        let headerState = currentHeaderState
+        guard headerState != EmailDraftHeaderEditState(draft: draft) else {
+            headerSaveTask?.cancel()
+            return
+        }
+        scheduleHeaderSave(headerState, baseVersion: draft.version)
+    }
+
+    private func syncBodyAfterDraftChange() {
+        guard bodyText != draft.bodyText else {
+            lastSubmittedBodyText = draft.bodyText
+            return
+        }
+        guard draft.bodyText != lastSubmittedBodyText else {
+            scheduleSave(bodyText, baseVersion: draft.version)
+            return
+        }
+        saveTask?.cancel()
+        isApplyingDraftBody = true
+        bodyText = draft.bodyText
+        lastSubmittedBodyText = draft.bodyText
+    }
+
+    private func syncHeaderAfterDraftChange() {
+        let draftHeaderState = EmailDraftHeaderEditState(draft: draft)
+        let headerState = currentHeaderState
+        guard headerState != draftHeaderState else {
+            lastSubmittedHeaderState = draftHeaderState
+            return
+        }
+        guard draftHeaderState != lastSubmittedHeaderState else {
+            scheduleHeaderSave(headerState, baseVersion: draft.version)
+            return
+        }
+        headerSaveTask?.cancel()
+        isApplyingHeaderFields = true
+        applyHeaderState(draftHeaderState)
+        lastSubmittedHeaderState = draftHeaderState
+        Task { @MainActor in
+            isApplyingHeaderFields = false
+        }
     }
 
     private var statusText: String {
@@ -743,14 +1047,6 @@ private struct EmailThreadDraftCard: View {
         }
     }
 
-    private var recipientsText: String {
-        let to = draft.toRecipients.joined(separator: ", ")
-        return String.localizedStringWithFormat(
-            String(localized: "email.draft.toLine", defaultValue: "To %@"),
-            to.isEmpty ? String(localized: "email.draft.noRecipients", defaultValue: "No recipients") : to
-        )
-    }
-
     private func scheduleSave(_ value: String, baseVersion: Int) {
         saveTask?.cancel()
         saveTask = Task { @MainActor in
@@ -762,7 +1058,22 @@ private struct EmailThreadDraftCard: View {
             guard !Task.isCancelled else { return }
             lastSubmittedBodyText = value
             saveTask = nil
-            onUpdateBody(baseVersion, value)
+            onUpdateDraft(baseVersion, EmailDraftPatch(bodyText: value))
+        }
+    }
+
+    private func scheduleHeaderSave(_ value: EmailDraftHeaderEditState, baseVersion: Int) {
+        headerSaveTask?.cancel()
+        headerSaveTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 450_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            lastSubmittedHeaderState = value
+            headerSaveTask = nil
+            onUpdateDraft(baseVersion, value.patch())
         }
     }
 }
