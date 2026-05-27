@@ -368,7 +368,7 @@ write_generated_commit_message() {
   local changed_count=0
   local task_count=0
   local first_title=""
-  local first_summary_detail=""
+  local first_summary_sentence=""
   local first_task_title=""
   local first_task_status_old=""
   local first_task_status_new=""
@@ -405,7 +405,7 @@ write_generated_commit_message() {
       esac
       detail_text="${label}: ${old_value} -> ${new_value}"
       printf -- '- %s: %s\n' "$title" "$detail_text" >> "$details_file"
-      [[ -n "$first_summary_detail" ]] || first_summary_detail="$detail_text"
+      [[ -n "$first_summary_sentence" ]] || first_summary_sentence="${title}의 ${label}를 업데이트했습니다."
       if [[ "$field" == "status" && -z "$first_task_status_old" ]]; then
         first_task_status_old="$old_value"
         first_task_status_new="$new_value"
@@ -428,10 +428,10 @@ write_generated_commit_message() {
       timeline_line="$(truncate_text "$timeline_line" 180)"
       detail_text="타임라인 추가: ${timeline_line}"
       printf -- '- %s: %s\n' "$title" "$detail_text" >> "$details_file"
-      [[ -n "$first_summary_detail" ]] || first_summary_detail="$detail_text"
+      [[ -n "$first_summary_sentence" ]] || first_summary_sentence="${title}에 타임라인을 추가했습니다."
     done < <(staged_timeline_additions "$path")
 
-    if [[ -z "$first_summary_detail" ]]; then
+    if [[ -z "$first_summary_sentence" ]]; then
       added_line="$(staged_first_meaningful_addition "$path")"
       if [[ -n "$added_line" ]]; then
         added_line="$(clean_added_line "$added_line")"
@@ -439,7 +439,7 @@ write_generated_commit_message() {
         added_line="$(truncate_text "$added_line" 180)"
         detail_text="내용 추가: ${added_line}"
         printf -- '- %s: %s\n' "$title" "$detail_text" >> "$details_file"
-        first_summary_detail="$detail_text"
+        first_summary_sentence="${title}에 내용을 추가했습니다."
       fi
     fi
   done < "$staged_file_list"
@@ -457,8 +457,8 @@ write_generated_commit_message() {
     printf 'Slack-Summary: 태스크 우선순위가 `%s` -> `%s`로 변경되었습니다.\n\n' "$first_task_priority_old" "$first_task_priority_new" >> "$message_file"
   elif [[ "$changed_count" -eq 1 ]]; then
     printf 'brain: update %s\n\n' "$first_title" > "$message_file"
-    if [[ -n "$first_summary_detail" ]]; then
-      printf 'Slack-Summary: %s — %s\n\n' "$first_title" "$first_summary_detail" >> "$message_file"
+    if [[ -n "$first_summary_sentence" ]]; then
+      printf 'Slack-Summary: %s\n\n' "$first_summary_sentence" >> "$message_file"
     else
       printf 'Slack-Summary: %s 문서를 업데이트했습니다.\n\n' "$first_title" >> "$message_file"
     fi
