@@ -691,7 +691,7 @@ public struct MarkdownChatPill: View {
             leadingChipSlot
 
             promptModeLabel
-                .layoutPriority(0)
+                .layoutPriority(1)
 
             collapsedHeaderControls
                 .opacity(collapsedOpacity)
