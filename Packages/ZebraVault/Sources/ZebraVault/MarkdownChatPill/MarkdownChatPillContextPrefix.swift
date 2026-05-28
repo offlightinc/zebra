@@ -18,8 +18,9 @@ public enum MarkdownChatPillContextSurface: Equatable {
     case fallback(typeLabel: String)
     /// Email panel 호출 사이트 전용. detail.messages 의 bodyText 가
     /// prefix 안에 전문으로 직렬화된다. threadSubject 는 thread-level
-    /// 표시명 (보통 첫 메시지의 subject).
-    case email(detail: EmailThreadDetail, threadSubject: String)
+    /// 표시명 (보통 첫 메시지의 subject), drafts 는 같은 thread 에
+    /// 이미 붙은 로컬 초안 snapshot 이다.
+    case email(detail: EmailThreadDetail, threadSubject: String, drafts: [EmailDraftSnapshot])
 
     /// **Markdown panel 전용 helper.** frontmatter 첫 `type:` 스칼라를 보고
     /// `.task` / `.goal` / `.fallback(typeLabel:)` 중 하나를 반환한다.
@@ -134,8 +135,8 @@ public enum MarkdownChatPillContextPrefix {
                 .replacingOccurrences(of: "<path>", with: pathForMarkdown)
                 .replacingOccurrences(of: "<type>", with: typeLabel)
             return firstLine + "\n" + commonGbrainAdvisoryLine
-        case .email(let detail, let threadSubject):
-            return buildEmailPrefix(detail: detail, threadSubject: threadSubject)
+        case .email(let detail, let threadSubject, let drafts):
+            return buildEmailPrefix(detail: detail, threadSubject: threadSubject, drafts: drafts)
         }
     }
 
@@ -145,7 +146,11 @@ public enum MarkdownChatPillContextPrefix {
     /// 일반 thread (수십 통 단위) 는 한참 못 미친다 — 인공적인 거대 케이스 안전망.
     private static let emailBodyByteBudget = 180_000
 
-    private static func buildEmailPrefix(detail: EmailThreadDetail, threadSubject: String) -> String {
+    private static func buildEmailPrefix(
+        detail: EmailThreadDetail,
+        threadSubject: String,
+        drafts: [EmailDraftSnapshot]
+    ) -> String {
         let subjectDisplay = threadSubject.isEmpty ? "(no subject)" : threadSubject
         let accountDisplay = detail.accountEmail?.nilIfBlank ?? "(unknown account)"
         let advisory = emailAdvisoryTemplate
@@ -164,9 +169,10 @@ public enum MarkdownChatPillContextPrefix {
         header += "List drafts: cmux rpc zebra.email_draft.list '{\"thread_id\":\"\(detail.threadId)\"}'\n"
         header += "Create draft: cmux rpc zebra.email_draft.create '{\"thread_id\":\"\(detail.threadId)\",\"target_message_id\":\"<message_id>\",\"body_text\":\"<reply>\"}'\n"
         header += "Update draft: cmux rpc zebra.email_draft.update '{\"thread_id\":\"\(detail.threadId)\",\"local_draft_id\":\"<draft_id>\",\"base_version\":<version>,\"body_text\":\"<reply>\"}'\n"
-        header += "Update draft needs the latest base_version from list; stale versions return conflict.\n"
+        header += "Update draft needs the latest base_version from Current draft workspace or list; stale versions return conflict.\n"
         header += "Optional draft fields: subject, to, cc, bcc.\n"
         header += "Focus draft UI: cmux rpc zebra.email_draft.focus '{\"thread_id\":\"\(detail.threadId)\"}'\n"
+        header += buildDraftWorkspaceSection(drafts: drafts)
 
         var rendered = advisory + "\n" + commonGbrainAdvisoryLine + "\n\n" + header
         let isoFormatter = ISO8601DateFormatter()
@@ -216,6 +222,48 @@ public enum MarkdownChatPillContextPrefix {
             rendered += "\n*** truncated — \(omittedMessageCount) messages / \(omittedBodyChars) chars omitted to stay under argv limit ***\n"
         }
         return rendered
+    }
+
+    private static func buildDraftWorkspaceSection(drafts: [EmailDraftSnapshot]) -> String {
+        guard !drafts.isEmpty else { return "" }
+
+        var section = "\n=== Current draft workspace ===\n"
+        section += "These are Zebra local drafts already attached to this Gmail thread.\n"
+        for (index, draft) in drafts.enumerated() {
+            section += "\n--- Draft \(index + 1) of \(drafts.count) ---\n"
+            section += "Display name: \(draft.displayName)\n"
+            section += "Local draft ID: \(draft.localDraftId)\n"
+            section += "Version: \(draft.version)\n"
+            section += "Target message ID: \(draft.targetMessageId?.nilIfBlank ?? "(none)")\n"
+            section += "Mode: \(draft.mode.rawValue)\n"
+            section += "Origin: \(draft.origin.rawValue)\n"
+            section += "Status: \(draft.status.rawValue)\n"
+            section += "Sync state: \(draft.syncState.rawValue)\n"
+            if let lastError = draft.lastError?.nilIfBlank {
+                section += "Last error: \(lastError)\n"
+            }
+            section += "To: \(formatRecipients(draft.toRecipients))\n"
+            section += "Cc: \(formatRecipients(draft.ccRecipients))\n"
+            section += "Bcc: \(formatRecipients(draft.bccRecipients))\n"
+            section += "Subject: \(draft.subject.nilIfBlank ?? "(no subject)")\n"
+            section += "Body text:\n\(draftBodyPreview(draft.bodyText))\n"
+        }
+        return section
+    }
+
+    private static func formatRecipients(_ recipients: [String]) -> String {
+        let cleaned = recipients.compactMap(\.nilIfBlank)
+        return cleaned.isEmpty ? "(none)" : cleaned.joined(separator: ", ")
+    }
+
+    private static func draftBodyPreview(_ bodyText: String) -> String {
+        let body = bodyText.nilIfBlank ?? "(empty body)"
+        let maxCharacters = 1_200
+        guard body.count > maxCharacters else { return body }
+
+        let cutoff = body.index(body.startIndex, offsetBy: maxCharacters)
+        let omitted = body.distance(from: cutoff, to: body.endIndex)
+        return String(body[..<cutoff]) + "\n*** draft body truncated — \(omitted) chars omitted ***"
     }
 
     private static func formatFrom(message: EmailThreadMessage) -> String? {

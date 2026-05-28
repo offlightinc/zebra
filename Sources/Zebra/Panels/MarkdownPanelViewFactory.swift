@@ -244,7 +244,8 @@ private struct ZebraEmailPanelHost: View {
 
         let surface = MarkdownChatPillContextSurface.email(
             detail: detail,
-            threadSubject: panel.displayTitle
+            threadSubject: panel.displayTitle,
+            drafts: detailStore.drafts(threadId: panel.threadId)
         )
         let startupLine = MarkdownChatPillCommand.shellStartupLine(
             agent: agent,

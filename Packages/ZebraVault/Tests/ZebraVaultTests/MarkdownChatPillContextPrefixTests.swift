@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import ZebraVault
 
@@ -200,7 +201,7 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
             .task,
             .goal,
             .fallback(typeLabel: "person"),
-            .email(detail: emptyEmailDetail, threadSubject: "Re: ping"),
+            .email(detail: emptyEmailDetail, threadSubject: "Re: ping", drafts: []),
         ]
         let commonHint = "gbrain's `search` / `query` / `get`"
         for surface in surfaces {
@@ -222,6 +223,59 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
                 "surface \(surface) prefix missing citation advisory"
             )
         }
+    }
+
+    func testEmailPrefixIncludesCurrentDraftWorkspaceWhenDraftsExist() {
+        let detail = EmailThreadDetail(
+            threadId: "thread-1",
+            providerThreadId: nil,
+            accountEmail: "han@example.com",
+            cached: true,
+            messages: []
+        )
+        let now = Date(timeIntervalSince1970: 0)
+        let draft = EmailDraftSnapshot(
+            localDraftId: "draft-1",
+            threadId: "thread-1",
+            providerThreadId: nil,
+            targetMessageId: "message-1",
+            providerDraftId: nil,
+            providerMessageId: nil,
+            accountEmail: "han@example.com",
+            mode: .reply,
+            displayName: "초안 1",
+            origin: .agent,
+            status: .active,
+            syncState: .dirty,
+            version: 4,
+            toRecipients: ["to@example.com"],
+            ccRecipients: ["cc@example.com"],
+            bccRecipients: [],
+            subject: "Re: hello",
+            bodyHtml: "",
+            bodyText: "hello draft",
+            inReplyToHeader: nil,
+            referencesHeader: nil,
+            lastError: nil,
+            createdAt: now,
+            updatedAt: now,
+            syncedAt: nil,
+            sentAt: nil
+        )
+
+        let out = MarkdownChatPillContextPrefix.build(
+            markdownFilePath: nil,
+            surface: .email(detail: detail, threadSubject: "Re: hello", drafts: [draft])
+        )
+
+        XCTAssertTrue(out.contains("=== Current draft workspace ==="))
+        XCTAssertTrue(out.contains("Local draft ID: draft-1"))
+        XCTAssertTrue(out.contains("Version: 4"))
+        XCTAssertTrue(out.contains("To: to@example.com"))
+        XCTAssertTrue(out.contains("Cc: cc@example.com"))
+        XCTAssertTrue(out.contains("Bcc: (none)"))
+        XCTAssertTrue(out.contains("Subject: Re: hello"))
+        XCTAssertTrue(out.contains("Body text:\nhello draft"))
     }
 
     // MARK: - Tone guards (회귀 grep)
