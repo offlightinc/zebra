@@ -4,12 +4,12 @@ import XCTest
 /// ChatPill 컨텍스트 prefix v1 회귀 테스트.
 ///
 /// 정책 (`~/.claude/plans/graceful-forging-biscuit.md` + 후속 정정):
-///   - surface enum: task / goal / fallback. (email/inbox/signal 류는 b-brain 측
+///   - surface enum: task / goal / fallback. (email/inbox/signal 류는 GBrain 측
 ///     문서 모델이 진행 중이라 v1 에서 의도적으로 제외 — markdown panel 에서 그런
 ///     frontmatter type 이 들어와도 fallback 으로 떨어진다. 라벨만 보존.)
 ///   - surface 결정은 **호출 사이트 책임**: markdown panel 은 `detect(fromContent:)`.
 ///     향후 다른 panel kind 가 ChatPill 마운트되면 그쪽 호출 사이트가 직접 enum 주입.
-///   - 두 줄 prose. 줄1 surface advisory + 줄2 공통 b-brain advisory.
+///   - 두 줄 prose. 줄1 surface advisory + 줄2 공통 GBrain advisory.
 ///   - `<path>` 는 모든 surface 에서, `<type>` 은 fallback 에서만 인터폴레이션.
 ///   - 톤 가드: 명령형/분기형/탐색 닫는 표현/리스트 마커/헤더 0건.
 final class MarkdownChatPillContextPrefixTests: XCTestCase {
@@ -43,7 +43,7 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
     }
 
     /// inbox/signal/email 같은 frontmatter type 도 v1 에선 fallback 으로 떨어져야 한다.
-    /// b-brain 측에서 email 문서 모델이 정해지면 별도 surface 추가 — 그 전까진 라벨만 보존.
+    /// GBrain 측에서 email 문서 모델이 정해지면 별도 surface 추가 — 그 전까진 라벨만 보존.
     func testInboxSignalEmailFrontmatterFallsBackInV1() {
         for raw in ["inbox", "signal", "email"] {
             let content = "---\ntype: \(raw)\n---\n"
@@ -55,7 +55,7 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
         }
     }
 
-    /// b-brain `PageType` 중 task/goal 이외는 전부 fallback 으로 빠져야 한다.
+    /// GBrain `PageType` 중 task/goal 이외는 전부 fallback 으로 빠져야 한다.
     /// 회귀 가드 — 누군가 "note 도 별도 surface 로" 같은 분기를 가볍게 추가하는 걸 막는다.
     func testNonTaskGoalPageTypesFallThroughToFallback() {
         let nonSpecial = [
@@ -179,14 +179,14 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
             markdownFilePath: "/Users/foo/brain/people/p.md",
             surface: .fallback(typeLabel: "person")
         )
-        XCTAssertTrue(out.contains("`person` b-brain document"))
+        XCTAssertTrue(out.contains("`person` GBrain document"))
         XCTAssertTrue(out.contains("/Users/foo/brain/people/p.md"))
     }
 
     func testAllSurfacesShareCommonGbrainAdvisory() {
         let path = "/tmp/x.md"
         // `.email` 도 같은 회귀 가드에 들어간다 — 빈 messages 의
-        // EmailThreadDetail 을 써서 advisory + commonBbrainAdvisoryLine
+        // EmailThreadDetail 을 써서 advisory + commonGbrainAdvisoryLine
         // 만 검사. 본문 inline 직렬화는 의도된 별 영역이라 tone guard /
         // no-body-inline guard 에는 추가하지 않는다.
         let emptyEmailDetail = EmailThreadDetail(
@@ -202,7 +202,7 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
             .fallback(typeLabel: "person"),
             .email(detail: emptyEmailDetail, threadSubject: "Re: ping"),
         ]
-        let commonHint = "b-brain's `search` / `query` / `get`"
+        let commonHint = "gbrain's `search` / `query` / `get`"
         for surface in surfaces {
             // email surface 는 markdownFilePath 가 의미 없어서 nil 로 빌드한다.
             let pathArg: String? = {
@@ -215,7 +215,7 @@ final class MarkdownChatPillContextPrefixTests: XCTestCase {
             )
             XCTAssertTrue(
                 out.contains(commonHint),
-                "surface \(surface) prefix missing common b-brain advisory line"
+                "surface \(surface) prefix missing common GBrain advisory line"
             )
             XCTAssertTrue(
                 out.contains("[Source: …, YYYY-MM-DD]"),

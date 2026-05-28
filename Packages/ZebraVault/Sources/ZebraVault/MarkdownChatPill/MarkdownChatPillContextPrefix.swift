@@ -1,11 +1,11 @@
 import Foundation
 
-/// b-brain 문서 종류를 ChatPill prefix 분기에 필요한 3개 surface 로만 좁힌 enum.
+/// GBrain 문서 종류를 ChatPill prefix 분기에 필요한 3개 surface 로만 좁힌 enum.
 ///
 /// v1 은 **task / goal / fallback** 만 다룬다.
 ///
 /// inbox / signal / email 같은 surface 는 의도적으로 빼뒀다. email/메시지 그래프는
-/// 현재 b-brain 측에서 어떤 문서/객체 shape 로 정착할지 진행 중이라 prefix advisory
+/// 현재 GBrain 측에서 어떤 문서/객체 shape 로 정착할지 진행 중이라 prefix advisory
 /// 형태도 그 결정에 종속이다. v1 에서 미리 surface 케이스를 박아두면 모델링이 바뀔
 /// 때 prose 와 enum 둘 다 회귀로 갈 위험이 있어서, 후속 작업으로 분리한다.
 ///
@@ -78,7 +78,7 @@ public enum MarkdownChatPillContextSurface: Equatable {
 }
 
 /// ChatPill 이 새 에이전트 터미널을 띄울 때 사용자 프롬프트 앞에 흘려보내는
-/// "이 터미널은 어떤 b-brain 문서 위에서 열렸는지" advisory prose.
+/// "이 터미널은 어떤 GBrain 문서 위에서 열렸는지" advisory prose.
 ///
 /// **영어 prose 인 이유**: 사용자 프롬프트는 한국어가 기본이라, prefix 도 한국어면
 /// 에이전트 입장에서 advisory 가 어디 끝나고 user prompt 가 어디서 시작하는지 시각적
@@ -91,22 +91,25 @@ public enum MarkdownChatPillContextSurface: Equatable {
 ///   - 본문 데이터 inline 금지 (timeline·checklist 발췌 등).
 ///   - 메타룰(citation/mutation/사용자 지시 우선) 은 글로벌 CLAUDE.md 의 책임.
 ///     단 brain-first lookup + cite·backlink 한 줄은 ChatPill 의 본질이라 공통으로 붙는다.
-///   - 두 줄 prose: 줄1 = surface advisory, 줄2 = 공통 b-brain advisory.
+///   - 두 줄 prose: 줄1 = surface advisory, 줄2 = 공통 GBrain advisory.
 ///   - `<path>` 는 모든 surface 에서 인터폴레이션, `<type>` 은 fallback 한정.
 public enum MarkdownChatPillContextPrefix {
-    /// 3 surface 가 공통으로 붙이는 둘째 줄. b-brain query/search/get advisory + citation·backlink advisory.
-    /// (CLI 이름은 `b-brain` — gbrain 은 다른 fork 로, 거기엔 task/goal type 자체가 없다.)
-    private static let commonBbrainAdvisoryLine =
-        "For tracking down related material, b-brain's `search` / `query` / `get` tend to surface backlinks and compiled_truth that raw grep misses, and leaving a `[Source: …, YYYY-MM-DD]` citation alongside backlinks when writing new facts keeps the graph alive across sessions."
+    /// 3 surface 가 공통으로 붙이는 둘째 줄. gbrain query/search/get advisory + citation·backlink advisory.
+    /// active brain 에 `.gbrain-adapter` 가 있으면 그 vault 의 adapter 지침을 우선한다.
+    private static let commonGbrainAdvisoryLine =
+        "For tracking down related material, gbrain's `search` / `query` / `get` tend to surface backlinks and compiled_truth that raw grep misses. When using GBrain, active vault adapter instructions, when present, are the preferred routing. When writing new facts, leave a `[Source: …, YYYY-MM-DD]` citation alongside backlinks so the graph stays alive across sessions."
+
+    private static let emailDraftGbrainAdvisoryLine =
+        "Use this email thread as the target conversation. Before creating or revising a reply draft, decide whether the thread is self-contained or whether outside GBrain context would materially improve the reply. If the thread is enough, draft directly. Use GBrain only when the thread references prior work, a project, task, meeting, source, person or company relationship, unresolved decision, prior email context, or when the user asks for context-aware drafting. When more context is useful, start with `gbrain query`, `gbrain search`, or `gbrain get` to find the most relevant pages. From those pages, follow linked pages, backlinks, or graph connections only when they directly clarify the reply. Stop once you have enough context to write a good reply; do not run every GBrain command as a checklist. Create or update Zebra drafts through `cmux rpc zebra.email_draft.*`; use `base_version` when updating an existing draft and leave sending to the visible user action. Write the outgoing email as a natural human reply. Keep GBrain citations and source notes out of the email body unless the user explicitly asks for citations."
 
     private static let taskAdvisoryTemplate =
-        "This terminal opened on top of a b-brain task document at <path>. A task is an execution unit owned by someone, and its `status` field carries two layered signals at once — a lifecycle phase (todo / doing / done) and a dependency signal (`blocked` for internal work, `waiting` for an external response). Glancing at that signal once tends to set the tone for the answer."
+        "This terminal opened on top of a GBrain task document at <path>. A task is an execution unit owned by someone, and its `status` field carries two layered signals at once — a lifecycle phase (todo / doing / done) and a dependency signal (`blocked` for internal work, `waiting` for an external response). Glancing at that signal once tends to set the tone for the answer."
 
     private static let goalAdvisoryTemplate =
-        "This terminal opened on top of a b-brain goal document at <path>. A goal is a time-bound outcome measured by metrics or milestones, usually fanning out into subgoals and linked tasks. The goal page itself is the primary source for current direction, while the linked tasks carry day-to-day execution state."
+        "This terminal opened on top of a GBrain goal document at <path>. A goal is a time-bound outcome measured by metrics or milestones, usually fanning out into subgoals and linked tasks. The goal page itself is the primary source for current direction, while the linked tasks carry day-to-day execution state."
 
     private static let fallbackAdvisoryTemplate =
-        "This terminal opened on top of a `<type>` b-brain document at <path>. Its body and frontmatter are the primary source."
+        "This terminal opened on top of a `<type>` GBrain document at <path>. Its body and frontmatter are the primary source."
 
     private static let emailAdvisoryTemplate =
         "This terminal opened on top of an email thread \"<subject>\" in account <account>. The full thread is included inline below — bodies are the plain-text rendition Clawvisor stored locally. Messages are ordered oldest → newest. Treat the thread as analysis context; any reply or mutation goes through the user."
@@ -122,15 +125,15 @@ public enum MarkdownChatPillContextPrefix {
         switch surface {
         case .task:
             let firstLine = taskAdvisoryTemplate.replacingOccurrences(of: "<path>", with: pathForMarkdown)
-            return firstLine + "\n" + commonBbrainAdvisoryLine
+            return firstLine + "\n" + commonGbrainAdvisoryLine
         case .goal:
             let firstLine = goalAdvisoryTemplate.replacingOccurrences(of: "<path>", with: pathForMarkdown)
-            return firstLine + "\n" + commonBbrainAdvisoryLine
+            return firstLine + "\n" + commonGbrainAdvisoryLine
         case .fallback(let typeLabel):
             let firstLine = fallbackAdvisoryTemplate
                 .replacingOccurrences(of: "<path>", with: pathForMarkdown)
                 .replacingOccurrences(of: "<type>", with: typeLabel)
-            return firstLine + "\n" + commonBbrainAdvisoryLine
+            return firstLine + "\n" + commonGbrainAdvisoryLine
         case .email(let detail, let threadSubject):
             return buildEmailPrefix(detail: detail, threadSubject: threadSubject)
         }
@@ -155,14 +158,17 @@ public enum MarkdownChatPillContextPrefix {
         header += "Account: \(accountDisplay)\n"
         header += "Thread ID: \(detail.threadId)\n"
         header += "Messages: \(messageCount)\n"
+        header += "\n=== Reply drafting workflow ===\n"
+        header += emailDraftGbrainAdvisoryLine + "\n"
         header += "\n=== Zebra draft RPC ===\n"
         header += "List drafts: cmux rpc zebra.email_draft.list '{\"thread_id\":\"\(detail.threadId)\"}'\n"
         header += "Create draft: cmux rpc zebra.email_draft.create '{\"thread_id\":\"\(detail.threadId)\",\"target_message_id\":\"<message_id>\",\"body_text\":\"<reply>\"}'\n"
-        header += "Update draft: cmux rpc zebra.email_draft.update '{\"thread_id\":\"\(detail.threadId)\",\"local_draft_id\":\"<draft_id>\",\"body_text\":\"<reply>\"}'\n"
+        header += "Update draft: cmux rpc zebra.email_draft.update '{\"thread_id\":\"\(detail.threadId)\",\"local_draft_id\":\"<draft_id>\",\"base_version\":<version>,\"body_text\":\"<reply>\"}'\n"
+        header += "Update draft needs the latest base_version from list; stale versions return conflict.\n"
         header += "Optional draft fields: subject, to, cc, bcc.\n"
         header += "Focus draft UI: cmux rpc zebra.email_draft.focus '{\"thread_id\":\"\(detail.threadId)\"}'\n"
 
-        var rendered = advisory + "\n" + commonBbrainAdvisoryLine + "\n\n" + header
+        var rendered = advisory + "\n" + commonGbrainAdvisoryLine + "\n\n" + header
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime]
 
