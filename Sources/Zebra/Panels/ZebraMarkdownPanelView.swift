@@ -610,16 +610,17 @@ struct ZebraMarkdownPanelView<
         return nil
     }
 
-    /// Create a fresh agent terminal for every prompt. The first prompt makes
-    /// a companion split; subsequent prompts add tabs to that remembered pane.
+    /// Create a fresh agent terminal for every prompt. Reuse this content
+    /// pane's terminal companion when one already exists; otherwise create
+    /// the initial companion split.
     private func createAgentTerminalTab() -> (any ZebraTerminalPanel)? {
-        if let paneId = controller.chatCompanionPaneId,
-           workspace.allPaneIds.contains(paneId),
+        if let companionPaneId = workspace.reusableAgentCompanionPane(forContentPane: paneId),
            let panel = workspace.newTerminalSurface(
-               inPane: paneId,
+               inPane: companionPaneId,
                focus: true,
                initialCommand: nil
            ) {
+            controller.chatCompanionPaneId = companionPaneId
             return panel
         }
 

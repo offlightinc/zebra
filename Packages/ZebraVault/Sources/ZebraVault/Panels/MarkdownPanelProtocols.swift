@@ -70,5 +70,7 @@ public protocol ZebraMarkdownWorkspace: AnyObject, ObservableObject {
         initialCommand: String?
     ) -> (any ZebraTerminalPanel)?
 
+    func reusableAgentCompanionPane(forContentPane paneId: PaneID) -> PaneID?
+
     func paneId(forPanelId panelId: UUID) -> PaneID?
 }

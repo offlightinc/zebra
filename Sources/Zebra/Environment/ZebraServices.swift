@@ -1215,6 +1215,19 @@ final class ZebraEmailDetailStore: ObservableObject {
         threadStates[threadId] = state
     }
 
+    func activeChatCompanionPaneIds(validPaneIds: [PaneID]) -> Set<PaneID> {
+        let validPaneIds = Set(validPaneIds)
+        return Set(
+            threadStates.values.compactMap { state in
+                guard let paneId = state.chatCompanionPaneId,
+                      validPaneIds.contains(paneId) else {
+                    return nil
+                }
+                return paneId
+            }
+        )
+    }
+
     func chatCompanionAgent(threadId: String) -> MarkdownPillAgent? {
         threadStates[threadId]?.chatCompanionAgent
     }

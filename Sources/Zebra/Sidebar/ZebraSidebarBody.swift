@@ -186,22 +186,25 @@ struct ZebraSidebarBody: View {
 
     private func openMarkdownFile(filePath: String) {
         guard let workspace = tabManager.selectedWorkspace else { return }
-        guard let paneId = workspace.bonsplitController.focusedPaneId
-            ?? workspace.bonsplitController.allPaneIds.first else {
-            return
-        }
         sidebarSelectionState.selection = .tabs
         // Markdown rail modes (goals / tasks / documents) route through the
         // brain-object-aware MarkdownPanel so the right-pane inspector lights
-        // up. If the focused tab is already Markdown, keep that tab and swap
-        // its file instead of creating another Markdown tab.
-        _ = workspace.openMarkdownFromSidebar(inPane: paneId, filePath: filePath)
+        // up. Keep Markdown and email in the shared content pane even after
+        // ChatPill submit moves focus to the agent companion pane.
+        _ = workspace.openMarkdownFromZebraSidebar(
+            filePath: filePath,
+            excludedAgentCompanionPaneIds: chatCompanionPaneIds(in: workspace),
+            anchorPanelId: workspace.focusedPanelId
+        )
     }
 
     private func openEmailThread(_ thread: EmailThreadItem) {
         guard let workspace = tabManager.selectedWorkspace else { return }
+        let paneId = workspace.bonsplitController.focusedPaneId
+            ?? workspace.bonsplitController.allPaneIds.first
         sidebarSelectionState.selection = .tabs
-        _ = workspace.openOrFocusEmailThreadContent(
+        _ = workspace.openEmailThreadFromSidebar(
+            inPane: paneId,
             thread: thread,
             excludedAgentCompanionPaneIds: chatCompanionPaneIds(in: workspace),
             anchorPanelId: workspace.focusedPanelId
@@ -210,9 +213,14 @@ struct ZebraSidebarBody: View {
     }
 
     private func chatCompanionPaneIds(in workspace: Workspace) -> Set<PaneID> {
-        zebra?.panelControllers.activeChatCompanionPaneIds(
-            validPaneIds: workspace.bonsplitController.allPaneIds
+        let validPaneIds = workspace.bonsplitController.allPaneIds
+        let markdownPaneIds = zebra?.panelControllers.activeChatCompanionPaneIds(
+            validPaneIds: validPaneIds
         ) ?? []
+        let emailPaneIds = emailDetailStore.activeChatCompanionPaneIds(
+            validPaneIds: validPaneIds
+        )
+        return markdownPaneIds.union(emailPaneIds)
     }
 }
 

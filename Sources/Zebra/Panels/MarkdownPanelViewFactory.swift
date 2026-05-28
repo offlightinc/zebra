@@ -98,6 +98,7 @@ enum ZebraCustomPanelViewFactoryProvider {
                 return AnyView(
                     ZebraEmailPanelHost(
                         panel: emailPanel,
+                        paneId: context.paneId,
                         detailStore: services.emailDetail,
                         listStore: services.email
                     )
@@ -109,7 +110,8 @@ enum ZebraCustomPanelViewFactoryProvider {
 }
 
 private struct ZebraEmailPanelHost: View {
-    let panel: ZebraEmailThreadPanel
+    @ObservedObject var panel: ZebraEmailThreadPanel
+    let paneId: PaneID
     @ObservedObject var detailStore: ZebraEmailDetailStore
     let listStore: ZebraEmailListStore
     @EnvironmentObject private var tabManager: TabManager
@@ -225,9 +227,9 @@ private struct ZebraEmailPanelHost: View {
         }
     }
 
-    /// Send the pill prompt into a freshly-created agent terminal that
-    /// lives on the email thread's companion pane. First submit on a
-    /// thread creates the split; subsequent submits add tabs.
+    /// Send the pill prompt into an agent terminal in the companion pane.
+    /// A split is created only when this content pane has no reusable
+    /// terminal companion yet.
     private func handlePillSubmit(text: String, agent: MarkdownPillAgent, workspace: Workspace) {
         guard let detail = detailStore.detail(threadId: panel.threadId) else { return }
         let surface = MarkdownChatPillContextSurface.email(
@@ -257,17 +259,17 @@ private struct ZebraEmailPanelHost: View {
     }
 
     /// Mirrors the per-prompt-fresh-tab pattern in `ZebraMarkdownPanelView`:
-    /// the first prompt creates a companion split, subsequent prompts add
-    /// tabs to that remembered pane (per thread).
+    /// reuse an existing companion pane when possible, and only create the
+    /// split when this content pane has no terminal companion yet.
     private func createAgentTerminalTab(workspace: Workspace) -> (any ZebraTerminalPanel)? {
         let zebraWorkspace: any ZebraMarkdownWorkspace = workspace
-        if let paneId = detailStore.chatCompanionPaneId(threadId: panel.threadId),
-           zebraWorkspace.allPaneIds.contains(paneId),
+        if let companionPaneId = zebraWorkspace.reusableAgentCompanionPane(forContentPane: paneId),
            let reusedPanel: any ZebraTerminalPanel = zebraWorkspace.newTerminalSurface(
-               inPane: paneId,
+               inPane: companionPaneId,
                focus: true,
                initialCommand: nil
            ) {
+            detailStore.setChatCompanionPaneId(companionPaneId, threadId: panel.threadId)
             return reusedPanel
         }
 

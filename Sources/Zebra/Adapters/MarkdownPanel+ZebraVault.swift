@@ -123,6 +123,14 @@ extension Workspace: ZebraMarkdownWorkspace {
         )
         return concrete
     }
+
+    func reusableAgentCompanionPane(forContentPane paneId: PaneID) -> PaneID? {
+        nearestRightTerminalPane(fromContentPane: paneId)
+    }
+
+    func paneHasTerminalSurface(_ paneId: PaneID) -> Bool {
+        panels(inPane: paneId).contains { $0 is TerminalPanel }
+    }
 }
 
 private extension Workspace {
@@ -223,7 +231,7 @@ final class ZebraEmailThreadPanel: Panel, ObservableObject {
     // `customPanelViewFactory` seam in `PanelContentView`, so cmux common
     // code never has to know about `ZebraEmailThreadPanel` directly.
     let panelType: PanelType = .email
-    let threadId: String
+    @Published private(set) var threadId: String
     /// Owning workspace id. Needed by the panel host to look the workspace
     /// up from `TabManager` for chat-pill split/tab creation — same pattern
     /// `MarkdownPanel.workspaceId` follows on the markdown side.
@@ -243,6 +251,13 @@ final class ZebraEmailThreadPanel: Panel, ObservableObject {
     func updateSubject(_ subject: String) {
         let nextTitle = Self.title(from: subject)
         guard displayTitle != nextTitle else { return }
+        displayTitle = nextTitle
+    }
+
+    func openThread(_ thread: EmailThreadItem) {
+        let nextTitle = Self.title(from: thread.subject)
+        guard threadId != thread.id || displayTitle != nextTitle else { return }
+        threadId = thread.id
         displayTitle = nextTitle
     }
 
@@ -296,6 +311,84 @@ extension Workspace {
             insertFirst: true,
             thread: thread,
             focus: true
+        )
+    }
+
+    @discardableResult
+    func openMarkdownFromZebraSidebar(
+        filePath: String,
+        excludedAgentCompanionPaneIds: Set<PaneID>,
+        anchorPanelId: UUID?,
+        focus: Bool = true
+    ) -> MarkdownPanel? {
+        let targetPaneId = resolvePaneForContentOpen(
+            kind: .markdown,
+            excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds,
+            anchorPanelId: anchorPanelId
+        ) ?? bonsplitController.allPaneIds.first { !excludedAgentCompanionPaneIds.contains($0) }
+            ?? bonsplitController.allPaneIds.first
+
+        guard let targetPaneId else { return nil }
+        return openMarkdownFromSidebar(inPane: targetPaneId, filePath: filePath, focus: focus)
+    }
+
+    @discardableResult
+    func openEmailThreadFromSidebar(
+        inPane requestedPaneId: PaneID?,
+        thread: EmailThreadItem,
+        excludedAgentCompanionPaneIds: Set<PaneID>,
+        anchorPanelId: UUID?,
+        focus: Bool = true
+    ) -> ZebraEmailThreadPanel? {
+        if let existing = focusExistingEmailThread(thread, focus: focus) {
+            return existing
+        }
+
+        let targetPaneId: PaneID? = {
+            if let requestedPaneId,
+               !excludedAgentCompanionPaneIds.contains(requestedPaneId),
+               selectedEmailThreadPanel(inPane: requestedPaneId) != nil {
+                return requestedPaneId
+            }
+            return resolvePaneForContentOpen(
+                kind: .email,
+                excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds,
+                anchorPanelId: anchorPanelId
+            )
+        }()
+
+        if let targetPaneId,
+           let selected = selectedEmailThreadPanel(inPane: targetPaneId) {
+            selected.panel.openThread(thread)
+            panelTitles[selected.panelId] = selected.panel.displayTitle
+            bonsplitController.updateTab(
+                selected.tabId,
+                title: selected.panel.displayTitle,
+                icon: .some(selected.panel.displayIcon)
+            )
+            if focus {
+                focusPanel(selected.panelId)
+            } else {
+                objectWillChange.send()
+            }
+            return selected.panel
+        }
+
+        if let targetPaneId {
+            return openOrFocusEmailThreadSurface(inPane: targetPaneId, thread: thread, focus: focus)
+        }
+
+        guard let sourcePanelId = firstPanelIdForContentSplit(
+            excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds
+        ) else {
+            return nil
+        }
+        return newEmailThreadSplit(
+            from: sourcePanelId,
+            orientation: .horizontal,
+            insertFirst: true,
+            thread: thread,
+            focus: focus
         )
     }
 
@@ -511,11 +604,22 @@ private extension Workspace {
         }
     }
 
+    func selectedEmailThreadPanel(
+        inPane paneId: PaneID
+    ) -> (panel: ZebraEmailThreadPanel, panelId: UUID, tabId: TabID)? {
+        guard let selectedTab = bonsplitController.selectedTab(inPane: paneId),
+              let selectedPanelId = panelIdFromSurfaceId(selectedTab.id),
+              let emailPanel = panels[selectedPanelId] as? ZebraEmailThreadPanel else {
+            return nil
+        }
+        return (emailPanel, selectedPanelId, selectedTab.id)
+    }
+
     func firstPanelIdForContentSplit(
         excludedAgentCompanionPaneIds: Set<PaneID>
     ) -> UUID? {
         let paneIds = bonsplitController.allPaneIds
-        let preferredPane = paneIds.first { excludedAgentCompanionPaneIds.contains($0) }
+        let preferredPane = paneIds.first { !excludedAgentCompanionPaneIds.contains($0) }
             ?? paneIds.first
         guard let preferredPane else { return nil }
 
@@ -533,5 +637,87 @@ private extension Workspace {
             }
         }
         return nil
+    }
+
+    func nearestRightTerminalPane(fromContentPane contentPaneId: PaneID) -> PaneID? {
+        let targetPaneId = contentPaneId.id.uuidString
+        guard let path = zebraPathToPane(
+            targetPaneId: targetPaneId,
+            node: bonsplitController.treeSnapshot()
+        ) else {
+            return nil
+        }
+
+        let contentFrame = bonsplitController.layoutSnapshot().panes
+            .first(where: { $0.paneId == targetPaneId })?
+            .frame
+        let contentCenterY = contentFrame.map { $0.y + ($0.height * 0.5) } ?? 0
+        let contentRightX = contentFrame.map { $0.x + $0.width } ?? 0
+
+        for crumb in path {
+            guard crumb.split.orientation == "horizontal", crumb.branch == .first else { continue }
+            var candidateNodes: [ExternalPaneNode] = []
+            zebraCollectPaneNodes(node: crumb.split.second, into: &candidateNodes)
+            let sorted = candidateNodes.sorted { lhs, rhs in
+                let lhsDy = abs((lhs.frame.y + (lhs.frame.height * 0.5)) - contentCenterY)
+                let rhsDy = abs((rhs.frame.y + (rhs.frame.height * 0.5)) - contentCenterY)
+                if lhsDy != rhsDy { return lhsDy < rhsDy }
+
+                let lhsDx = abs(lhs.frame.x - contentRightX)
+                let rhsDx = abs(rhs.frame.x - contentRightX)
+                if lhsDx != rhsDx { return lhsDx < rhsDx }
+
+                if lhs.frame.x != rhs.frame.x { return lhs.frame.x < rhs.frame.x }
+                return lhs.id < rhs.id
+            }
+
+            for candidate in sorted {
+                guard let candidateUUID = UUID(uuidString: candidate.id),
+                      candidateUUID != contentPaneId.id,
+                      let paneId = bonsplitController.allPaneIds.first(where: { $0.id == candidateUUID }),
+                      paneHasTerminalSurface(paneId) else {
+                    continue
+                }
+                return paneId
+            }
+        }
+        return nil
+    }
+}
+
+private enum ZebraPaneBranch {
+    case first
+    case second
+}
+
+private struct ZebraPaneBreadcrumb {
+    let split: ExternalSplitNode
+    let branch: ZebraPaneBranch
+}
+
+private func zebraPathToPane(targetPaneId: String, node: ExternalTreeNode) -> [ZebraPaneBreadcrumb]? {
+    switch node {
+    case .pane(let paneNode):
+        return paneNode.id == targetPaneId ? [] : nil
+    case .split(let splitNode):
+        if var path = zebraPathToPane(targetPaneId: targetPaneId, node: splitNode.first) {
+            path.append(ZebraPaneBreadcrumb(split: splitNode, branch: .first))
+            return path
+        }
+        if var path = zebraPathToPane(targetPaneId: targetPaneId, node: splitNode.second) {
+            path.append(ZebraPaneBreadcrumb(split: splitNode, branch: .second))
+            return path
+        }
+        return nil
+    }
+}
+
+private func zebraCollectPaneNodes(node: ExternalTreeNode, into output: inout [ExternalPaneNode]) {
+    switch node {
+    case .pane(let paneNode):
+        output.append(paneNode)
+    case .split(let splitNode):
+        zebraCollectPaneNodes(node: splitNode.first, into: &output)
+        zebraCollectPaneNodes(node: splitNode.second, into: &output)
     }
 }
