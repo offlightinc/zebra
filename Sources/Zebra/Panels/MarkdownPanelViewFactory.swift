@@ -113,6 +113,7 @@ private struct ZebraEmailPanelHost: View {
     @ObservedObject var detailStore: ZebraEmailDetailStore
     let listStore: ZebraEmailListStore
     @EnvironmentObject private var tabManager: TabManager
+    @EnvironmentObject private var vaultState: VerticalTabsSidebarVaultState
     /// Chat pill expand state. Per-thread persistence isn't needed — the
     /// pill collapses cleanly when the user dismisses it, and a fresh
     /// thread view should not inherit another thread's open state.
@@ -229,30 +230,29 @@ private struct ZebraEmailPanelHost: View {
     /// thread creates the split; subsequent submits add tabs.
     private func handlePillSubmit(text: String, agent: MarkdownPillAgent, workspace: Workspace) {
         guard let detail = detailStore.detail(threadId: panel.threadId) else { return }
-        guard let newPanel = createAgentTerminalTab(workspace: workspace) else { return }
-        detailStore.setChatCompanionAgent(agent, threadId: panel.threadId)
-
-        let launchEnvironmentReady = MarkdownChatPillCommand.prepareLaunchEnvironment(
-            agent: agent,
-            markdownFilePath: nil
-        )
-        #if DEBUG
-        if !launchEnvironmentReady {
-            cmuxDebugLog("email.chatPill.launchEnvironment.failed agent=\(agent.rawValue)")
-        }
-        #endif
-
         let surface = MarkdownChatPillContextSurface.email(
             detail: detail,
             threadSubject: panel.displayTitle,
             drafts: detailStore.drafts(threadId: panel.threadId)
         )
-        let startupLine = MarkdownChatPillCommand.shellStartupLine(
+        let launchPlan = MarkdownChatPillCommand.launchPlan(
             agent: agent,
+            markdownContent: nil,
             markdownFilePath: nil,
+            fallbackDirectory: vaultState.selectedVaultPath,
             surface: surface,
             userPrompt: text
         )
+        guard let startupLine = launchPlan.startupLine else { return }
+        guard let newPanel = createAgentTerminalTab(workspace: workspace) else { return }
+        detailStore.setChatCompanionAgent(agent, threadId: panel.threadId)
+
+        #if DEBUG
+        if !launchPlan.launchEnvironmentReady {
+            cmuxDebugLog("email.chatPill.launchEnvironment.failed agent=\(agent.rawValue)")
+        }
+        #endif
+
         sendStartupSequence(startup: startupLine, to: newPanel)
     }
 

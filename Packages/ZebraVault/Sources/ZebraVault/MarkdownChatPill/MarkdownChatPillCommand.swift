@@ -8,6 +8,13 @@ import Foundation
 /// override, claude `--append-system-prompt`, gemini `--skip-trust`)
 /// auditable without scrolling past hundreds of lines of view code.
 public enum MarkdownChatPillCommand {
+    public struct LaunchPlan {
+        public let requestedWorktree: String?
+        public let launchDirectory: String?
+        public let launchEnvironmentReady: Bool
+        public let startupLine: String?
+    }
+
     /// Resolve the cwd for a chat-pill agent launch. A markdown document may
     /// store the creator's local directory in top-level frontmatter:
     ///
@@ -33,6 +40,54 @@ public enum MarkdownChatPillCommand {
             return nil
         }
         return validLaunchDirectoryCwd(fallbackDirectory)
+    }
+
+    /// Shared launch contract for every ChatPill surface. Callers provide the
+    /// surface-specific context and fallback directory, and this returns the
+    /// agent prep result plus the exact startup command that uses the same cwd.
+    public static func launchPlan(
+        agent: MarkdownPillAgent,
+        markdownContent: String?,
+        markdownFilePath: String?,
+        fallbackDirectory: String?,
+        surface: MarkdownChatPillContextSurface,
+        userPrompt: String,
+        chooseDirectory: ((_ requestedPath: String, _ suggestedPath: String?) -> String?)? = nil
+    ) -> LaunchPlan {
+        let requestedWorktree = worktreeFrontmatterPath(markdownContent)
+        let launchDirectory = resolvedLaunchDirectory(
+            markdownContent: markdownContent,
+            fallbackDirectory: fallbackDirectory,
+            chooseDirectory: chooseDirectory
+        )
+
+        guard requestedWorktree == nil || launchDirectory != nil else {
+            return LaunchPlan(
+                requestedWorktree: requestedWorktree,
+                launchDirectory: nil,
+                launchEnvironmentReady: true,
+                startupLine: nil
+            )
+        }
+
+        let launchEnvironmentReady = prepareLaunchEnvironment(
+            agent: agent,
+            markdownFilePath: markdownFilePath,
+            launchDirectory: launchDirectory
+        )
+        let startupLine = shellStartupLine(
+            agent: agent,
+            markdownFilePath: markdownFilePath,
+            surface: surface,
+            userPrompt: userPrompt,
+            launchDirectory: launchDirectory
+        )
+        return LaunchPlan(
+            requestedWorktree: requestedWorktree,
+            launchDirectory: launchDirectory,
+            launchEnvironmentReady: launchEnvironmentReady,
+            startupLine: startupLine
+        )
     }
 
     /// Prepare any agent-specific launch state that cannot be expressed as a
