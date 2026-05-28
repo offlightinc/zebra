@@ -288,7 +288,10 @@ extension Workspace {
         excludedAgentCompanionPaneIds: Set<PaneID>,
         anchorPanelId: UUID?
     ) -> ZebraEmailThreadPanel? {
-        if let existing = focusExistingEmailThread(thread) {
+        if let existing = focusExistingEmailThread(
+            thread,
+            excludedPaneIds: excludedAgentCompanionPaneIds
+        ) {
             return existing
         }
 
@@ -297,7 +300,12 @@ extension Workspace {
             excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds,
             anchorPanelId: anchorPanelId
         ) {
-            return openOrFocusEmailThreadSurface(inPane: paneId, thread: thread, focus: true)
+            return openOrFocusEmailThreadSurface(
+                inPane: paneId,
+                thread: thread,
+                focus: true,
+                excludedPaneIds: excludedAgentCompanionPaneIds
+            )
         }
 
         guard let sourcePanelId = firstPanelIdForContentSplit(
@@ -321,6 +329,21 @@ extension Workspace {
         anchorPanelId: UUID?,
         focus: Bool = true
     ) -> MarkdownPanel? {
+        let canonical = (filePath as NSString).resolvingSymlinksInPath
+        for (existingId, panel) in panels {
+            guard let markdown = panel as? MarkdownPanel else { continue }
+            if let paneId = paneId(forPanelId: existingId),
+               excludedAgentCompanionPaneIds.contains(paneId) {
+                continue
+            }
+            if (markdown.filePath as NSString).resolvingSymlinksInPath == canonical {
+                if focus {
+                    focusPanel(existingId)
+                }
+                return markdown
+            }
+        }
+
         let targetPaneId = resolvePaneForContentOpen(
             kind: .markdown,
             excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds,
@@ -329,7 +352,23 @@ extension Workspace {
             ?? bonsplitController.allPaneIds.first
 
         guard let targetPaneId else { return nil }
-        return openMarkdownFromSidebar(inPane: targetPaneId, filePath: filePath, focus: focus)
+        if let reusable = reusableMarkdownPanel(inPane: targetPaneId) {
+            reusable.panel.openFile(filePath)
+            panelTitles[reusable.panelId] = reusable.panel.displayTitle
+            bonsplitController.updateTab(
+                reusable.tabId,
+                title: panelCustomTitles[reusable.panelId] ?? reusable.panel.displayTitle,
+                hasCustomTitle: panelCustomTitles[reusable.panelId] != nil
+            )
+            if focus {
+                focusPanel(reusable.panelId)
+            } else {
+                objectWillChange.send()
+            }
+            return reusable.panel
+        }
+
+        return newMarkdownSurface(inPane: targetPaneId, filePath: filePath, focus: focus)
     }
 
     @discardableResult
@@ -340,14 +379,18 @@ extension Workspace {
         anchorPanelId: UUID?,
         focus: Bool = true
     ) -> ZebraEmailThreadPanel? {
-        if let existing = focusExistingEmailThread(thread, focus: focus) {
+        if let existing = focusExistingEmailThread(
+            thread,
+            focus: focus,
+            excludedPaneIds: excludedAgentCompanionPaneIds
+        ) {
             return existing
         }
 
         let targetPaneId: PaneID? = {
             if let requestedPaneId,
                !excludedAgentCompanionPaneIds.contains(requestedPaneId),
-               selectedEmailThreadPanel(inPane: requestedPaneId) != nil {
+               reusableEmailThreadPanel(inPane: requestedPaneId) != nil {
                 return requestedPaneId
             }
             return resolvePaneForContentOpen(
@@ -358,24 +401,29 @@ extension Workspace {
         }()
 
         if let targetPaneId,
-           let selected = selectedEmailThreadPanel(inPane: targetPaneId) {
-            selected.panel.openThread(thread)
-            panelTitles[selected.panelId] = selected.panel.displayTitle
+           let reusable = reusableEmailThreadPanel(inPane: targetPaneId) {
+            reusable.panel.openThread(thread)
+            panelTitles[reusable.panelId] = reusable.panel.displayTitle
             bonsplitController.updateTab(
-                selected.tabId,
-                title: selected.panel.displayTitle,
-                icon: .some(selected.panel.displayIcon)
+                reusable.tabId,
+                title: reusable.panel.displayTitle,
+                icon: .some(reusable.panel.displayIcon)
             )
             if focus {
-                focusPanel(selected.panelId)
+                focusPanel(reusable.panelId)
             } else {
                 objectWillChange.send()
             }
-            return selected.panel
+            return reusable.panel
         }
 
         if let targetPaneId {
-            return openOrFocusEmailThreadSurface(inPane: targetPaneId, thread: thread, focus: focus)
+            return openOrFocusEmailThreadSurface(
+                inPane: targetPaneId,
+                thread: thread,
+                focus: focus,
+                excludedPaneIds: excludedAgentCompanionPaneIds
+            )
         }
 
         guard let sourcePanelId = firstPanelIdForContentSplit(
@@ -396,9 +444,14 @@ extension Workspace {
     func openOrFocusEmailThreadSurface(
         inPane paneId: PaneID,
         thread: EmailThreadItem,
-        focus: Bool = true
+        focus: Bool = true,
+        excludedPaneIds: Set<PaneID> = []
     ) -> ZebraEmailThreadPanel? {
-        if let existing = focusExistingEmailThread(thread, focus: focus) {
+        if let existing = focusExistingEmailThread(
+            thread,
+            focus: focus,
+            excludedPaneIds: excludedPaneIds
+        ) {
             return existing
         }
 
@@ -407,11 +460,16 @@ extension Workspace {
 
     private func focusExistingEmailThread(
         _ thread: EmailThreadItem,
-        focus: Bool = true
+        focus: Bool = true,
+        excludedPaneIds: Set<PaneID> = []
     ) -> ZebraEmailThreadPanel? {
         for (existingId, panel) in panels {
             guard let emailPanel = panel as? ZebraEmailThreadPanel,
                   emailPanel.threadId == thread.id else {
+                continue
+            }
+            if let paneId = paneId(forPanelId: existingId),
+               excludedPaneIds.contains(paneId) {
                 continue
             }
             emailPanel.updateSubject(thread.subject)
@@ -604,15 +662,43 @@ private extension Workspace {
         }
     }
 
-    func selectedEmailThreadPanel(
+    func reusableMarkdownPanel(
+        inPane paneId: PaneID
+    ) -> (panel: MarkdownPanel, panelId: UUID, tabId: TabID)? {
+        if let selectedTab = bonsplitController.selectedTab(inPane: paneId),
+           let selectedPanelId = panelIdFromSurfaceId(selectedTab.id),
+           let markdownPanel = panels[selectedPanelId] as? MarkdownPanel {
+            return (markdownPanel, selectedPanelId, selectedTab.id)
+        }
+
+        for tab in bonsplitController.tabs(inPane: paneId) {
+            guard let panelId = panelIdFromSurfaceId(tab.id),
+                  let markdownPanel = panels[panelId] as? MarkdownPanel else {
+                continue
+            }
+            guard !markdownPanel.isDirty else { continue }
+            return (markdownPanel, panelId, tab.id)
+        }
+        return nil
+    }
+
+    func reusableEmailThreadPanel(
         inPane paneId: PaneID
     ) -> (panel: ZebraEmailThreadPanel, panelId: UUID, tabId: TabID)? {
-        guard let selectedTab = bonsplitController.selectedTab(inPane: paneId),
-              let selectedPanelId = panelIdFromSurfaceId(selectedTab.id),
-              let emailPanel = panels[selectedPanelId] as? ZebraEmailThreadPanel else {
-            return nil
+        if let selectedTab = bonsplitController.selectedTab(inPane: paneId),
+           let selectedPanelId = panelIdFromSurfaceId(selectedTab.id),
+           let emailPanel = panels[selectedPanelId] as? ZebraEmailThreadPanel {
+            return (emailPanel, selectedPanelId, selectedTab.id)
         }
-        return (emailPanel, selectedPanelId, selectedTab.id)
+
+        for tab in bonsplitController.tabs(inPane: paneId) {
+            guard let panelId = panelIdFromSurfaceId(tab.id),
+                  let emailPanel = panels[panelId] as? ZebraEmailThreadPanel else {
+                continue
+            }
+            return (emailPanel, panelId, tab.id)
+        }
+        return nil
     }
 
     func firstPanelIdForContentSplit(
