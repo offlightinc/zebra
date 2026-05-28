@@ -687,16 +687,40 @@ public struct MarkdownChatPill: View {
     // MARK: - Unified shell slots
 
     private var headerRow: some View {
+        Group {
+            if isExpanded {
+                expandedHeaderRow
+            } else {
+                collapsedHeaderRow
+            }
+        }
+    }
+
+    private var expandedHeaderRow: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                contextChip(label: contextChipTitle)
+                    .fixedSize(horizontal: true, vertical: false)
+                autoModeLabel
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 10) {
+                contextChip(label: contextChipTitle)
+                autoModeLabel
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var collapsedHeaderRow: some View {
         HStack(spacing: 10) {
             leadingChipSlot
 
-            promptModeLabel
+            collapsedPromptLabel
                 .layoutPriority(1)
 
             collapsedHeaderControls
-                .opacity(collapsedOpacity)
-                .allowsHitTesting(!isExpanded)
-                .accessibilityHidden(isExpanded)
         }
     }
 
@@ -748,24 +772,22 @@ public struct MarkdownChatPill: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 
-    private var promptModeLabel: some View {
-        ZStack(alignment: .leading) {
-            Text(collapsedPromptText)
-                .font(.system(size: 13.5))
-                .foregroundColor(MarkdownPillPalette.textDim)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .opacity(collapsedOpacity)
+    private var collapsedPromptLabel: some View {
+        Text(collapsedPromptText)
+            .font(.system(size: 13.5))
+            .foregroundColor(MarkdownPillPalette.textDim)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(minWidth: 58, maxWidth: .infinity, alignment: .leading)
+            .clipped()
+    }
 
-            Text(String(localized: "markdownChat.pill.context.auto", defaultValue: "· auto"))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(MarkdownPillPalette.textDim)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .opacity(expandedOpacity)
-        }
-        .frame(minWidth: 58, maxWidth: .infinity, alignment: .leading)
-        .clipped()
+    private var autoModeLabel: some View {
+        Text(String(localized: "markdownChat.pill.context.auto", defaultValue: "· auto"))
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundColor(MarkdownPillPalette.textDim)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
     }
 
     private var collapsedHeaderControls: some View {
