@@ -541,12 +541,22 @@ struct ZebraMarkdownPanelView<
     }
 
     fileprivate func handlePillSubmit(text: String, agent: MarkdownPillAgent) {
+        let requestedWorktree = MarkdownChatPillCommand.worktreeFrontmatterPath(panel.content)
+        let launchDirectory = MarkdownChatPillCommand.resolvedLaunchDirectory(
+            markdownContent: panel.content,
+            fallbackDirectory: markdownFileListStore.rootPath,
+            chooseDirectory: { requestedPath, suggestedPath in
+                chooseWorktreeDirectory(requestedPath: requestedPath, suggestedPath: suggestedPath)
+            }
+        )
+        guard requestedWorktree == nil || launchDirectory != nil else { return }
         guard let newPanel = createAgentTerminalTab() else { return }
         controller.chatCompanionAgent = agent
 
         let launchEnvironmentReady = MarkdownChatPillCommand.prepareLaunchEnvironment(
             agent: agent,
-            markdownFilePath: panel.filePath
+            markdownFilePath: panel.filePath,
+            launchDirectory: launchDirectory
         )
         #if DEBUG
         if !launchEnvironmentReady {
@@ -562,12 +572,51 @@ struct ZebraMarkdownPanelView<
             agent: agent,
             markdownFilePath: panel.filePath,
             surface: surface,
-            userPrompt: text
+            userPrompt: text,
+            launchDirectory: launchDirectory
         )
         sendStartupSequence(
             startup: startupLine,
             to: newPanel
         )
+    }
+
+    private func chooseWorktreeDirectory(requestedPath: String, suggestedPath: String?) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = String(localized: "markdownChat.worktree.choose.title", defaultValue: "Choose Working Directory")
+        panel.message = String(
+            localized: "markdownChat.worktree.choose.message",
+            defaultValue: "The worktree folder from this document was not found on this Mac. Choose the folder to use for this run."
+        )
+        panel.prompt = String(localized: "markdownChat.worktree.choose.prompt", defaultValue: "Choose")
+        panel.directoryURL = nearestExistingDirectoryURL(for: suggestedPath ?? requestedPath)
+
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.path
+    }
+
+    private func nearestExistingDirectoryURL(for path: String?) -> URL? {
+        guard let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        var current = (path as NSString).expandingTildeInPath
+        current = (current as NSString).standardizingPath
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: current, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            return URL(fileURLWithPath: current, isDirectory: true)
+        }
+        while current != "/" {
+            current = (current as NSString).deletingLastPathComponent
+            if FileManager.default.fileExists(atPath: current, isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                return URL(fileURLWithPath: current, isDirectory: true)
+            }
+        }
+        return nil
     }
 
     /// Create a fresh agent terminal for every prompt. The first prompt makes

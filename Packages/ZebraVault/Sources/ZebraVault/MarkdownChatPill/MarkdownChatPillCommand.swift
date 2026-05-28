@@ -8,19 +8,55 @@ import Foundation
 /// override, claude `--append-system-prompt`, gemini `--skip-trust`)
 /// auditable without scrolling past hundreds of lines of view code.
 public enum MarkdownChatPillCommand {
-    private static let codexTargetRepoEnvKey = "CMUX_MARKDOWN_CHAT_CODEX_TARGET_REPO"
+    /// Resolve the cwd for a chat-pill agent launch. A markdown document may
+    /// store the creator's local directory in top-level frontmatter:
+    ///
+    ///     worktree: /Users/dan/zebra
+    ///
+    /// On another Mac, Zebra first tries the same path under the current user's
+    /// home directory (`/Users/han/zebra`). If that deterministic candidate is
+    /// missing, the caller can ask the user to choose a folder.
+    public static func resolvedLaunchDirectory(
+        markdownContent: String?,
+        fallbackDirectory: String?,
+        chooseDirectory: ((_ requestedPath: String, _ suggestedPath: String?) -> String?)? = nil
+    ) -> String? {
+        if let worktree = worktreeFrontmatterPath(markdownContent) {
+            let candidate = deterministicWorktreeCandidate(worktree, fallbackDirectory: fallbackDirectory)
+            if let cwd = validLaunchDirectoryCwd(candidate) {
+                return cwd
+            }
+            if let chosen = chooseDirectory?(worktree, candidate),
+               let cwd = validLaunchDirectoryCwd(chosen) {
+                return cwd
+            }
+            return nil
+        }
+        return validLaunchDirectoryCwd(fallbackDirectory)
+    }
 
     /// Prepare any agent-specific launch state that cannot be expressed as a
     /// safe session-scoped CLI flag. Returns false when preparation failed and
     /// the agent should fall back to its own first-run prompt.
     ///
-    /// markdownFilePath nil 은 email panel 호출처럼 file-on-disk 가 없는 surface.
-    /// 이 경우 claude trust 같은 path-bound prep 은 의미가 없어 no-op 으로 성공 처리.
-    public static func prepareLaunchEnvironment(agent: MarkdownPillAgent, markdownFilePath: String?) -> Bool {
+    /// `launchDirectory` 는 호출부가 frontmatter `worktree:` 또는 selected Vault
+    /// 기준으로 이미 resolve 한 cwd 이다. 없고 markdownFilePath 도 nil 인 surface
+    /// (email panel 등)는 path-bound prep 없이 성공 처리한다.
+    public static func prepareLaunchEnvironment(
+        agent: MarkdownPillAgent,
+        markdownFilePath: String?,
+        launchDirectory: String? = nil
+    ) -> Bool {
         switch agent {
         case .codex:
             return true
         case .claude:
+            if let cwd = validLaunchDirectoryCwd(launchDirectory) {
+                guard let trustedCwd = safeTrustCwd(cwd) else {
+                    return false
+                }
+                return markClaudeProjectTrusted(cwd: trustedCwd)
+            }
             guard let markdownFilePath, !markdownFilePath.isEmpty else {
                 return true
             }
@@ -68,14 +104,18 @@ public enum MarkdownChatPillCommand {
         agent: MarkdownPillAgent,
         markdownFilePath: String?,
         surface: MarkdownChatPillContextSurface,
-        userPrompt: String
+        userPrompt: String,
+        launchDirectory: String? = nil
     ) -> String {
-        // markdownFilePath 가 있는 surface 에서만 자동 trust 우회 자격. nil/empty 면
-        // file-on-disk 가 없는 surface (예: email panel) 라 cd 는 home 으로 떨어뜨리되
-        // codex/gemini 의 trust-bypass flag 는 붙이지 않는다 (claude prep 은 이미 skip).
+        // Zebra ChatPill 호출부는 frontmatter `worktree:` 또는 selected Vault
+        // 기준으로 resolve 한 cwd 를 launchDirectory 로 넘긴다. 없으면 markdown
+        // file parent, 그것도 없으면 home 으로 fallback 한다.
         let cwd: String
         let trustEligible: Bool
-        if let markdownFilePath, !markdownFilePath.isEmpty {
+        if let launchDirectoryCwd = validLaunchDirectoryCwd(launchDirectory) {
+            cwd = launchDirectoryCwd
+            trustEligible = true
+        } else if let markdownFilePath, !markdownFilePath.isEmpty {
             let parent = (markdownFilePath as NSString).deletingLastPathComponent
             cwd = parent.isEmpty ? "/" : parent
             trustEligible = true
@@ -88,6 +128,63 @@ public enum MarkdownChatPillCommand {
             surface: surface
         )
         return "\(invocation(agent: agent, cwd: cwd, trustEligible: trustEligible, contextPrefix: contextPrefix, prompt: userPrompt))\r"
+    }
+
+    public static func worktreeFrontmatterPath(_ markdownContent: String?) -> String? {
+        guard let markdownContent,
+              let block = FrontmatterUtils.extractFrontmatterBlock(from: markdownContent) else {
+            return nil
+        }
+        let kv = FrontmatterUtils.parseFlatKeyValues(block)
+        guard let raw = kv["worktree"]?.trimmedUnquoted,
+              !raw.isEmpty else {
+            return nil
+        }
+        return raw
+    }
+
+    private static func deterministicWorktreeCandidate(_ rawPath: String, fallbackDirectory: String?) -> String? {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("~/") || trimmed == "~" {
+            return standardizedPath((trimmed as NSString).expandingTildeInPath)
+        }
+        let expanded = standardizedPath((trimmed as NSString).expandingTildeInPath)
+        if let translated = currentHomeTranslatedUsersPath(expanded) {
+            return translated
+        }
+        if expanded.hasPrefix("/") {
+            return expanded
+        }
+        guard let fallback = validLaunchDirectoryCwd(fallbackDirectory) else {
+            return nil
+        }
+        return standardizedPath((fallback as NSString).appendingPathComponent(trimmed))
+    }
+
+    private static func currentHomeTranslatedUsersPath(_ path: String) -> String? {
+        let components = URL(fileURLWithPath: path).pathComponents
+        guard components.count >= 3,
+              components[0] == "/",
+              components[1] == "Users" else {
+            return nil
+        }
+        let home = standardizedPath(NSHomeDirectory())
+        let tail = components.dropFirst(3).joined(separator: "/")
+        guard !tail.isEmpty else { return home }
+        return standardizedPath((home as NSString).appendingPathComponent(tail))
+    }
+
+    private static func validLaunchDirectoryCwd(_ launchDirectory: String?) -> String? {
+        guard let launchDirectory else { return nil }
+        let trimmed = launchDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let cwd = standardizedPath((trimmed as NSString).expandingTildeInPath)
+        guard cwd.hasPrefix("/") else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return cwd
     }
 
     /// Per-agent CLI invocation tuned to keep the initial prompt on the agent
@@ -110,17 +207,13 @@ public enum MarkdownChatPillCommand {
         let visibleContextPrompt = "\(contextPrefix)\n\n\(promptArgument)"
         switch agent {
         case .codex:
-            let codexLaunch = codexLaunchContext(markdownCwd: cwd)
             var parts = [
-                "cd \(shellQuote(codexLaunch.cwd)) && codex",
-                "-C \(shellQuote(codexLaunch.cwd))"
+                "cd \(shellQuote(cwd)) && codex",
+                "-C \(shellQuote(cwd))"
             ]
-            if let addDir = codexLaunch.addDir {
-                parts.append("--add-dir \(shellQuote(addDir))")
-            }
             // trust 우회는 (a) surface 가 file-bound 이고 (b) cwd 가 안전한
             // 사용자-소유 디렉터리일 때만. `/` 나 home 직속을 silent trusted 처리 금지.
-            if trustEligible, let trustCwd = safeTrustCwd(codexLaunch.cwd) {
+            if trustEligible, let trustCwd = safeTrustCwd(cwd) {
                 let trustOverride = "projects.\"\(trustCwd)\".trust_level=\"trusted\""
                 parts.append("-c \(shellQuote(trustOverride))")
             }
@@ -134,39 +227,6 @@ public enum MarkdownChatPillCommand {
         }
     }
 
-    private struct CodexLaunchContext {
-        let cwd: String
-        let addDir: String?
-    }
-
-    private static func codexLaunchContext(markdownCwd: String) -> CodexLaunchContext {
-        let markdownCwd = standardizedPath(markdownCwd)
-        guard let targetRepo = codexTargetRepoPath(),
-              targetRepo != markdownCwd else {
-            return CodexLaunchContext(cwd: markdownCwd, addDir: nil)
-        }
-
-        return CodexLaunchContext(
-            cwd: targetRepo,
-            addDir: isPath(markdownCwd, inside: targetRepo) ? nil : markdownCwd
-        )
-    }
-
-    private static func codexTargetRepoPath() -> String? {
-        guard let raw = ProcessInfo.processInfo.environment[codexTargetRepoEnvKey]?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty else {
-            return nil
-        }
-        let path = standardizedPath((raw as NSString).expandingTildeInPath)
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
-              isDirectory.boolValue else {
-            return nil
-        }
-        return path
-    }
-
     private static func standardizedPath(_ path: String) -> String {
         (path as NSString).standardizingPath
     }
@@ -176,7 +236,7 @@ public enum MarkdownChatPillCommand {
     /// standardized absolute path 반환. Claude 의 `.claude.json` 영구 쓰기, codex
     /// `-c trust_level=trusted` override, gemini `--skip-trust` 모두 이 게이트를
     /// 통과한 cwd 에서만 적용. tilde-prefixed 입력도 expand 후 검증해서 콜러가
-    /// `~/...` 를 넘겨도 silent 거절되지 않게 한다 (codexTargetRepoPath 와 대칭).
+    /// `~/...` 를 넘겨도 silent 거절되지 않게 한다.
     private static func safeTrustCwd(_ cwd: String) -> String? {
         guard !cwd.isEmpty else { return nil }
         let expanded = (cwd as NSString).expandingTildeInPath
@@ -193,10 +253,6 @@ public enum MarkdownChatPillCommand {
         guard FileManager.default.fileExists(atPath: standardized, isDirectory: &isDirectory),
               isDirectory.boolValue else { return nil }
         return standardized
-    }
-
-    private static func isPath(_ path: String, inside root: String) -> Bool {
-        path == root || path.hasPrefix(root + "/")
     }
 
     private static func shellQuote(_ value: String) -> String {
