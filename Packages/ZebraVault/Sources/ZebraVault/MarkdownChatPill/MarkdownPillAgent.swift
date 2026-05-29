@@ -7,6 +7,15 @@ public enum MarkdownPillAgent: String, CaseIterable, Identifiable, Sendable {
 
     public var id: String { rawValue }
 
+    public static func defaultAgent(
+        preferenceStore: ZebraAgentPreferenceStore = ZebraAgentPreferenceStore()
+    ) -> MarkdownPillAgent {
+        guard let primaryAgent = preferenceStore.load(migratingLegacyDefaults: false).primaryAgent else {
+            return .codex
+        }
+        return MarkdownPillAgent(agentKind: primaryAgent)
+    }
+
     public init(agentKind: ZebraAgentKind) {
         switch agentKind {
         case .codex:

@@ -316,11 +316,12 @@ public struct MarkdownChatPill: View {
         self.activeAgent = activeAgent
         self.onSubmit = onSubmit
         self.onHeightChange = onHeightChange
+        self._agent = State(initialValue: MarkdownPillAgent.defaultAgent())
     }
 
     @Binding private var isExpanded: Bool
     @State private var text: String = ""
-    @State private var agent: MarkdownPillAgent = .codex
+    @State private var agent: MarkdownPillAgent
     @State private var agentMenuOpen: Bool = false
     /// Cached gbrain skill list, loaded lazily on first slash. nil means
     /// "didn't try yet" — empty array means we tried and gbrain isn't

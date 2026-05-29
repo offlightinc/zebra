@@ -98,6 +98,20 @@ final class ZebraAgentPreferenceStoreTests: XCTestCase {
         XCTAssertEqual(preferences.resolvedAgent(for: .brainSync), .claude)
     }
 
+    func testMarkdownPillDefaultAgentUsesPrimaryAgentPreference() throws {
+        let fileURL = try makeTemporaryPreferencesURL()
+        let store = makeStore(fileURL: fileURL)
+        try store.setPrimaryAgent(.antigravity, updatedBy: "test")
+
+        XCTAssertEqual(MarkdownPillAgent.defaultAgent(preferenceStore: store), .antigravity)
+    }
+
+    func testMarkdownPillDefaultAgentFallsBackToCodexWithoutPrimaryAgent() throws {
+        let store = makeStore(fileURL: try makeTemporaryPreferencesURL())
+
+        XCTAssertEqual(MarkdownPillAgent.defaultAgent(preferenceStore: store), .codex)
+    }
+
     private func makeStore(
         fileURL: URL,
         legacyDefaults: UserDefaults? = nil
