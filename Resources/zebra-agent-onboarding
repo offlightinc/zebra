@@ -17,10 +17,15 @@ AGENT_DIR="$APP_SUPPORT_DIR/agent"
 STATE_FILE="$ONBOARDING_DIR/agent-cli-state.json"
 EVENTS_FILE="$ONBOARDING_DIR/agent-cli-events.jsonl"
 PREFERENCES_FILE="$AGENT_DIR/preferences.json"
+INCLUDE_GLOBAL_AGENT_PATHS="${ZEBRA_AGENT_ONBOARDING_INCLUDE_GLOBAL_PATHS:-1}"
 
 # Zebra is often launched outside the user's login shell. Include common CLI
 # install locations before scanning or launching provider tools.
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+if [[ "$INCLUDE_GLOBAL_AGENT_PATHS" == "0" ]]; then
+  export PATH="$HOME/.local/bin:$PATH"
+else
+  export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+fi
 
 RUN_ID=""
 SAVED_PRIMARY=""
@@ -385,12 +390,16 @@ candidate_path_options() {
   case "$agent" in
     antigravity)
       CANDIDATE_PATH_OPTIONS+=("$HOME/.local/bin/$binary")
-      CANDIDATE_PATH_OPTIONS+=("/opt/homebrew/bin/$binary")
-      CANDIDATE_PATH_OPTIONS+=("/usr/local/bin/$binary")
+      if [[ "$INCLUDE_GLOBAL_AGENT_PATHS" != "0" ]]; then
+        CANDIDATE_PATH_OPTIONS+=("/opt/homebrew/bin/$binary")
+        CANDIDATE_PATH_OPTIONS+=("/usr/local/bin/$binary")
+      fi
       ;;
     *)
-      CANDIDATE_PATH_OPTIONS+=("/opt/homebrew/bin/$binary")
-      CANDIDATE_PATH_OPTIONS+=("/usr/local/bin/$binary")
+      if [[ "$INCLUDE_GLOBAL_AGENT_PATHS" != "0" ]]; then
+        CANDIDATE_PATH_OPTIONS+=("/opt/homebrew/bin/$binary")
+        CANDIDATE_PATH_OPTIONS+=("/usr/local/bin/$binary")
+      fi
       CANDIDATE_PATH_OPTIONS+=("$HOME/.local/bin/$binary")
       ;;
   esac
@@ -406,8 +415,9 @@ candidate_path_options() {
 
 path_seen() {
   local needle="$1"
-  local item
-  for item in "${UNIQUE_PATHS[@]}"; do
+  local i item
+  for ((i = 0; i < ${#UNIQUE_PATHS[@]}; i++)); do
+    item="${UNIQUE_PATHS[$i]}"
     [[ "$item" == "$needle" ]] && return 0
   done
   return 1
@@ -563,9 +573,17 @@ scan_agents() {
 append_scan_completed_event() {
   local extra
   extra=',"installed":'
-  extra+="$(json_string_array "${INSTALLED_AGENTS[@]}")"
+  if [[ "${#INSTALLED_AGENTS[@]}" -gt 0 ]]; then
+    extra+="$(json_string_array "${INSTALLED_AGENTS[@]}")"
+  else
+    extra+='[]'
+  fi
   extra+=',"missing":'
-  extra+="$(json_string_array "${MISSING_AGENTS[@]}")"
+  if [[ "${#MISSING_AGENTS[@]}" -gt 0 ]]; then
+    extra+="$(json_string_array "${MISSING_AGENTS[@]}")"
+  else
+    extra+='[]'
+  fi
   if [[ "${#BROKEN_AGENTS[@]}" -gt 0 ]]; then
     extra+=',"broken":'
     extra+="$(json_string_array "${BROKEN_AGENTS[@]}")"
@@ -575,8 +593,9 @@ append_scan_completed_event() {
 
 is_agent_installed() {
   local agent="$1"
-  local item
-  for item in "${INSTALLED_AGENTS[@]}"; do
+  local i item
+  for ((i = 0; i < ${#INSTALLED_AGENTS[@]}; i++)); do
+    item="${INSTALLED_AGENTS[$i]}"
     [[ "$item" == "$agent" ]] && return 0
   done
   return 1
@@ -615,6 +634,43 @@ print_candidates() {
   done
 }
 
+candidate_index_for_agent() {
+  local agent="$1"
+  local i
+  for i in "${!CANDIDATE_IDS[@]}"; do
+    if [[ "${CANDIDATE_IDS[$i]}" == "$agent" ]]; then
+      printf '%s\n' "$i"
+      return 0
+    fi
+  done
+  return 1
+}
+
+install_state_for_agent() {
+  local agent="$1"
+  local index
+  if index="$(candidate_index_for_agent "$agent")"; then
+    printf '%s\n' "${CANDIDATE_INSTALL_STATES[$index]}"
+    return
+  fi
+  printf 'missing\n'
+}
+
+print_menu_agent_state() {
+  local agent="$1"
+  case "$(install_state_for_agent "$agent")" in
+    installed)
+      printf ' [installed]'
+      ;;
+    broken)
+      printf ' [needs repair]'
+      ;;
+    *)
+      printf ' [not installed]'
+      ;;
+  esac
+}
+
 prompt_menu() {
   local title="$1"
   local count="${#MENU_AGENTS[@]}"
@@ -622,7 +678,9 @@ prompt_menu() {
   PROMPT_RESULT=""
   printf '\n%s\n\n' "$title"
   for i in "${!MENU_AGENTS[@]}"; do
-    printf '  %s. %s\n' "$((i + 1))" "$(display_name "${MENU_AGENTS[$i]}")"
+    printf '  %s. %s' "$((i + 1))" "$(display_name "${MENU_AGENTS[$i]}")"
+    print_menu_agent_state "${MENU_AGENTS[$i]}"
+    printf '\n'
   done
   printf '\n'
   while true; do
@@ -646,16 +704,26 @@ prompt_menu() {
   done
 }
 
-select_primary_from_installed() {
-  MENU_AGENTS=("${INSTALLED_AGENTS[@]}")
+select_primary_agent() {
+  MENU_AGENTS=("${AGENTS[@]}")
   write_state choose_primary ""
-  prompt_menu "Which installed agent should Zebra use by default?"
+  prompt_menu "Which agent should Zebra use by default?"
 }
 
 select_install_target() {
   MENU_AGENTS=("${AGENTS[@]}")
   write_state choose_install_target ""
-  prompt_menu "Zebra needs a local agent CLI to continue. Choose the agent Zebra should install:"
+  prompt_menu "Choose the agent Zebra should use:"
+}
+
+continue_with_selected_agent() {
+  local agent="$1"
+  local selection_mode="$2"
+  if is_agent_installed "$agent"; then
+    select_and_launch "$agent" "$selection_mode"
+  else
+    install_then_launch "$agent"
+  fi
 }
 
 primary_missing_flow() {
@@ -667,14 +735,8 @@ primary_missing_flow() {
   while true; do
     printf '\nChoose a recovery action:\n'
     printf '  1. Reinstall %s\n' "$(display_name "$saved")"
-    if [[ "${#INSTALLED_AGENTS[@]}" -gt 0 ]]; then
-      printf '  2. Choose another installed agent\n'
-      printf '  3. Install a different agent\n'
-      printf 'Selection [1-3]: '
-    else
-      printf '  2. Install a different agent\n'
-      printf 'Selection [1-2]: '
-    fi
+    printf '  2. Choose another agent\n'
+    printf 'Selection [1-2]: '
     if ! read -r choice; then
       return 1
     fi
@@ -684,21 +746,9 @@ primary_missing_flow() {
         return
         ;;
       2)
-        if [[ "${#INSTALLED_AGENTS[@]}" -gt 0 ]]; then
-          select_primary_from_installed || return 1
-          select_and_launch "$PROMPT_RESULT" user_recovered_primary
-        else
-          select_install_target || return 1
-          install_then_launch "$PROMPT_RESULT"
-        fi
+        select_primary_agent || return 1
+        continue_with_selected_agent "$PROMPT_RESULT" user_recovered_primary
         return
-        ;;
-      3)
-        if [[ "${#INSTALLED_AGENTS[@]}" -gt 0 ]]; then
-          select_install_target || return 1
-          install_then_launch "$PROMPT_RESULT"
-          return
-        fi
         ;;
     esac
     printf 'Enter a valid option.\n'
@@ -826,6 +876,10 @@ install_then_launch() {
       return 1
     fi
     agent="$PROMPT_RESULT"
+    if is_agent_installed "$agent"; then
+      select_and_launch "$agent" user_recovered_primary
+      return
+    fi
   done
 }
 
@@ -1005,13 +1059,8 @@ select_and_launch() {
 }
 
 force_choose_flow() {
-  if [[ "${#INSTALLED_AGENTS[@]}" -gt 0 ]]; then
-    select_primary_from_installed || return 1
-    select_and_launch "$PROMPT_RESULT" user_selected_primary
-  else
-    select_install_target || return 1
-    install_then_launch "$PROMPT_RESULT"
-  fi
+  select_primary_agent || return 1
+  continue_with_selected_agent "$PROMPT_RESULT" user_selected_primary
 }
 
 resume_existing_flow() {
@@ -1045,13 +1094,8 @@ resume_existing_flow() {
       append_resume_event "$resume_phase"
       scan_agents_for_resume
       print_candidates
-      if [[ "${#INSTALLED_AGENTS[@]}" -gt 0 ]]; then
-        select_primary_from_installed || return 1
-        select_and_launch "$PROMPT_RESULT" user_selected_primary
-      else
-        select_install_target || return 1
-        install_then_launch "$PROMPT_RESULT"
-      fi
+      select_primary_agent || return 1
+      continue_with_selected_agent "$PROMPT_RESULT" user_selected_primary
       return $?
       ;;
     choose_install_target)
@@ -1062,7 +1106,7 @@ resume_existing_flow() {
       scan_agents_for_resume
       print_candidates
       select_install_target || return 1
-      install_then_launch "$PROMPT_RESULT"
+      continue_with_selected_agent "$PROMPT_RESULT" user_selected_primary
       return $?
       ;;
     primary_missing)
@@ -1136,20 +1180,8 @@ run_flow() {
     return
   fi
 
-  case "${#INSTALLED_AGENTS[@]}" in
-    0)
-      select_install_target || return 1
-      install_then_launch "$PROMPT_RESULT"
-      ;;
-    1)
-      printf '\nZebra found one installed agent: %s.\n' "$(display_name "${INSTALLED_AGENTS[0]}")"
-      select_and_launch "${INSTALLED_AGENTS[0]}" auto_one_installed
-      ;;
-    *)
-      select_primary_from_installed || return 1
-      select_and_launch "$PROMPT_RESULT" user_selected_primary
-      ;;
-  esac
+  select_primary_agent || return 1
+  continue_with_selected_agent "$PROMPT_RESULT" user_selected_primary
 }
 
 mark_ready() {

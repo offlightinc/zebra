@@ -18,6 +18,9 @@ RUN_STATUS=0
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
+  if [[ -n "${RUN_OUTPUT:-}" ]]; then
+    printf '%s\n' "$RUN_OUTPUT" >&2
+  fi
   exit 1
 }
 
@@ -49,17 +52,28 @@ setup_case() {
   STATE_FILE="$APP_DIR/onboarding/agent-cli-state.json"
   mkdir -p "$HOME_DIR/.local/bin" "$APP_DIR/onboarding" "$APP_DIR/agent" "$WORK_DIR"
   : > "$FAKE_LOG"
-  cat > "$HOME_DIR/.local/bin/agy" <<'FAKE'
+}
+
+add_fake_agent() {
+  local agent="$1"
+  local binary
+  case "$agent" in
+    claude) binary=claude ;;
+    codex) binary=codex ;;
+    antigravity) binary=agy ;;
+    *) fail "unknown fake agent: $agent" ;;
+  esac
+  cat > "$HOME_DIR/.local/bin/$binary" <<FAKE
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "${1:-}" == "--version" ]]; then
-  printf 'agy fake 1.0\n'
+if [[ "\${1:-}" == "--version" ]]; then
+  printf '$binary fake 1.0\n'
   exit 0
 fi
-printf 'launch:%s\n' "$*" >> "${ZEBRA_FAKE_AGENT_LOG:?}"
+printf '$agent:%s\n' "\$*" >> "\${ZEBRA_FAKE_AGENT_LOG:?}"
 exit 0
 FAKE
-  chmod +x "$HOME_DIR/.local/bin/agy"
+  chmod +x "$HOME_DIR/.local/bin/$binary"
 }
 
 write_preferences() {
@@ -101,7 +115,9 @@ run_onboarding() {
   set +e
   HOME="$HOME_DIR" \
     ZEBRA_APP_SUPPORT_DIR="$APP_DIR" \
+    ZEBRA_AGENT_ONBOARDING_INCLUDE_GLOBAL_PATHS=0 \
     ZEBRA_FAKE_AGENT_LOG="$FAKE_LOG" \
+    PATH="/usr/bin:/bin" \
     "$SCRIPT" run --cwd "$WORK_DIR" >"$output_file" 2>&1 <<<"$input"
   RUN_STATUS=$?
   set -e
@@ -151,6 +167,36 @@ test_choose_install_target_resumes_install_menu() {
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "choose_install_target" "phase remains install selection"
 }
 
+test_fresh_choice_lists_missing_agents() {
+  setup_case fresh-missing
+  add_fake_agent codex
+
+  run_onboarding $'3\nn\n4\n'
+
+  assert_eq "$RUN_STATUS" "1" "declined missing-agent install status"
+  assert_contains "$RUN_OUTPUT" "Which agent should Zebra use by default?" "primary prompt"
+  assert_contains "$RUN_OUTPUT" "2. Codex [installed]" "installed option"
+  assert_contains "$RUN_OUTPUT" "3. Antigravity [not installed]" "missing option"
+  assert_contains "$RUN_OUTPUT" "Zebra will run the official installer for Antigravity:" "missing selection installs"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "choose_primary" "declined install returns to primary choice state"
+  assert_eq "$(cat "$FAKE_LOG")" "" "installed agent is not launched when missing agent is selected"
+}
+
+test_fresh_choice_launches_installed_selection() {
+  setup_case fresh-installed
+  add_fake_agent codex
+
+  run_onboarding $'2\n4\n'
+
+  assert_eq "$RUN_STATUS" "1" "exit-for-now status"
+  assert_contains "$RUN_OUTPUT" "2. Codex [installed]" "installed option"
+  assert_contains "$RUN_OUTPUT" "Starting Codex for Zebra onboarding." "selected installed agent launches"
+  assert_contains "$(cat "$FAKE_LOG")" "codex:" "fake codex launched"
+  assert_eq "$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent)" "codex" "primary preference is saved"
+  assert_eq "$(plist_raw "$STATE_FILE" selectedAgent)" "codex" "selected agent is persisted"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "waiting_for_continue" "launch exit moves to continue menu"
+}
+
 test_complete_state_exits_without_scan() {
   setup_case complete
   write_preferences antigravity
@@ -166,6 +212,8 @@ test_complete_state_exits_without_scan() {
 test_waiting_for_continue_resumes_menu
 test_agent_working_resumes_to_continue_menu
 test_choose_install_target_resumes_install_menu
+test_fresh_choice_lists_missing_agents
+test_fresh_choice_launches_installed_selection
 test_complete_state_exits_without_scan
 
 printf 'PASS: zebra agent onboarding resume\n'
