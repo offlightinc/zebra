@@ -93,13 +93,18 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
     }
 
     private var statusText: String? {
-        if isScanning {
+        if isScanning && candidate == nil && !isPrimary {
             return String(localized: "markdownChat.pill.agent.status.checking", defaultValue: "Checking")
         }
         if isBroken {
             return String(localized: "markdownChat.pill.agent.status.repair", defaultValue: "Needs repair")
         }
         if !isInstalled {
+            guard candidate != nil else {
+                return isPrimary
+                    ? String(localized: "markdownChat.pill.agent.status.default", defaultValue: "Default")
+                    : nil
+            }
             return String(localized: "markdownChat.pill.agent.status.missing", defaultValue: "Not installed")
         }
         if isPrimary {
@@ -109,6 +114,9 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
     }
 
     private var statusColor: Color {
+        if candidate == nil && isPrimary {
+            return MarkdownPillPalette.textMuted
+        }
         if isBroken || !isInstalled {
             return MarkdownPillPalette.selectionTint.opacity(0.72)
         }
@@ -119,7 +127,7 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
     }
 
     private var actionTitle: String {
-        if isScanning {
+        if isScanning && candidate == nil {
             return String(localized: "markdownChat.pill.agent.action.checking", defaultValue: "Checking")
         }
         if isPrimary && isInstalled {
@@ -129,13 +137,18 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
             return String(localized: "markdownChat.pill.agent.action.repair", defaultValue: "Repair")
         }
         if !isInstalled {
+            guard candidate != nil else {
+                return isPrimary
+                    ? String(localized: "markdownChat.pill.agent.action.default", defaultValue: "Default")
+                    : String(localized: "markdownChat.pill.agent.action.checking", defaultValue: "Checking")
+            }
             return String(localized: "markdownChat.pill.agent.action.install", defaultValue: "Install")
         }
         return String(localized: "markdownChat.pill.agent.action.setDefault", defaultValue: "Set default")
     }
 
     private var actionIcon: String {
-        if isScanning {
+        if isScanning && candidate == nil {
             return "hourglass"
         }
         if isPrimary && isInstalled {
@@ -145,6 +158,9 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
             return "wrench.adjustable"
         }
         if !isInstalled {
+            guard candidate != nil else {
+                return isPrimary ? "checkmark" : "hourglass"
+            }
             return "arrow.down.to.line.compact"
         }
         return "pin.fill"
@@ -155,7 +171,7 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
     }
 
     private var actionEnabled: Bool {
-        !isScanning && !(isPrimary && isInstalled)
+        candidate != nil && !(isPrimary && isInstalled)
     }
 
     private var rowFill: Color {
@@ -1160,6 +1176,7 @@ public struct MarkdownChatPill: View {
     }
 
     private func refreshAgentMenuState() {
+        guard agentScanStatus != .scanning else { return }
         syncAgentFromPrimaryPreferenceIfNeeded()
         agentScanStatus = .scanning
         Task(priority: .userInitiated) {
@@ -1180,10 +1197,13 @@ public struct MarkdownChatPill: View {
     }
 
     private func selectPrimaryAgent(_ option: MarkdownPillAgent) {
-        guard agentScanStatus != .scanning else { return }
         let agentKind = option.agentKind
-        guard let candidate = agentCandidate(for: agentKind),
-              candidate.installState == .installed,
+        guard let candidate = agentCandidate(for: agentKind) else {
+            guard agentScanStatus != .scanning else { return }
+            openDefaultAgentFallback(agentKind)
+            return
+        }
+        guard candidate.installState == .installed,
               candidate.terminalLaunchable else {
             openDefaultAgentFallback(agentKind)
             return
