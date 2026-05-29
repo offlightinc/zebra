@@ -6,9 +6,9 @@ import SwiftUI
 /// - chip: pill (border-radius 999), padding 3 7 3 5, bg `BVColor.bg`,
 ///   border `BVColor.accent`, font 10.5px weight 500
 /// - dropdown (`.ag-list`): width 170, padding 4, gap 1, bg `#0c0c0c`
-/// - 3 rows: codex (⌥1) / claude (⌥2) / gemini (⌥3)
+/// - 3 rows: codex (⌥1) / claude (⌥2) / agy (⌥3)
 ///
-/// Selection 은 `UserDefaults` 의 `zebra.brainSync.preferredAgent` 에 persist.
+/// Selection 은 shared agent preference JSON 의 `surfaceOverrides.brainSync` 에 persist.
 /// chip click 시 dropdown toggle. dropdown 의 row click 시 onSelect callback +
 /// preference 저장 + dropdown close.
 ///
@@ -158,7 +158,7 @@ struct BrainSyncAgentPicker: View {
         switch agent {
         case .codex: return "OpenAI"
         case .claude: return "Anthropic"
-        case .gemini: return "Google"
+        case .antigravity: return "Google"
         }
     }
 
@@ -166,7 +166,7 @@ struct BrainSyncAgentPicker: View {
         switch agent {
         case .codex: return "⌥1"
         case .claude: return "⌥2"
-        case .gemini: return "⌥3"
+        case .antigravity: return "⌥3"
         }
     }
 }
@@ -195,22 +195,25 @@ private struct BrainSyncDropdownHeightKey: PreferenceKey {
     }
 }
 
-/// `UserDefaults` 의 preferred agent slug 를 typed `MarkdownPillAgent` 로 read/write.
+/// Shared preference JSON 의 BrainSync override 를 typed `MarkdownPillAgent` 로 read/write.
 /// chip 의 default 표시 + 신규 선택 persist 에 사용.
 enum BrainSyncAgentPreference {
-    private static let key = "zebra.brainSync.preferredAgent"
-
     static var current: MarkdownPillAgent {
-        get {
-            if let raw = UserDefaults.standard.string(forKey: key),
-               let agent = MarkdownPillAgent(rawValue: raw) {
-                return agent
-            }
-            return .codex
-        }
+        let agent = ZebraAgentPreferenceStore().resolvedAgent(for: .brainSync) ?? .codex
+        return MarkdownPillAgent(agentKind: agent)
     }
 
     static func set(_ agent: MarkdownPillAgent) {
-        UserDefaults.standard.set(agent.rawValue, forKey: key)
+        do {
+            try ZebraAgentPreferenceStore().setSurfaceOverride(
+                agent.agentKind,
+                for: .brainSync,
+                updatedBy: "brainSyncPicker"
+            )
+        } catch {
+            #if DEBUG
+            NSLog("[BrainSync] failed to persist agent override: \(error.localizedDescription)")
+            #endif
+        }
     }
 }

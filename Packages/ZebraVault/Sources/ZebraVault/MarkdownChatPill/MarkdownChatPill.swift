@@ -18,7 +18,7 @@ private extension MarkdownPillAgent {
         switch self {
         case .codex: return "⌥1"
         case .claude: return "⌥2"
-        case .gemini: return "⌥3"
+        case .antigravity: return "⌥3"
         }
     }
 
@@ -28,7 +28,7 @@ private extension MarkdownPillAgent {
         switch self {
         case .codex: return "OpenAI · code-first"
         case .claude: return "Anthropic · reasoning"
-        case .gemini: return "Google · long context"
+        case .antigravity: return "Google · Antigravity"
         }
     }
 
@@ -37,7 +37,7 @@ private extension MarkdownPillAgent {
         switch self {
         case .codex: return "◇"
         case .claude: return "✳"
-        case .gemini: return "✦"
+        case .antigravity: return "✦"
         }
     }
 
@@ -45,14 +45,14 @@ private extension MarkdownPillAgent {
         switch self {
         case .codex: return Color(red: 15.0 / 255, green: 15.0 / 255, blue: 15.0 / 255)
         case .claude: return Color(red: 201.0 / 255, green: 100.0 / 255, blue: 66.0 / 255)
-        case .gemini: return Color(red: 42.0 / 255, green: 77.0 / 255, blue: 173.0 / 255)
+        case .antigravity: return Color(red: 42.0 / 255, green: 77.0 / 255, blue: 173.0 / 255)
         }
     }
 
     var glyphColor: Color {
         switch self {
         case .codex: return Color(red: 230.0 / 255, green: 228.0 / 255, blue: 221.0 / 255)
-        case .claude, .gemini: return .white
+        case .claude, .antigravity: return .white
         }
     }
 }

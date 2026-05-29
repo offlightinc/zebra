@@ -87,7 +87,7 @@ struct ZebraSidebarBody: View {
     ) {
         guard let workspace = tabManager.selectedWorkspace else { return }
         guard let vaultPath = vaultState.selectedVaultPath, !vaultPath.isEmpty else { return }
-        // Claude 의 .claude.json trust 처리는 prep 단계에서 (codex/gemini 는 no-op).
+        // Claude 의 .claude.json trust 처리는 prep 단계에서 (codex/agy 는 no-op).
         _ = MarkdownChatPillCommand.prepareLaunchEnvironmentForBrainSyncFailure(
             agent: agent,
             vaultPath: vaultPath
