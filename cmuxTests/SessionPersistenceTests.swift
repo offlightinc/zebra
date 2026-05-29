@@ -3298,6 +3298,46 @@ extension SessionPersistenceTests {
         XCTAssertEqual(resolved, fallbackFile.path)
     }
 
+    func testMarkdownFileLinkResolverAddsMarkdownExtensionForBrainStylePaths() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-markdown-link-resolver-brain-\(UUID().uuidString)", isDirectory: true)
+        let docs = root.appendingPathComponent("docs", isDirectory: true)
+        let openedFile = docs.appendingPathComponent("index.md")
+        let sourceFile = docs.appendingPathComponent("sources/signup-flow.md")
+
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "index".write(to: openedFile, atomically: true, encoding: .utf8)
+        try "source".write(to: sourceFile, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let resolved = MarkdownPanelFileLinkResolver.resolve(
+            rawPath: "sources/signup-flow",
+            relativeToMarkdownFile: openedFile.path
+        )
+        XCTAssertEqual(resolved, sourceFile.path)
+    }
+
+    func testMarkdownFileLinkResolverOpensDirectoryReadmeForBrainStylePaths() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-markdown-link-resolver-readme-\(UUID().uuidString)", isDirectory: true)
+        let docs = root.appendingPathComponent("docs", isDirectory: true)
+        let openedFile = docs.appendingPathComponent("index.md")
+        let sourceDirectory = docs.appendingPathComponent("sources/featurebase-posts", isDirectory: true)
+        let readmeFile = sourceDirectory.appendingPathComponent("README.md")
+
+        try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try "index".write(to: openedFile, atomically: true, encoding: .utf8)
+        try "readme".write(to: readmeFile, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let resolved = MarkdownPanelFileLinkResolver.resolve(
+            rawPath: "sources/featurebase-posts",
+            relativeToMarkdownFile: openedFile.path
+        )
+        XCTAssertEqual(resolved, readmeFile.path)
+    }
+
     func testMarkdownFileLinkResolverRejectsMissingAndNonMarkdownFiles() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("cmux-markdown-link-resolver-reject-\(UUID().uuidString)", isDirectory: true)
@@ -3310,6 +3350,7 @@ extension SessionPersistenceTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         XCTAssertNil(MarkdownPanelFileLinkResolver.resolve(rawPath: "missing.md", relativeToMarkdownFile: openedFile.path))
+        XCTAssertNil(MarkdownPanelFileLinkResolver.resolve(rawPath: "missing", relativeToMarkdownFile: openedFile.path))
         XCTAssertNil(MarkdownPanelFileLinkResolver.resolve(rawPath: "notes.txt", relativeToMarkdownFile: openedFile.path))
         XCTAssertNil(MarkdownPanelFileLinkResolver.resolve(rawPath: "https://example.com/notes.md", relativeToMarkdownFile: openedFile.path))
     }

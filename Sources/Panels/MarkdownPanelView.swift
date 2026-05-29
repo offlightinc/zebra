@@ -90,6 +90,7 @@ struct MarkdownPanelView: View {
                 workspaceId: panel.workspaceId,
                 filePath: panel.filePath,
                 handle: renderer,
+                bottomContentInset: 32,
                 onRequestPanelFocus: onRequestPanelFocus
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -7,6 +7,9 @@ Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment
 Sources/ContentView.swift                  # SidebarSlots composer + \.sidebarExtraLeadingInset + commandPalette PanelType.email branches
 Sources/Panels/PanelContentView.swift      # \.markdownPanelViewFactory + \.customPanelViewFactory + PanelType.email render branch
 Sources/Panels/MarkdownPanel.swift         # didCloseNotification + applyStatusChange + applyPropertyChange
+Sources/Panels/MarkdownPanelFileLinkResolver.swift # markdown source icon click-through resolves extensionless brain paths
+Sources/Panels/MarkdownPanelView.swift     # passes web-renderer bottom inset for source-icon markdown view
+Sources/Panels/MarkdownWebRenderer.swift   # source-icon markdown bridge + extensionless markdown source path resolution
 Sources/Panels/Panel.swift                 # PanelType.email case (Zebra-owned panel kind, rendered via customPanelViewFactory seam)
 Sources/Workspace.swift                    # SurfaceKind.email + PanelType.email branches in surfaceKind / session snapshot / createPanel
 Sources/CmuxLifecycleEventPublishing.swift # cmuxEventSurfaceKind PanelType.email branch
@@ -23,6 +26,7 @@ Sources/WorkspaceContentView.swift         # upstream added: unread indicator pr
 
 # Localization (single catalog — see docs note about SwiftUI string tables)
 Resources/Localizable.xcstrings
+Resources/markdown-viewer/shell.html      # compact source citation markers in web markdown renderer
 Resources/zebra-brain-sync               # Zebra-owned bundled brain sync script
 
 # Zebra-owned auth tenant — dev Stack Auth project ID + publishable client key
@@ -34,6 +38,7 @@ Sources/Auth/AuthEnvironment.swift
 # Tests + project plumbing
 cmuxTests/FileDropOverlayViewTests.swift
 cmuxTests/MarkdownPanelTests.swift
+cmuxTests/SessionPersistenceTests.swift
 cmux.xcodeproj/project.pbxproj
 
 # Docs

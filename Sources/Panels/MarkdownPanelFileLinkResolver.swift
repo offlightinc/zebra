@@ -19,7 +19,7 @@ enum MarkdownPanelFileLinkResolver {
         let stripped = stripFragmentAndQuery(rawPath)
         guard !stripped.isEmpty else { return nil }
 
-        let candidatePaths: [String] = {
+        let baseCandidatePaths: [String] = {
             if let url = URL(string: stripped), url.scheme == "file" {
                 return [url.path]
             }
@@ -34,15 +34,31 @@ enum MarkdownPanelFileLinkResolver {
             ]
         }()
 
-        for path in candidatePaths {
+        for path in baseCandidatePaths {
             let standardized = (path as NSString).standardizingPath
-            guard isMarkdownPathLike(standardized) else { continue }
-            var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: standardized, isDirectory: &isDir), !isDir.boolValue {
-                return standardized
+            for candidate in markdownCandidatePaths(for: standardized) {
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: candidate, isDirectory: &isDir), !isDir.boolValue {
+                    return candidate
+                }
             }
         }
         return nil
+    }
+
+    private static func markdownCandidatePaths(for standardizedPath: String) -> [String] {
+        let nsPath = standardizedPath as NSString
+        let ext = nsPath.pathExtension.lowercased()
+
+        if !ext.isEmpty {
+            guard markdownExtensions.contains(ext) else { return [] }
+            return [standardizedPath]
+        }
+
+        var candidates = markdownExtensions.map { "\(standardizedPath).\($0)" }
+        candidates.append((standardizedPath as NSString).appendingPathComponent("README.md"))
+        candidates.append((standardizedPath as NSString).appendingPathComponent("index.md"))
+        return candidates
     }
 
     private static func stripFragmentAndQuery(_ rawPath: String) -> String {

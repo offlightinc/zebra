@@ -2,6 +2,11 @@
 
 All notable changes to cmux are documented here.
 
+## [0.65.1] - 2026-05-29
+
+### Changed
+- Collapse inline markdown source citations into compact source icons with hover provenance and click-through for supported source files or URLs.
+
 ## [0.64.7] - 2026-05-22
 
 ### Fixed

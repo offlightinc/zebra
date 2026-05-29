@@ -25,7 +25,7 @@ html, body {
 body {
   /* Match GitHub's reading column padding for a docs-y feel while
      still letting the panel use full width on narrow splits. */
-  padding: 18px 28px 32px 28px;
+  padding: 18px 28px var(--cmux-markdown-bottom-inset, 32px) 28px;
 }
 .markdown-body {
   background: transparent;
@@ -116,6 +116,40 @@ body {
   content: " ↗";
   font-size: 0.82em;
   opacity: 0.65;
+}
+.cmux-source-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  min-width: 15px;
+  margin-left: 0.18em;
+  padding: 0;
+  vertical-align: -2px;
+  color: var(--fgColor-muted);
+  background: transparent;
+  border: 0;
+  opacity: 0.46;
+  font-size: 0;
+  line-height: 0;
+}
+.cmux-source-marker svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+button.cmux-source-marker,
+a.cmux-source-marker {
+  cursor: pointer;
+}
+.cmux-source-marker:hover,
+.cmux-source-marker:focus-visible {
+  color: var(--fgColor-accent);
+  opacity: 0.92;
+  outline: none;
 }
 .cmux-frontmatter {
   margin: 0 0 16px 0;
@@ -787,6 +821,7 @@ html { scroll-behavior: smooth; }
     }
     addCodeCopyButtons();
     markMarkdownFileLinks();
+    compactSourceMarkers();
   }
 
   function addCodeCopyButtons() {
@@ -894,6 +929,185 @@ html { scroll-behavior: smooth; }
     } catch (e) { /* no bridge */ }
   }
 
+  function cleanSourceTarget(value) {
+    return String(value || '')
+      .trim()
+      .replace(/^[`'"]+|[`'"]+$/g, '')
+      .replace(/[.,;]+$/g, '');
+  }
+
+  function firstSourceTarget(rawSource) {
+    var raw = String(rawSource || '');
+    var urlMatch = raw.match(/https?:\/\/[^\s\],;]+/i);
+    if (urlMatch) {
+      return { type: 'url', value: cleanSourceTarget(urlMatch[0]) };
+    }
+
+    var wikiMatch = raw.match(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/);
+    if (wikiMatch && wikiMatch[1]) {
+      return { type: 'markdown', value: cleanSourceTarget(wikiMatch[1]) };
+    }
+
+    var backtickMarkdownMatch = raw.match(/`([^`]+\.(?:md|markdown|mkd|mdx))`/i);
+    if (backtickMarkdownMatch && backtickMarkdownMatch[1]) {
+      return { type: 'markdown', value: cleanSourceTarget(backtickMarkdownMatch[1]) };
+    }
+
+    var markdownFileMatch = raw.match(/(?:^|[\s`;,(])([A-Za-z0-9_.가-힣~\/-]+\.(?:md|markdown|mkd|mdx))(?:$|[\s,;\]\)])/i);
+    if (markdownFileMatch && markdownFileMatch[1]) {
+      return { type: 'markdown', value: cleanSourceTarget(markdownFileMatch[1]) };
+    }
+
+    var pathPattern = /(?:^|[\s`;,(])((?:sources|tasks|goals|projects|companies|people|data-pipelines|features|ops|ideas|org|concepts|opportunities|analysis)\/[^\s,;\]\)]+)/g;
+    var pathMatch;
+    while ((pathMatch = pathPattern.exec(raw)) !== null) {
+      var candidate = cleanSourceTarget(pathMatch[1]);
+      if (candidate) {
+        return { type: 'markdown', value: candidate };
+      }
+    }
+
+    return null;
+  }
+
+  function sourceMarkerEnd(text, start) {
+    for (var i = start + 8; i < text.length; i++) {
+      if (text.slice(i, i + 2) === '[[') {
+        var wikiEnd = text.indexOf(']]', i + 2);
+        if (wikiEnd >= 0) {
+          i = wikiEnd + 1;
+          continue;
+        }
+      }
+      if (text.charAt(i) === ']') {
+        if (text.charAt(i + 1) === ']') {
+          i++;
+          continue;
+        }
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function sourceIconSVG() {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true">'
+      + '<path d="M10 13a5 5 0 0 0 7.1 0l2.4-2.4a5 5 0 0 0-7.1-7.1l-1.3 1.3"></path>'
+      + '<path d="M14 11a5 5 0 0 0-7.1 0l-2.4 2.4a5 5 0 0 0 7.1 7.1l1.3-1.3"></path>'
+      + '</svg>';
+  }
+
+  function createSourceMarker(rawSource) {
+    var target = firstSourceTarget(rawSource);
+    var el;
+    if (target && target.type === 'url') {
+      el = document.createElement('a');
+      el.href = target.value;
+      el.setAttribute('aria-label', 'Open source');
+    } else if (target && target.type === 'markdown') {
+      el = document.createElement('button');
+      el.type = 'button';
+      el.setAttribute('aria-label', 'Open source');
+      el.setAttribute('data-cmux-source-path', target.value);
+    } else {
+      el = document.createElement('span');
+      el.setAttribute('aria-label', 'Source');
+    }
+    el.className = 'cmux-source-marker';
+    el.title = rawSource;
+    el.setAttribute('data-cmux-source-raw', rawSource);
+    el.innerHTML = sourceIconSVG();
+    return el;
+  }
+
+  function replaceSourceMarkersInMarkdown(markdown) {
+    var text = String(markdown || '');
+    var out = '';
+    var offset = 0;
+    while (offset < text.length) {
+      var start = text.indexOf('[Source:', offset);
+      if (start < 0) {
+        out += text.slice(offset);
+        break;
+      }
+      var end = sourceMarkerEnd(text, start);
+      if (end < 0) {
+        out += text.slice(offset);
+        break;
+      }
+      out += text.slice(offset, start);
+      out += '<span data-cmux-source-placeholder="'
+        + escapeDataAttribute(text.slice(start, end + 1))
+        + '"></span>';
+      offset = end + 1;
+    }
+    return out;
+  }
+
+  function hydrateSourcePlaceholders() {
+    contentEl.querySelectorAll('[data-cmux-source-placeholder]').forEach(function(el) {
+      var rawSource = unescapeDataAttribute(el.getAttribute('data-cmux-source-placeholder') || '');
+      el.replaceWith(createSourceMarker(rawSource));
+    });
+  }
+
+  function replaceSourceMarkersInTextNode(node) {
+    var text = node.nodeValue || '';
+    var first = text.indexOf('[Source:');
+    if (first < 0) { return; }
+    var parent = node.parentElement;
+    if (parent && parent.closest('a, code, pre, .cmux-source-marker')) { return; }
+
+    var fragment = document.createDocumentFragment();
+    var offset = 0;
+    while (offset < text.length) {
+      var start = text.indexOf('[Source:', offset);
+      if (start < 0) {
+        fragment.appendChild(document.createTextNode(text.slice(offset)));
+        break;
+      }
+      var end = sourceMarkerEnd(text, start);
+      if (end < 0) {
+        fragment.appendChild(document.createTextNode(text.slice(offset)));
+        break;
+      }
+      if (start > offset) {
+        fragment.appendChild(document.createTextNode(text.slice(offset, start)));
+      }
+      fragment.appendChild(createSourceMarker(text.slice(start, end + 1)));
+      offset = end + 1;
+    }
+    node.parentNode.replaceChild(fragment, node);
+  }
+
+  function compactSourceMarkers() {
+    hydrateSourcePlaceholders();
+
+    var walker = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT, {
+      acceptNode: function(node) {
+        if (!node.nodeValue || node.nodeValue.indexOf('[Source:') < 0) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        var parent = node.parentElement;
+        if (parent && parent.closest('a, code, pre, .cmux-source-marker')) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    var nodes = [];
+    while (walker.nextNode()) {
+      nodes.push(walker.currentNode);
+    }
+    nodes.forEach(replaceSourceMarkersInTextNode);
+  }
+
+  function restoreSourceMarkersForExport(root) {
+    root.querySelectorAll('[data-cmux-source-raw]').forEach(function(el) {
+      el.replaceWith(document.createTextNode(el.getAttribute('data-cmux-source-raw') || ''));
+    });
+  }
+
   function markMarkdownFileLinks() {
     contentEl.querySelectorAll('a[href]').forEach(function(a) {
       var href = a.getAttribute('href') || '';
@@ -915,6 +1129,14 @@ html { scroll-behavior: smooth; }
     if (el) { resolveMarkdownCandidate(el, false); }
   });
   contentEl.addEventListener('click', function(ev) {
+    var sourceMarker = ev.target && ev.target.closest && ev.target.closest('.cmux-source-marker[data-cmux-source-path]');
+    if (sourceMarker) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openMarkdownCandidate(sourceMarker.getAttribute('data-cmux-source-path') || '');
+      return;
+    }
+
     var el = ev.target && ev.target.closest && ev.target.closest('code[data-cmux-file], a[href]');
     var rawPath = markdownCandidateForElement(el);
     if (!rawPath) { return; }
@@ -933,8 +1155,9 @@ html { scroll-behavior: smooth; }
     try {
       headingSlugCounts = Object.create(null);
       var documentParts = extractFrontmatter(md || '');
+      var bodyMarkdown = replaceSourceMarkersInMarkdown(documentParts.body || '');
       var html = renderFrontmatter(documentParts.frontmatter)
-        + sanitizeRenderedHTML(marked.parse(documentParts.body || ''));
+        + sanitizeRenderedHTML(marked.parse(bodyMarkdown));
       var didReplaceContent = contentEl.innerHTML !== html;
       var scrollState = didReplaceContent ? captureMarkdownScrollState() : null;
       if (didReplaceContent) {
@@ -955,6 +1178,7 @@ html { scroll-behavior: smooth; }
   window.__cmuxRenderedHTML = function() {
     if (!contentEl) { return ''; }
     var clone = contentEl.cloneNode(true);
+    restoreSourceMarkersForExport(clone);
     clone.querySelectorAll('.cmux-code-copy-button').forEach(function(el) {
       el.remove();
     });
@@ -973,7 +1197,10 @@ html { scroll-behavior: smooth; }
   };
 
   window.__cmuxRenderedText = function() {
-    return contentEl ? (contentEl.innerText || contentEl.textContent || '') : '';
+    if (!contentEl) { return ''; }
+    var clone = contentEl.cloneNode(true);
+    restoreSourceMarkersForExport(clone);
+    return clone.textContent || '';
   };
 
   var darkMql = window.matchMedia('(prefers-color-scheme: dark)');

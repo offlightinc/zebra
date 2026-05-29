@@ -50,6 +50,7 @@ struct ZebraMarkdownPanelView<
     @State private var inspectorDragStartWidth: Double?
     @State private var chatPillExpanded: Bool = false
     @State private var chatPillShellHeight: CGFloat = MarkdownChatPillLayout.expandedHeight
+    @State private var renderer = MarkdownWebRendererHandle()
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var markdownFileListStore: MarkdownFileListStore
 
@@ -200,37 +201,28 @@ struct ZebraMarkdownPanelView<
 
     private func markdownContentView(isInspectorAutoCollapsed: Bool) -> some View {
         GeometryReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // File path breadcrumb + inspector toggle
-                    filePathHeader(isInspectorAutoCollapsed: isInspectorAutoCollapsed)
-                        .padding(.horizontal, 24)
-                        .padding(.top, 16)
-                        .padding(.bottom, 8)
+            VStack(alignment: .leading, spacing: 0) {
+                // File path breadcrumb + inspector toggle
+                filePathHeader(isInspectorAutoCollapsed: isInspectorAutoCollapsed)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 16)
+                    .padding(.bottom, 8)
 
-                    Divider()
-                        .padding(.horizontal, 16)
+                Divider()
+                    .padding(.horizontal, 16)
 
-                    // Rendered markdown
-                    Markdown(renderedMarkdown)
-                        .markdownTheme(cmuxMarkdownTheme)
-                        .textSelection(.enabled)
-                        // Wire link activation through NSWorkspace explicitly.
-                        // SwiftUI's default Link path does not fire reliably
-                        // for the rendered Markdown in this panel; setting the
-                        // env action makes it deterministic. Surface failures
-                        // (no registered handler for the scheme, etc.) by
-                        // returning .systemAction so the click is not silently
-                        // swallowed.
-                        .environment(\.openURL, OpenURLAction { url in
-                            NSWorkspace.shared.open(url) ? .handled : .systemAction
-                        })
-                        .padding(.horizontal, 24)
-                        .padding(.top, 16)
-                        // Bottom padding leaves room for the floating chat pill
-                        // so scrolled-to-end content is not obscured by the pill.
-                        .padding(.bottom, MarkdownChatPillLayout.contentBottomInset(shellHeight: chatPillShellHeight))
-                }
+                MarkdownWebRenderer(
+                    markdown: renderedMarkdown,
+                    theme: MarkdownWebTheme.resolve(backgroundColor: markdownWebBackgroundColor),
+                    backgroundColor: markdownWebBackgroundColor,
+                    panelId: panel.id,
+                    workspaceId: workspace.id,
+                    filePath: panel.filePath,
+                    handle: renderer,
+                    bottomContentInset: MarkdownChatPillLayout.contentBottomInset(shellHeight: chatPillShellHeight),
+                    onRequestPanelFocus: onRequestPanelFocus
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .overlay {
                 MarkdownChatPillOverlay(
@@ -245,6 +237,12 @@ struct ZebraMarkdownPanelView<
                 )
             }
         }
+    }
+
+    private var markdownWebBackgroundColor: NSColor {
+        colorScheme == .dark
+            ? NSColor(white: 0.12, alpha: 1.0)
+            : NSColor(white: 0.98, alpha: 1.0)
     }
 
     private func handleChatPillHeightChange(_ height: CGFloat) {

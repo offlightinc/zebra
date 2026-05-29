@@ -46,6 +46,7 @@ public protocol ZebraTerminalPanel: AnyObject {
 
 @MainActor
 public protocol ZebraMarkdownWorkspace: AnyObject, ObservableObject {
+    var id: UUID { get }
     var allPaneIds: [PaneID] { get }
 
     func paneWidth(forPane paneId: PaneID) -> Double?

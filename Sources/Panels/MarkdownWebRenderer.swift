@@ -45,6 +45,7 @@ struct MarkdownWebRenderer: NSViewRepresentable {
     let workspaceId: UUID
     let filePath: String
     let handle: MarkdownWebRendererHandle
+    let bottomContentInset: CGFloat
     let onRequestPanelFocus: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -81,6 +82,7 @@ struct MarkdownWebRenderer: NSViewRepresentable {
         applyAppearance(to: webView, isDark: theme.isDark)
 
         context.coordinator.webView = webView
+        context.coordinator.updateBottomContentInset(bottomContentInset)
         context.coordinator.loadShell(theme: theme, initialMarkdown: markdown)
         return webView
     }
@@ -95,6 +97,7 @@ struct MarkdownWebRenderer: NSViewRepresentable {
         (nsView as? MarkdownWebView)?.onPointerDown = onRequestPanelFocus
         applyBackground(to: nsView)
         applyAppearance(to: nsView, isDark: theme.isDark)
+        context.coordinator.updateBottomContentInset(bottomContentInset)
         context.coordinator.update(markdown: markdown, theme: theme)
     }
 
@@ -135,6 +138,7 @@ struct MarkdownWebRenderer: NSViewRepresentable {
         private var pendingTheme: MarkdownWebTheme = .resolve(backgroundColor: GhosttyBackgroundTheme.currentColor())
         private var lastMarkdown: String? = nil
         private var lastTheme: MarkdownWebTheme? = nil
+        private var bottomContentInset: CGFloat = 32
         private var isLoaded = false
 
         func loadShell(theme: MarkdownWebTheme, initialMarkdown: String) {
@@ -149,6 +153,15 @@ struct MarkdownWebRenderer: NSViewRepresentable {
             NSLog("MarkdownPanel.loadShell filePath=\(filePath) baseURL=\(baseURL.absoluteString) htmlBytes=\(html.utf8.count)")
 #endif
             webView?.loadHTMLString(html, baseURL: baseURL)
+        }
+
+        func updateBottomContentInset(_ inset: CGFloat) {
+            let next = max(32, inset.isFinite ? inset : 32)
+            guard abs(next - bottomContentInset) > 0.5 else { return }
+            bottomContentInset = next
+            if isLoaded {
+                applyBottomContentInset()
+            }
         }
 
         func update(markdown: String, theme: MarkdownWebTheme) {
@@ -230,6 +243,17 @@ struct MarkdownWebRenderer: NSViewRepresentable {
             })(\(json));
             """
             webView.evaluateJavaScript(js, completionHandler: nil)
+        }
+
+        private func applyBottomContentInset() {
+            guard let webView else { return }
+            let value = "\(Int(bottomContentInset.rounded()))px"
+            guard let data = try? JSONSerialization.data(withJSONObject: [value]),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            webView.evaluateJavaScript(
+                "document.body && document.body.style.setProperty('--cmux-markdown-bottom-inset', \(json)[0]);",
+                completionHandler: nil
+            )
         }
 
         // MARK: Bridge
@@ -340,7 +364,6 @@ struct MarkdownWebRenderer: NSViewRepresentable {
         private func resolvedMarkdownFilePath(_ rawPath: String) -> String? {
             let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
-            guard MarkdownPanelFileLinkResolver.isMarkdownPathLike(trimmed) else { return nil }
             return MarkdownPanelFileLinkResolver.resolve(rawPath: trimmed, relativeToMarkdownFile: filePath)
         }
 
@@ -416,6 +439,7 @@ struct MarkdownWebRenderer: NSViewRepresentable {
 #endif
             isLoaded = true
             applyTheme(lastTheme ?? pendingTheme)
+            applyBottomContentInset()
             // Replay last known markdown after the shell finishes loading.
             let md = lastMarkdown ?? pendingMarkdown
             lastMarkdown = md
