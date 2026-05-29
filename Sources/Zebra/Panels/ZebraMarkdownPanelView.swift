@@ -241,6 +241,9 @@ struct ZebraMarkdownPanelView<
                     onSubmit: { text, agent in
                         handlePillSubmit(text: text, agent: agent)
                     },
+                    onManageDefaultAgent: { agent in
+                        startDefaultAgentManager(agent: agent)
+                    },
                     onHeightChange: handleChatPillHeightChange
                 )
             }
@@ -608,6 +611,30 @@ struct ZebraMarkdownPanelView<
             }
         }
         return nil
+    }
+
+    private func startDefaultAgentManager(agent: ZebraAgentKind?) {
+        let cwd = defaultAgentManagerCWD()
+        guard let startupLine = ZebraAgentOnboardingScriptCommand.shellStartupLine(
+            command: .choosePrimary,
+            cwd: cwd,
+            agent: agent
+        ) else {
+            #if DEBUG
+            cmuxDebugLog("markdown.chatPill.defaultAgent.scriptMissing")
+            #endif
+            return
+        }
+        guard let newPanel = createAgentTerminalTab() else { return }
+        sendStartupSequence(startup: startupLine, to: newPanel)
+    }
+
+    private func defaultAgentManagerCWD() -> String {
+        let rootPath = markdownFileListStore.rootPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let rootPath, !rootPath.isEmpty {
+            return rootPath
+        }
+        return (panel.filePath as NSString).deletingLastPathComponent
     }
 
     /// Create a fresh agent terminal for every prompt. Reuse this content
