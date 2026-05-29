@@ -971,6 +971,7 @@ html { scroll-behavior: smooth; }
   }
 
   function sourceMarkerEnd(text, start) {
+    var bracketDepth = 0;
     for (var i = start + 8; i < text.length; i++) {
       if (text.slice(i, i + 2) === '[[') {
         var wikiEnd = text.indexOf(']]', i + 2);
@@ -979,9 +980,23 @@ html { scroll-behavior: smooth; }
           continue;
         }
       }
+      if (text.charAt(i) === '[') {
+        bracketDepth++;
+        continue;
+      }
       if (text.charAt(i) === ']') {
         if (text.charAt(i + 1) === ']') {
           i++;
+          continue;
+        }
+        if (bracketDepth > 0) {
+          bracketDepth--;
+          if (text.charAt(i + 1) === '(') {
+            var linkEnd = text.indexOf(')', i + 2);
+            if (linkEnd >= 0) {
+              i = linkEnd;
+            }
+          }
           continue;
         }
         return i;

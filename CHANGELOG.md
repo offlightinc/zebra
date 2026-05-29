@@ -2,6 +2,11 @@
 
 All notable changes to cmux are documented here.
 
+## [0.65.2] - 2026-05-29
+
+### Fixed
+- Hide complete markdown-link source citations in Zebra markdown previews so `[label](url)` source targets collapse behind the compact source icon.
+
 ## [0.65.1] - 2026-05-29
 
 ### Changed
