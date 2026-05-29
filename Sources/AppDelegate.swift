@@ -7,6 +7,7 @@ import UserNotifications
 import Sentry
 import WebKit
 import Combine
+import ZebraVault
 import ObjectiveC.runtime
 import Darwin
 
@@ -7307,11 +7308,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func sendWelcomeCommandWhenReady(to workspace: Workspace, markShownOnSend: Bool = false) {
-        sendTextWhenReady("cmux welcome\n", to: workspace) {
+        let command = markShownOnSend ? automaticWelcomeCommand() : "cmux welcome\n"
+        sendTextWhenReady(command, to: workspace) {
             if markShownOnSend {
                 UserDefaults.standard.set(true, forKey: WelcomeSettings.shownKey)
             }
         }
+    }
+
+    private func automaticWelcomeCommand() -> String {
+        guard ZebraAgentOnboardingStartup.shouldRunAutomaticWelcome(),
+              let startupLine = ZebraAgentOnboardingStartup.appResourceShellStartupLine() else {
+            return "cmux welcome\n"
+        }
+        return startupLine
     }
 
     @objc func applyUpdateIfAvailable(_ sender: Any?) {
