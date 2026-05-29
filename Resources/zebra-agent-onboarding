@@ -45,6 +45,7 @@ fi
 RUN_ID=""
 SAVED_PRIMARY=""
 SELECTED_AGENT=""
+REQUESTED_AGENT=""
 ONBOARDING_CWD="$PWD"
 SELF_PATH=""
 STATE_ERROR_CODE=""
@@ -83,12 +84,13 @@ RESUME_FLOW_HANDLED=0
 
 usage() {
   cat <<'USAGE'
-zebra-agent-onboarding [run|choose-primary] [--cwd <path>]
+zebra-agent-onboarding [run|choose-primary] [--cwd <path>] [--agent <agent>]
 zebra-agent-onboarding mark-ready --agent <agent> --run-id <runId>
 
 Commands:
   run             Scan supported CLIs, choose/install a primary agent, then launch it.
   choose-primary  Force a primary-agent choice even if a saved preference exists.
+                  Pass --agent to recover or install a specific selected agent.
   mark-ready      Compatibility write path; normal flow completes via readiness probes.
 
 Supported agents:
@@ -1466,6 +1468,17 @@ resume_existing_flow() {
   esac
 }
 
+requested_agent_flow() {
+  local agent="$1"
+  if is_agent_installed "$agent"; then
+    printf '\nZebra found %s installed at %s.\n' "$(display_name "$agent")" "$(path_for_agent "$agent")"
+    select_and_launch "$agent" direct_selected_primary
+  else
+    printf '\nZebra could not find %s locally. Opening setup flow.\n' "$(display_name "$agent")"
+    install_then_launch "$agent"
+  fi
+}
+
 run_flow() {
   local force_choose="$1"
   local resume_status=0
@@ -1496,6 +1509,11 @@ run_flow() {
   append_scan_completed_event
   write_state scan ""
   print_candidates
+
+  if [[ -n "$REQUESTED_AGENT" ]]; then
+    requested_agent_flow "$REQUESTED_AGENT"
+    return
+  fi
 
   if [[ "$force_choose" -eq 1 ]]; then
     force_choose_flow
@@ -1594,6 +1612,15 @@ main() {
         case "$1" in
           --cwd)
             ONBOARDING_CWD="${2:-}"
+            shift 2
+            ;;
+          --agent)
+            REQUESTED_AGENT="${2:-}"
+            valid_agent "$REQUESTED_AGENT" || {
+              printf 'unknown agent: %s\n\n' "$REQUESTED_AGENT" >&2
+              usage >&2
+              exit 2
+            }
             shift 2
             ;;
           --help|-h)
