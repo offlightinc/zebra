@@ -7093,11 +7093,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         sourceWindow preferredSourceWindow: NSWindow? = nil
     ) -> UUID {
         let windowId = UUID()
+        let shouldSendInitialWelcome = initialTerminalInput == nil
         let tabManager = TabManager(
             initialWorkspaceTitle: initialWorkspaceTitle,
             initialWorkingDirectory: initialWorkingDirectory,
             initialTerminalInput: initialTerminalInput,
-            autoWelcomeIfNeeded: initialTerminalInput == nil
+            autoWelcomeIfNeeded: false
         )
         if let tabManagerSnapshot = sessionWindowSnapshot?.tabManager {
             tabManager.restoreSessionSnapshot(tabManagerSnapshot)
@@ -7255,6 +7256,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         publishCmuxWindowLifecycle(name: "window.created", windowId: windowId, origin: "create")
         installFileDropOverlay(on: window, tabManager: tabManager)
+        if shouldSendInitialWelcome,
+           !UserDefaults.standard.bool(forKey: WelcomeSettings.shownKey),
+           let workspace = tabManager.selectedWorkspace {
+            sendWelcomeCommandWhenReady(to: workspace, markShownOnSend: true)
+        }
         if !shouldActivate || TerminalController.shouldSuppressSocketCommandActivation() {
             window.orderFront(nil)
             if shouldActivate, TerminalController.socketCommandAllowsInAppFocusMutations() {
