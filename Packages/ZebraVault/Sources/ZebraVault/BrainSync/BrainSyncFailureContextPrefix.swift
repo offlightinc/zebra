@@ -153,7 +153,7 @@ public enum BrainSyncFailureContextPrefix {
             commands.append("git log --oneline --left-right HEAD...origin/\(inlineSafe(branch)) -20")
         case .conflict:
             commands.append("tail -80 ~/Library/Logs/zebra/brainsync.log")
-            commands.append("rg -n '^(<<<<<<<|=======|>>>>>>>)' -- '*.md'")
+            commands.append("rg -n '^(<<<<<<<|=======|>>>>>>>)' -g '*.md' .")
         case .alreadyRunning:
             commands.append("tail -120 ~/Library/Logs/zebra/brainsync.log")
         case .hookFailed, .unknown:
