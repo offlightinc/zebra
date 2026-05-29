@@ -23,12 +23,12 @@ level Zebra would need.
 | cmux symbol | Zebra sites | Definition | Access today | Notes |
 |---|---|---|---|---|
 | `MarkdownPanel` (cmux `final class … : Panel, ObservableObject`) | `ZebraMarkdownPanelView.@ObservedObject panel`; `ActiveMarkdownPathsObserver` cast | `Sources/Panels/MarkdownPanel.swift:15` | `internal` | **Deepest dep.** Zebra reads 7 members and subscribes to `@Published focusFlashToken`. |
-| `Workspace` (cmux `final class … : ObservableObject`, 7000+ LOC) | `ZebraMarkdownPanelView.workspace`; `ActiveMarkdownPathsObserver` Combine sink on `objectWillChange` | `Sources/Workspace.swift:7153` | `internal` | Zebra calls 5 methods: `openOrFocusMarkdownSurface`, `newTerminalSurface`, `newTerminalSplit`, `paneId(forPanelId:)`, plus `bonsplitController.allPaneIds`. |
+| `Workspace` (cmux `final class … : ObservableObject`, 7000+ LOC) | `ZebraMarkdownPanelView.workspace`; `ActiveMarkdownPathsObserver` Combine sink on `objectWillChange` | `Sources/Workspace.swift:7153` | `internal` | Zebra calls markdown/terminal creation methods plus agent-terminal placement helpers exposed through `ZebraMarkdownWorkspace`. |
 | `TabManager` | `ZebraSidebarBody.@EnvironmentObject`; `ZebraStoreBindings.@EnvironmentObject`; `MarkdownPanelViewFactory.@EnvironmentObject`; `ActiveMarkdownPathsObserver.tabManager` | `Sources/TabManager.swift:774` | `internal` | Reads `tabs`, `selectedTabId`, `$selectedTabId` publisher. |
 | `FilePreviewPanel` | `ActiveMarkdownPathsObserver` runtime cast | `Sources/Panels/FilePreviewPanel.swift` | `internal` | Type-check only, no member access. |
 | `TerminalPanel` | `ZebraMarkdownPanelView.createAgentTerminalTab() -> TerminalPanel?` (via `workspace.newTerminalSurface` / `newTerminalSplit`) | `Sources/Panels/TerminalPanel.swift` | `internal` | Returned value, used through workspace API only. |
 | `SidebarSelectionState` | `ZebraSidebarBody.@EnvironmentObject` | cmux model | `internal` | Sidebar mode rail uses it. |
-| `PaneID` | `MarkdownPanelViewContext.paneId`, `ZebraMarkdownPanelView.paneId`, `MarkdownPanelController.chatCompanionPaneId` | `Bonsplit` module | `public` (Bonsplit SPM) | Already a Swift Package — fine to depend on. |
+| `PaneID` | `MarkdownPanelViewContext.paneId`, `ZebraMarkdownPanelView.paneId`, agent-terminal placement helpers | `Bonsplit` module | `public` (Bonsplit SPM) | Already a Swift Package — fine to depend on. |
 | `Bonsplit` | 3 imports inside `Sources/Zebra/Panels/` | `vendor/bonsplit/Package.swift` | local SPM | `ZebraVault` can list it as `.package(path: "../../vendor/bonsplit")`. |
 
 ### Surface area summary — the markdown panel slice (deepest coupling)

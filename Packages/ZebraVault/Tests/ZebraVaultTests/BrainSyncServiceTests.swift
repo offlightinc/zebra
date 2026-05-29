@@ -1,6 +1,7 @@
 import XCTest
 @testable import ZebraVault
 
+@MainActor
 final class BrainSyncServiceTests: XCTestCase {
     func testAlreadyRunningReasonTagIsNotClassifiedAsSuccess() {
         let failure = BrainSyncService.classifyFailure(

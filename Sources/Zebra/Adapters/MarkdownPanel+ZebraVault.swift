@@ -124,12 +124,26 @@ extension Workspace: ZebraMarkdownWorkspace {
         return concrete
     }
 
-    func reusableAgentCompanionPane(forContentPane paneId: PaneID) -> PaneID? {
-        nearestRightTerminalPane(fromContentPane: paneId)
+    func reusableAgentCompanionPane(
+        forContentPane paneId: PaneID,
+        markedBy registry: ZebraAgentTerminalRegistry
+    ) -> PaneID? {
+        nearestRightAgentTerminalPane(fromContentPane: paneId, markedBy: registry)
     }
 
-    func paneHasTerminalSurface(_ paneId: PaneID) -> Bool {
-        panels(inPane: paneId).contains { $0 is TerminalPanel }
+    func activeAgentTerminalAgent(
+        for source: ZebraAgentTerminalSource,
+        contentPane paneId: PaneID,
+        markedBy registry: ZebraAgentTerminalRegistry
+    ) -> MarkdownPillAgent? {
+        guard let companionPaneId = reusableAgentCompanionPane(
+            forContentPane: paneId,
+            markedBy: registry
+        ) else { return nil }
+        return registry.latestAgent(
+            for: source,
+            panelIds: panels(inPane: companionPaneId).map(\.id)
+        )
     }
 }
 
@@ -282,11 +296,102 @@ final class ZebraEmailThreadPanel: Panel, ObservableObject {
 }
 
 extension Workspace {
+    func zebraAgentCompanionPaneIds(markedBy registry: ZebraAgentTerminalRegistry) -> Set<PaneID> {
+        registry.prune(validPanelIds: Set(panels.keys))
+        return Set(
+            bonsplitController.allPaneIds.filter { paneId in
+                paneHasRegisteredAgentTerminal(paneId, markedBy: registry)
+            }
+        )
+    }
+
+    @discardableResult
+    func openZebraAgentTerminal(
+        startupLine: String,
+        source: ZebraAgentTerminalSource,
+        agent: MarkdownPillAgent,
+        anchor: ZebraAgentTerminalPlacementAnchor,
+        markedBy registry: ZebraAgentTerminalRegistry
+    ) -> (any ZebraTerminalPanel)? {
+        registry.prune(validPanelIds: Set(panels.keys))
+        let panel: TerminalPanel?
+
+        switch anchor {
+        case .contentAnchored(let contentPanelId, let contentPaneId):
+            if let companionPaneId = nearestRightAgentTerminalPane(
+                fromContentPane: contentPaneId,
+                markedBy: registry
+            ) {
+                panel = newTerminalSurface(inPane: companionPaneId, focus: true)
+            } else {
+                panel = newTerminalSplit(
+                    from: contentPanelId,
+                    orientation: .horizontal,
+                    focus: true
+                )
+            }
+
+        case .focusAnchored:
+            panel = openFocusAnchoredAgentTerminal(markedBy: registry)
+        }
+
+        guard let panel else { return nil }
+        registry.mark(panelId: panel.id, source: source, agent: agent)
+        sendStartupSequence(startupLine, to: panel)
+        return panel
+    }
+
+    private func openFocusAnchoredAgentTerminal(markedBy registry: ZebraAgentTerminalRegistry) -> TerminalPanel? {
+        let agentPaneIds = zebraAgentCompanionPaneIds(markedBy: registry)
+        let focusedPaneId = bonsplitController.focusedPaneId
+
+        if let focusedPaneId, agentPaneIds.contains(focusedPaneId) {
+            return newTerminalSurface(inPane: focusedPaneId, focus: true)
+        }
+
+        if let focusedPaneId,
+           let companionPaneId = nearestRightAgentTerminalPane(
+               fromContentPane: focusedPaneId,
+               markedBy: registry
+           ) {
+            return newTerminalSurface(inPane: companionPaneId, focus: true)
+        }
+
+        if let focusedPaneId,
+           paneIsTerminalOnly(focusedPaneId) {
+            return newTerminalSurface(inPane: focusedPaneId, focus: true)
+        }
+
+        if let focusedPaneId,
+           let sourcePanelId = firstPanelId(inPane: focusedPaneId) {
+            return newTerminalSplit(
+                from: sourcePanelId,
+                orientation: .horizontal,
+                focus: true
+            )
+        }
+
+        if let agentPaneId = agentPaneIds.first {
+            return newTerminalSurface(inPane: agentPaneId, focus: true)
+        }
+
+        if let sourcePanelId = firstPanelIdForContentSplit(
+            excludedAgentCompanionPaneIds: []
+        ) {
+            return newTerminalSplit(
+                from: sourcePanelId,
+                orientation: .horizontal,
+                focus: true
+            )
+        }
+        return nil
+    }
+
     @discardableResult
     func openOrFocusEmailThreadContent(
         thread: EmailThreadItem,
         excludedAgentCompanionPaneIds: Set<PaneID>,
-        anchorPanelId: UUID?
+        requestedPaneId: PaneID?
     ) -> ZebraEmailThreadPanel? {
         if let existing = focusExistingEmailThread(
             thread,
@@ -295,10 +400,9 @@ extension Workspace {
             return existing
         }
 
-        if let paneId = resolvePaneForContentOpen(
-            kind: .email,
-            excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds,
-            anchorPanelId: anchorPanelId
+        if let paneId = nonAgentPaneForSidebarOpen(
+            requestedPaneId: requestedPaneId,
+            excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds
         ) {
             return openOrFocusEmailThreadSurface(
                 inPane: paneId,
@@ -324,9 +428,9 @@ extension Workspace {
 
     @discardableResult
     func openMarkdownFromZebraSidebar(
+        inPane requestedPaneId: PaneID?,
         filePath: String,
         excludedAgentCompanionPaneIds: Set<PaneID>,
-        anchorPanelId: UUID?,
         focus: Bool = true
     ) -> MarkdownPanel? {
         let canonical = (filePath as NSString).resolvingSymlinksInPath
@@ -344,31 +448,42 @@ extension Workspace {
             }
         }
 
-        let targetPaneId = resolvePaneForContentOpen(
-            kind: .markdown,
-            excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds,
-            anchorPanelId: anchorPanelId
-        ) ?? bonsplitController.allPaneIds.first { !excludedAgentCompanionPaneIds.contains($0) }
-            ?? bonsplitController.allPaneIds.first
-
-        guard let targetPaneId else { return nil }
-        if let reusable = reusableMarkdownPanel(inPane: targetPaneId) {
-            reusable.panel.openFile(filePath)
-            panelTitles[reusable.panelId] = reusable.panel.displayTitle
-            bonsplitController.updateTab(
-                reusable.tabId,
-                title: panelCustomTitles[reusable.panelId] ?? reusable.panel.displayTitle,
-                hasCustomTitle: panelCustomTitles[reusable.panelId] != nil
-            )
-            if focus {
-                focusPanel(reusable.panelId)
-            } else {
-                objectWillChange.send()
+        if let targetPaneId = nonAgentPaneForSidebarOpen(
+            requestedPaneId: requestedPaneId,
+            excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds
+        ) {
+            if let selectedTab = bonsplitController.selectedTab(inPane: targetPaneId),
+               let selectedPanelId = panelIdFromSurfaceId(selectedTab.id),
+               let markdown = panels[selectedPanelId] as? MarkdownPanel {
+                markdown.openFile(filePath)
+                panelTitles[selectedPanelId] = markdown.displayTitle
+                bonsplitController.updateTab(
+                    selectedTab.id,
+                    title: panelCustomTitles[selectedPanelId] ?? markdown.displayTitle,
+                    hasCustomTitle: panelCustomTitles[selectedPanelId] != nil
+                )
+                if focus {
+                    focusPanel(selectedPanelId)
+                } else {
+                    objectWillChange.send()
+                }
+                return markdown
             }
-            return reusable.panel
+            return newMarkdownSurface(inPane: targetPaneId, filePath: filePath, focus: focus)
         }
 
-        return newMarkdownSurface(inPane: targetPaneId, filePath: filePath, focus: focus)
+        guard let sourcePanelId = firstPanelIdForContentSplit(
+            excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds
+        ) else {
+            return nil
+        }
+        return newMarkdownSplit(
+            from: sourcePanelId,
+            orientation: .horizontal,
+            insertFirst: true,
+            filePath: filePath,
+            focus: focus
+        )
     }
 
     @discardableResult
@@ -376,7 +491,6 @@ extension Workspace {
         inPane requestedPaneId: PaneID?,
         thread: EmailThreadItem,
         excludedAgentCompanionPaneIds: Set<PaneID>,
-        anchorPanelId: UUID?,
         focus: Bool = true
     ) -> ZebraEmailThreadPanel? {
         if let existing = focusExistingEmailThread(
@@ -387,37 +501,25 @@ extension Workspace {
             return existing
         }
 
-        let targetPaneId: PaneID? = {
-            if let requestedPaneId,
-               !excludedAgentCompanionPaneIds.contains(requestedPaneId),
-               reusableEmailThreadPanel(inPane: requestedPaneId) != nil {
-                return requestedPaneId
+        if let targetPaneId = nonAgentPaneForSidebarOpen(
+            requestedPaneId: requestedPaneId,
+            excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds
+        ) {
+            if let reusable = reusableEmailThreadPanel(inPane: targetPaneId) {
+                reusable.panel.openThread(thread)
+                panelTitles[reusable.panelId] = reusable.panel.displayTitle
+                bonsplitController.updateTab(
+                    reusable.tabId,
+                    title: reusable.panel.displayTitle,
+                    icon: .some(reusable.panel.displayIcon)
+                )
+                if focus {
+                    focusPanel(reusable.panelId)
+                } else {
+                    objectWillChange.send()
+                }
+                return reusable.panel
             }
-            return resolvePaneForContentOpen(
-                kind: .email,
-                excludedAgentCompanionPaneIds: excludedAgentCompanionPaneIds,
-                anchorPanelId: anchorPanelId
-            )
-        }()
-
-        if let targetPaneId,
-           let reusable = reusableEmailThreadPanel(inPane: targetPaneId) {
-            reusable.panel.openThread(thread)
-            panelTitles[reusable.panelId] = reusable.panel.displayTitle
-            bonsplitController.updateTab(
-                reusable.tabId,
-                title: reusable.panel.displayTitle,
-                icon: .some(reusable.panel.displayIcon)
-            )
-            if focus {
-                focusPanel(reusable.panelId)
-            } else {
-                objectWillChange.send()
-            }
-            return reusable.panel
-        }
-
-        if let targetPaneId {
             return openOrFocusEmailThreadSurface(
                 inPane: targetPaneId,
                 thread: thread,
@@ -596,63 +698,17 @@ extension Workspace {
     }
 }
 
-private enum ZebraContentPlacementKind {
-    case markdown
-    case email
-}
-
 private extension Workspace {
-    func resolvePaneForContentOpen(
-        kind: ZebraContentPlacementKind,
-        excludedAgentCompanionPaneIds: Set<PaneID>,
-        anchorPanelId: UUID?
+    func nonAgentPaneForSidebarOpen(
+        requestedPaneId: PaneID?,
+        excludedAgentCompanionPaneIds: Set<PaneID>
     ) -> PaneID? {
-        let anchorPaneId = anchorPanelId.flatMap { paneId(forPanelId: $0) }
-        var best: (paneId: PaneID, score: Int)?
-
-        for paneId in bonsplitController.allPaneIds {
-            let panePanels = panels(inPane: paneId)
-            if excludedAgentCompanionPaneIds.contains(paneId),
-               panePanels.contains(where: { $0 is TerminalPanel }) {
-                continue
-            }
-
-            var score = scorePaneForContentOpen(kind: kind, panels: panePanels)
-            if anchorPaneId == paneId {
-                score += 10
-            }
-
-            if let current = best {
-                if score > current.score {
-                    best = (paneId, score)
-                }
-            } else {
-                best = (paneId, score)
-            }
+        if let requestedPaneId,
+           bonsplitController.allPaneIds.contains(requestedPaneId),
+           !excludedAgentCompanionPaneIds.contains(requestedPaneId) {
+            return requestedPaneId
         }
-
-        return best?.paneId
-    }
-
-    func scorePaneForContentOpen(
-        kind: ZebraContentPlacementKind,
-        panels panePanels: [any Panel]
-    ) -> Int {
-        let hasMarkdown = panePanels.contains { $0 is MarkdownPanel }
-        let hasEmail = panePanels.contains { $0 is ZebraEmailThreadPanel }
-        let hasFilePreview = panePanels.contains { $0 is FilePreviewPanel }
-        let hasAnyContent = hasMarkdown || hasEmail || hasFilePreview
-
-        switch kind {
-        case .markdown:
-            if hasMarkdown { return 100 }
-        case .email:
-            if hasEmail { return 100 }
-        }
-
-        if hasAnyContent { return 70 }
-        if panePanels.isEmpty { return 20 }
-        return 30
+        return bonsplitController.allPaneIds.first { !excludedAgentCompanionPaneIds.contains($0) }
     }
 
     func panels(inPane paneId: PaneID) -> [any Panel] {
@@ -662,24 +718,23 @@ private extension Workspace {
         }
     }
 
-    func reusableMarkdownPanel(
-        inPane paneId: PaneID
-    ) -> (panel: MarkdownPanel, panelId: UUID, tabId: TabID)? {
+    func firstPanelId(inPane paneId: PaneID) -> UUID? {
         if let selectedTab = bonsplitController.selectedTab(inPane: paneId),
-           let selectedPanelId = panelIdFromSurfaceId(selectedTab.id),
-           let markdownPanel = panels[selectedPanelId] as? MarkdownPanel {
-            return (markdownPanel, selectedPanelId, selectedTab.id)
+           let selectedPanelId = panelIdFromSurfaceId(selectedTab.id) {
+            return selectedPanelId
         }
 
         for tab in bonsplitController.tabs(inPane: paneId) {
-            guard let panelId = panelIdFromSurfaceId(tab.id),
-                  let markdownPanel = panels[panelId] as? MarkdownPanel else {
-                continue
+            if let panelId = panelIdFromSurfaceId(tab.id) {
+                return panelId
             }
-            guard !markdownPanel.isDirty else { continue }
-            return (markdownPanel, panelId, tab.id)
         }
         return nil
+    }
+
+    func paneIsTerminalOnly(_ paneId: PaneID) -> Bool {
+        let panePanels = panels(inPane: paneId)
+        return !panePanels.isEmpty && panePanels.allSatisfy { $0 is TerminalPanel }
     }
 
     func reusableEmailThreadPanel(
@@ -725,7 +780,10 @@ private extension Workspace {
         return nil
     }
 
-    func nearestRightTerminalPane(fromContentPane contentPaneId: PaneID) -> PaneID? {
+    func nearestRightAgentTerminalPane(
+        fromContentPane contentPaneId: PaneID,
+        markedBy registry: ZebraAgentTerminalRegistry
+    ) -> PaneID? {
         let targetPaneId = contentPaneId.id.uuidString
         guard let path = zebraPathToPane(
             targetPaneId: targetPaneId,
@@ -761,13 +819,65 @@ private extension Workspace {
                 guard let candidateUUID = UUID(uuidString: candidate.id),
                       candidateUUID != contentPaneId.id,
                       let paneId = bonsplitController.allPaneIds.first(where: { $0.id == candidateUUID }),
-                      paneHasTerminalSurface(paneId) else {
+                      paneHasRegisteredAgentTerminal(paneId, markedBy: registry) else {
                     continue
                 }
                 return paneId
             }
         }
         return nil
+    }
+
+    func paneHasRegisteredAgentTerminal(
+        _ paneId: PaneID,
+        markedBy registry: ZebraAgentTerminalRegistry
+    ) -> Bool {
+        panels(inPane: paneId).contains { panel in
+            guard panel is TerminalPanel else { return false }
+            return registry.isAgentTerminal(panelId: panel.id)
+        }
+    }
+
+    func sendStartupSequence(_ startupLine: String, to terminalPanel: TerminalPanel) {
+        let runSequence = {
+            terminalPanel.sendInput(startupLine)
+        }
+
+        if terminalPanel.isSurfaceReady {
+            runSequence()
+            return
+        }
+
+        var resolved = false
+        var observer: NSObjectProtocol?
+        let cleanup = {
+            if let observer {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        }
+
+        observer = NotificationCenter.default.addObserver(
+            forName: .terminalSurfaceDidBecomeReady,
+            object: nil,
+            queue: .main
+        ) { _ in
+            guard !resolved,
+                  terminalPanel.isSurfaceReady else { return }
+            resolved = true
+            cleanup()
+            runSequence()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+            guard !resolved else { return }
+            resolved = true
+            cleanup()
+            #if DEBUG
+            cmuxDebugLog(
+                "zebra.agentTerminal.startup.timeout panel=\(terminalPanel.id.uuidString.prefix(5))"
+            )
+            #endif
+        }
     }
 }
 
