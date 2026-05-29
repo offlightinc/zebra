@@ -327,6 +327,7 @@
 		C3873001C3873001C3873001 /* GhosttyCrashBreadcrumb.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3873002C3873002C3873002 /* GhosttyCrashBreadcrumb.swift */; };
 		A5001623 /* cmux.sdef in Resources */ = {isa = PBXBuildFile; fileRef = A5001622 /* cmux.sdef */; };
 		B0A1000000000000000F0001 /* zebra-brain-sync in Resources */ = {isa = PBXBuildFile; fileRef = B0A1000000000000000F0002 /* zebra-brain-sync */; };
+		B0A1000000000000000F0003 /* zebra-agent-onboarding in Resources */ = {isa = PBXBuildFile; fileRef = B0A1000000000000000F0004 /* zebra-agent-onboarding */; };
 		A5001640 /* RemoteRelayZshBootstrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001641 /* RemoteRelayZshBootstrap.swift */; };
 		A5001660 /* RestorableAgentSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001661 /* RestorableAgentSession.swift */; };
 		C0DEF0C10000000000000001 /* AgentForkSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DEF0C10000000000000002 /* AgentForkSupport.swift */; };
@@ -870,6 +871,7 @@
 		A5001620 /* AppleScriptSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleScriptSupport.swift; sourceTree = "<group>"; };
 		A5001622 /* cmux.sdef */ = {isa = PBXFileReference; lastKnownFileType = text.sdef; path = cmux.sdef; sourceTree = "<group>"; };
 		B0A1000000000000000F0002 /* zebra-brain-sync */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.script.sh; path = "zebra-brain-sync"; sourceTree = "<group>"; };
+		B0A1000000000000000F0004 /* zebra-agent-onboarding */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.script.sh; path = "zebra-agent-onboarding"; sourceTree = "<group>"; };
 		A5001641 /* RemoteRelayZshBootstrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteRelayZshBootstrap.swift; sourceTree = "<group>"; };
 		A5001661 /* RestorableAgentSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestorableAgentSession.swift; sourceTree = "<group>"; };
 		C0DEF0C10000000000000002 /* AgentForkSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentForkSupport.swift; sourceTree = "<group>"; };
@@ -1096,6 +1098,7 @@
 				A9D9000000000000000F0016 /* markdown-viewer */,
 				A5001622 /* cmux.sdef */,
 				B0A1000000000000000F0002 /* zebra-brain-sync */,
+				B0A1000000000000000F0004 /* zebra-agent-onboarding */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -1825,6 +1828,7 @@
 				A9D9000000000000000F0017 /* markdown-viewer in Resources */,
 				A5001623 /* cmux.sdef in Resources */,
 				B0A1000000000000000F0001 /* zebra-brain-sync in Resources */,
+				B0A1000000000000000F0003 /* zebra-agent-onboarding in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

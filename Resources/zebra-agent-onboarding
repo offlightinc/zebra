@@ -1,0 +1,1116 @@
+#!/usr/bin/env bash
+# zebra-agent-onboarding
+#
+# Terminal-first Zebra primary-agent onboarding.
+# Owns CLI scan, install selection, provider CLI launch, JSON state, and the
+# mark-ready completion contract used by the launched agent.
+
+set -euo pipefail
+
+AGENTS=(claude codex antigravity)
+STATE_SCHEMA_VERSION=1
+PREFERENCE_SCHEMA_VERSION=1
+
+APP_SUPPORT_DIR="${ZEBRA_APP_SUPPORT_DIR:-$HOME/Library/Application Support/zebra}"
+ONBOARDING_DIR="$APP_SUPPORT_DIR/onboarding"
+AGENT_DIR="$APP_SUPPORT_DIR/agent"
+STATE_FILE="$ONBOARDING_DIR/agent-cli-state.json"
+EVENTS_FILE="$ONBOARDING_DIR/agent-cli-events.jsonl"
+PREFERENCES_FILE="$AGENT_DIR/preferences.json"
+
+# Zebra is often launched outside the user's login shell. Include common CLI
+# install locations before scanning or launching provider tools.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+RUN_ID=""
+SAVED_PRIMARY=""
+SELECTED_AGENT=""
+ONBOARDING_CWD="$PWD"
+SELF_PATH=""
+STATE_ERROR_CODE=""
+STATE_ERROR_AGENT=""
+STATE_ERROR_MESSAGE=""
+STATE_ERROR_RECOVERABLE="true"
+
+CANDIDATE_IDS=()
+CANDIDATE_DISPLAY_NAMES=()
+CANDIDATE_BINARY_NAMES=()
+CANDIDATE_PATHS=()
+CANDIDATE_VERSIONS=()
+CANDIDATE_INSTALL_STATES=()
+CANDIDATE_AUTH_STATES=()
+CANDIDATE_RECOMMENDED_ACTIONS=()
+CANDIDATE_PATH_OPTIONS=()
+UNIQUE_PATHS=()
+INSTALLED_AGENTS=()
+MISSING_AGENTS=()
+BROKEN_AGENTS=()
+MENU_AGENTS=()
+PROMPT_RESULT=""
+RESOLVE_STATUS=""
+RESOLVE_PATH=""
+RESOLVE_BROKEN_REASON=""
+INSTALL_RESULT=""
+
+usage() {
+  cat <<'USAGE'
+zebra-agent-onboarding [run|choose-primary] [--cwd <path>]
+zebra-agent-onboarding mark-ready --agent <agent> --run-id <runId>
+
+Commands:
+  run             Scan supported CLIs, choose/install a primary agent, then launch it.
+  choose-primary  Force a primary-agent choice even if a saved preference exists.
+  mark-ready      Mark the active onboarding run complete. Intended for the launched agent.
+
+Supported agents:
+  claude, codex, antigravity
+
+State:
+  ~/Library/Application Support/zebra/onboarding/agent-cli-state.json
+  ~/Library/Application Support/zebra/onboarding/agent-cli-events.jsonl
+  ~/Library/Application Support/zebra/agent/preferences.json
+USAGE
+}
+
+now_iso() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+new_run_id() {
+  local random_hex
+  random_hex="$(od -An -N2 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  printf '%s-%s\n' "$(date -u '+%Y-%m-%dT%H-%M-%SZ')" "${random_hex:-$$}"
+}
+
+resolve_self_path() {
+  local source_path dir
+  source_path="${BASH_SOURCE[0]}"
+  if [[ "$source_path" != /* ]]; then
+    source_path="$(command -v -- "$source_path" 2>/dev/null || printf '%s/%s' "$PWD" "$source_path")"
+  fi
+  dir="$(cd "$(dirname "$source_path")" && pwd -P)"
+  printf '%s/%s\n' "$dir" "$(basename "$source_path")"
+}
+
+json_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '"%s"' "$value"
+}
+
+json_nullable_string() {
+  local value="${1:-}"
+  if [[ -z "$value" ]]; then
+    printf 'null'
+  else
+    json_string "$value"
+  fi
+}
+
+json_string_array() {
+  local first=1 item
+  printf '['
+  for item in "$@"; do
+    if [[ "$first" -eq 0 ]]; then
+      printf ','
+    fi
+    first=0
+    json_string "$item"
+  done
+  printf ']'
+}
+
+shell_words() {
+  local first=1 item
+  for item in "$@"; do
+    if [[ "$first" -eq 0 ]]; then
+      printf ' '
+    fi
+    first=0
+    printf '%q' "$item"
+  done
+}
+
+valid_agent() {
+  case "$1" in
+    claude|codex|antigravity) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+display_name() {
+  case "$1" in
+    claude) printf 'Claude Code' ;;
+    codex) printf 'Codex' ;;
+    antigravity) printf 'Antigravity' ;;
+  esac
+}
+
+binary_name() {
+  case "$1" in
+    claude) printf 'claude' ;;
+    codex) printf 'codex' ;;
+    antigravity) printf 'agy' ;;
+  esac
+}
+
+installer_command() {
+  case "$1" in
+    claude) printf 'curl -fsSL https://claude.ai/install.sh | bash' ;;
+    codex) printf 'curl -fsSL https://chatgpt.com/codex/install.sh | sh' ;;
+    antigravity) printf 'curl -fsSL https://antigravity.google/cli/install.sh | bash' ;;
+  esac
+}
+
+mkdirs() {
+  mkdir -p "$ONBOARDING_DIR" "$AGENT_DIR"
+}
+
+append_event() {
+  local event="$1"
+  local extra="${2:-}"
+  mkdir -p "$ONBOARDING_DIR"
+  {
+    printf '{"ts":'
+    json_string "$(now_iso)"
+    printf ',"runId":'
+    json_string "$RUN_ID"
+    printf ',"event":'
+    json_string "$event"
+    printf '%s}\n' "$extra"
+  } >> "$EVENTS_FILE"
+}
+
+clear_state_error() {
+  STATE_ERROR_CODE=""
+  STATE_ERROR_AGENT=""
+  STATE_ERROR_MESSAGE=""
+  STATE_ERROR_RECOVERABLE="true"
+}
+
+set_state_error() {
+  STATE_ERROR_CODE="$1"
+  STATE_ERROR_AGENT="$2"
+  STATE_ERROR_MESSAGE="$3"
+  STATE_ERROR_RECOVERABLE="${4:-true}"
+}
+
+state_error_json() {
+  if [[ -z "$STATE_ERROR_CODE" ]]; then
+    printf 'null'
+    return
+  fi
+  printf '{"code":'
+  json_string "$STATE_ERROR_CODE"
+  printf ',"agent":'
+  json_nullable_string "$STATE_ERROR_AGENT"
+  printf ',"message":'
+  json_string "$STATE_ERROR_MESSAGE"
+  printf ',"recoverable":%s}' "$STATE_ERROR_RECOVERABLE"
+}
+
+write_candidates_json() {
+  local first=1 i terminal_launchable path version
+  printf '['
+  for i in "${!CANDIDATE_IDS[@]}"; do
+    if [[ "$first" -eq 0 ]]; then
+      printf ','
+    fi
+    first=0
+    if [[ "${CANDIDATE_INSTALL_STATES[$i]}" == "installed" ]]; then
+      terminal_launchable=true
+    else
+      terminal_launchable=false
+    fi
+    path="${CANDIDATE_PATHS[$i]}"
+    version="${CANDIDATE_VERSIONS[$i]}"
+    printf '\n    {'
+    printf '\n      "id":'
+    json_string "${CANDIDATE_IDS[$i]}"
+    printf ',\n      "displayName":'
+    json_string "${CANDIDATE_DISPLAY_NAMES[$i]}"
+    printf ',\n      "binaryName":'
+    json_string "${CANDIDATE_BINARY_NAMES[$i]}"
+    printf ',\n      "executablePath":'
+    json_nullable_string "$path"
+    printf ',\n      "version":'
+    json_nullable_string "$version"
+    printf ',\n      "installState":'
+    json_string "${CANDIDATE_INSTALL_STATES[$i]}"
+    printf ',\n      "authState":'
+    json_string "${CANDIDATE_AUTH_STATES[$i]}"
+    printf ',\n      "terminalLaunchable":%s' "$terminal_launchable"
+    printf ',\n      "recommendedAction":'
+    json_string "${CANDIDATE_RECOMMENDED_ACTIONS[$i]}"
+    printf '\n    }'
+  done
+  if [[ "${#CANDIDATE_IDS[@]}" -gt 0 ]]; then
+    printf '\n  '
+  fi
+  printf ']'
+}
+
+write_state() {
+  local phase="$1"
+  local selected_agent="${2:-$SELECTED_AGENT}"
+  local tmp
+  mkdir -p "$ONBOARDING_DIR"
+  tmp="$STATE_FILE.tmp.$$"
+  {
+    printf '{\n'
+    printf '  "schemaVersion": %s,\n' "$STATE_SCHEMA_VERSION"
+    printf '  "runId": '
+    json_string "$RUN_ID"
+    printf ',\n  "phase": '
+    json_string "$phase"
+    printf ',\n  "updatedAt": '
+    json_string "$(now_iso)"
+    printf ',\n  "savedPrimary": '
+    json_nullable_string "$SAVED_PRIMARY"
+    printf ',\n  "selectedAgent": '
+    json_nullable_string "$selected_agent"
+    printf ',\n  "candidates": '
+    write_candidates_json
+    printf ',\n  "error": '
+    state_error_json
+    printf '\n}\n'
+  } > "$tmp"
+  mv "$tmp" "$STATE_FILE"
+}
+
+read_plist_raw_key() {
+  local file="$1"
+  local key="$2"
+  [[ -f "$file" ]] || return 1
+  plutil -extract "$key" raw -o - "$file" 2>/dev/null || return 1
+}
+
+read_saved_primary() {
+  local raw
+  raw="$(read_plist_raw_key "$PREFERENCES_FILE" primaryAgent || true)"
+  if valid_agent "$raw"; then
+    printf '%s\n' "$raw"
+  fi
+}
+
+ensure_preferences_base() {
+  local tmp="$1"
+  if [[ -f "$PREFERENCES_FILE" ]] && plutil -lint "$PREFERENCES_FILE" >/dev/null 2>&1; then
+    cp "$PREFERENCES_FILE" "$tmp"
+  else
+    {
+      printf '{\n'
+      printf '  "schemaVersion": %s,\n' "$PREFERENCE_SCHEMA_VERSION"
+      printf '  "surfaceOverrides": {}\n'
+      printf '}\n'
+    } > "$tmp"
+  fi
+  plutil -replace schemaVersion -integer "$PREFERENCE_SCHEMA_VERSION" "$tmp" >/dev/null 2>&1 \
+    || plutil -insert schemaVersion -integer "$PREFERENCE_SCHEMA_VERSION" "$tmp" >/dev/null
+  plutil -type surfaceOverrides "$tmp" >/dev/null 2>&1 \
+    || plutil -insert surfaceOverrides -dictionary "$tmp" >/dev/null
+}
+
+set_primary_preference() {
+  local agent="$1"
+  local updated_by="${2:-onboarding}"
+  local tmp
+  mkdir -p "$AGENT_DIR"
+  tmp="$PREFERENCES_FILE.tmp.$$"
+  ensure_preferences_base "$tmp"
+  plutil -replace primaryAgent -string "$agent" "$tmp" >/dev/null 2>&1 \
+    || plutil -insert primaryAgent -string "$agent" "$tmp" >/dev/null
+  plutil -replace updatedAt -string "$(now_iso)" "$tmp" >/dev/null 2>&1 \
+    || plutil -insert updatedAt -string "$(now_iso)" "$tmp" >/dev/null
+  plutil -replace updatedBy -string "$updated_by" "$tmp" >/dev/null 2>&1 \
+    || plutil -insert updatedBy -string "$updated_by" "$tmp" >/dev/null
+  plutil -convert json -r -o "$tmp" "$tmp" >/dev/null
+  mv "$tmp" "$PREFERENCES_FILE"
+}
+
+candidate_path_options() {
+  local agent="$1"
+  local binary="$2"
+  local entry
+  CANDIDATE_PATH_OPTIONS=()
+  case "$agent" in
+    antigravity)
+      CANDIDATE_PATH_OPTIONS+=("$HOME/.local/bin/$binary")
+      CANDIDATE_PATH_OPTIONS+=("/opt/homebrew/bin/$binary")
+      CANDIDATE_PATH_OPTIONS+=("/usr/local/bin/$binary")
+      ;;
+    *)
+      CANDIDATE_PATH_OPTIONS+=("/opt/homebrew/bin/$binary")
+      CANDIDATE_PATH_OPTIONS+=("/usr/local/bin/$binary")
+      CANDIDATE_PATH_OPTIONS+=("$HOME/.local/bin/$binary")
+      ;;
+  esac
+  local old_ifs="$IFS"
+  IFS=:
+  for entry in ${PATH:-}; do
+    if [[ -n "$entry" ]]; then
+      CANDIDATE_PATH_OPTIONS+=("$entry/$binary")
+    fi
+  done
+  IFS="$old_ifs"
+}
+
+path_seen() {
+  local needle="$1"
+  local item
+  for item in "${UNIQUE_PATHS[@]}"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+is_transient_path() {
+  local lower
+  lower="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    *"/deriveddata/"*|*"/build/products/"*|*".app/contents/"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_cmux_claude_wrapper() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  head -c 512 "$path" 2>/dev/null | grep -Fq 'cmux claude wrapper - injects hooks and session tracking'
+}
+
+resolve_executable() {
+  local agent="$1"
+  local binary path standardized
+  binary="$(binary_name "$agent")"
+  RESOLVE_STATUS=missing
+  RESOLVE_PATH=""
+  RESOLVE_BROKEN_REASON=""
+  UNIQUE_PATHS=()
+  candidate_path_options "$agent" "$binary"
+  for path in "${CANDIDATE_PATH_OPTIONS[@]}"; do
+    standardized="$(cd "$(dirname "$path")" 2>/dev/null && printf '%s/%s' "$PWD" "$(basename "$path")" || printf '%s' "$path")"
+    path="$standardized"
+    path_seen "$path" && continue
+    UNIQUE_PATHS+=("$path")
+    if [[ -x "$path" ]]; then
+      is_transient_path "$path" && continue
+      if [[ "$agent" == "claude" ]] && is_cmux_claude_wrapper "$path"; then
+        continue
+      fi
+      RESOLVE_STATUS=installed
+      RESOLVE_PATH="$path"
+      return 0
+    fi
+    if [[ -e "$path" && -z "$RESOLVE_BROKEN_REASON" ]]; then
+      RESOLVE_BROKEN_REASON="$path is not executable"
+    fi
+  done
+  if [[ -n "$RESOLVE_BROKEN_REASON" ]]; then
+    RESOLVE_STATUS=broken
+  fi
+  return 0
+}
+
+version_for() {
+  local path="$1"
+  local stdout_file stderr_file pid killer status line
+  [[ -n "$path" ]] || return 0
+  stdout_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-version.stdout.XXXXXX")"
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-version.stderr.XXXXXX")"
+  "$path" --version >"$stdout_file" 2>"$stderr_file" &
+  pid="$!"
+  (
+    sleep 2
+    if kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      sleep 0.2
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  ) &
+  killer="$!"
+  if wait "$pid"; then
+    status=0
+  else
+    status="$?"
+  fi
+  kill "$killer" 2>/dev/null || true
+  wait "$killer" 2>/dev/null || true
+  if [[ "$status" -eq 0 ]]; then
+    line="$(sed -n '1{s/[[:space:]]*$//;p;q;}' "$stdout_file")"
+    if [[ -z "$line" ]]; then
+      line="$(sed -n '1{s/[[:space:]]*$//;p;q;}' "$stderr_file")"
+    fi
+    printf '%s\n' "$line"
+  fi
+  rm -f "$stdout_file" "$stderr_file"
+}
+
+auth_state_for() {
+  local agent="$1"
+  case "$agent" in
+    claude)
+      [[ -e "$HOME/.claude" || -e "$HOME/.claude.json" ]] && printf 'configPresent' || printf 'unknown'
+      ;;
+    codex)
+      [[ -e "$HOME/.codex" ]] && printf 'configPresent' || printf 'unknown'
+      ;;
+    antigravity)
+      [[ -e "$HOME/.config/antigravity" || -e "$HOME/.local/share/antigravity" ]] && printf 'configPresent' || printf 'unknown'
+      ;;
+  esac
+}
+
+scan_agents() {
+  local agent path version install_state recommended_action auth_state
+  CANDIDATE_IDS=()
+  CANDIDATE_DISPLAY_NAMES=()
+  CANDIDATE_BINARY_NAMES=()
+  CANDIDATE_PATHS=()
+  CANDIDATE_VERSIONS=()
+  CANDIDATE_INSTALL_STATES=()
+  CANDIDATE_AUTH_STATES=()
+  CANDIDATE_RECOMMENDED_ACTIONS=()
+  INSTALLED_AGENTS=()
+  MISSING_AGENTS=()
+  BROKEN_AGENTS=()
+
+  for agent in "${AGENTS[@]}"; do
+    resolve_executable "$agent"
+    path="$RESOLVE_PATH"
+    version=""
+    case "$RESOLVE_STATUS" in
+      installed)
+        install_state=installed
+        recommended_action=launch
+        version="$(version_for "$path")"
+        INSTALLED_AGENTS+=("$agent")
+        ;;
+      broken)
+        install_state=broken
+        recommended_action=repairInstall
+        path=""
+        BROKEN_AGENTS+=("$agent")
+        ;;
+      *)
+        install_state=missing
+        recommended_action=install
+        path=""
+        MISSING_AGENTS+=("$agent")
+        ;;
+    esac
+    auth_state="$(auth_state_for "$agent")"
+    CANDIDATE_IDS+=("$agent")
+    CANDIDATE_DISPLAY_NAMES+=("$(display_name "$agent")")
+    CANDIDATE_BINARY_NAMES+=("$(binary_name "$agent")")
+    CANDIDATE_PATHS+=("$path")
+    CANDIDATE_VERSIONS+=("$version")
+    CANDIDATE_INSTALL_STATES+=("$install_state")
+    CANDIDATE_AUTH_STATES+=("$auth_state")
+    CANDIDATE_RECOMMENDED_ACTIONS+=("$recommended_action")
+  done
+}
+
+append_scan_completed_event() {
+  local extra
+  extra=',"installed":'
+  extra+="$(json_string_array "${INSTALLED_AGENTS[@]}")"
+  extra+=',"missing":'
+  extra+="$(json_string_array "${MISSING_AGENTS[@]}")"
+  if [[ "${#BROKEN_AGENTS[@]}" -gt 0 ]]; then
+    extra+=',"broken":'
+    extra+="$(json_string_array "${BROKEN_AGENTS[@]}")"
+  fi
+  append_event agent_scan_completed "$extra"
+}
+
+is_agent_installed() {
+  local agent="$1"
+  local item
+  for item in "${INSTALLED_AGENTS[@]}"; do
+    [[ "$item" == "$agent" ]] && return 0
+  done
+  return 1
+}
+
+path_for_agent() {
+  local agent="$1"
+  local i
+  for i in "${!CANDIDATE_IDS[@]}"; do
+    if [[ "${CANDIDATE_IDS[$i]}" == "$agent" ]]; then
+      printf '%s\n' "${CANDIDATE_PATHS[$i]}"
+      return 0
+    fi
+  done
+}
+
+print_candidates() {
+  local i agent path version state auth
+  for i in "${!CANDIDATE_IDS[@]}"; do
+    agent="${CANDIDATE_IDS[$i]}"
+    path="${CANDIDATE_PATHS[$i]}"
+    version="${CANDIDATE_VERSIONS[$i]}"
+    state="${CANDIDATE_INSTALL_STATES[$i]}"
+    auth="${CANDIDATE_AUTH_STATES[$i]}"
+    printf '  - %s: %s' "$(display_name "$agent")" "$state"
+    if [[ -n "$path" ]]; then
+      printf ' at %s' "$path"
+    fi
+    if [[ -n "$version" ]]; then
+      printf ' (%s)' "$version"
+    fi
+    if [[ "$auth" == "configPresent" ]]; then
+      printf ' [previous local config found]'
+    fi
+    printf '\n'
+  done
+}
+
+prompt_menu() {
+  local title="$1"
+  local count="${#MENU_AGENTS[@]}"
+  local i choice
+  PROMPT_RESULT=""
+  printf '\n%s\n\n' "$title"
+  for i in "${!MENU_AGENTS[@]}"; do
+    printf '  %s. %s\n' "$((i + 1))" "$(display_name "${MENU_AGENTS[$i]}")"
+  done
+  printf '\n'
+  while true; do
+    printf 'Selection [1-%s]: ' "$count"
+    if ! read -r choice; then
+      printf '\nNo selection received.\n' >&2
+      return 1
+    fi
+    case "$choice" in
+      ''|*[!0-9]*)
+        printf 'Enter a number from 1 to %s.\n' "$count"
+        ;;
+      *)
+        if [[ "$choice" -ge 1 && "$choice" -le "$count" ]]; then
+          PROMPT_RESULT="${MENU_AGENTS[$((choice - 1))]}"
+          return 0
+        fi
+        printf 'Enter a number from 1 to %s.\n' "$count"
+        ;;
+    esac
+  done
+}
+
+select_primary_from_installed() {
+  MENU_AGENTS=("${INSTALLED_AGENTS[@]}")
+  write_state choose_primary ""
+  prompt_menu "Which installed agent should Zebra use by default?"
+}
+
+select_install_target() {
+  MENU_AGENTS=("${AGENTS[@]}")
+  write_state choose_install_target ""
+  prompt_menu "Zebra needs a local agent CLI to continue. Choose the agent Zebra should install:"
+}
+
+primary_missing_flow() {
+  local saved="$1"
+  local choice
+  write_state primary_missing "$saved"
+  printf '\nZebra could not find your saved primary agent: %s.\n' "$(display_name "$saved")"
+  print_candidates
+  while true; do
+    printf '\nChoose a recovery action:\n'
+    printf '  1. Reinstall %s\n' "$(display_name "$saved")"
+    if [[ "${#INSTALLED_AGENTS[@]}" -gt 0 ]]; then
+      printf '  2. Choose another installed agent\n'
+      printf '  3. Install a different agent\n'
+      printf 'Selection [1-3]: '
+    else
+      printf '  2. Install a different agent\n'
+      printf 'Selection [1-2]: '
+    fi
+    if ! read -r choice; then
+      return 1
+    fi
+    case "$choice" in
+      1)
+        install_then_launch "$saved"
+        return
+        ;;
+      2)
+        if [[ "${#INSTALLED_AGENTS[@]}" -gt 0 ]]; then
+          select_primary_from_installed || return 1
+          select_and_launch "$PROMPT_RESULT" user_recovered_primary
+        else
+          select_install_target || return 1
+          install_then_launch "$PROMPT_RESULT"
+        fi
+        return
+        ;;
+      3)
+        if [[ "${#INSTALLED_AGENTS[@]}" -gt 0 ]]; then
+          select_install_target || return 1
+          install_then_launch "$PROMPT_RESULT"
+          return
+        fi
+        ;;
+    esac
+    printf 'Enter a valid option.\n'
+  done
+}
+
+run_installer() {
+  local agent="$1"
+  local command_label answer status extra
+  command_label="$(installer_command "$agent")"
+  INSTALL_RESULT=failed
+  printf '\nZebra will run the official installer for %s:\n\n  %s\n\n' "$(display_name "$agent")" "$command_label"
+  printf 'Run this installer now? [y/N]: '
+  read -r answer || answer=""
+  case "$answer" in
+    y|Y|yes|YES|Yes) ;;
+    *)
+      INSTALL_RESULT=declined
+      return 1
+      ;;
+  esac
+
+  clear_state_error
+  SELECTED_AGENT="$agent"
+  write_state installing "$agent"
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  extra+=',"commandLabel":'
+  extra+="$(json_string "$command_label")"
+  append_event install_started "$extra"
+
+  printf '\nInstalling %s...\n\n' "$(display_name "$agent")"
+  if /bin/bash -lc "$command_label"; then
+    status=0
+  else
+    status="$?"
+  fi
+
+  if [[ "$status" -eq 0 ]]; then
+    INSTALL_RESULT=succeeded
+    extra=',"agent":'
+    extra+="$(json_string "$agent")"
+    append_event install_succeeded "$extra"
+    return 0
+  fi
+
+  INSTALL_RESULT=failed
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  extra+=',"commandLabel":'
+  extra+="$(json_string "$command_label")"
+  extra+=',"exitCode":'
+  extra+="$status"
+  append_event install_failed "$extra"
+  set_state_error install_failed "$agent" "Installer exited $status" true
+  write_state failed "$agent"
+  return 1
+}
+
+install_failure_menu() {
+  local agent="$1"
+  local command_label choice
+  command_label="$(installer_command "$agent")"
+  while true; do
+    printf '\n%s install did not complete.\n' "$(display_name "$agent")"
+    printf '  1. Retry %s install\n' "$(display_name "$agent")"
+    printf '  2. Choose another agent\n'
+    printf '  3. Show manual install command\n'
+    printf '  4. Exit for now\n'
+    printf 'Selection [1-4]: '
+    read -r choice || return 1
+    case "$choice" in
+      1)
+        PROMPT_RESULT="$agent"
+        return 0
+        ;;
+      2)
+        select_install_target || return 1
+        return 0
+        ;;
+      3)
+        printf '\nManual install command for %s:\n\n  %s\n\n' "$(display_name "$agent")" "$command_label"
+        printf 'Press Return to continue.'
+        read -r _ || true
+        ;;
+      4)
+        append_event agent_onboarding_failed ',"reason":"install_failed_exit"'
+        return 1
+        ;;
+      *)
+        printf 'Enter a valid option.\n'
+        ;;
+    esac
+  done
+}
+
+rescan_after_install() {
+  local agent="$1"
+  clear_state_error
+  write_state rescanning_after_install "$agent"
+  append_event agent_scan_started ',"reason":"after_install"'
+  scan_agents
+  append_scan_completed_event
+  write_state rescanning_after_install "$agent"
+}
+
+install_then_launch() {
+  local agent="$1"
+  while true; do
+    if run_installer "$agent"; then
+      printf '\nInstall complete. Re-scanning...\n'
+      rescan_after_install "$agent"
+      if is_agent_installed "$agent"; then
+        printf '%s found at %s.\n' "$(display_name "$agent")" "$(path_for_agent "$agent")"
+        select_and_launch "$agent" post_install
+        return
+      fi
+      set_state_error install_failed "$agent" "Installer completed, but $(binary_name "$agent") was not found on PATH or known install paths." true
+      write_state failed "$agent"
+    elif [[ "$INSTALL_RESULT" == "declined" ]]; then
+      printf '\nInstaller was not run.\n'
+    fi
+
+    if ! install_failure_menu "$agent"; then
+      return 1
+    fi
+    agent="$PROMPT_RESULT"
+  done
+}
+
+mark_ready_command() {
+  shell_words "$SELF_PATH" mark-ready --agent "$1" --run-id "$RUN_ID"
+}
+
+zebra_system_prompt() {
+  local agent="$1"
+  printf 'You are running inside Zebra onboarding as the selected primary agent: %s.\n' "$(display_name "$agent")"
+  printf 'Help complete the user-requested Zebra setup work in this terminal. If the provider CLI asks the user to sign in or create an account, let that provider flow proceed.\n'
+  printf 'When the Zebra onboarding step is complete, run the exact ready command provided by the user prompt. Do not edit Zebra JSON state files directly.\n'
+}
+
+zebra_user_prompt() {
+  local agent="$1"
+  printf 'Zebra has selected %s for first-run onboarding.\n\n' "$(display_name "$agent")"
+  printf 'If you need the user to sign in or create an account, guide them through the provider CLI flow.\n\n'
+  printf 'When this onboarding step is finished, run this exact command:\n\n'
+  printf '  %s\n\n' "$(mark_ready_command "$agent")"
+  printf 'Do not create a separate ready marker file. Zebra uses this command to update its canonical state and event log.\n'
+}
+
+ready_event_exists() {
+  local agent="$1"
+  [[ -f "$EVENTS_FILE" ]] || return 1
+  grep -F "\"runId\":\"$RUN_ID\"" "$EVENTS_FILE" \
+    | grep -F '"event":"agent_ready_reported"' \
+    | grep -F "\"agent\":\"$agent\"" >/dev/null 2>&1
+}
+
+launch_selected_agent() {
+  local agent="$1"
+  local system_prompt user_prompt status extra
+  local command_label executable_path
+  SELECTED_AGENT="$agent"
+  clear_state_error
+  write_state launching_agent "$agent"
+  command_label="$(printf '%s onboarding prompt' "$(binary_name "$agent")")"
+  executable_path="$(path_for_agent "$agent")"
+  if [[ -z "$executable_path" ]]; then
+    executable_path="$(binary_name "$agent")"
+  fi
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  extra+=',"commandLabel":'
+  extra+="$(json_string "$command_label")"
+  append_event agent_launch_started "$extra"
+
+  system_prompt="$(zebra_system_prompt "$agent")"
+  user_prompt="$(zebra_user_prompt "$agent")"
+
+  printf '\nStarting %s for Zebra onboarding.\n' "$(display_name "$agent")"
+  printf 'The provider CLI may ask you to sign in or create an account.\n\n'
+  write_state agent_working "$agent"
+
+  case "$agent" in
+    claude)
+      if (cd "$ONBOARDING_CWD" && "$executable_path" --append-system-prompt "$system_prompt" "$user_prompt"); then
+        status=0
+      else
+        status="$?"
+      fi
+      ;;
+    codex)
+      if (cd "$ONBOARDING_CWD" && "$executable_path" -C "$ONBOARDING_CWD" "$system_prompt"$'\n\n'"$user_prompt"); then
+        status=0
+      else
+        status="$?"
+      fi
+      ;;
+    antigravity)
+      if (cd "$ONBOARDING_CWD" && "$executable_path" -p "$system_prompt"$'\n\n'"$user_prompt" --cwd "$ONBOARDING_CWD"); then
+        status=0
+      else
+        status="$?"
+      fi
+      ;;
+  esac
+
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  extra+=',"exitCode":'
+  extra+="$status"
+  append_event agent_process_exited "$extra"
+
+  if ready_event_exists "$agent"; then
+    printf '\nZebra onboarding is complete.\n'
+    return 0
+  fi
+
+  post_launch_continue_menu "$agent"
+}
+
+update_state_complete() {
+  local agent="$1"
+  local tmp="$STATE_FILE.tmp.$$"
+  [[ -f "$STATE_FILE" ]] || return 1
+  cp "$STATE_FILE" "$tmp"
+  plutil -replace phase -string complete "$tmp" >/dev/null
+  plutil -replace updatedAt -string "$(now_iso)" "$tmp" >/dev/null
+  plutil -replace selectedAgent -string "$agent" "$tmp" >/dev/null
+  plutil -replace error -json null "$tmp" >/dev/null
+  plutil -lint "$tmp" >/dev/null
+  mv "$tmp" "$STATE_FILE"
+}
+
+manual_complete() {
+  local agent="$1"
+  local extra
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  append_event manual_continue_selected "$extra"
+  append_event agent_onboarding_completed "$extra"
+  update_state_complete "$agent"
+  printf '\nZebra onboarding marked complete.\n'
+}
+
+post_launch_continue_menu() {
+  local agent="$1"
+  local choice
+  write_state waiting_for_continue "$agent"
+  while true; do
+    printf '\n%s exited before reporting ready.\n' "$(display_name "$agent")"
+    printf '  1. Relaunch %s\n' "$(display_name "$agent")"
+    printf '  2. Mark complete manually\n'
+    printf '  3. Choose another agent\n'
+    printf '  4. Exit for now\n'
+    printf 'Selection [1-4]: '
+    read -r choice || return 1
+    case "$choice" in
+      1)
+        launch_selected_agent "$agent"
+        return
+        ;;
+      2)
+        manual_complete "$agent"
+        return
+        ;;
+      3)
+        force_choose_flow
+        return
+        ;;
+      4)
+        return 1
+        ;;
+      *)
+        printf 'Enter a valid option.\n'
+        ;;
+    esac
+  done
+}
+
+select_and_launch() {
+  local agent="$1"
+  local selection_mode="$2"
+  local extra
+  SELECTED_AGENT="$agent"
+  if [[ "$selection_mode" != "saved_primary" ]]; then
+    set_primary_preference "$agent" onboarding
+  fi
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  extra+=',"selectionMode":'
+  extra+="$(json_string "$selection_mode")"
+  append_event primary_agent_selected "$extra"
+  launch_selected_agent "$agent"
+}
+
+force_choose_flow() {
+  if [[ "${#INSTALLED_AGENTS[@]}" -gt 0 ]]; then
+    select_primary_from_installed || return 1
+    select_and_launch "$PROMPT_RESULT" user_selected_primary
+  else
+    select_install_target || return 1
+    install_then_launch "$PROMPT_RESULT"
+  fi
+}
+
+run_flow() {
+  local force_choose="$1"
+  RUN_ID="$(new_run_id)"
+  SELF_PATH="$(resolve_self_path)"
+  mkdirs
+  SAVED_PRIMARY="$(read_saved_primary || true)"
+  clear_state_error
+
+  printf 'Zebra agent onboarding\n'
+  printf 'State: %s\n\n' "$STATE_FILE"
+  append_event agent_scan_started
+  scan_agents
+  append_scan_completed_event
+  write_state scan ""
+  print_candidates
+
+  if [[ "$force_choose" -eq 1 ]]; then
+    force_choose_flow
+    return
+  fi
+
+  if [[ -n "$SAVED_PRIMARY" ]]; then
+    if is_agent_installed "$SAVED_PRIMARY"; then
+      printf '\nUsing saved primary agent: %s.\n' "$(display_name "$SAVED_PRIMARY")"
+      select_and_launch "$SAVED_PRIMARY" saved_primary
+      return
+    fi
+    primary_missing_flow "$SAVED_PRIMARY"
+    return
+  fi
+
+  case "${#INSTALLED_AGENTS[@]}" in
+    0)
+      select_install_target || return 1
+      install_then_launch "$PROMPT_RESULT"
+      ;;
+    1)
+      printf '\nZebra found one installed agent: %s.\n' "$(display_name "${INSTALLED_AGENTS[0]}")"
+      select_and_launch "${INSTALLED_AGENTS[0]}" auto_one_installed
+      ;;
+    *)
+      select_primary_from_installed || return 1
+      select_and_launch "$PROMPT_RESULT" user_selected_primary
+      ;;
+  esac
+}
+
+mark_ready() {
+  local agent=""
+  local run_id=""
+  local current_run current_agent extra
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent)
+        agent="${2:-}"
+        shift 2
+        ;;
+      --run-id)
+        run_id="${2:-}"
+        shift 2
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        printf 'unknown option for mark-ready: %s\n' "$1" >&2
+        usage >&2
+        exit 2
+        ;;
+    esac
+  done
+  valid_agent "$agent" || {
+    printf 'mark-ready requires --agent claude|codex|antigravity\n' >&2
+    exit 2
+  }
+  [[ -n "$run_id" ]] || {
+    printf 'mark-ready requires --run-id\n' >&2
+    exit 2
+  }
+  [[ -f "$STATE_FILE" ]] || {
+    printf 'no onboarding state found at %s\n' "$STATE_FILE" >&2
+    exit 1
+  }
+  current_run="$(read_plist_raw_key "$STATE_FILE" runId || true)"
+  if [[ "$current_run" != "$run_id" ]]; then
+    printf 'run id mismatch: expected current run %s, got %s\n' "$current_run" "$run_id" >&2
+    exit 1
+  fi
+  current_agent="$(read_plist_raw_key "$STATE_FILE" selectedAgent || true)"
+  if [[ -n "$current_agent" && "$current_agent" != "$agent" ]]; then
+    printf 'agent mismatch: current selected agent is %s, got %s\n' "$current_agent" "$agent" >&2
+    exit 1
+  fi
+
+  RUN_ID="$run_id"
+  mkdirs
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  extra+=',"source":"mark-ready"'
+  append_event agent_ready_reported "$extra"
+  append_event agent_onboarding_completed "$extra"
+  update_state_complete "$agent"
+  printf 'Zebra onboarding marked ready for %s.\n' "$(display_name "$agent")"
+}
+
+main() {
+  local command="run"
+  if [[ $# -gt 0 ]]; then
+    case "$1" in
+      run|choose-primary|mark-ready)
+        command="$1"
+        shift
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+    esac
+  fi
+
+  case "$command" in
+    mark-ready)
+      mark_ready "$@"
+      ;;
+    run|choose-primary)
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --cwd)
+            ONBOARDING_CWD="${2:-}"
+            shift 2
+            ;;
+          --help|-h)
+            usage
+            exit 0
+            ;;
+          *)
+            printf 'unknown option: %s\n\n' "$1" >&2
+            usage >&2
+            exit 2
+            ;;
+        esac
+      done
+      [[ -n "$ONBOARDING_CWD" ]] || ONBOARDING_CWD="$PWD"
+      if [[ "$command" == "choose-primary" ]]; then
+        run_flow 1
+      else
+        run_flow 0
+      fi
+      ;;
+  esac
+}
+
+main "$@"
