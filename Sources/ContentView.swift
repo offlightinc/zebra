@@ -10905,7 +10905,7 @@ struct VerticalTabsSidebarFooter: View {
     @ObservedObject var vaultState: VerticalTabsSidebarVaultState
     @ObservedObject var brainSync: BrainSyncService
     let onSendFeedback: () -> Void
-    let onBrainSyncConflictAgent: (MarkdownPillAgent) -> Void
+    let onBrainSyncFailureAgent: (MarkdownPillAgent, Date, BrainSyncService.Failure) -> Void
 
     var body: some View {
         // ?/⚙ 두 버튼은 이 footer 에서 빠지고 ModeRail 하단으로 이동
@@ -10919,7 +10919,7 @@ struct VerticalTabsSidebarFooter: View {
 
             BrainSyncIndicatorView(
                 service: brainSync,
-                onConflictAgentSelect: onBrainSyncConflictAgent
+                onFailureAgentSelect: onBrainSyncFailureAgent
             )
             .fixedSize(horizontal: true, vertical: false)
         }

@@ -19,9 +19,28 @@ import Foundation
 /// 바뀜. 동시 multi-vault sync 는 V2.
 @MainActor
 public final class BrainSyncService: ObservableObject {
+    public struct Failure: Equatable, Sendable {
+        public let reason: FailureReason
+        public let rawReasonId: String?
+        public let detail: String
+
+        public init(reason: FailureReason, rawReasonId: String? = nil, detail: String) {
+            self.reason = reason
+            self.rawReasonId = {
+                guard let raw = rawReasonId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !raw.isEmpty,
+                      raw != reason.rawValue else {
+                    return nil
+                }
+                return raw
+            }()
+            self.detail = detail
+        }
+    }
+
     public enum SyncState: Equatable, Sendable {
         case synced(at: Date, commit: String)
-        case failed(at: Date, reason: FailureReason, detail: String)
+        case failed(at: Date, failure: Failure)
     }
 
     public enum FailureReason: String, Sendable, Codable {
@@ -221,8 +240,8 @@ public final class BrainSyncService: ObservableObject {
         switch outcome {
         case .success(let commit):
             state = .synced(at: now, commit: commit)
-        case .failure(let reason, let detail):
-            state = .failed(at: now, reason: reason, detail: detail)
+        case .failure(let failure):
+            state = .failed(at: now, failure: failure)
         }
         Self.writeSentinel(state)
     }
@@ -246,7 +265,8 @@ public final class BrainSyncService: ObservableObject {
     private struct SentinelPayload: Codable {
         let timestamp: Date
         let kind: String   // "synced" | "failed"
-        let reason: FailureReason?
+        let reason: String?
+        let rawReasonId: String?
         let detail: String?
         let commit: String?
     }
@@ -260,9 +280,23 @@ public final class BrainSyncService: ObservableObject {
         let payload: SentinelPayload
         switch state {
         case .synced(let at, let commit):
-            payload = SentinelPayload(timestamp: at, kind: "synced", reason: nil, detail: nil, commit: commit)
-        case .failed(let at, let reason, let detail):
-            payload = SentinelPayload(timestamp: at, kind: "failed", reason: reason, detail: detail, commit: nil)
+            payload = SentinelPayload(
+                timestamp: at,
+                kind: "synced",
+                reason: nil,
+                rawReasonId: nil,
+                detail: nil,
+                commit: commit
+            )
+        case .failed(let at, let failure):
+            payload = SentinelPayload(
+                timestamp: at,
+                kind: "failed",
+                reason: failure.reason.rawValue,
+                rawReasonId: failure.rawReasonId,
+                detail: failure.detail,
+                commit: nil
+            )
         }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -281,10 +315,25 @@ public final class BrainSyncService: ObservableObject {
         case "synced":
             return .synced(at: payload.timestamp, commit: payload.commit ?? "")
         case "failed":
+            let rawReason = payload.reason ?? FailureReason.unknown.rawValue
+            let parsedReason = FailureReason(rawValue: rawReason) ?? .unknown
+            let rawReasonId: String? = {
+                if let explicit = payload.rawReasonId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !explicit.isEmpty {
+                    return explicit
+                }
+                if parsedReason == .unknown, rawReason != FailureReason.unknown.rawValue {
+                    return rawReason
+                }
+                return nil
+            }()
             return .failed(
                 at: payload.timestamp,
-                reason: payload.reason ?? .unknown,
-                detail: payload.detail ?? ""
+                failure: Failure(
+                    reason: parsedReason,
+                    rawReasonId: rawReasonId,
+                    detail: payload.detail ?? ""
+                )
             )
         default:
             return nil
@@ -295,12 +344,12 @@ public final class BrainSyncService: ObservableObject {
 
     private enum SyncOutcome: Sendable {
         case success(commit: String)
-        case failure(reason: FailureReason, detail: String)
+        case failure(Failure)
     }
 
     private static func run(vaultRoot: String) async -> SyncOutcome {
         guard let scriptURL = bundledScriptURL() else {
-            return .failure(reason: .hookFailed, detail: "zebra-brain-sync script missing from app bundle")
+            return .failure(Failure(reason: .hookFailed, detail: "zebra-brain-sync script missing from app bundle"))
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -319,7 +368,7 @@ public final class BrainSyncService: ObservableObject {
         do {
             try process.run()
         } catch {
-            return .failure(reason: .hookFailed, detail: "failed to launch zebra-brain-sync: \(error.localizedDescription)")
+            return .failure(Failure(reason: .hookFailed, detail: "failed to launch zebra-brain-sync: \(error.localizedDescription)"))
         }
         // macOS pipe 버퍼는 ~64KB. `git fetch` 같은 명령은 큰 brain repo 에서
         // 그 한계를 쉽게 넘어. `waitUntilExit()` 후에 read 하면 subprocess 가
@@ -345,14 +394,15 @@ public final class BrainSyncService: ObservableObject {
             let commit = parseCommit(stdout: stdout)
             if commit.isEmpty {
                 return .failure(
-                    reason: .unknown,
-                    detail: "zebra-brain-sync exited successfully without reporting a final commit"
+                    Failure(
+                        reason: .unknown,
+                        detail: "zebra-brain-sync exited successfully without reporting a final commit"
+                    )
                 )
             }
             return .success(commit: commit)
         }
-        let (reason, detail) = classifyFailure(stderr: stderr, stdout: stdout)
-        return .failure(reason: reason, detail: detail)
+        return .failure(classifyFailure(stderr: stderr, stdout: stdout))
     }
 
     private static func bundledScriptURL() -> URL? {
@@ -373,10 +423,10 @@ public final class BrainSyncService: ObservableObject {
 
     // MARK: - Failure classification
 
-    static func classifyFailure(stderr: String, stdout: String) -> (FailureReason, String) {
+    static func classifyFailure(stderr: String, stdout: String) -> Failure {
         // Source A — 스크립트가 `[REASON:<id>]` 태그를 emit 했으면 우선.
-        if let (reason, detail) = parseReasonTag(stderr: stderr) {
-            return (reason, detail)
+        if let failure = parseReasonTag(stderr: stderr) {
+            return failure
         }
         // Source B — git stderr 패턴 매칭, **specific → general** 우선순위.
         //
@@ -400,7 +450,7 @@ public final class BrainSyncService: ObservableObject {
             || haystack.contains("conflict (rename")
             || haystack.contains("automatic merge failed")
             || haystack.contains("conflict marker") {
-            return (.conflict, lastStderrLine)
+            return Failure(reason: .conflict, detail: lastStderrLine)
         }
         // 2. permissionDenied — 권한 issue 명시. `pushRejected` 의 "rejected" 와
         //    같이 나오는 경우가 흔해서 (`! [remote rejected] permission denied`)
@@ -416,7 +466,7 @@ public final class BrainSyncService: ObservableObject {
             || haystack.hasSuffix(" 403")
             || haystack.contains(" 404 ")
             || haystack.hasSuffix(" 404") {
-            return (.permissionDenied, lastStderrLine)
+            return Failure(reason: .permissionDenied, detail: lastStderrLine)
         }
         // 3. authExpired — 인증 issue 명시. `pushRejected` 보다 위에 (push 가
         //    auth fail 로도 reject 됨).
@@ -425,7 +475,7 @@ public final class BrainSyncService: ObservableObject {
             || haystack.contains("permission denied (publickey)")
             || haystack.contains(" 401 ")
             || haystack.hasSuffix(" 401") {
-            return (.authExpired, lastStderrLine)
+            return Failure(reason: .authExpired, detail: lastStderrLine)
         }
         // 4. pushRejected — push 의 일반 거절 (non-fast-forward). 권한/인증 둘 다
         //    못 잡은 reject 만 여기. "rejected" 단어 단독은 ambiguous 라 안 보고
@@ -433,7 +483,7 @@ public final class BrainSyncService: ObservableObject {
         if haystack.contains("non-fast-forward")
             || haystack.contains("fetch first")
             || haystack.contains("failed to push some refs") {
-            return (.pushRejected, lastStderrLine)
+            return Failure(reason: .pushRejected, detail: lastStderrLine)
         }
         // 5. offline — 네트워크 자체 못 닿음.
         if haystack.contains("could not resolve host")
@@ -441,11 +491,11 @@ public final class BrainSyncService: ObservableObject {
             || haystack.contains("network is unreachable")
             || haystack.contains("operation timed out")
             || haystack.contains("connection timed out") {
-            return (.offline, lastStderrLine)
+            return Failure(reason: .offline, detail: lastStderrLine)
         }
         // 6. diskFull — 시스템 자원.
         if haystack.contains("no space left on device") || haystack.contains("enospc") {
-            return (.diskFull, lastStderrLine)
+            return Failure(reason: .diskFull, detail: lastStderrLine)
         }
         // 7. rateLimit — server-side throttle.
         if haystack.contains("api rate limit")
@@ -453,16 +503,16 @@ public final class BrainSyncService: ObservableObject {
             || haystack.contains(" 429 ")
             || haystack.hasSuffix(" 429")
             || haystack.contains("retry-after:") {
-            return (.rateLimit, lastStderrLine)
+            return Failure(reason: .rateLimit, detail: lastStderrLine)
         }
         if haystack.contains("brain sync already running")
             || haystack.contains("brain sync lock exists") {
-            return (.alreadyRunning, lastStderrLine)
+            return Failure(reason: .alreadyRunning, detail: lastStderrLine)
         }
-        return (.unknown, lastStderrLine)
+        return Failure(reason: .unknown, detail: lastStderrLine)
     }
 
-    private static func parseReasonTag(stderr: String) -> (FailureReason, String)? {
+    private static func parseReasonTag(stderr: String) -> Failure? {
         for raw in stderr.split(separator: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
             guard line.hasPrefix("[REASON:") else { continue }
@@ -471,8 +521,9 @@ public final class BrainSyncService: ObservableObject {
             let id = String(line[idStart..<end])
             let detail = String(line[line.index(after: end)...]).trimmingCharacters(in: .whitespaces)
             if let reason = FailureReason(rawValue: id) {
-                return (reason, detail)
+                return Failure(reason: reason, detail: detail)
             }
+            return Failure(reason: .unknown, rawReasonId: id, detail: detail)
         }
         return nil
     }

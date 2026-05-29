@@ -125,9 +125,9 @@ public enum MarkdownChatPillCommand {
         }
     }
 
-    /// Brain-sync conflict 전용 prep. cwd = vaultPath. Claude 분기는 vault path 를
+    /// Brain-sync failure 전용 prep. cwd = vaultPath. Claude 분기는 vault path 를
     /// `~/.claude.json` 에 trusted 로 박는다.
-    public static func prepareLaunchEnvironmentForBrainSyncConflict(
+    public static func prepareLaunchEnvironmentForBrainSyncFailure(
         agent: MarkdownPillAgent,
         vaultPath: String
     ) -> Bool {
@@ -142,17 +142,50 @@ public enum MarkdownChatPillCommand {
         }
     }
 
-    /// Brain-sync conflict 전용 entry. ChatPill 의 `invocation` 을 재사용해 agent
-    /// CLI 명령을 만들되 prefix 는 `BrainSyncConflictContextPrefix.build(...)` 의
-    /// 결과를 사용. user prompt 는 default 빈 문자열 — agent 가 conflict prefix 만
-    /// 받고 사용자 답을 기다림.
+    public static func prepareLaunchEnvironmentForBrainSyncConflict(
+        agent: MarkdownPillAgent,
+        vaultPath: String
+    ) -> Bool {
+        prepareLaunchEnvironmentForBrainSyncFailure(agent: agent, vaultPath: vaultPath)
+    }
+
+    /// Brain-sync failure 전용 entry. ChatPill 의 `invocation` 을 재사용해 agent
+    /// CLI 명령을 만들되 prefix 는 짧은 failure summary + inspect commands 만
+    /// 포함한다. 로그/파일 본문은 prefix 에 inline 하지 않고 agent 가 기존 파일을
+    /// 직접 확인하게 한다.
+    public static func shellStartupLineForBrainSyncFailure(
+        agent: MarkdownPillAgent,
+        vaultPath: String,
+        reason: BrainSyncService.FailureReason,
+        rawReasonId: String?,
+        detail: String,
+        failedAt: Date?,
+        userPrompt: String = ""
+    ) -> String {
+        let failurePrefix = BrainSyncFailureContextPrefix.build(
+            vaultPath: vaultPath,
+            reason: reason,
+            rawReasonId: rawReasonId,
+            detail: detail,
+            failedAt: failedAt
+        )
+        return "\(invocation(agent: agent, cwd: vaultPath, trustEligible: true, contextPrefix: failurePrefix, prompt: userPrompt))\r"
+    }
+
     public static func shellStartupLineForBrainSyncConflict(
         agent: MarkdownPillAgent,
         vaultPath: String,
         userPrompt: String = ""
     ) -> String {
-        let conflictPrefix = BrainSyncConflictContextPrefix.build(vaultPath: vaultPath)
-        return "\(invocation(agent: agent, cwd: vaultPath, trustEligible: true, contextPrefix: conflictPrefix, prompt: userPrompt))\r"
+        shellStartupLineForBrainSyncFailure(
+            agent: agent,
+            vaultPath: vaultPath,
+            reason: .conflict,
+            rawReasonId: nil,
+            detail: "",
+            failedAt: nil,
+            userPrompt: userPrompt
+        )
     }
 
     public static func shellStartupLine(

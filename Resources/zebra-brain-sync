@@ -8,7 +8,7 @@
 # <id> ∈ authExpired|offline|pushRejected|permissionDenied|diskFull|hookFailed|rateLimit|conflict|notGbrainRepo|alreadyRunning|unknown.
 # Zebra's `BrainSyncService` parses the tag to classify the FailureReason.
 #
-# Originates from offlightinc/b-brain-offlight's `local-offlight-brain-sync`,
+# Originates from the brain-offlight `local-offlight-brain-sync`,
 # generic-fied here (no brand-bound repo basename / remote URL / gbrain CLI
 # path checks). That source script remains in the brain repo and is not
 # touched by zebra.

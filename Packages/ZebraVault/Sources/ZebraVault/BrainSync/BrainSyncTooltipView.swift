@@ -5,16 +5,14 @@ import SwiftUI
 ///
 /// 3 분기:
 /// - synced: row "[Last synced] [3m ago]" + passive status hint
-/// - failed (reason ≠ conflict): row "[{한글 reason}] [14m ago]" + detail + passive next-step hint
-/// - failed (reason = conflict): row "[동기화 충돌] [7m ago]" + detail + conflict CTA
+/// - failed: row "[{한글 reason}] [14m ago]" + detail + agent picker when wired
 ///
-/// Conflict 의 agent picker chip 자체는 단계 3 에서 별도 view (`BrainSyncAgentPicker`).
-/// 단계 2 에선 hint 자리에 passive 안내 텍스트만 표시.
+/// Failure 의 agent picker chip 자체는 별도 view (`BrainSyncAgentPicker`).
 struct BrainSyncTooltipView: View {
     @ObservedObject var service: BrainSyncService
-    /// Conflict reason 일 때 agent 선택 callback. nil 이면 picker 안 보이고
-    /// 그냥 generic hint 만 표시 (= 단계 3 의존성 없을 때의 fallback).
-    var onConflictAgentSelect: ((MarkdownPillAgent) -> Void)?
+    /// Failure reason 일 때 agent 선택 callback. nil 이면 picker 안 보이고
+    /// 그냥 generic hint 만 표시 (= terminal launch 의존성 없을 때의 fallback).
+    var onFailureAgentSelect: ((MarkdownPillAgent, Date, BrainSyncService.Failure) -> Void)?
 
     @State private var preferredAgent: MarkdownPillAgent = BrainSyncAgentPreference.current
 
@@ -24,8 +22,8 @@ struct BrainSyncTooltipView: View {
             if let detail = failureDetail {
                 detailRow(detail)
             }
-            if isConflict, onConflictAgentSelect != nil {
-                conflictPicker
+            if failedState != nil, onFailureAgentSelect != nil {
+                failurePicker
             } else {
                 hintRow
             }
@@ -87,26 +85,29 @@ struct BrainSyncTooltipView: View {
             .padding(.top, 6)
     }
 
-    /// conflict reason 일 때 hint 자리에 표시되는 agent picker (chip + dropdown).
-    /// `onConflictAgentSelect` 가 nil 이면 안 그림 (= 호출자가 단계 3-b 의 terminal
+    /// failure reason 일 때 hint 자리에 표시되는 agent picker (chip + dropdown).
+    /// `onFailureAgentSelect` 가 nil 이면 안 그림 (= 호출자가 terminal
     /// flow 를 아직 wire-up 안 한 케이스).
     @ViewBuilder
-    private var conflictPicker: some View {
+    private var failurePicker: some View {
         Divider()
             .background(BVColor.border)
             .padding(.top, 6)
         BrainSyncAgentPicker(
             preferredAgent: $preferredAgent,
             onSelect: { agent in
+                guard let failedState else { return }
                 BrainSyncAgentPreference.set(agent)
-                onConflictAgentSelect?(agent)
+                onFailureAgentSelect?(agent, failedState.at, failedState.failure)
             }
         )
     }
 
-    private var isConflict: Bool {
-        if case .failed(_, .conflict, _)? = service.state { return true }
-        return false
+    private var failedState: (at: Date, failure: BrainSyncService.Failure)? {
+        if case let .failed(at, failure)? = service.state {
+            return (at, failure)
+        }
+        return nil
     }
 
     // MARK: - Content derivation
@@ -115,8 +116,8 @@ struct BrainSyncTooltipView: View {
         switch service.state {
         case .synced?:
             return String(localized: "brainSync.tooltip.lastSynced", defaultValue: "Last synced")
-        case .failed(_, let reason, _)?:
-            return reason.humanLabel
+        case .failed(_, let failure)?:
+            return failure.reason.humanLabel
         case nil:
             return String(localized: "brainSync.tooltip.pending", defaultValue: "Sync pending")
         }
@@ -141,8 +142,8 @@ struct BrainSyncTooltipView: View {
     }
 
     private var failureDetail: String? {
-        if case let .failed(_, _, detail)? = service.state, !detail.isEmpty {
-            return detail
+        if let failure = failedState?.failure, !failure.detail.isEmpty {
+            return failure.detail
         }
         return nil
     }
@@ -151,8 +152,8 @@ struct BrainSyncTooltipView: View {
         switch service.state {
         case .synced?:
             return String(localized: "brainSync.hint.synced", defaultValue: "sync is up to date")
-        case .failed(_, let reason, _)?:
-            return reason.hintText
+        case .failed(_, let failure)?:
+            return failure.reason.hintText
         case nil:
             return String(localized: "brainSync.hint.pending", defaultValue: "waiting for first sync")
         }
@@ -162,7 +163,7 @@ struct BrainSyncTooltipView: View {
         let date: Date?
         switch service.state {
         case .synced(let at, _)?: date = at
-        case .failed(let at, _, _)?: date = at
+        case .failed(let at, _)?: date = at
         case nil: date = nil
         }
         guard let date else { return "—" }

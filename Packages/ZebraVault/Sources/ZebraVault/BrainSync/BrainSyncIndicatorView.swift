@@ -13,10 +13,10 @@ import SwiftUI
 /// in-flight 중에는 disabled — 서비스 자체가 idempotent 라 안전망까지 둠.
 public struct BrainSyncIndicatorView: View {
     @ObservedObject public var service: BrainSyncService
-    /// Conflict reason 일 때 picker 에서 agent 선택 / indicator click 시 호출.
-    /// nil 이면 generic retry 로 fall back. 단계 3-b 에서 cmux app module 의
-    /// caller 가 terminal split + agent CLI 실행을 wire up.
-    public var onConflictAgentSelect: ((MarkdownPillAgent) -> Void)?
+    /// Failure reason 일 때 picker 에서 agent 선택 / indicator click 시 호출.
+    /// nil 이면 generic retry 로 fall back. cmux app module 의 caller 가 terminal
+    /// split + agent CLI 실행을 wire up.
+    public var onFailureAgentSelect: ((MarkdownPillAgent, Date, BrainSyncService.Failure) -> Void)?
 
     // Two hover detectors so that the tooltip area itself can keep the
     // popover open. SwiftUI's `.onHover` only fires within a view's layout
@@ -30,10 +30,10 @@ public struct BrainSyncIndicatorView: View {
 
     public init(
         service: BrainSyncService,
-        onConflictAgentSelect: ((MarkdownPillAgent) -> Void)? = nil
+        onFailureAgentSelect: ((MarkdownPillAgent, Date, BrainSyncService.Failure) -> Void)? = nil
     ) {
         self.service = service
-        self.onConflictAgentSelect = onConflictAgentSelect
+        self.onFailureAgentSelect = onFailureAgentSelect
     }
 
     public var body: some View {
@@ -67,7 +67,7 @@ public struct BrainSyncIndicatorView: View {
             if hovering {
                 BrainSyncTooltipView(
                     service: service,
-                    onConflictAgentSelect: onConflictAgentSelect
+                    onFailureAgentSelect: onFailureAgentSelect
                 )
                     .offset(y: -39)
                     .onHover { tooltipHovering = $0 }
@@ -133,11 +133,10 @@ public struct BrainSyncIndicatorView: View {
         #if DEBUG
         NSLog("[BrainSync] indicator clicked. isSyncing=\(service.isSyncing) state=\(String(describing: service.state))")
         #endif
-        // Conflict reason 일 때 click = default agent (UserDefaults 의 preferred,
-        // 첫 사용 시 codex) 로 즉시 agent terminal. 디자인 spec path (b).
-        // 다른 reason 또는 synced 일 때는 sync retry.
-        if case .failed(_, .conflict, _)? = service.state, let onConflictAgentSelect {
-            onConflictAgentSelect(BrainSyncAgentPreference.current)
+        // Failure reason 일 때 click = default agent (UserDefaults 의 preferred,
+        // 첫 사용 시 codex) 로 즉시 agent terminal. synced/pending 일 때는 sync retry.
+        if case let .failed(failedAt, failure)? = service.state, let onFailureAgentSelect {
+            onFailureAgentSelect(BrainSyncAgentPreference.current, failedAt, failure)
             return
         }
         guard !service.isSyncing else { return }
