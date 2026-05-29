@@ -51,6 +51,10 @@ RESOLVE_STATUS=""
 RESOLVE_PATH=""
 RESOLVE_BROKEN_REASON=""
 INSTALL_RESULT=""
+STATE_PHASE=""
+STATE_RUN_ID=""
+STATE_SELECTED_AGENT=""
+RESUME_FLOW_HANDLED=0
 
 usage() {
   cat <<'USAGE'
@@ -287,6 +291,40 @@ read_plist_raw_key() {
   local key="$2"
   [[ -f "$file" ]] || return 1
   plutil -extract "$key" raw -o - "$file" 2>/dev/null || return 1
+}
+
+load_existing_state() {
+  local selected_agent
+  STATE_PHASE=""
+  STATE_RUN_ID=""
+  STATE_SELECTED_AGENT=""
+  [[ -f "$STATE_FILE" ]] || return 1
+
+  STATE_PHASE="$(read_plist_raw_key "$STATE_FILE" phase || true)"
+  STATE_RUN_ID="$(read_plist_raw_key "$STATE_FILE" runId || true)"
+  selected_agent="$(read_plist_raw_key "$STATE_FILE" selectedAgent || true)"
+  if valid_agent "$selected_agent"; then
+    STATE_SELECTED_AGENT="$selected_agent"
+  fi
+}
+
+append_resume_event() {
+  local phase="$1"
+  local agent="${2:-}"
+  local extra
+  extra=',"phase":'
+  extra+="$(json_string "$phase")"
+  if valid_agent "$agent"; then
+    extra+=',"agent":'
+    extra+="$(json_string "$agent")"
+  fi
+  append_event agent_onboarding_resumed "$extra"
+}
+
+scan_agents_for_resume() {
+  append_event agent_scan_started ',"reason":"resume"'
+  scan_agents
+  append_scan_completed_event
 }
 
 read_saved_primary() {
@@ -976,16 +1014,107 @@ force_choose_flow() {
   fi
 }
 
+resume_existing_flow() {
+  local resume_phase="$STATE_PHASE"
+  local resume_agent="$STATE_SELECTED_AGENT"
+  RESUME_FLOW_HANDLED=0
+  [[ -n "$resume_phase" ]] || return 0
+
+  case "$resume_phase" in
+    complete)
+      if [[ -n "$SAVED_PRIMARY" ]]; then
+        RESUME_FLOW_HANDLED=1
+        printf 'Zebra agent onboarding is already complete.\n'
+      fi
+      return 0
+      ;;
+    waiting_for_continue|agent_working|launching_agent)
+      [[ -n "$STATE_RUN_ID" && -n "$resume_agent" ]] || return 0
+      RESUME_FLOW_HANDLED=1
+      SELECTED_AGENT="$resume_agent"
+      printf 'Resuming Zebra agent onboarding for %s.\n\n' "$(display_name "$resume_agent")"
+      append_resume_event "$resume_phase" "$resume_agent"
+      scan_agents_for_resume
+      post_launch_continue_menu "$resume_agent"
+      return $?
+      ;;
+    choose_primary)
+      [[ -n "$STATE_RUN_ID" ]] || return 0
+      RESUME_FLOW_HANDLED=1
+      printf 'Resuming Zebra agent onboarding at primary-agent selection.\n'
+      append_resume_event "$resume_phase"
+      scan_agents_for_resume
+      print_candidates
+      if [[ "${#INSTALLED_AGENTS[@]}" -gt 0 ]]; then
+        select_primary_from_installed || return 1
+        select_and_launch "$PROMPT_RESULT" user_selected_primary
+      else
+        select_install_target || return 1
+        install_then_launch "$PROMPT_RESULT"
+      fi
+      return $?
+      ;;
+    choose_install_target)
+      [[ -n "$STATE_RUN_ID" ]] || return 0
+      RESUME_FLOW_HANDLED=1
+      printf 'Resuming Zebra agent onboarding at install selection.\n'
+      append_resume_event "$resume_phase"
+      scan_agents_for_resume
+      print_candidates
+      select_install_target || return 1
+      install_then_launch "$PROMPT_RESULT"
+      return $?
+      ;;
+    primary_missing)
+      [[ -n "$STATE_RUN_ID" && -n "$resume_agent" ]] || return 0
+      RESUME_FLOW_HANDLED=1
+      printf 'Resuming Zebra agent onboarding recovery for %s.\n' "$(display_name "$resume_agent")"
+      append_resume_event "$resume_phase" "$resume_agent"
+      scan_agents_for_resume
+      primary_missing_flow "$resume_agent"
+      return $?
+      ;;
+    installing|failed)
+      [[ -n "$STATE_RUN_ID" && -n "$resume_agent" ]] || return 0
+      RESUME_FLOW_HANDLED=1
+      printf 'Resuming Zebra agent onboarding after an interrupted %s install.\n' "$(display_name "$resume_agent")"
+      append_resume_event "$resume_phase" "$resume_agent"
+      scan_agents_for_resume
+      install_failure_menu "$resume_agent" || return 1
+      install_then_launch "$PROMPT_RESULT"
+      return $?
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 run_flow() {
   local force_choose="$1"
+  local resume_status=0
   RUN_ID="$(new_run_id)"
   SELF_PATH="$(resolve_self_path)"
   mkdirs
   SAVED_PRIMARY="$(read_saved_primary || true)"
   clear_state_error
+  if [[ "$force_choose" -eq 0 ]]; then
+    load_existing_state || true
+    if [[ -n "$STATE_RUN_ID" && "$STATE_PHASE" != "complete" ]]; then
+      RUN_ID="$STATE_RUN_ID"
+    fi
+    resume_existing_flow
+    resume_status=$?
+    if [[ "$RESUME_FLOW_HANDLED" -eq 1 ]]; then
+      return "$resume_status"
+    fi
+  fi
 
   printf 'Zebra agent onboarding\n'
   printf 'State: %s\n\n' "$STATE_FILE"
+  if [[ "$force_choose" -eq 0 && -n "$STATE_PHASE" && -n "$STATE_RUN_ID" && "$RUN_ID" == "$STATE_RUN_ID" ]]; then
+    append_resume_event "$STATE_PHASE" "$STATE_SELECTED_AGENT"
+  fi
   append_event agent_scan_started
   scan_agents
   append_scan_completed_event
