@@ -58,30 +58,6 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(line.contains("gemini"))
     }
 
-    func testOnboardingWelcomeCommandRunsScriptWithCwd() {
-        let line = ZebraAgentOnboardingWelcomeCommand.shellStartupLine(
-            scriptPath: "/Applications/Zebra.app/Contents/Resources/zebra-agent-onboarding",
-            cwd: "/Users/han/zebra phase3"
-        )
-
-        XCTAssertEqual(
-            line,
-            "'/Applications/Zebra.app/Contents/Resources/zebra-agent-onboarding' 'run' '--cwd' '/Users/han/zebra phase3'\n"
-        )
-    }
-
-    func testOnboardingWelcomeCommandQuotesSingleQuotes() {
-        let line = ZebraAgentOnboardingWelcomeCommand.shellStartupLine(
-            scriptPath: "/tmp/zebra-agent-onboarding",
-            cwd: "/Users/han/project/it's-zebra"
-        )
-
-        XCTAssertEqual(
-            line,
-            "'/tmp/zebra-agent-onboarding' 'run' '--cwd' '/Users/han/project/it'\\''s-zebra'\n"
-        )
-    }
-
     private func makeTemporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ZebraAgentLaunchCommandTests-\(UUID().uuidString)", isDirectory: true)

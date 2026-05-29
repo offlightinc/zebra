@@ -3,7 +3,7 @@
 # allowlist — one path per line, blank lines and `#` comments ignored.
 
 # Adapter / DI seams
-Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment + tabManager-scoped Zebra socket bridge registration + ZebraSidebarDefaults.defaultWidth fallback + first-run zebra-agent-onboarding command seam
+Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment + tabManager-scoped Zebra socket bridge registration + ZebraSidebarDefaults.defaultWidth fallback
 Sources/ContentView.swift                  # SidebarSlots composer + \.sidebarExtraLeadingInset + commandPalette PanelType.email branches
 Sources/Panels/PanelContentView.swift      # \.markdownPanelViewFactory + \.customPanelViewFactory + PanelType.email render branch
 Sources/Panels/MarkdownPanel.swift         # didCloseNotification + applyStatusChange + applyPropertyChange
