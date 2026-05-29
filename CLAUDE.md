@@ -312,10 +312,10 @@ The app has a **Debug** menu in the macOS menu bar (only in DEBUG builds). Use i
 
 ## Testing policy
 
-**Never run tests locally.** All tests (E2E, UI, python socket tests) run via GitHub Actions or on the VM.
+Run focused local unit tests when they directly cover the change. E2E, UI, and socket tests still run via GitHub Actions or on the VM unless the user explicitly asks for a local tagged-debug run.
 
 - **E2E / UI tests:** trigger via `gh workflow run test-e2e.yml` (see cmuxterm-hq CLAUDE.md for details)
-- **Unit tests:** `xcodebuild -scheme cmux-unit` is safe (no app launch), but prefer CI
+- **Unit tests:** Swift package unit tests are safe when they do not launch the app. `cmux-unit` is app-hosted XCTest and may launch/use `cmux DEV.app`; when running it locally, use a unique `CMUX_TAG=<tag>` and isolated `-derivedDataPath` so sockets/build products do not collide with the user's running debug app.
 - **Python socket tests (tests_v2/):** these connect to a running cmux instance's socket. Never launch an untagged `cmux DEV.app` to run them. If you must test locally, use a tagged build's socket (`/tmp/cmux-debug-<tag>.sock`) with `CMUX_SOCKET_PATH=/tmp/cmux-debug-<tag>.sock`
 - **Never `open` an untagged `cmux DEV.app`** from DerivedData. It conflicts with the user's running debug instance.
 

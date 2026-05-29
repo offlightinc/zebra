@@ -71,7 +71,25 @@ public protocol ZebraMarkdownWorkspace: AnyObject, ObservableObject {
         initialCommand: String?
     ) -> (any ZebraTerminalPanel)?
 
-    func reusableAgentCompanionPane(forContentPane paneId: PaneID) -> PaneID?
+    func reusableAgentCompanionPane(
+        forContentPane paneId: PaneID,
+        markedBy registry: ZebraAgentTerminalRegistry
+    ) -> PaneID?
+
+    func activeAgentTerminalAgent(
+        for source: ZebraAgentTerminalSource,
+        contentPane paneId: PaneID,
+        markedBy registry: ZebraAgentTerminalRegistry
+    ) -> MarkdownPillAgent?
+
+    @discardableResult
+    func openZebraAgentTerminal(
+        startupLine: String,
+        source: ZebraAgentTerminalSource,
+        agent: MarkdownPillAgent,
+        anchor: ZebraAgentTerminalPlacementAnchor,
+        markedBy registry: ZebraAgentTerminalRegistry
+    ) -> (any ZebraTerminalPanel)?
 
     func paneId(forPanelId panelId: UUID) -> PaneID?
 }

@@ -100,9 +100,13 @@ struct ZebraSidebarBody: View {
             detail: failure.detail,
             failedAt: failedAt
         )
-        _ = workspace.newTerminalSurfaceInFocusedPane(
-            focus: true,
-            initialInput: startupLine
+        guard let agentTerminals = zebra?.agentTerminals else { return }
+        workspace.openZebraAgentTerminal(
+            startupLine: startupLine,
+            source: .brainSyncFailure,
+            agent: agent,
+            anchor: .focusAnchored,
+            markedBy: agentTerminals
         )
     }
 
@@ -187,23 +191,29 @@ struct ZebraSidebarBody: View {
         // the user doesn't see Claude's "Trust this folder?" dialog mid-flow.
         ZebraClawvisorOnboardingCommand.prepareLaunchEnvironment()
         let startupLine = ZebraClawvisorOnboardingCommand.shellStartupLine(agent: agent)
-        _ = workspace.newTerminalSurfaceInFocusedPane(
-            focus: true,
-            initialInput: startupLine
+        guard let agentTerminals = zebra?.agentTerminals else { return }
+        workspace.openZebraAgentTerminal(
+            startupLine: startupLine,
+            source: .clawvisorOnboarding,
+            agent: agent.markdownPillAgent,
+            anchor: .focusAnchored,
+            markedBy: agentTerminals
         )
     }
 
     private func openMarkdownFile(filePath: String) {
         guard let workspace = tabManager.selectedWorkspace else { return }
+        let paneId = workspace.bonsplitController.focusedPaneId
+            ?? workspace.bonsplitController.allPaneIds.first
         sidebarSelectionState.selection = .tabs
         // Markdown rail modes (goals / tasks / documents) route through the
         // brain-object-aware MarkdownPanel so the right-pane inspector lights
         // up. Keep Markdown and email in the shared content pane even after
         // ChatPill submit moves focus to the agent companion pane.
         _ = workspace.openMarkdownFromZebraSidebar(
+            inPane: paneId,
             filePath: filePath,
-            excludedAgentCompanionPaneIds: chatCompanionPaneIds(in: workspace),
-            anchorPanelId: workspace.focusedPanelId
+            excludedAgentCompanionPaneIds: agentCompanionPaneIds(in: workspace)
         )
     }
 
@@ -215,21 +225,14 @@ struct ZebraSidebarBody: View {
         _ = workspace.openEmailThreadFromSidebar(
             inPane: paneId,
             thread: thread,
-            excludedAgentCompanionPaneIds: chatCompanionPaneIds(in: workspace),
-            anchorPanelId: workspace.focusedPanelId
+            excludedAgentCompanionPaneIds: agentCompanionPaneIds(in: workspace)
         )
         emailDetailStore.selectThread(thread)
     }
 
-    private func chatCompanionPaneIds(in workspace: Workspace) -> Set<PaneID> {
-        let validPaneIds = workspace.bonsplitController.allPaneIds
-        let markdownPaneIds = zebra?.panelControllers.activeChatCompanionPaneIds(
-            validPaneIds: validPaneIds
-        ) ?? []
-        let emailPaneIds = emailDetailStore.activeChatCompanionPaneIds(
-            validPaneIds: validPaneIds
-        )
-        return markdownPaneIds.union(emailPaneIds)
+    private func agentCompanionPaneIds(in workspace: Workspace) -> Set<PaneID> {
+        guard let agentTerminals = zebra?.agentTerminals else { return [] }
+        return workspace.zebraAgentCompanionPaneIds(markedBy: agentTerminals)
     }
 }
 
@@ -238,5 +241,14 @@ struct ZebraSidebarBody: View {
 enum ZebraSidebarComposer {
     static let composer = SidebarComposer { slots in
         AnyView(ZebraSidebarBody(slots: slots))
+    }
+}
+
+private extension ZebraClawvisorAgent {
+    var markdownPillAgent: MarkdownPillAgent {
+        switch self {
+        case .claudeCode, .claudeDesktop, .openClawHermes, .otherAgents:
+            return .claude
+        }
     }
 }

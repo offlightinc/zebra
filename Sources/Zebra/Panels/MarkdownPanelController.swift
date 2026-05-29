@@ -13,9 +13,9 @@ import ZebraVault
 ///
 /// 1. Owner = `ZebraServices.panelControllers` (app-wide). Views may only
 ///    observe it via `@ObservedObject`. **No `@StateObject` in any view**
-///    — that re-creates the controller on view churn and the chat pill's
-///    `chatCompanionPaneId` would silently reset every time the markdown
-///    panel disappears and reappears (split reparent, tab switch, etc.).
+///    — that re-creates the controller on view churn and loses per-panel
+///    inspector / parse state every time the markdown panel disappears and
+///    reappears (split reparent, tab switch, etc.).
 /// 2. Cleanup runs in response to `MarkdownPanel.close()` posting
 ///    `markdownPanelDidClose`. Never tie cleanup to a SwiftUI view's
 ///    `onDisappear` — the panel object can outlive any individual view.
@@ -29,12 +29,6 @@ final class MarkdownPanelController: ObservableObject {
     /// panels start visible by default; width-based auto-collapse is derived
     /// in the view and never writes back here.
     @Published private(set) var inspectorVisibilityIntent: MarkdownInspectorVisibilityIntent = .defaultShown
-
-    /// Pane where the markdown chat pill accumulates agent terminal tabs.
-    /// Stored on the controller (panel-identified, not view-identified) so
-    /// split layout reparenting does not lose the companion-pane reference.
-    @Published var chatCompanionPaneId: PaneID?
-    @Published var chatCompanionAgent: MarkdownPillAgent?
 
     /// Bumped when the user asks to reveal an auto-collapsed inspector while
     /// the panel already wants the inspector visible. This gives SwiftUI a real
@@ -144,19 +138,6 @@ final class MarkdownPanelControllerRegistry {
     func controllerIfOpen(for panel: MarkdownPanel) -> MarkdownPanelController? {
         guard !closedPanelIds.contains(panel.id) else { return nil }
         return controller(for: panel)
-    }
-
-    func activeChatCompanionPaneIds(validPaneIds: [PaneID]) -> Set<PaneID> {
-        let validPaneIds = Set(validPaneIds)
-        return Set(
-            controllers.values.compactMap { controller in
-                guard let paneId = controller.chatCompanionPaneId,
-                      validPaneIds.contains(paneId) else {
-                    return nil
-                }
-                return paneId
-            }
-        )
     }
 
     func hasController(for panel: MarkdownPanel) -> Bool {

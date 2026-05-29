@@ -37,6 +37,11 @@ struct ZebraServices {
     /// so the registry survives view churn (split reparent, tab switch).
     let panelControllers: MarkdownPanelControllerRegistry
 
+    /// Terminal-side marker registry for Zebra-owned agent panels.
+    /// Marks terminal panel ids rather than pane ids so tab moves/reparents
+    /// are reflected by live layout lookup instead of stale pane memory.
+    let agentTerminals: ZebraAgentTerminalRegistry
+
     /// Build a fresh container with default-initialized stores. Call this once
     /// per main window in `AppDelegate.createMainWindow(...)`.
     static func makeDefault(tabManager: TabManager? = nil) -> ZebraServices {
@@ -53,6 +58,7 @@ struct ZebraServices {
         brainSync.attachVaultSource(vault)
         brainSync.start()
         let email = ZebraEmailListStore()
+        let agentTerminals = ZebraAgentTerminalRegistry()
         let emailDetail = ZebraEmailDetailStore(
             onConnectionRepairRequired: { repairState in
                 email.beginConnectionRepair(repairState)
@@ -64,7 +70,8 @@ struct ZebraServices {
         ZebraEmailDraftSocketBridge.shared.configure(
             tabManager: tabManager,
             emailListStore: email,
-            emailDetailStore: emailDetail
+            emailDetailStore: emailDetail,
+            agentTerminals: agentTerminals
         )
         return ZebraServices(
             sidebarMode: VerticalTabsSidebarModeState(),
@@ -77,7 +84,8 @@ struct ZebraServices {
             email: email,
             emailDetail: emailDetail,
             brainSync: brainSync,
-            panelControllers: MarkdownPanelControllerRegistry()
+            panelControllers: MarkdownPanelControllerRegistry(),
+            agentTerminals: agentTerminals
         )
     }
 
@@ -1199,45 +1207,6 @@ final class ZebraEmailDetailStore: ObservableObject {
         }
     }
 
-    // MARK: - Per-thread chat companion pane state
-    //
-    // Email thread 마다 한 짝의 에이전트 터미널 split 을 기억한다.
-    // markdown panel 의 `MarkdownPanelController.chatCompanionPaneId` 가
-    // panel-scoped 인 것과 같은 결로, email surface 도 thread 단위로 격리.
-
-    func chatCompanionPaneId(threadId: String) -> PaneID? {
-        threadStates[threadId]?.chatCompanionPaneId
-    }
-
-    func setChatCompanionPaneId(_ paneId: PaneID?, threadId: String) {
-        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
-        state.chatCompanionPaneId = paneId
-        threadStates[threadId] = state
-    }
-
-    func activeChatCompanionPaneIds(validPaneIds: [PaneID]) -> Set<PaneID> {
-        let validPaneIds = Set(validPaneIds)
-        return Set(
-            threadStates.values.compactMap { state in
-                guard let paneId = state.chatCompanionPaneId,
-                      validPaneIds.contains(paneId) else {
-                    return nil
-                }
-                return paneId
-            }
-        )
-    }
-
-    func chatCompanionAgent(threadId: String) -> MarkdownPillAgent? {
-        threadStates[threadId]?.chatCompanionAgent
-    }
-
-    func setChatCompanionAgent(_ agent: MarkdownPillAgent?, threadId: String) {
-        var state = threadStates[threadId] ?? ZebraEmailThreadUIState()
-        state.chatCompanionAgent = agent
-        threadStates[threadId] = state
-    }
-
     private func defaultExpandedMessageIds(_ detail: EmailThreadDetail) -> Set<String> {
         var expanded = Set(detail.messages.filter(\.isUnread).map(\.id))
         if let latest = detail.messages.last {
@@ -1345,8 +1314,6 @@ private struct ZebraEmailThreadUIState {
     var errorMessage: String?
     var archiveErrorMessage: String?
     var expandedMessageIds: Set<String>?
-    var chatCompanionPaneId: PaneID?
-    var chatCompanionAgent: MarkdownPillAgent?
 }
 
 private struct ZebraEmailDraftUpdateQueue {
@@ -1391,19 +1358,22 @@ final class ZebraEmailDraftSocketBridge {
         weak var tabManager: TabManager?
         weak var emailListStore: ZebraEmailListStore?
         weak var emailDetailStore: ZebraEmailDetailStore?
+        weak var agentTerminals: ZebraAgentTerminalRegistry?
 
         init(
             tabManager: TabManager?,
             emailListStore: ZebraEmailListStore,
-            emailDetailStore: ZebraEmailDetailStore
+            emailDetailStore: ZebraEmailDetailStore,
+            agentTerminals: ZebraAgentTerminalRegistry
         ) {
             self.tabManager = tabManager
             self.emailListStore = emailListStore
             self.emailDetailStore = emailDetailStore
+            self.agentTerminals = agentTerminals
         }
 
         var isAlive: Bool {
-            emailListStore != nil && emailDetailStore != nil
+            emailListStore != nil && emailDetailStore != nil && agentTerminals != nil
         }
     }
 
@@ -1415,12 +1385,14 @@ final class ZebraEmailDraftSocketBridge {
     func configure(
         tabManager: TabManager?,
         emailListStore: ZebraEmailListStore,
-        emailDetailStore: ZebraEmailDetailStore
+        emailDetailStore: ZebraEmailDetailStore,
+        agentTerminals: ZebraAgentTerminalRegistry
     ) {
         let context = Context(
             tabManager: tabManager,
             emailListStore: emailListStore,
-            emailDetailStore: emailDetailStore
+            emailDetailStore: emailDetailStore,
+            agentTerminals: agentTerminals
         )
         if let tabManager {
             contextsByTabManager[ObjectIdentifier(tabManager)] = context
@@ -1476,7 +1448,8 @@ final class ZebraEmailDraftSocketBridge {
             return .err(code: "unavailable", message: "TabManager not available", data: nil)
         }
         guard let context = context(for: tabManager),
-              let detailStore = context.emailDetailStore else {
+              let detailStore = context.emailDetailStore,
+              let agentTerminals = context.agentTerminals else {
             return .err(code: "unavailable", message: "Zebra email draft store is unavailable", data: nil)
         }
         let localDraftId = Self.string(params, "local_draft_id", "localDraftId", "draft_id", "draftId")
@@ -1493,11 +1466,11 @@ final class ZebraEmailDraftSocketBridge {
         controller.v2MaybeFocusWindow(for: tabManager)
         controller.v2MaybeSelectWorkspace(tabManager, workspace: workspace)
 
-        let excludedPaneIds = detailStore.chatCompanionPaneId(threadId: threadId).map { Set([$0]) } ?? []
+        let excludedPaneIds = workspace.zebraAgentCompanionPaneIds(markedBy: agentTerminals)
         guard let panel = workspace.openOrFocusEmailThreadContent(
             thread: thread,
             excludedAgentCompanionPaneIds: excludedPaneIds,
-            anchorPanelId: nil
+            requestedPaneId: nil
         ) else {
             return .err(code: "internal_error", message: "Failed to focus email thread", data: ["thread_id": threadId])
         }

@@ -49,7 +49,11 @@ enum ZebraMarkdownPanelViewFactory {
                 return AnyView(Color.clear)
             }
             return AnyView(
-                ZebraMarkdownPanelHost(context: context, controller: controller)
+                ZebraMarkdownPanelHost(
+                    context: context,
+                    controller: controller,
+                    agentTerminals: services.agentTerminals
+                )
             )
         }
     }
@@ -62,6 +66,7 @@ enum ZebraMarkdownPanelViewFactory {
 private struct ZebraMarkdownPanelHost: View {
     let context: MarkdownPanelViewContext
     @ObservedObject var controller: MarkdownPanelController
+    let agentTerminals: ZebraAgentTerminalRegistry
     @EnvironmentObject private var tabManager: TabManager
 
     var body: some View {
@@ -70,6 +75,7 @@ private struct ZebraMarkdownPanelHost: View {
                 panel: context.panel,
                 controller: controller,
                 workspace: workspace,
+                agentTerminals: agentTerminals,
                 paneId: context.paneId,
                 isFocused: context.isFocused,
                 isVisibleInUI: context.isVisibleInUI,
@@ -99,6 +105,7 @@ enum ZebraCustomPanelViewFactoryProvider {
                     ZebraEmailPanelHost(
                         panel: emailPanel,
                         paneId: context.paneId,
+                        agentTerminals: services.agentTerminals,
                         detailStore: services.emailDetail,
                         listStore: services.email
                     )
@@ -112,6 +119,7 @@ enum ZebraCustomPanelViewFactoryProvider {
 private struct ZebraEmailPanelHost: View {
     @ObservedObject var panel: ZebraEmailThreadPanel
     let paneId: PaneID
+    let agentTerminals: ZebraAgentTerminalRegistry
     @ObservedObject var detailStore: ZebraEmailDetailStore
     let listStore: ZebraEmailListStore
     @EnvironmentObject private var tabManager: TabManager
@@ -206,7 +214,11 @@ private struct ZebraEmailPanelHost: View {
                         isExpanded: $pillExpanded,
                         displayTitle: panel.displayTitle,
                         availableContentHeight: proxy.size.height,
-                        activeAgent: detailStore.chatCompanionAgent(threadId: panel.threadId),
+                        activeAgent: workspace.activeAgentTerminalAgent(
+                            for: agentTerminalSource,
+                            contentPane: paneId,
+                            markedBy: agentTerminals
+                        ),
                         onSubmit: { text, agent in
                             handlePillSubmit(text: text, agent: agent, workspace: workspace)
                         },
@@ -225,6 +237,10 @@ private struct ZebraEmailPanelHost: View {
         withAnimation(.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.30)) {
             chatPillShellHeight = height
         }
+    }
+
+    private var agentTerminalSource: ZebraAgentTerminalSource {
+        .emailThread(panel.threadId)
     }
 
     /// Send the pill prompt into an agent terminal in the companion pane.
@@ -246,8 +262,6 @@ private struct ZebraEmailPanelHost: View {
             userPrompt: text
         )
         guard let startupLine = launchPlan.startupLine else { return }
-        guard let newPanel = createAgentTerminalTab(workspace: workspace) else { return }
-        detailStore.setChatCompanionAgent(agent, threadId: panel.threadId)
 
         #if DEBUG
         if !launchPlan.launchEnvironmentReady {
@@ -255,79 +269,12 @@ private struct ZebraEmailPanelHost: View {
         }
         #endif
 
-        sendStartupSequence(startup: startupLine, to: newPanel)
-    }
-
-    /// Mirrors the per-prompt-fresh-tab pattern in `ZebraMarkdownPanelView`:
-    /// reuse an existing companion pane when possible, and only create the
-    /// split when this content pane has no terminal companion yet.
-    private func createAgentTerminalTab(workspace: Workspace) -> (any ZebraTerminalPanel)? {
-        let zebraWorkspace: any ZebraMarkdownWorkspace = workspace
-        if let companionPaneId = zebraWorkspace.reusableAgentCompanionPane(forContentPane: paneId),
-           let reusedPanel: any ZebraTerminalPanel = zebraWorkspace.newTerminalSurface(
-               inPane: companionPaneId,
-               focus: true,
-               initialCommand: nil
-           ) {
-            detailStore.setChatCompanionPaneId(companionPaneId, threadId: panel.threadId)
-            return reusedPanel
-        }
-
-        detailStore.setChatCompanionPaneId(nil, threadId: panel.threadId)
-        guard let newPanel: any ZebraTerminalPanel = zebraWorkspace.newTerminalSplit(
-            from: panel.id,
-            orientation: .horizontal,
-            initialCommand: nil
-        ) else { return nil }
-        detailStore.setChatCompanionPaneId(
-            zebraWorkspace.paneId(forPanelId: newPanel.id),
-            threadId: panel.threadId
+        workspace.openZebraAgentTerminal(
+            startupLine: startupLine,
+            source: agentTerminalSource,
+            agent: agent,
+            anchor: .contentAnchored(contentPanelId: panel.id, contentPaneId: paneId),
+            markedBy: agentTerminals
         )
-        return newPanel
-    }
-
-    private func sendStartupSequence(
-        startup: String,
-        to terminalPanel: any ZebraTerminalPanel
-    ) {
-        let runSequence = {
-            terminalPanel.sendInput(startup)
-        }
-
-        if terminalPanel.isSurfaceReady {
-            runSequence()
-            return
-        }
-
-        var resolved = false
-        var observer: NSObjectProtocol?
-        let cleanup = {
-            if let observer {
-                NotificationCenter.default.removeObserver(observer)
-            }
-        }
-
-        observer = NotificationCenter.default.addObserver(
-            forName: .terminalSurfaceDidBecomeReady,
-            object: nil,
-            queue: .main
-        ) { _ in
-            guard !resolved,
-                  terminalPanel.isSurfaceReady else { return }
-            resolved = true
-            cleanup()
-            runSequence()
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
-            guard !resolved else { return }
-            resolved = true
-            cleanup()
-            #if DEBUG
-            cmuxDebugLog(
-                "email.chatPill.startup.timeout panel=\(terminalPanel.id.uuidString.prefix(5))"
-            )
-            #endif
-        }
     }
 }

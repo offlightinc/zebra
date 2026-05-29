@@ -37,6 +37,7 @@ struct ZebraMarkdownPanelView<
     @ObservedObject var panel: Model
     @ObservedObject var controller: MarkdownPanelController
     @ObservedObject var workspace: WorkspaceModel
+    let agentTerminals: ZebraAgentTerminalRegistry
     let paneId: PaneID
     let isFocused: Bool
     let isVisibleInUI: Bool
@@ -528,14 +529,18 @@ struct ZebraMarkdownPanelView<
 
     // MARK: - Chat pill — submit routing
 
-    /// Returns nil when the remembered companion pane was closed or merged
-    /// away; submit then lazily recreates it next to this markdown panel.
+    /// Returns nil when this document has no marked agent terminal in the
+    /// current companion pane.
     fileprivate var liveChatCompanionAgent: MarkdownPillAgent? {
-        guard let paneId = controller.chatCompanionPaneId,
-              workspace.allPaneIds.contains(paneId) else {
-            return nil
-        }
-        return controller.chatCompanionAgent
+        workspace.activeAgentTerminalAgent(
+            for: agentTerminalSource,
+            contentPane: paneId,
+            markedBy: agentTerminals
+        )
+    }
+
+    private var agentTerminalSource: ZebraAgentTerminalSource {
+        .markdownFile((panel.filePath as NSString).resolvingSymlinksInPath)
     }
 
     fileprivate func handlePillSubmit(text: String, agent: MarkdownPillAgent) {
@@ -555,8 +560,6 @@ struct ZebraMarkdownPanelView<
             }
         )
         guard let startupLine = launchPlan.startupLine else { return }
-        guard let newPanel = createAgentTerminalTab() else { return }
-        controller.chatCompanionAgent = agent
 
         #if DEBUG
         if !launchPlan.launchEnvironmentReady {
@@ -564,9 +567,12 @@ struct ZebraMarkdownPanelView<
         }
         #endif
 
-        sendStartupSequence(
-            startup: startupLine,
-            to: newPanel
+        workspace.openZebraAgentTerminal(
+            startupLine: startupLine,
+            source: agentTerminalSource,
+            agent: agent,
+            anchor: .contentAnchored(contentPanelId: panel.id, contentPaneId: paneId),
+            markedBy: agentTerminals
         )
     }
 
@@ -608,82 +614,6 @@ struct ZebraMarkdownPanelView<
         return nil
     }
 
-    /// Create a fresh agent terminal for every prompt. Reuse this content
-    /// pane's terminal companion when one already exists; otherwise create
-    /// the initial companion split.
-    private func createAgentTerminalTab() -> (any ZebraTerminalPanel)? {
-        if let companionPaneId = workspace.reusableAgentCompanionPane(forContentPane: paneId),
-           let panel = workspace.newTerminalSurface(
-               inPane: companionPaneId,
-               focus: true,
-               initialCommand: nil
-           ) {
-            controller.chatCompanionPaneId = companionPaneId
-            return panel
-        }
-
-        controller.chatCompanionPaneId = nil
-        guard let newPanel = workspace.newTerminalSplit(
-            from: panel.id,
-            orientation: .horizontal,
-            initialCommand: nil
-        ) else { return nil }
-        controller.chatCompanionPaneId = workspace.paneId(forPanelId: newPanel.id)
-        return newPanel
-    }
-
-    /// Drive the new pane like a fast typist: when the Ghostty surface is
-    /// alive, push one shell command that launches the CLI with the user's
-    /// prompt as its initial argument.
-    private func sendStartupSequence(
-        startup: String,
-        to terminalPanel: any ZebraTerminalPanel
-    ) {
-        let runSequence = {
-            terminalPanel.sendInput(startup)
-        }
-
-        if terminalPanel.isSurfaceReady {
-            runSequence()
-            return
-        }
-
-        var resolved = false
-        var observer: NSObjectProtocol?
-        let cleanup = {
-            if let observer {
-                NotificationCenter.default.removeObserver(observer)
-            }
-        }
-
-        observer = NotificationCenter.default.addObserver(
-            forName: .terminalSurfaceDidBecomeReady,
-            object: nil,
-            queue: .main
-        ) { _ in
-            guard !resolved,
-                  terminalPanel.isSurfaceReady else { return }
-            resolved = true
-            cleanup()
-            runSequence()
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
-            guard !resolved else { return }
-            resolved = true
-            cleanup()
-            #if DEBUG
-            // 8s without a `terminalSurfaceDidBecomeReady` for this pane
-            // means the startup line never reached the CLI — the prompt is
-            // silently lost without this trace. Log so we can grep for the
-            // pattern in the debug log if a user reports "agent never
-            // answered my first prompt".
-            cmuxDebugLog(
-                "markdown.chatPill.startup.timeout panel=\(terminalPanel.id.uuidString.prefix(5))"
-            )
-            #endif
-        }
-    }
 }
 
 private struct MarkdownPointerObserver: NSViewRepresentable {
