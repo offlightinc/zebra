@@ -299,7 +299,7 @@ read_saved_primary() {
 
 ensure_preferences_base() {
   local tmp="$1"
-  if [[ -f "$PREFERENCES_FILE" ]] && plutil -lint "$PREFERENCES_FILE" >/dev/null 2>&1; then
+  if [[ -f "$PREFERENCES_FILE" ]]; then
     cp "$PREFERENCES_FILE" "$tmp"
   else
     {
@@ -309,8 +309,15 @@ ensure_preferences_base() {
       printf '}\n'
     } > "$tmp"
   fi
-  plutil -replace schemaVersion -integer "$PREFERENCE_SCHEMA_VERSION" "$tmp" >/dev/null 2>&1 \
-    || plutil -insert schemaVersion -integer "$PREFERENCE_SCHEMA_VERSION" "$tmp" >/dev/null
+  if ! plutil -replace schemaVersion -integer "$PREFERENCE_SCHEMA_VERSION" "$tmp" >/dev/null 2>&1 \
+    && ! plutil -insert schemaVersion -integer "$PREFERENCE_SCHEMA_VERSION" "$tmp" >/dev/null 2>&1; then
+    {
+      printf '{\n'
+      printf '  "schemaVersion": %s,\n' "$PREFERENCE_SCHEMA_VERSION"
+      printf '  "surfaceOverrides": {}\n'
+      printf '}\n'
+    } > "$tmp"
+  fi
   plutil -type surfaceOverrides "$tmp" >/dev/null 2>&1 \
     || plutil -insert surfaceOverrides -dictionary "$tmp" >/dev/null
 }
@@ -805,10 +812,19 @@ zebra_user_prompt() {
 }
 
 ready_event_exists() {
-  local agent="$1"
+  event_exists agent_ready_reported "$1"
+}
+
+completed_event_exists() {
+  event_exists agent_onboarding_completed "$1"
+}
+
+event_exists() {
+  local event="$1"
+  local agent="$2"
   [[ -f "$EVENTS_FILE" ]] || return 1
   grep -F "\"runId\":\"$RUN_ID\"" "$EVENTS_FILE" \
-    | grep -F '"event":"agent_ready_reported"' \
+    | grep -F "\"event\":\"$event\"" \
     | grep -F "\"agent\":\"$agent\"" >/dev/null 2>&1
 }
 
@@ -884,7 +900,7 @@ update_state_complete() {
   plutil -replace updatedAt -string "$(now_iso)" "$tmp" >/dev/null
   plutil -replace selectedAgent -string "$agent" "$tmp" >/dev/null
   plutil -replace error -json null "$tmp" >/dev/null
-  plutil -lint "$tmp" >/dev/null
+  read_plist_raw_key "$tmp" phase >/dev/null
   mv "$tmp" "$STATE_FILE"
 }
 
@@ -1060,9 +1076,13 @@ mark_ready() {
   extra=',"agent":'
   extra+="$(json_string "$agent")"
   extra+=',"source":"mark-ready"'
-  append_event agent_ready_reported "$extra"
-  append_event agent_onboarding_completed "$extra"
   update_state_complete "$agent"
+  if ! ready_event_exists "$agent"; then
+    append_event agent_ready_reported "$extra"
+  fi
+  if ! completed_event_exists "$agent"; then
+    append_event agent_onboarding_completed "$extra"
+  fi
   printf 'Zebra onboarding marked ready for %s.\n' "$(display_name "$agent")"
 }
 
