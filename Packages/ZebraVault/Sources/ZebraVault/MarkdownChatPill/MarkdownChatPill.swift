@@ -92,6 +92,10 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
         return true
     }
 
+    private var isDefaultDisplay: Bool {
+        isPrimary && (candidate == nil || isInstalled)
+    }
+
     private var statusText: String? {
         if isScanning && candidate == nil && !isPrimary {
             return String(localized: "markdownChat.pill.agent.status.checking", defaultValue: "Checking")
@@ -114,24 +118,21 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
     }
 
     private var statusColor: Color {
-        if candidate == nil && isPrimary {
-            return MarkdownPillPalette.textMuted
+        if isDefaultDisplay {
+            return MarkdownPillPalette.accent
         }
         if isBroken || !isInstalled {
             return MarkdownPillPalette.selectionTint.opacity(0.72)
-        }
-        if isPrimary {
-            return MarkdownPillPalette.textMuted
         }
         return MarkdownPillPalette.textMuted
     }
 
     private var actionTitle: String {
+        if isDefaultDisplay {
+            return String(localized: "markdownChat.pill.agent.action.default", defaultValue: "Default")
+        }
         if isScanning && candidate == nil {
             return String(localized: "markdownChat.pill.agent.action.checking", defaultValue: "Checking")
-        }
-        if isPrimary && isInstalled {
-            return String(localized: "markdownChat.pill.agent.action.default", defaultValue: "Default")
         }
         if isBroken {
             return String(localized: "markdownChat.pill.agent.action.repair", defaultValue: "Repair")
@@ -144,15 +145,15 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
             }
             return String(localized: "markdownChat.pill.agent.action.install", defaultValue: "Install")
         }
-        return String(localized: "markdownChat.pill.agent.action.setDefault", defaultValue: "Change default")
+        return String(localized: "markdownChat.pill.agent.action.setDefault", defaultValue: "Default")
     }
 
     private var actionIcon: String {
+        if isDefaultDisplay {
+            return "checkmark"
+        }
         if isScanning && candidate == nil {
             return "hourglass"
-        }
-        if isPrimary && isInstalled {
-            return "checkmark"
         }
         if isBroken {
             return "wrench.adjustable"
@@ -172,6 +173,13 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
 
     private var actionEnabled: Bool {
         candidate != nil && !(isPrimary && isInstalled)
+    }
+
+    private var actionForegroundColor: Color {
+        if isDefaultDisplay {
+            return MarkdownPillPalette.accent
+        }
+        return actionEnabled ? MarkdownPillPalette.textMuted : MarkdownPillPalette.textDim
     }
 
     private var rowFill: Color {
@@ -221,7 +229,7 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.78)
                 }
-                .foregroundColor(actionEnabled ? MarkdownPillPalette.textMuted : MarkdownPillPalette.textDim)
+                .foregroundColor(actionForegroundColor)
                 .frame(width: 78, height: 26)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -1143,7 +1151,7 @@ public struct MarkdownChatPill: View {
 
             Text(String(
                 localized: "markdownChat.pill.agent.dropdownHint",
-                defaultValue: "Click row for one-time change. Click Change default to change the default agent."
+                defaultValue: "Click row for one-time change. Click Default to change the default agent."
             ))
             .font(.system(size: 9.5))
             .foregroundColor(MarkdownPillPalette.textDim)
