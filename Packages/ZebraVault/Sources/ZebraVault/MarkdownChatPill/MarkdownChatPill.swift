@@ -144,7 +144,7 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
             }
             return String(localized: "markdownChat.pill.agent.action.install", defaultValue: "Install")
         }
-        return String(localized: "markdownChat.pill.agent.action.setDefault", defaultValue: "Set default")
+        return String(localized: "markdownChat.pill.agent.action.setDefault", defaultValue: "Change default")
     }
 
     private var actionIcon: String {
@@ -1143,11 +1143,13 @@ public struct MarkdownChatPill: View {
 
             Text(String(
                 localized: "markdownChat.pill.agent.dropdownHint",
-                defaultValue: "Click a row to use it once. Use Set default to change the default agent."
+                defaultValue: "Click row for one-time change. Click Change default to change the default agent."
             ))
-            .font(.system(size: 10.5))
+            .font(.system(size: 9.5))
             .foregroundColor(MarkdownPillPalette.textDim)
-            .lineLimit(2)
+            .lineLimit(1)
+            .minimumScaleFactor(0.76)
+            .allowsTightening(true)
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity, alignment: .center)
             .fixedSize(horizontal: false, vertical: true)
