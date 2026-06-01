@@ -7323,11 +7323,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func automaticWelcomeCommand() -> String {
-        guard ZebraAgentOnboardingStartup.shouldRunAutomaticWelcome(),
-              let startupLine = ZebraAgentOnboardingStartup.appResourceShellStartupLine() else {
-            return "cmux welcome\n"
+        if ZebraAgentOnboardingStartup.shouldRunAutomaticWelcome() {
+            // Zebra first-run setup now starts from the sidebar checklist. Keep
+            // the initial terminal idle until the user picks a checklist row.
+            return ""
         }
-        return startupLine
+        return "cmux welcome\n"
     }
 
     @objc func applyUpdateIfAvailable(_ sender: Any?) {

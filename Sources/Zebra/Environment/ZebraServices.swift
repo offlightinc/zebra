@@ -30,6 +30,7 @@ struct ZebraServices {
     let email: ZebraEmailListStore
     let emailDetail: ZebraEmailDetailStore
     let brainSync: BrainSyncService
+    let onboardingChecklist: ZebraOnboardingChecklistStore
 
     /// Per-panel side-car controllers for markdown panels. Owner of all
     /// `MarkdownPanelController` instances — views may only `@ObservedObject`
@@ -77,6 +78,7 @@ struct ZebraServices {
             email: email,
             emailDetail: emailDetail,
             brainSync: brainSync,
+            onboardingChecklist: ZebraOnboardingChecklistStore(),
             panelControllers: MarkdownPanelControllerRegistry()
         )
     }
@@ -109,6 +111,7 @@ struct ZebraServices {
             .environmentObject(email)
             .environmentObject(emailDetail)
             .environmentObject(brainSync)
+            .environmentObject(onboardingChecklist)
     }
 }
 

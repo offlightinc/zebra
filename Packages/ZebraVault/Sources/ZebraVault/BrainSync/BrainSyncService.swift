@@ -71,6 +71,15 @@ public final class BrainSyncService: ObservableObject {
             case .unknown: return String(localized: "brainSync.reason.unknown", defaultValue: "기타 오류")
             }
         }
+
+        var allowsAutomaticRetry: Bool {
+            switch self {
+            case .offline, .rateLimit, .alreadyRunning:
+                return true
+            case .authExpired, .pushRejected, .permissionDenied, .diskFull, .hookFailed, .conflict, .notGbrainRepo, .unknown:
+                return false
+            }
+        }
     }
 
     @Published public private(set) var state: SyncState?
@@ -90,8 +99,15 @@ public final class BrainSyncService: ObservableObject {
     private var terminateObserver: NSObjectProtocol?
     private var currentTask: Task<Void, Never>?
     private var boundVault: String?
+    private var automaticRetrySuppressedVault: String?
     private var started = false
     private var vaultCancellable: AnyCancellable?
+
+    private enum TriggerSource {
+        case automatic
+        case manual
+        case vaultChange
+    }
 
     public init() {
         // Sentinel 로부터 마지막 sync state 복원 (앱 재시작 후에도 "X분 전" 유지).
@@ -110,7 +126,7 @@ public final class BrainSyncService: ObservableObject {
         registerWakeObserver()
         registerTerminateObserver()
         scheduleTimer()
-        triggerSync()
+        triggerSync(source: .automatic)
     }
 
     /// `applicationWillTerminate` 에서 호출. Timer/observer 해제 + in-flight sync
@@ -135,9 +151,10 @@ public final class BrainSyncService: ObservableObject {
     public func bind(vaultRoot: String?) {
         let normalized = vaultRoot.flatMap { $0.isEmpty ? nil : $0 }
         guard normalized != boundVault else { return }
+        automaticRetrySuppressedVault = nil
         boundVault = normalized
         if started, normalized != nil {
-            triggerSync()
+            triggerSync(source: .vaultChange)
         }
     }
 
@@ -160,10 +177,21 @@ public final class BrainSyncService: ObservableObject {
     /// 사용자 클릭 / Timer tick / wake 모두 같은 entry. in-flight 면 no-op
     /// (스크립트 내부 lock 까지 갈 필요 없이 zebra 측에서 차단).
     public func triggerSync() {
+        triggerSync(source: .manual)
+    }
+
+    private func triggerSync(source: TriggerSource) {
         #if DEBUG
         NSLog("[BrainSync] triggerSync started=\(started) isSyncing=\(isSyncing) vault=\(boundVault ?? "nil")")
         #endif
         guard started, !isSyncing, let vault = boundVault else { return }
+        if source == .automatic, automaticRetrySuppressedVault == vault {
+            return
+        }
+        if let failure = Self.preflightFailure(vaultRoot: vault) {
+            applyOutcome(.failure(failure), vaultRoot: vault)
+            return
+        }
         isSyncing = true
         let startedAt = Date()
         let task = Task.detached(priority: .utility) { [weak self] in
@@ -177,7 +205,7 @@ public final class BrainSyncService: ObservableObject {
             }
             await MainActor.run {
                 guard let self else { return }
-                self.applyOutcome(outcome)
+                self.applyOutcome(outcome, vaultRoot: vault)
                 self.isSyncing = false
                 self.currentTask = nil
             }
@@ -191,7 +219,7 @@ public final class BrainSyncService: ObservableObject {
         let source = DispatchSource.makeTimerSource(queue: timerQueue)
         source.schedule(deadline: .now() + Self.interval, repeating: Self.interval, leeway: .seconds(30))
         source.setEventHandler { [weak self] in
-            Task { @MainActor in self?.triggerSync() }
+            Task { @MainActor in self?.triggerSync(source: .automatic) }
         }
         source.resume()
         timerSource = source
@@ -204,7 +232,7 @@ public final class BrainSyncService: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.triggerSync() }
+            Task { @MainActor in self?.triggerSync(source: .automatic) }
         }
     }
 
@@ -235,12 +263,19 @@ public final class BrainSyncService: ObservableObject {
 
     // MARK: - Outcome handling
 
-    private func applyOutcome(_ outcome: SyncOutcome) {
+    private func applyOutcome(_ outcome: SyncOutcome, vaultRoot: String) {
+        guard vaultRoot == boundVault else { return }
         let now = Date()
         switch outcome {
         case .success(let commit):
+            automaticRetrySuppressedVault = nil
             state = .synced(at: now, commit: commit)
         case .failure(let failure):
+            if failure.reason.allowsAutomaticRetry {
+                automaticRetrySuppressedVault = nil
+            } else {
+                automaticRetrySuppressedVault = vaultRoot
+            }
             state = .failed(at: now, failure: failure)
         }
         Self.writeSentinel(state)
@@ -345,6 +380,33 @@ public final class BrainSyncService: ObservableObject {
     private enum SyncOutcome: Sendable {
         case success(commit: String)
         case failure(Failure)
+    }
+
+    private static func preflightFailure(vaultRoot: String) -> Failure? {
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: vaultRoot, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return Failure(reason: .hookFailed, detail: "repo path does not exist: \(vaultRoot)")
+        }
+
+        let gitPath = (vaultRoot as NSString).appendingPathComponent(".git")
+        isDirectory = false
+        guard fileManager.fileExists(atPath: gitPath, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return Failure(reason: .hookFailed, detail: "not a git repo: \(vaultRoot)")
+        }
+
+        let gbrainMountPath = (vaultRoot as NSString).appendingPathComponent(".gbrain-mount")
+        let gbrainSourcePath = (vaultRoot as NSString).appendingPathComponent(".gbrain-source")
+        guard fileManager.fileExists(atPath: gbrainMountPath)
+            || fileManager.fileExists(atPath: gbrainSourcePath) else {
+            return Failure(
+                reason: .notGbrainRepo,
+                detail: "not a GBrain repo: missing .gbrain-mount or .gbrain-source at repo root"
+            )
+        }
+        return nil
     }
 
     private static func run(vaultRoot: String) async -> SyncOutcome {
