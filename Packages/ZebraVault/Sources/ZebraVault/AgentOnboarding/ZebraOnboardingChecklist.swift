@@ -19,6 +19,7 @@ public struct ZebraOnboardingChecklistStepSnapshot: Identifiable, Equatable {
     public let id: ZebraOnboardingChecklistStepID
     public let number: Int
     public let isCompleted: Bool
+    public let isDevelopmentCompleted: Bool
     public let isActive: Bool
     public let isRunning: Bool
     public let showsStart: Bool
@@ -45,6 +46,17 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private var selectedVaultPath: String?
     private var emailConnected = false
     private var launchGeneration = 0
+#if DEBUG
+    private static let developmentCompletedStepIDsDefaultsKey = "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
+    private static let developmentManuallyCompletableStepIDs: Set<ZebraOnboardingChecklistStepID> = [
+        .gbrain,
+        .adapter,
+        .email,
+        .ingest,
+        .goals,
+    ]
+    private var developmentCompletedStepIDs: Set<ZebraOnboardingChecklistStepID> = []
+#endif
 #if os(macOS)
     private var completionWatchSources: [DispatchSourceFileSystemObject] = []
     private let completionWatchQueue = DispatchQueue(
@@ -64,6 +76,9 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     ) {
         self.fileManager = fileManager
         self.homeDirectoryPath = Self.standardizedPath(homeDirectoryPath)
+#if DEBUG
+        self.developmentCompletedStepIDs = Self.loadDevelopmentCompletedStepIDs()
+#endif
 #if os(macOS)
         startCompletionFileWatching()
 #endif
@@ -101,6 +116,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                 id: step.id,
                 number: step.number,
                 isCompleted: completedStepIDs.contains(step.id),
+                isDevelopmentCompleted: isDevelopmentCompleted(step.id),
                 isActive: firstIncomplete == step.id,
                 isRunning: runningStepID == step.id,
                 showsStart: firstIncomplete == step.id && runningStepID != step.id
@@ -141,21 +157,42 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         }
     }
 
+#if DEBUG
+    /// DEVELOPMENT-ONLY TEMPORARY OVERRIDE.
+    /// Steps 2-6 do not have final completion validators yet. Keep this path
+    /// DEBUG-only so local development can hide the checklist without teaching
+    /// production builds that these steps are actually complete.
+    public func developmentToggleStepCompleted(_ stepID: ZebraOnboardingChecklistStepID) {
+        guard Self.developmentManuallyCompletableStepIDs.contains(stepID) else { return }
+        if developmentCompletedStepIDs.contains(stepID) {
+            developmentCompletedStepIDs.remove(stepID)
+        } else {
+            developmentCompletedStepIDs.insert(stepID)
+        }
+        saveDevelopmentCompletedStepIDs()
+        refreshDetectedCompletion()
+    }
+#endif
+
     public func refreshDetectedCompletion() {
         var completed = Set<ZebraOnboardingChecklistStepID>()
 
         if !ZebraAgentOnboardingStartup.shouldRunAutomaticWelcome() {
             completed.insert(.agent)
         }
-        if isGbrainSetupReady {
-            completed.insert(.gbrain)
-        }
-        if isAdapterInstalled {
-            completed.insert(.adapter)
-        }
+        // TODO(Zebra onboarding): Do not complete steps 2 or 3 by scanning the
+        // currently selected vault. The checklist is Zebra onboarding state, so
+        // it must stay stable whether the user is looking at ~/,
+        // ~/brain-offlight, or any other vault. Final step 2 should write a
+        // Zebra-owned GBrain setup receipt that records the verified source /
+        // profile target. Final step 3 should read that receipt and verify the
+        // adapter on the receipt's target, not on `selectedVaultPath`.
         if emailConnected || isClawvisorEmailConfigured {
             completed.insert(.email)
         }
+#if DEBUG
+        completed.formUnion(developmentCompletedStepIDs)
+#endif
 
         if let runningStepID, completed.contains(runningStepID) {
             self.runningStepID = nil
@@ -223,32 +260,28 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     }
 #endif
 
-    private var currentVaultPath: String? {
-        selectedVaultPath
+#if DEBUG
+    private static func loadDevelopmentCompletedStepIDs() -> Set<ZebraOnboardingChecklistStepID> {
+        let rawValues = UserDefaults.standard.stringArray(forKey: developmentCompletedStepIDsDefaultsKey) ?? []
+        return Set(
+            rawValues
+                .compactMap(ZebraOnboardingChecklistStepID.init(rawValue:))
+                .filter { developmentManuallyCompletableStepIDs.contains($0) }
+        )
     }
 
-    private var isGbrainSetupReady: Bool {
-        isGbrainVaultReady && (hasGbrainExecutable || hasGbrainProfileWrapper)
+    private func saveDevelopmentCompletedStepIDs() {
+        let rawValues = developmentCompletedStepIDs.map(\.rawValue).sorted()
+        UserDefaults.standard.set(rawValues, forKey: Self.developmentCompletedStepIDsDefaultsKey)
     }
+#endif
 
-    private var isGbrainVaultReady: Bool {
-        guard let currentVaultPath else { return false }
-        return hasValidGbrainDotfile(".gbrain-mount", in: currentVaultPath)
-            || hasValidGbrainDotfile(".gbrain-source", in: currentVaultPath)
-    }
-
-    private var isAdapterInstalled: Bool {
-        guard let currentVaultPath else { return false }
-        let skillPaths = [
-            ".gbrain-adapter/skills/router/SKILL.md",
-            ".gbrain-adapter/skills/daily-task-manager/SKILL.md",
-            ".gbrain-adapter/skills/daily-task-prep/SKILL.md",
-        ]
-        return directoryExists(".gbrain-adapter", in: currentVaultPath)
-            && skillPaths.allSatisfy { fileExists($0, in: currentVaultPath) }
-            && hasAdapterBlock("RESOLVER.md", in: currentVaultPath)
-            && hasAdapterBlock("schema.md", in: currentVaultPath)
-            && hasAdapterBlock("AGENTS.md", in: currentVaultPath)
+    private func isDevelopmentCompleted(_ stepID: ZebraOnboardingChecklistStepID) -> Bool {
+#if DEBUG
+        return developmentCompletedStepIDs.contains(stepID)
+#else
+        return false
+#endif
     }
 
     private var isClawvisorEmailConfigured: Bool {
@@ -266,79 +299,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                 String(line).trimmingCharacters(in: .whitespaces).hasPrefix("\(key)=")
             }
         }
-    }
-
-    private var hasGbrainExecutable: Bool {
-        let candidates = [
-            ".bun/bin/gbrain",
-            ".local/bin/gbrain",
-            "gbrain/bin/gbrain",
-            ".asdf/shims/gbrain",
-            ".mise/shims/gbrain",
-        ].map { (homeDirectoryPath as NSString).appendingPathComponent($0) } + [
-            "/opt/homebrew/bin/gbrain",
-            "/usr/local/bin/gbrain",
-        ]
-        return candidates.contains { fileManager.isExecutableFile(atPath: $0) }
-    }
-
-    private var hasGbrainProfileWrapper: Bool {
-        let profilesRoot = (homeDirectoryPath as NSString).appendingPathComponent(".gbrain-profiles")
-        guard let profileNames = try? fileManager.contentsOfDirectory(atPath: profilesRoot) else {
-            return false
-        }
-        return profileNames.contains { profileName in
-            guard !profileName.hasPrefix(".") else { return false }
-            let profilePath = (profilesRoot as NSString).appendingPathComponent(profileName)
-            var isDirectory: ObjCBool = false
-            guard fileManager.fileExists(atPath: profilePath, isDirectory: &isDirectory),
-                  isDirectory.boolValue,
-                  let childNames = try? fileManager.contentsOfDirectory(atPath: profilePath) else {
-                return false
-            }
-            return childNames.contains { childName in
-                guard childName.hasPrefix("gbrain-") else { return false }
-                let childPath = (profilePath as NSString).appendingPathComponent(childName)
-                return fileManager.isExecutableFile(atPath: childPath)
-            }
-        }
-    }
-
-    private func fileExists(_ relativePath: String, in rootPath: String) -> Bool {
-        let path = (rootPath as NSString).appendingPathComponent(relativePath)
-        var isDirectory: ObjCBool = false
-        return fileManager.fileExists(atPath: path, isDirectory: &isDirectory)
-            && !isDirectory.boolValue
-    }
-
-    private func directoryExists(_ relativePath: String, in rootPath: String) -> Bool {
-        let path = (rootPath as NSString).appendingPathComponent(relativePath)
-        return Self.validDirectoryPath(path, fileManager: fileManager) != nil
-    }
-
-    private func hasValidGbrainDotfile(_ relativePath: String, in rootPath: String) -> Bool {
-        let path = (rootPath as NSString).appendingPathComponent(relativePath)
-        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else {
-            return false
-        }
-        let value = raw
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .first?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !value.isEmpty else { return false }
-        return value.range(
-            of: "^(host|[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)$",
-            options: .regularExpression
-        ) != nil
-    }
-
-    private func hasAdapterBlock(_ relativePath: String, in rootPath: String) -> Bool {
-        let path = (rootPath as NSString).appendingPathComponent(relativePath)
-        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else {
-            return false
-        }
-        return raw.contains("<!-- gbrain-adapter:begin goals-tasks -->")
-            && raw.contains("<!-- gbrain-adapter:end goals-tasks -->")
     }
 
     private static func validDirectoryPath(
@@ -509,7 +469,8 @@ public struct ZebraOnboardingChecklistCard: View {
                             ZebraOnboardingChecklistRow(
                                 snapshot: snapshot,
                                 title: Self.title(for: snapshot.id),
-                                onStart: { onStartStep(snapshot.id) }
+                                onStart: { onStartStep(snapshot.id) },
+                                onDevelopmentToggle: developmentToggleAction(for: snapshot.id)
                             )
                         }
                     }
@@ -585,12 +546,24 @@ public struct ZebraOnboardingChecklistCard: View {
             )
         }
     }
+
+    private func developmentToggleAction(
+        for stepID: ZebraOnboardingChecklistStepID
+    ) -> (() -> Void)? {
+#if DEBUG
+        guard stepID != .agent else { return nil }
+        return { store.developmentToggleStepCompleted(stepID) }
+#else
+        return nil
+#endif
+    }
 }
 
 private struct ZebraOnboardingChecklistRow: View {
     let snapshot: ZebraOnboardingChecklistStepSnapshot
     let title: String
     let onStart: () -> Void
+    let onDevelopmentToggle: (() -> Void)?
 
     @State private var hovering = false
 
@@ -629,6 +602,7 @@ private struct ZebraOnboardingChecklistRow: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("ZebraOnboardingChecklistStartButton.\(snapshot.id.rawValue)")
             }
+
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -648,17 +622,56 @@ private struct ZebraOnboardingChecklistRow: View {
                 .tint(ZebraOnboardingChecklistPalette.accent)
                 .frame(width: 13, height: 13)
         } else if snapshot.isCompleted {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(ZebraOnboardingChecklistPalette.accent)
-                .overlay(
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 7, weight: .bold))
-                        .foregroundColor(.white)
-                )
+            if let onDevelopmentToggle, snapshot.isDevelopmentCompleted {
+                Button(action: onDevelopmentToggle) {
+                    completedCheckbox
+                        .frame(width: 13, height: 13)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(developmentToggleHelp)
+                .accessibilityLabel(developmentToggleHelp)
+                .accessibilityIdentifier("ZebraOnboardingChecklistDevelopmentToggleCheckbox.\(snapshot.id.rawValue)")
+            } else {
+                completedCheckbox
+                    .frame(width: 13, height: 13)
+            }
+        } else if let onDevelopmentToggle {
+            Button(action: onDevelopmentToggle) {
+                emptyCheckbox
+                    .frame(width: 13, height: 13)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(developmentToggleHelp)
+            .accessibilityLabel(developmentToggleHelp)
+            .accessibilityIdentifier("ZebraOnboardingChecklistDevelopmentToggleCheckbox.\(snapshot.id.rawValue)")
         } else {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .stroke(BVColor.fgGhost, lineWidth: 1.3)
+            emptyCheckbox
+                .frame(width: 13, height: 13)
         }
+    }
+
+    private var completedCheckbox: some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(ZebraOnboardingChecklistPalette.accent)
+            .overlay(
+                Image(systemName: "checkmark")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundColor(.white)
+            )
+    }
+
+    private var emptyCheckbox: some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .stroke(BVColor.fgGhost, lineWidth: 1.3)
+    }
+
+    private var developmentToggleHelp: String {
+        String(
+            localized: "brain.onboarding.checklist.developmentToggle.help",
+            defaultValue: "Toggle development completion"
+        )
     }
 
     private var rowBackground: some View {
