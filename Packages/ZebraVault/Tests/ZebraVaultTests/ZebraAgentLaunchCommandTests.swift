@@ -2,7 +2,7 @@ import XCTest
 @testable import ZebraVault
 
 final class ZebraAgentLaunchCommandTests: XCTestCase {
-    func testCodexLaunchIncludesCwdAndQuotedPrompt() {
+    func testCodexOnboardingLaunchStartsInteractiveCliWithoutPrompt() {
         let line = ZebraAgentLaunchCommand.shellStartupLine(
             agent: .codex,
             cwd: "/tmp/work dir",
@@ -10,11 +10,12 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
             userPrompt: "What is 'next'?"
         )
 
-        XCTAssertTrue(line.contains("cd '/tmp/work dir' && codex -C '/tmp/work dir'"))
-        XCTAssertTrue(line.contains("'System context\n\nWhat is '\\''next'\\''?'"))
+        XCTAssertEqual(line, "cd '/tmp/work dir' && codex\r")
+        XCTAssertFalse(line.contains("System context"))
+        XCTAssertFalse(line.contains("What is"))
     }
 
-    func testClaudeLaunchUsesAppendSystemPrompt() {
+    func testClaudeOnboardingLaunchStartsInteractiveCliWithoutPrompt() {
         let line = ZebraAgentLaunchCommand.shellStartupLine(
             agent: .claude,
             cwd: "/tmp/work",
@@ -24,11 +25,13 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
 
         XCTAssertEqual(
             line,
-            "cd '/tmp/work' && claude --append-system-prompt 'Zebra setup' 'Continue now'\r"
+            "cd '/tmp/work' && claude\r"
         )
+        XCTAssertFalse(line.contains("--append-system-prompt"))
+        XCTAssertFalse(line.contains("Zebra setup"))
     }
 
-    func testAntigravityLaunchUsesPromptAndCwdFlags() {
+    func testAntigravityOnboardingLaunchStartsInteractiveCliWithoutPrompt() {
         let line = ZebraAgentLaunchCommand.shellStartupLine(
             agent: .antigravity,
             cwd: "/tmp/work",
@@ -38,8 +41,11 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
 
         XCTAssertEqual(
             line,
-            "cd '/tmp/work' && agy -p 'Zebra setup\n\nContinue' --cwd '/tmp/work'\r"
+            "cd '/tmp/work' && agy\r"
         )
+        XCTAssertFalse(line.contains("--prompt-interactive"))
+        XCTAssertFalse(line.contains("--add-dir"))
+        XCTAssertFalse(line.contains("Zebra setup"))
     }
 
     func testChatPillAntigravityLaunchUsesAgyPromptAndCwdFlags() throws {
