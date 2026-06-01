@@ -40,7 +40,7 @@ public enum MarkdownPillAgent: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .codex: return "codex"
         case .claude: return "claude"
-        case .antigravity: return "agy"
+        case .antigravity: return "antigravity"
         }
     }
 }
