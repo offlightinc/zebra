@@ -1135,9 +1135,13 @@ public struct MarkdownChatPill: View {
             if let anchor, agentMenuOpen {
                 let rect = geo[anchor]
                 let x = max(0, min(geo.size.width - Self.agentDropdownWidth, rect.midX - Self.agentDropdownWidth / 2))
+                let desiredY = isExpanded
+                    ? rect.minY - Self.agentDropdownHeight - Self.agentDropdownGap
+                    : geo.size.height - shellHeight - Self.agentDropdownHeight - Self.agentDropdownGap
+                let y = max(0, min(geo.size.height - Self.agentDropdownHeight, desiredY))
                 ZStack(alignment: .topLeading) {
                     agentDropdownPanel
-                        .offset(x: x, y: 0)
+                        .offset(x: x, y: y)
                         .zIndex(1)
                 }
                 .frame(
