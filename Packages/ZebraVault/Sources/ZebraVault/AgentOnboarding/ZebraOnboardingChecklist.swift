@@ -80,7 +80,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                 id: step.id,
                 number: step.number,
                 isCompleted: completedStepIDs.contains(step.id),
-                isActive: activeStepID == step.id,
+                isActive: firstIncomplete == step.id,
                 isRunning: runningStepID == step.id,
                 showsStart: firstIncomplete == step.id && runningStepID != step.id
             )
@@ -522,27 +522,27 @@ private struct ZebraOnboardingChecklistRow: View {
     @State private var hovering = false
 
     var body: some View {
-        Button(action: onStart) {
-            HStack(spacing: 9) {
-                Text("\(snapshot.number)")
-                    .font(.system(size: 10, weight: .regular, design: .monospaced))
-                    .monospacedDigit()
-                    .foregroundColor(BVColor.fgFaint)
-                    .frame(width: 15, alignment: .trailing)
+        HStack(spacing: 9) {
+            Text("\(snapshot.number)")
+                .font(.system(size: 10, weight: .regular, design: .monospaced))
+                .monospacedDigit()
+                .foregroundColor(BVColor.fgFaint)
+                .frame(width: 15, alignment: .trailing)
 
-                statusIndicator
-                    .frame(width: 13, height: 13)
+            statusIndicator
+                .frame(width: 13, height: 13)
 
-                Text(title)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundColor(snapshot.isCompleted ? BVColor.fgMute : BVColor.fg)
-                    .strikethrough(snapshot.isCompleted, color: BVColor.fgMute.opacity(0.65))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+            Text(title)
+                .font(.system(size: 12, weight: .regular))
+                .foregroundColor(snapshot.isCompleted ? BVColor.fgMute : BVColor.fg)
+                .strikethrough(snapshot.isCompleted, color: BVColor.fgMute.opacity(0.65))
+                .lineLimit(1)
+                .truncationMode(.tail)
 
-                Spacer(minLength: 0)
+            Spacer(minLength: 0)
 
-                if snapshot.showsStart {
+            if snapshot.showsStart {
+                Button(action: onStart) {
                     Text(String(localized: "brain.onboarding.checklist.start", defaultValue: "Start"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(ZebraOnboardingChecklistPalette.startText)
@@ -553,13 +553,14 @@ private struct ZebraOnboardingChecklistRow: View {
                                 .fill(ZebraOnboardingChecklistPalette.accent)
                         )
                 }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("ZebraOnboardingChecklistStartButton.\(snapshot.id.rawValue)")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-            .background(rowBackground)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .background(rowBackground)
         .onHover { hovering = $0 }
         .accessibilityLabel(title)
         .accessibilityIdentifier("ZebraOnboardingChecklistRow.\(snapshot.id.rawValue)")
