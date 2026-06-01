@@ -22,13 +22,19 @@ private extension MarkdownPillAgent {
         }
     }
 
-    /// Two-line description shown under the label in the picker. Matches
-    /// md-app.jsx's `AGENTS.desc` strings — "vendor · tagline" monospace.
-    var desc: String {
+    var vendorName: String {
         switch self {
-        case .codex: return "OpenAI · code-first"
-        case .claude: return "Anthropic · reasoning"
-        case .antigravity: return "Google · Antigravity"
+        case .codex: return "OpenAI"
+        case .claude: return "Anthropic"
+        case .antigravity: return "Google"
+        }
+    }
+
+    var tagline: String {
+        switch self {
+        case .codex: return "code-first"
+        case .claude: return "reasoning"
+        case .antigravity: return "Antigravity"
         }
     }
 
@@ -43,9 +49,9 @@ private extension MarkdownPillAgent {
 
     var glyphBg: Color {
         switch self {
-        case .codex: return Color(red: 15.0 / 255, green: 15.0 / 255, blue: 15.0 / 255)
-        case .claude: return Color(red: 201.0 / 255, green: 100.0 / 255, blue: 66.0 / 255)
-        case .antigravity: return Color(red: 42.0 / 255, green: 77.0 / 255, blue: 173.0 / 255)
+        case .codex: return Color(red: 28.0 / 255, green: 28.0 / 255, blue: 32.0 / 255)
+        case .claude: return Color(red: 194.0 / 255, green: 103.0 / 255, blue: 74.0 / 255)
+        case .antigravity: return Color(red: 59.0 / 255, green: 111.0 / 255, blue: 224.0 / 255)
         }
     }
 
@@ -67,6 +73,10 @@ struct MarkdownPillAgentDot: View {
             .foregroundColor(agent.glyphColor)
             .frame(width: size, height: size)
             .background(agent.glyphBg)
+            .overlay(
+                RoundedRectangle(cornerRadius: size / 4)
+                    .stroke(agent == .codex ? MarkdownPillPalette.agentChooserTileBorder : .clear, lineWidth: 1)
+            )
             .clipShape(RoundedRectangle(cornerRadius: size / 4))
     }
 }
@@ -83,6 +93,9 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
     let onSelectOnce: () -> Void
     let onPrimaryAction: () -> Void
 
+    @State private var rowHovered = false
+    @State private var defaultStarHovered = false
+
     private var isInstalled: Bool {
         candidate?.installState == .installed && candidate?.terminalLaunchable == true
     }
@@ -90,10 +103,6 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
     private var isBroken: Bool {
         guard case .broken = candidate?.installState else { return false }
         return true
-    }
-
-    private var isDefaultDisplay: Bool {
-        isPrimary && (candidate == nil || isInstalled)
     }
 
     private var statusText: String? {
@@ -105,88 +114,62 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
         }
         if !isInstalled {
             guard candidate != nil else {
-                return isPrimary
-                    ? String(localized: "markdownChat.pill.agent.status.default", defaultValue: "Default")
-                    : nil
+                return nil
             }
             return String(localized: "markdownChat.pill.agent.status.missing", defaultValue: "Not installed")
-        }
-        if isPrimary {
-            return String(localized: "markdownChat.pill.agent.status.default", defaultValue: "Default")
         }
         return nil
     }
 
     private var statusColor: Color {
-        if isDefaultDisplay {
-            return MarkdownPillPalette.accent
-        }
         if isBroken || !isInstalled {
             return MarkdownPillPalette.selectionTint.opacity(0.72)
         }
         return MarkdownPillPalette.textMuted
     }
 
-    private var actionTitle: String {
-        if isDefaultDisplay {
-            return String(localized: "markdownChat.pill.agent.action.default", defaultValue: "Default")
-        }
-        if isScanning && candidate == nil {
-            return String(localized: "markdownChat.pill.agent.action.checking", defaultValue: "Checking")
-        }
-        if isBroken {
-            return String(localized: "markdownChat.pill.agent.action.repair", defaultValue: "Repair")
-        }
-        if !isInstalled {
-            guard candidate != nil else {
-                return isPrimary
-                    ? String(localized: "markdownChat.pill.agent.action.default", defaultValue: "Default")
-                    : String(localized: "markdownChat.pill.agent.action.checking", defaultValue: "Checking")
-            }
-            return String(localized: "markdownChat.pill.agent.action.install", defaultValue: "Install")
-        }
-        return String(localized: "markdownChat.pill.agent.action.setDefault", defaultValue: "Default")
-    }
-
-    private var actionIcon: String {
-        if isDefaultDisplay {
-            return "checkmark"
-        }
-        if isScanning && candidate == nil {
-            return "hourglass"
-        }
-        if isBroken {
-            return "wrench.adjustable"
-        }
-        if !isInstalled {
-            guard candidate != nil else {
-                return isPrimary ? "checkmark" : "hourglass"
-            }
-            return "arrow.down.to.line.compact"
-        }
-        return "pin.fill"
-    }
-
-    private var actionIconSize: CGFloat {
-        actionIcon == "pin.fill" ? 9.5 : 11
-    }
-
     private var actionEnabled: Bool {
         candidate != nil && !(isPrimary && isInstalled)
     }
 
-    private var actionForegroundColor: Color {
-        if isDefaultDisplay {
-            return MarkdownPillPalette.accent
-        }
-        return actionEnabled ? MarkdownPillPalette.textMuted : MarkdownPillPalette.textDim
-    }
-
     private var rowFill: Color {
         if active {
-            return MarkdownPillPalette.accent.opacity(0.07)
+            return MarkdownPillPalette.agentChooserActiveFill
+        }
+        if rowHovered {
+            return MarkdownPillPalette.agentChooserRowHoverFill
         }
         return .clear
+    }
+
+    private var rowBorder: Color {
+        if active {
+            return MarkdownPillPalette.agentChooserActiveBorder
+        }
+        return .clear
+    }
+
+    private var defaultStarColor: Color {
+        if isPrimary {
+            return MarkdownPillPalette.agentChooserAccent
+        }
+        if rowHovered || defaultStarHovered {
+            return MarkdownPillPalette.agentChooserStarHoverColor
+        }
+        return MarkdownPillPalette.agentChooserStarMuted
+    }
+
+    private var defaultStarButtonFill: Color {
+        defaultStarHovered ? MarkdownPillPalette.agentChooserStarHoverFill : .clear
+    }
+
+    private var defaultStarButtonBorder: Color {
+        if !defaultStarHovered {
+            return .clear
+        }
+        return isPrimary
+            ? MarkdownPillPalette.agentChooserAccent.opacity(0.60)
+            : MarkdownPillPalette.agentChooserStarHoverBorder
     }
 
     var body: some View {
@@ -198,8 +181,14 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
                         HStack(spacing: 6) {
                             Text(agent.label)
                                 .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                                .foregroundColor(MarkdownPillPalette.text)
+                                .foregroundColor(MarkdownPillPalette.agentChooserText)
                                 .lineLimit(1)
+                            if active {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundColor(MarkdownPillPalette.agentChooserAccent)
+                                    .frame(width: 12, height: 12)
+                            }
                             if let statusText {
                                 Text(statusText)
                                     .font(.system(size: 10.5, weight: .semibold))
@@ -207,10 +196,19 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
                                     .lineLimit(1)
                             }
                         }
-                        Text(agent.desc)
+                        HStack(spacing: 6) {
+                            Text(agent.vendorName)
+                                .foregroundColor(MarkdownPillPalette.agentChooserMeta)
+                            Text("·")
+                                .foregroundColor(MarkdownPillPalette.agentChooserMeta)
+                            Text(agent.tagline)
+                                .foregroundColor(MarkdownPillPalette.agentChooserTag)
+                        }
                             .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(MarkdownPillPalette.textDim)
                             .lineLimit(1)
+                            .minimumScaleFactor(0.86)
+                            .allowsTightening(true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -219,43 +217,48 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
             .buttonStyle(.plain)
             .help(String(localized: "markdownChat.pill.agent.useOnce.help", defaultValue: "Use this agent once"))
 
-            Button(action: onPrimaryAction) {
-                HStack(spacing: 5) {
-                    Image(systemName: actionIcon)
-                        .font(.system(size: actionIconSize, weight: .semibold))
-                        .frame(width: 11, height: 11)
-                    Text(actionTitle)
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
+            Button {
+                if actionEnabled {
+                    onPrimaryAction()
                 }
-                .foregroundColor(actionForegroundColor)
-                .frame(width: 78, height: 26)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.white.opacity(actionEnabled ? 0.055 : 0.035))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(actionEnabled ? MarkdownPillPalette.borderStrong : MarkdownPillPalette.border)
-                )
+            } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(defaultStarButtonFill)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(defaultStarButtonBorder, lineWidth: 1)
+                    Image(systemName: isPrimary ? "star.fill" : "star")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(defaultStarColor)
+                }
+                .frame(width: 26, height: 26)
             }
             .buttonStyle(.plain)
-            .disabled(!actionEnabled)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .onHover { defaultStarHovered = $0 }
+            .animation(.easeInOut(duration: 0.12), value: defaultStarHovered)
             .help(String(localized: "markdownChat.pill.agent.setDefault.help", defaultValue: "Set this agent as the default"))
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .frame(height: 48)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(rowFill)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(active ? MarkdownPillPalette.borderStrong : .clear, lineWidth: 1)
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(rowBorder, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(MarkdownPillPalette.agentChooserAccentBar)
+                    .frame(width: 3, height: 32)
+                    .opacity(active ? 1 : 0)
+            }
         )
         .contentShape(Rectangle())
+        .onHover { rowHovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: rowHovered)
     }
 }
 
@@ -376,6 +379,22 @@ enum MarkdownPillPalette {
     static let border = Color.white.opacity(0.07)
     static let borderStrong = Color.white.opacity(0.12)
     static let accent = Color(red: 123.0 / 255, green: 227.0 / 255, blue: 196.0 / 255)
+    static let agentChooserText = Color(red: 244.0 / 255, green: 244.0 / 255, blue: 244.0 / 255)
+    static let agentChooserMeta = Color(red: 111.0 / 255, green: 112.0 / 255, blue: 119.0 / 255)
+    static let agentChooserTag = Color(red: 109.0 / 255, green: 138.0 / 255, blue: 128.0 / 255)
+    static let agentChooserAccent = Color(red: 95.0 / 255, green: 192.0 / 255, blue: 163.0 / 255)
+    static let agentChooserAccentBar = Color(red: 70.0 / 255, green: 169.0 / 255, blue: 140.0 / 255)
+    static let agentChooserRowHoverFill = Color.white.opacity(0.035)
+    static let agentChooserActiveFill = Color(red: 61.0 / 255, green: 141.0 / 255, blue: 118.0 / 255).opacity(0.10)
+    static let agentChooserActiveBorder = Color(red: 61.0 / 255, green: 141.0 / 255, blue: 118.0 / 255).opacity(0.45)
+    static let agentChooserPanelBorder = Color(red: 44.0 / 255, green: 44.0 / 255, blue: 51.0 / 255)
+    static let agentChooserPanelTop = Color(red: 27.0 / 255, green: 27.0 / 255, blue: 31.0 / 255)
+    static let agentChooserPanelBottom = Color(red: 22.0 / 255, green: 22.0 / 255, blue: 25.0 / 255)
+    static let agentChooserStarMuted = Color(red: 93.0 / 255, green: 94.0 / 255, blue: 102.0 / 255)
+    static let agentChooserStarHoverColor = Color(red: 154.0 / 255, green: 155.0 / 255, blue: 162.0 / 255)
+    static let agentChooserStarHoverFill = Color.white.opacity(0.06)
+    static let agentChooserStarHoverBorder = Color(red: 51.0 / 255, green: 52.0 / 255, blue: 59.0 / 255)
+    static let agentChooserTileBorder = Color(red: 52.0 / 255, green: 52.0 / 255, blue: 59.0 / 255)
     // Pre-blended dim teal — equivalent to rgba(123,227,196,0.45) on dark pill bg.
     // mockup's 0.25 reads too washed-out once layered on the semi-opaque pill;
     // bumping saturation keeps the button visible while still clearly disabled.
@@ -448,6 +467,9 @@ public enum MarkdownChatPillLayout {
 
 public struct MarkdownChatPill: View {
     private static let expandedChipMaxWidth: CGFloat = 320
+    private static let agentDropdownWidth: CGFloat = 300
+    private static let agentDropdownHeight: CGFloat = 160
+    private static let agentDropdownGap: CGFloat = 12
     private static let motion = Animation.timingCurve(0.4, 0.0, 0.2, 1.0, duration: 0.30)
 
     let displayTitle: String
@@ -606,14 +628,20 @@ public struct MarkdownChatPill: View {
     private var collapsedPromptText: String {
         placeholderText
     }
+    private var agentDropdownSlotHeight: CGFloat {
+        agentMenuOpen ? Self.agentDropdownHeight + Self.agentDropdownGap : 0
+    }
 
     public var body: some View {
-        // Picker now lives INSIDE pillShell (between input and divider)
-        // to match the md-app.jsx mockup: one dark popover surface, not
-        // a floating sibling that lets the markdown content bleed through
-        // its translucent fill.
-        pillShell
+        // Keep the agent menu in the view's actual layout bounds instead
+        // of painting it above the pill with a negative offset. SwiftUI's
+        // hover tracking follows layout bounds, so the menu needs a real
+        // slot above the shell for row/star hover effects to fire.
+        ZStack(alignment: .bottomLeading) {
+            pillShell
+        }
             .frame(maxWidth: MarkdownChatPillLayout.maxWidth)
+            .frame(height: shellHeight + agentDropdownSlotHeight, alignment: .bottomLeading)
             .overlayPreferenceValue(AgentButtonAnchorKey.self) { anchor in
                 agentDropdownOverlay(anchor: anchor)
             }
@@ -1106,17 +1134,16 @@ public struct MarkdownChatPill: View {
         GeometryReader { geo in
             if let anchor, agentMenuOpen {
                 let rect = geo[anchor]
-                let dropdownWidth: CGFloat = 300
-                let gap: CGFloat = 6
-                ZStack(alignment: .bottomLeading) {
-                    Color.clear
+                let x = max(0, min(geo.size.width - Self.agentDropdownWidth, rect.midX - Self.agentDropdownWidth / 2))
+                ZStack(alignment: .topLeading) {
                     agentDropdownPanel
-                        .offset(x: max(0, min(geo.size.width - dropdownWidth, rect.midX - dropdownWidth / 2)))
+                        .offset(x: x, y: 0)
+                        .zIndex(1)
                 }
                 .frame(
                     width: geo.size.width,
-                    height: max(0, rect.minY - gap),
-                    alignment: .bottomLeading
+                    height: geo.size.height,
+                    alignment: .topLeading
                 )
                 .allowsHitTesting(true)
             }
@@ -1142,38 +1169,25 @@ public struct MarkdownChatPill: View {
                     }
                 )
             }
-
-            Rectangle()
-                .fill(MarkdownPillPalette.borderStrong)
-                .frame(height: 1)
-                .padding(.horizontal, 4)
-                .padding(.top, 7)
-                .padding(.bottom, 6)
-
-            Text(String(
-                localized: "markdownChat.pill.agent.dropdownHint",
-                defaultValue: "Click row for one-time change. Click Default to change the default agent."
-            ))
-            .font(.system(size: 9.5))
-            .foregroundColor(MarkdownPillPalette.textDim)
-            .lineLimit(1)
-            .minimumScaleFactor(0.76)
-            .allowsTightening(true)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 8)
-            .padding(.bottom, 2)
         }
         .padding(8)
-        .frame(width: 300)
+        .frame(width: Self.agentDropdownWidth, height: Self.agentDropdownHeight)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(MarkdownPillPalette.popoverBg)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            MarkdownPillPalette.agentChooserPanelTop,
+                            MarkdownPillPalette.agentChooserPanelBottom,
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(MarkdownPillPalette.borderStrong, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(MarkdownPillPalette.agentChooserPanelBorder, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.55), radius: 30, x: 0, y: 24)
         .fixedSize(horizontal: false, vertical: true)
