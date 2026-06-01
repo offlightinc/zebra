@@ -231,10 +231,43 @@ struct ZebraSidebarBody: View {
             return
         }
         onboardingChecklistStore.beginLaunch(stepID: stepID)
+        if stepID == .agent,
+           sendAgentOnboardingToInitialTerminalIfAvailable(startupLine, in: workspace) {
+            return
+        }
         _ = workspace.newTerminalSurfaceInFocusedPane(
             focus: true,
             initialInput: startupLine
         )
+    }
+
+    private func sendAgentOnboardingToInitialTerminalIfAvailable(
+        _ startupLine: String,
+        in workspace: Workspace
+    ) -> Bool {
+        let terminalPanels = workspace.panels.values.compactMap { $0 as? TerminalPanel }
+        guard terminalPanels.count == 1,
+              let terminalPanel = terminalPanels.first,
+              workspace.focusedTerminalPanel?.id == terminalPanel.id,
+              canReuseTerminalForAgentOnboarding(terminalPanel, in: workspace) else {
+            return false
+        }
+        terminalPanel.focus()
+        terminalPanel.sendInput(startupLine)
+        return true
+    }
+
+    private func canReuseTerminalForAgentOnboarding(
+        _ terminalPanel: TerminalPanel,
+        in workspace: Workspace
+    ) -> Bool {
+        guard !terminalPanel.needsConfirmClose() else { return false }
+        switch workspace.panelShellActivityStates[terminalPanel.id] ?? .unknown {
+        case .promptIdle, .unknown:
+            return true
+        case .commandRunning:
+            return false
+        }
     }
 
     private func refreshOnboardingChecklist() {

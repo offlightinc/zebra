@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if os(macOS)
+import Darwin
+#endif
 
 public enum ZebraOnboardingChecklistStepID: String, CaseIterable, Identifiable, Sendable {
     case agent
@@ -42,6 +45,14 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private var selectedVaultPath: String?
     private var emailConnected = false
     private var launchGeneration = 0
+#if os(macOS)
+    private var completionWatchSources: [DispatchSourceFileSystemObject] = []
+    private let completionWatchQueue = DispatchQueue(
+        label: "com.cmux.zebra.onboarding-checklist-watcher",
+        qos: .utility
+    )
+    private var completionRefreshWorkItem: DispatchWorkItem?
+#endif
 
     @Published public private(set) var completedStepIDs: Set<ZebraOnboardingChecklistStepID> = []
     @Published public private(set) var activeStepID: ZebraOnboardingChecklistStepID?
@@ -53,7 +64,17 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     ) {
         self.fileManager = fileManager
         self.homeDirectoryPath = Self.standardizedPath(homeDirectoryPath)
+#if os(macOS)
+        startCompletionFileWatching()
+#endif
         refreshDetectedCompletion()
+    }
+
+    deinit {
+#if os(macOS)
+        completionRefreshWorkItem?.cancel()
+        completionWatchSources.forEach { $0.cancel() }
+#endif
     }
 
     public var totalCount: Int {
@@ -95,11 +116,10 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             selectedVaultPath,
             fileManager: fileManager
         )
-        guard self.selectedVaultPath != validVaultPath || self.emailConnected != emailConnected else {
-            return
+        if self.selectedVaultPath != validVaultPath || self.emailConnected != emailConnected {
+            self.selectedVaultPath = validVaultPath
+            self.emailConnected = emailConnected
         }
-        self.selectedVaultPath = validVaultPath
-        self.emailConnected = emailConnected
         refreshDetectedCompletion()
     }
 
@@ -110,7 +130,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         let generation = launchGeneration
 
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 900_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
             await MainActor.run { [weak self] in
                 guard let self,
                       self.launchGeneration == generation,
@@ -137,17 +157,74 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             completed.insert(.email)
         }
 
+        if let runningStepID, completed.contains(runningStepID) {
+            self.runningStepID = nil
+        }
         if completedStepIDs != completed {
             completedStepIDs = completed
         }
     }
 
+#if os(macOS)
+    private func startCompletionFileWatching() {
+        completionWatchSources.forEach { $0.cancel() }
+        completionWatchSources = []
+
+        let directoryPaths = Set([
+            ZebraAgentOnboardingStartup.defaultStateURL().deletingLastPathComponent().path,
+            ZebraAgentPreferenceStore.defaultPreferencesURL().deletingLastPathComponent().path,
+        ])
+
+        for directoryPath in directoryPaths {
+            installCompletionDirectoryWatcher(directoryPath: directoryPath)
+        }
+    }
+
+    private func installCompletionDirectoryWatcher(directoryPath: String) {
+        try? fileManager.createDirectory(
+            atPath: directoryPath,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        let fd = open(directoryPath, O_EVTONLY)
+        guard fd >= 0 else { return }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .delete, .rename, .extend],
+            queue: completionWatchQueue
+        )
+        source.setEventHandler { [weak self] in
+            let flags = source.data
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if flags.contains(.delete) || flags.contains(.rename) {
+                    self.startCompletionFileWatching()
+                }
+                self.scheduleCompletionRefresh()
+            }
+        }
+        source.setCancelHandler {
+            Darwin.close(fd)
+        }
+        source.resume()
+        completionWatchSources.append(source)
+    }
+
+    private func scheduleCompletionRefresh() {
+        completionRefreshWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.refreshDetectedCompletion()
+            }
+        }
+        completionRefreshWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: item)
+    }
+#endif
+
     private var currentVaultPath: String? {
         selectedVaultPath
-            ?? Self.validDirectoryPath(
-                (homeDirectoryPath as NSString).appendingPathComponent("brain-offlight"),
-                fileManager: fileManager
-            )
     }
 
     private var isGbrainSetupReady: Bool {
@@ -398,10 +475,6 @@ public enum ZebraOnboardingChecklistCommand {
         }
 
         let home = NSHomeDirectory()
-        let brainOfflight = (home as NSString).appendingPathComponent("brain-offlight")
-        if isDirectory(brainOfflight) {
-            return (brainOfflight as NSString).standardizingPath
-        }
         return home.isEmpty ? "/" : (home as NSString).standardizingPath
     }
 
