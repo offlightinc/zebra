@@ -48,7 +48,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(line.contains("Zebra setup"))
     }
 
-    func testChatPillAntigravityLaunchUsesAgyPromptAndCwdFlags() throws {
+    func testChatPillAntigravityLaunchUsesInteractivePromptAndAddDir() throws {
         let cwd = try makeTemporaryDirectory()
 
         let line = MarkdownChatPillCommand.shellStartupLine(
@@ -59,8 +59,9 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
             launchDirectory: cwd.path
         )
 
-        XCTAssertTrue(line.contains("cd '\(cwd.path)' && agy -p '"))
-        XCTAssertTrue(line.contains("--cwd '\(cwd.path)'"))
+        XCTAssertTrue(line.contains("cd '\(cwd.path)' && agy --prompt-interactive --add-dir '\(cwd.path)' '"))
+        XCTAssertFalse(line.contains(" --cwd "))
+        XCTAssertFalse(line.contains("agy -p"))
         XCTAssertFalse(line.contains("gemini"))
     }
 

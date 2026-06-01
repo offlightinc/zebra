@@ -5,7 +5,7 @@ import Foundation
 /// Split out of `MarkdownChatPill.swift` because the pill view itself was
 /// trending past a thousand lines. Keeping the agent invocation contract
 /// in its own file makes the per-agent CLI conventions (codex `-c` trust
-/// override, claude `--append-system-prompt`, antigravity `agy -p`)
+/// override, claude `--append-system-prompt`, antigravity `agy --prompt-interactive`)
 /// auditable without scrolling past hundreds of lines of view code.
 public enum MarkdownChatPillCommand {
     public struct LaunchPlan {
@@ -277,7 +277,7 @@ public enum MarkdownChatPillCommand {
 
     /// Per-agent CLI invocation tuned to keep the initial prompt on the agent
     /// path instead of a first-run trust dialog. Codex uses a per-process
-    /// config override, Antigravity receives an explicit cwd, and Claude relies
+    /// config override, Antigravity receives cwd through cd + add-dir, and Claude relies
     /// on `prepareLaunchEnvironment` to pre-accept the current cwd in Claude's
     /// project state when that file is writable.
     private static func invocation(
@@ -310,7 +310,7 @@ public enum MarkdownChatPillCommand {
         case .claude:
             return "cd \(shellQuote(cwd)) && claude --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
         case .antigravity:
-            return "cd \(shellQuote(cwd)) && agy -p \(shellQuote(visibleContextPrompt)) --cwd \(shellQuote(cwd))"
+            return "cd \(shellQuote(cwd)) && agy --prompt-interactive --add-dir \(shellQuote(cwd)) \(shellQuote(visibleContextPrompt))"
         }
     }
 
