@@ -22,6 +22,7 @@ struct ZebraSidebarBody: View {
     @EnvironmentObject var emailListStore: ZebraEmailListStore
     @EnvironmentObject var emailDetailStore: ZebraEmailDetailStore
     @EnvironmentObject var brainSyncService: BrainSyncService
+    @EnvironmentObject var onboardingChecklistStore: ZebraOnboardingChecklistStore
     @Environment(\.zebra) private var zebra
 
     var body: some View {
@@ -56,9 +57,38 @@ struct ZebraSidebarBody: View {
             modeContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
+                .overlay(alignment: .bottom) {
+                    onboardingChecklistOverlay
+                }
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear {
+            refreshOnboardingChecklist()
+        }
+        .onChange(of: vaultState.selectedVaultPath) { _ in
+            refreshOnboardingChecklist()
+        }
+        .onChange(of: emailListStore.isConnected) { _ in
+            refreshOnboardingChecklist()
+        }
+        .task {
+            while !Task.isCancelled {
+                refreshOnboardingChecklist()
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
+        }
+    }
+
+    private var onboardingChecklistOverlay: some View {
+        ZebraOnboardingChecklistCard(
+            store: onboardingChecklistStore,
+            onStartStep: { stepID in
+                startOnboardingChecklistStep(stepID)
+            }
+        )
+        .padding(8)
+        .zIndex(10)
     }
 
     private var footer: some View {
@@ -87,7 +117,7 @@ struct ZebraSidebarBody: View {
     ) {
         guard let workspace = tabManager.selectedWorkspace else { return }
         guard let vaultPath = vaultState.selectedVaultPath, !vaultPath.isEmpty else { return }
-        // Claude 의 .claude.json trust 처리는 prep 단계에서 (codex/gemini 는 no-op).
+        // Claude 의 .claude.json trust 처리는 prep 단계에서 (codex/agy 는 no-op).
         _ = MarkdownChatPillCommand.prepareLaunchEnvironmentForBrainSyncFailure(
             agent: agent,
             vaultPath: vaultPath
@@ -111,67 +141,65 @@ struct ZebraSidebarBody: View {
     }
 
     private var modeContent: some View {
-        ZStack(alignment: .topLeading) {
-            modeLayer(isVisible: modeState.selectedMode == .terminal) {
+        Group {
+            switch modeState.selectedMode {
+            case .terminal:
                 slots.workspaceList
-            }
-            modeLayer(isVisible: modeState.selectedMode == .goals && modeState.listVisible) {
-                VerticalTabsSidebarGoalsContent(
-                    state: modeState,
-                    goalsStore: goalFileListStore,
-                    viewState: goalsViewState,
-                    onSelectFile: openMarkdownFile
-                )
-            }
-            modeLayer(isVisible: modeState.selectedMode == .tasks && modeState.listVisible) {
-                VerticalTabsSidebarTasksContent(
-                    state: modeState,
-                    taskStore: taskFileListStore,
-                    onSelectFile: openMarkdownFile
-                )
-            }
-            modeLayer(isVisible: modeState.selectedMode == .email && modeState.listVisible) {
-                VerticalTabsSidebarEmailContent(
-                    state: modeState,
-                    threads: emailListStore.threads,
-                    userLabels: emailListStore.userLabels,
-                    isConnected: emailListStore.isConnected,
-                    isLoading: emailListStore.isLoading,
-                    isSyncing: emailListStore.isSyncing,
-                    errorMessage: emailListStore.lastError,
-                    connectionRepairState: emailListStore.connectionRepairState,
-                    selectedThreadId: emailDetailStore.selectedThreadId,
-                    onConnect: { agent in startClawvisorOnboardingAgent(agent: agent) },
-                    onRefresh: { Task { await emailListStore.refresh() } },
-                    onSelectThread: openEmailThread,
-                    onCreateLabel: { emailListStore.localLabel(named: $0) }
-                )
-                .task(id: modeState.selectedMode) {
-                    guard modeState.selectedMode == .email else { return }
-                    await emailListStore.refreshIfNeeded()
+
+            case .goals:
+                if modeState.listVisible {
+                    VerticalTabsSidebarGoalsContent(
+                        state: modeState,
+                        goalsStore: goalFileListStore,
+                        viewState: goalsViewState,
+                        onSelectFile: openMarkdownFile
+                    )
                 }
-            }
-            modeLayer(isVisible: modeState.selectedMode == .documents && modeState.listVisible) {
-                VerticalTabsSidebarDocumentsContent(
-                    state: modeState,
-                    store: markdownFileListStore,
-                    onSelectFile: openMarkdownFile
-                )
+
+            case .tasks:
+                if modeState.listVisible {
+                    VerticalTabsSidebarTasksContent(
+                        state: modeState,
+                        taskStore: taskFileListStore,
+                        onSelectFile: openMarkdownFile
+                    )
+                }
+
+            case .email:
+                if modeState.listVisible {
+                    VerticalTabsSidebarEmailContent(
+                        state: modeState,
+                        threads: emailListStore.threads,
+                        userLabels: emailListStore.userLabels,
+                        isConnected: emailListStore.isConnected,
+                        isLoading: emailListStore.isLoading,
+                        isSyncing: emailListStore.isSyncing,
+                        errorMessage: emailListStore.lastError,
+                        connectionRepairState: emailListStore.connectionRepairState,
+                        selectedThreadId: emailDetailStore.selectedThreadId,
+                        onConnect: { agent in startClawvisorOnboardingAgent(agent: agent) },
+                        onRefresh: { Task { await emailListStore.refresh() } },
+                        onSelectThread: openEmailThread,
+                        onCreateLabel: { emailListStore.localLabel(named: $0) }
+                    )
+                    .task(id: modeState.selectedMode) {
+                        await emailListStore.refreshIfNeeded()
+                    }
+                }
+
+            case .documents:
+                if modeState.listVisible {
+                    VerticalTabsSidebarDocumentsContent(
+                        state: modeState,
+                        store: markdownFileListStore,
+                        onSelectFile: openMarkdownFile
+                    )
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .animation(.easeOut(duration: 0.15), value: modeState.selectedMode)
         .animation(.easeOut(duration: 0.15), value: modeState.listVisible)
-    }
-
-    private func modeLayer<Content: View>(
-        isVisible: Bool,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        content()
-            .opacity(isVisible ? 1 : 0)
-            .allowsHitTesting(isVisible)
-            .accessibilityHidden(!isVisible)
     }
 
     /// Launch a fresh terminal tab in the focused pane, drop the user into
@@ -198,6 +226,62 @@ struct ZebraSidebarBody: View {
             agent: agent.markdownPillAgent,
             anchor: .focusAnchored,
             markedBy: agentTerminals
+        )
+    }
+
+    private func startOnboardingChecklistStep(_ stepID: ZebraOnboardingChecklistStepID) {
+        guard onboardingChecklistStore.runningStepID != stepID else { return }
+        guard let workspace = tabManager.selectedWorkspace,
+              let startupLine = ZebraOnboardingChecklistCommand.shellStartupLine(
+                for: stepID,
+                selectedVaultPath: vaultState.selectedVaultPath
+              ) else {
+            return
+        }
+        onboardingChecklistStore.beginLaunch(stepID: stepID)
+        if stepID == .agent,
+           sendAgentOnboardingToInitialTerminalIfAvailable(startupLine, in: workspace) {
+            return
+        }
+        _ = workspace.newTerminalSurfaceInFocusedPane(
+            focus: true,
+            initialInput: startupLine
+        )
+    }
+
+    private func sendAgentOnboardingToInitialTerminalIfAvailable(
+        _ startupLine: String,
+        in workspace: Workspace
+    ) -> Bool {
+        let terminalPanels = workspace.panels.values.compactMap { $0 as? TerminalPanel }
+        guard terminalPanels.count == 1,
+              let terminalPanel = terminalPanels.first,
+              workspace.focusedTerminalPanel?.id == terminalPanel.id,
+              canReuseTerminalForAgentOnboarding(terminalPanel, in: workspace) else {
+            return false
+        }
+        terminalPanel.focus()
+        terminalPanel.sendInput(startupLine)
+        return true
+    }
+
+    private func canReuseTerminalForAgentOnboarding(
+        _ terminalPanel: TerminalPanel,
+        in workspace: Workspace
+    ) -> Bool {
+        guard !terminalPanel.needsConfirmClose() else { return false }
+        switch workspace.panelShellActivityStates[terminalPanel.id] ?? .unknown {
+        case .promptIdle, .unknown:
+            return true
+        case .commandRunning:
+            return false
+        }
+    }
+
+    private func refreshOnboardingChecklist() {
+        onboardingChecklistStore.syncExternalState(
+            selectedVaultPath: vaultState.selectedVaultPath,
+            emailConnected: emailListStore.isConnected
         )
     }
 

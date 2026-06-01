@@ -141,7 +141,7 @@ public enum MarkdownChatPillContextPrefix {
     }
 
     /// argv 한계(macOS ~256KB) 를 conservatively 피하기 위한 prefix 상한.
-    /// codex/claude/gemini 의 다른 argv·env 분 + shell escape 비용까지 감안해
+    /// codex/claude/antigravity 의 다른 argv·env 분 + shell escape 비용까지 감안해
     /// thread 직렬화 부분이 이만큼 넘어가면 끝을 자르고 truncation marker 를 박는다.
     /// 일반 thread (수십 통 단위) 는 한참 못 미친다 — 인공적인 거대 케이스 안전망.
     private static let emailBodyByteBudget = 180_000

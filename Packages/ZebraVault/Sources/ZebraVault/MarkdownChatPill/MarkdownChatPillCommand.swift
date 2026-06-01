@@ -5,7 +5,7 @@ import Foundation
 /// Split out of `MarkdownChatPill.swift` because the pill view itself was
 /// trending past a thousand lines. Keeping the agent invocation contract
 /// in its own file makes the per-agent CLI conventions (codex `-c` trust
-/// override, claude `--append-system-prompt`, gemini `--skip-trust`)
+/// override, claude `--append-system-prompt`, antigravity `agy --prompt-interactive`)
 /// auditable without scrolling past hundreds of lines of view code.
 public enum MarkdownChatPillCommand {
     public struct LaunchPlan {
@@ -120,7 +120,7 @@ public enum MarkdownChatPillCommand {
                 return false
             }
             return markClaudeProjectTrusted(cwd: cwd)
-        case .gemini:
+        case .antigravity:
             return true
         }
     }
@@ -137,7 +137,7 @@ public enum MarkdownChatPillCommand {
         case .claude:
             guard let cwd = safeTrustCwd(vaultPath) else { return false }
             return markClaudeProjectTrusted(cwd: cwd)
-        case .gemini:
+        case .antigravity:
             return true
         }
     }
@@ -277,9 +277,9 @@ public enum MarkdownChatPillCommand {
 
     /// Per-agent CLI invocation tuned to keep the initial prompt on the agent
     /// path instead of a first-run trust dialog. Codex uses a per-process
-    /// config override, Gemini uses its official session-scoped `--skip-trust`
-    /// flag, and Claude relies on `prepareLaunchEnvironment` to pre-accept the
-    /// current cwd in Claude's project state when that file is writable.
+    /// config override, Antigravity receives cwd through cd + add-dir, and Claude relies
+    /// on `prepareLaunchEnvironment` to pre-accept the current cwd in Claude's
+    /// project state when that file is writable.
     private static func invocation(
         agent: MarkdownPillAgent,
         cwd: String,
@@ -309,9 +309,8 @@ public enum MarkdownChatPillCommand {
             return parts.joined(separator: " ")
         case .claude:
             return "cd \(shellQuote(cwd)) && claude --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
-        case .gemini:
-            let skipTrust = (trustEligible && safeTrustCwd(cwd) != nil) ? "--skip-trust " : ""
-            return "cd \(shellQuote(cwd)) && gemini \(skipTrust)--prompt-interactive \(shellQuote(visibleContextPrompt))"
+        case .antigravity:
+            return "cd \(shellQuote(cwd)) && agy --prompt-interactive --add-dir \(shellQuote(cwd)) \(shellQuote(visibleContextPrompt))"
         }
     }
 
@@ -321,9 +320,9 @@ public enum MarkdownChatPillCommand {
 
     /// 자동 trust 처리를 허용할지 판단. 빈 string / 상대경로 / filesystem root `/` /
     /// `"` 나 제어문자 포함 경로 / 실제로 존재하지 않는 경로는 모두 거절. 통과하면
-    /// standardized absolute path 반환. Claude 의 `.claude.json` 영구 쓰기, codex
-    /// `-c trust_level=trusted` override, gemini `--skip-trust` 모두 이 게이트를
-    /// 통과한 cwd 에서만 적용. tilde-prefixed 입력도 expand 후 검증해서 콜러가
+    /// standardized absolute path 반환. Claude 의 `.claude.json` 영구 쓰기와 codex
+    /// `-c trust_level=trusted` override 는 이 게이트를 통과한 cwd 에서만 적용.
+    /// tilde-prefixed 입력도 expand 후 검증해서 콜러가
     /// `~/...` 를 넘겨도 silent 거절되지 않게 한다.
     private static func safeTrustCwd(_ cwd: String) -> String? {
         guard !cwd.isEmpty else { return nil }

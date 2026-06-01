@@ -7,6 +7,7 @@ import UserNotifications
 import Sentry
 import WebKit
 import Combine
+import ZebraVault
 import ObjectiveC.runtime
 import Darwin
 
@@ -7092,11 +7093,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         sourceWindow preferredSourceWindow: NSWindow? = nil
     ) -> UUID {
         let windowId = UUID()
+        let shouldSendInitialWelcome = initialTerminalInput == nil
         let tabManager = TabManager(
             initialWorkspaceTitle: initialWorkspaceTitle,
             initialWorkingDirectory: initialWorkingDirectory,
             initialTerminalInput: initialTerminalInput,
-            autoWelcomeIfNeeded: initialTerminalInput == nil
+            autoWelcomeIfNeeded: false
         )
         if let tabManagerSnapshot = sessionWindowSnapshot?.tabManager {
             tabManager.restoreSessionSnapshot(tabManagerSnapshot)
@@ -7254,6 +7256,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         publishCmuxWindowLifecycle(name: "window.created", windowId: windowId, origin: "create")
         installFileDropOverlay(on: window, tabManager: tabManager)
+        if shouldSendInitialWelcome,
+           !UserDefaults.standard.bool(forKey: WelcomeSettings.shownKey),
+           let workspace = tabManager.selectedWorkspace {
+            sendWelcomeCommandWhenReady(to: workspace, markShownOnSend: true)
+        }
         if !shouldActivate || TerminalController.shouldSuppressSocketCommandActivation() {
             window.orderFront(nil)
             if shouldActivate, TerminalController.socketCommandAllowsInAppFocusMutations() {
@@ -7307,11 +7314,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func sendWelcomeCommandWhenReady(to workspace: Workspace, markShownOnSend: Bool = false) {
-        sendTextWhenReady("cmux welcome\n", to: workspace) {
+        let command = markShownOnSend ? automaticWelcomeCommand() : "cmux welcome\n"
+        sendTextWhenReady(command, to: workspace) {
             if markShownOnSend {
                 UserDefaults.standard.set(true, forKey: WelcomeSettings.shownKey)
             }
         }
+    }
+
+    private func automaticWelcomeCommand() -> String {
+        if ZebraAgentOnboardingStartup.shouldRunAutomaticWelcome() {
+            // Zebra first-run setup now starts from the sidebar checklist. Keep
+            // the initial terminal idle until the user picks a checklist row.
+            return ""
+        }
+        return "cmux welcome\n"
     }
 
     @objc func applyUpdateIfAvailable(_ sender: Any?) {

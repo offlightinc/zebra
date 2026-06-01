@@ -222,6 +222,9 @@ private struct ZebraEmailPanelHost: View {
                         onSubmit: { text, agent in
                             handlePillSubmit(text: text, agent: agent, workspace: workspace)
                         },
+                        onManageDefaultAgent: { agent in
+                            startDefaultAgentManager(workspace: workspace, agent: agent)
+                        },
                         onHeightChange: handleChatPillHeightChange
                     )
                 }
@@ -276,5 +279,35 @@ private struct ZebraEmailPanelHost: View {
             anchor: .contentAnchored(contentPanelId: panel.id, contentPaneId: paneId),
             markedBy: agentTerminals
         )
+    }
+
+    private func startDefaultAgentManager(workspace: Workspace, agent: ZebraAgentKind?) {
+        let cwd = defaultAgentManagerCWD()
+        guard let startupLine = ZebraAgentOnboardingScriptCommand.shellStartupLine(
+            command: .choosePrimary,
+            cwd: cwd,
+            agent: agent
+        ) else {
+            #if DEBUG
+            cmuxDebugLog("email.chatPill.defaultAgent.scriptMissing")
+            #endif
+            return
+        }
+        let launchAgent = agent.map(MarkdownPillAgent.init(agentKind:)) ?? MarkdownPillAgent.defaultAgent()
+        workspace.openZebraAgentTerminal(
+            startupLine: startupLine,
+            source: agentTerminalSource,
+            agent: launchAgent,
+            anchor: .contentAnchored(contentPanelId: panel.id, contentPaneId: paneId),
+            markedBy: agentTerminals
+        )
+    }
+
+    private func defaultAgentManagerCWD() -> String {
+        let vaultPath = vaultState.selectedVaultPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let vaultPath, !vaultPath.isEmpty {
+            return vaultPath
+        }
+        return NSHomeDirectory()
     }
 }

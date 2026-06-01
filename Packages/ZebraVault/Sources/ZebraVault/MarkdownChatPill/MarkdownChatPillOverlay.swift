@@ -12,6 +12,7 @@ public struct MarkdownChatPillOverlay: View {
     private let availableContentHeight: CGFloat?
     private let activeAgent: MarkdownPillAgent?
     private let onSubmit: (_ text: String, _ agent: MarkdownPillAgent) -> Void
+    private let onManageDefaultAgent: ((_ agent: ZebraAgentKind?) -> Void)?
     private let onHeightChange: ((CGFloat) -> Void)?
 
     public init(
@@ -20,6 +21,7 @@ public struct MarkdownChatPillOverlay: View {
         availableContentHeight: CGFloat? = nil,
         activeAgent: MarkdownPillAgent?,
         onSubmit: @escaping (_ text: String, _ agent: MarkdownPillAgent) -> Void,
+        onManageDefaultAgent: ((_ agent: ZebraAgentKind?) -> Void)? = nil,
         onHeightChange: ((CGFloat) -> Void)? = nil
     ) {
         self._isExpanded = isExpanded
@@ -27,6 +29,7 @@ public struct MarkdownChatPillOverlay: View {
         self.availableContentHeight = availableContentHeight
         self.activeAgent = activeAgent
         self.onSubmit = onSubmit
+        self.onManageDefaultAgent = onManageDefaultAgent
         self.onHeightChange = onHeightChange
     }
 
@@ -49,6 +52,7 @@ public struct MarkdownChatPillOverlay: View {
                 availableContentHeight: availableContentHeight,
                 activeAgent: activeAgent,
                 onSubmit: onSubmit,
+                onManageDefaultAgent: onManageDefaultAgent,
                 onHeightChange: onHeightChange
             )
             .padding(.horizontal, Self.horizontalInset)

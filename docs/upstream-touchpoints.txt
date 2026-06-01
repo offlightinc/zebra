@@ -3,7 +3,7 @@
 # allowlist — one path per line, blank lines and `#` comments ignored.
 
 # Adapter / DI seams
-Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment + tabManager-scoped Zebra socket bridge registration + ZebraSidebarDefaults.defaultWidth fallback
+Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment + tabManager-scoped Zebra socket bridge registration + ZebraSidebarDefaults.defaultWidth fallback + first automatic welcome command seam
 Sources/ContentView.swift                  # SidebarSlots composer + \.sidebarExtraLeadingInset + commandPalette PanelType.email branches
 Sources/Panels/PanelContentView.swift      # \.markdownPanelViewFactory + \.customPanelViewFactory + PanelType.email render branch
 Sources/Panels/MarkdownPanel.swift         # didCloseNotification + applyStatusChange + applyPropertyChange
@@ -28,6 +28,7 @@ Sources/WorkspaceContentView.swift         # upstream added: unread indicator pr
 Resources/Localizable.xcstrings
 Resources/markdown-viewer/shell.html      # compact source citation markers in web markdown renderer
 Resources/zebra-brain-sync               # Zebra-owned bundled brain sync script
+Resources/zebra-agent-onboarding         # Zebra-owned bundled agent onboarding script
 
 # Zebra-owned auth tenant — dev Stack Auth project ID + publishable client key
 # differ per fork. The cmux env-var overrides (CMUX_STACK_PROJECT_ID,

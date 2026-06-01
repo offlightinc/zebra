@@ -133,8 +133,8 @@ public struct BrainSyncIndicatorView: View {
         #if DEBUG
         NSLog("[BrainSync] indicator clicked. isSyncing=\(service.isSyncing) state=\(String(describing: service.state))")
         #endif
-        // Failure reason 일 때 click = default agent (UserDefaults 의 preferred,
-        // 첫 사용 시 codex) 로 즉시 agent terminal. synced/pending 일 때는 sync retry.
+        // Failure reason 일 때 click = BrainSync override/default agent 로 즉시
+        // agent terminal. synced/pending 일 때는 sync retry.
         if case let .failed(failedAt, failure)? = service.state, let onFailureAgentSelect {
             onFailureAgentSelect(BrainSyncAgentPreference.current, failedAt, failure)
             return
