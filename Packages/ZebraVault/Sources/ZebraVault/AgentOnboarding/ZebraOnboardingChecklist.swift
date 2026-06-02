@@ -43,6 +43,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     private let fileManager: FileManager
     private let homeDirectoryPath: String
+    private let gbrainOnboardingStore: ZebraGBrainOnboardingStore
     private var selectedVaultPath: String?
     private var emailConnected = false
     private var launchGeneration = 0
@@ -72,10 +73,16 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     public init(
         fileManager: FileManager = .default,
-        homeDirectoryPath: String = NSHomeDirectory()
+        homeDirectoryPath: String = NSHomeDirectory(),
+        gbrainOnboardingStateURL: URL = ZebraGBrainOnboardingStore.defaultStateURL()
     ) {
         self.fileManager = fileManager
         self.homeDirectoryPath = Self.standardizedPath(homeDirectoryPath)
+        self.gbrainOnboardingStore = ZebraGBrainOnboardingStore(
+            stateURL: gbrainOnboardingStateURL,
+            fileManager: fileManager,
+            homeDirectoryPath: homeDirectoryPath
+        )
 #if DEBUG
         self.developmentCompletedStepIDs = Self.loadDevelopmentCompletedStepIDs()
 #endif
@@ -180,13 +187,12 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         if !ZebraAgentOnboardingStartup.shouldRunAutomaticWelcome() {
             completed.insert(.agent)
         }
-        // TODO(Zebra onboarding): Do not complete steps 2 or 3 by scanning the
-        // currently selected vault. The checklist is Zebra onboarding state, so
-        // it must stay stable whether the user is looking at ~/,
-        // ~/brain-offlight, or any other vault. Final step 2 should write a
-        // Zebra-owned GBrain setup receipt that records the verified source /
-        // profile target. Final step 3 should read that receipt and verify the
-        // adapter on the receipt's target, not on `selectedVaultPath`.
+        if gbrainOnboardingStore.isSetupCompleted(selectedVaultPath: selectedVaultPath) {
+            completed.insert(.gbrain)
+        }
+        // TODO(Zebra onboarding): Final step 3 should read the Zebra-owned
+        // GBrain setup receipt and verify the adapter on the resolved target,
+        // not by scanning `selectedVaultPath` directly.
         if emailConnected || isClawvisorEmailConfigured {
             completed.insert(.email)
         }
@@ -210,6 +216,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         let directoryPaths = Set([
             ZebraAgentOnboardingStartup.defaultStateURL().deletingLastPathComponent().path,
             ZebraAgentPreferenceStore.defaultPreferencesURL().deletingLastPathComponent().path,
+            ZebraGBrainOnboardingStore.defaultStateURL().deletingLastPathComponent().path,
         ])
 
         for directoryPath in directoryPaths {
@@ -333,7 +340,19 @@ public enum ZebraOnboardingChecklistCommand {
                 cwd: cwd
             )
         case .gbrain:
-            return shellScriptStartupLine(cwd: cwd, script: gbrainCheckScript)
+            let agent = MarkdownPillAgent.defaultAgent()
+            guard let launch = ZebraGBrainOnboardingStore().prepareLaunch(
+                selectedVaultPath: selectedVaultPath,
+                selectedAgent: agent
+            ) else {
+                return nil
+            }
+            return agentStartupLine(
+                cwd: launch.launchDirectory,
+                prompt: launch.startupPrompt,
+                agent: agent,
+                shellEnvironmentPrefix: launch.shellEnvironmentPrefix
+            )
         case .adapter:
             return agentStartupLine(
                 cwd: cwd,
@@ -361,71 +380,28 @@ public enum ZebraOnboardingChecklistCommand {
         }
     }
 
-    private static var gbrainCheckScript: String {
-        """
-        printf 'Zebra gbrain setup check\\n\\n'
-        printf 'Vault: %s\\n\\n' "$PWD"
-        if command -v gbrain >/dev/null 2>&1; then
-          printf 'gbrain CLI:\\n'
-          gbrain --version || true
-          printf '\\n'
-        elif [ -x "$HOME/.bun/bin/gbrain" ]; then
-          printf 'gbrain CLI candidate: %s\\n' "$HOME/.bun/bin/gbrain"
-          "$HOME/.bun/bin/gbrain" --version || true
-          printf '\\n'
-        elif [ -x "$HOME/gbrain/bin/gbrain" ]; then
-          printf 'gbrain CLI candidate: %s\\n' "$HOME/gbrain/bin/gbrain"
-          "$HOME/gbrain/bin/gbrain" --version || true
-          printf '\\n'
-        else
-          printf 'gbrain CLI not found on PATH. Install or expose gbrain before continuing.\\n\\n'
-        fi
-        printf 'GBrain profile wrappers:\\n'
-        found_wrapper=0
-        for wrapper in "$HOME"/.gbrain-profiles/*/gbrain-*; do
-          [ -x "$wrapper" ] || continue
-          found_wrapper=1
-          printf '  %s\\n' "$wrapper"
-        done
-        if [ "$found_wrapper" -eq 0 ]; then
-          printf '  none found\\n'
-        fi
-        printf '\\n'
-        if [ -s .gbrain-mount ]; then
-          printf '[ok] .gbrain-mount found: '
-          head -n 1 .gbrain-mount
-        elif [ -s .gbrain-source ]; then
-          printf '[ok] .gbrain-source found: '
-          head -n 1 .gbrain-source
-        else
-          printf 'No non-empty .gbrain-mount or .gbrain-source marker found in this vault. Use the vault menu to select your brain repo or initialize one before continuing.\\n'
-        fi
-        if [ -d tasks ] && [ -d goals ]; then
-          printf '[ok] tasks/ and goals/ directories are present.\\n'
-        else
-          printf 'tasks/ or goals/ directory is missing; the brain schema may not be initialized yet.\\n'
-        fi
-        """
-    }
-
-    private static func agentStartupLine(cwd: String, prompt: String) -> String {
-        let agent = MarkdownPillAgent.defaultAgent()
+    private static func agentStartupLine(
+        cwd: String,
+        prompt: String,
+        agent: MarkdownPillAgent = MarkdownPillAgent.defaultAgent(),
+        shellEnvironmentPrefix: String = ""
+    ) -> String {
         _ = MarkdownChatPillCommand.prepareLaunchEnvironment(
             agent: agent,
             markdownFilePath: nil,
             launchDirectory: cwd
         )
-        return MarkdownChatPillCommand.shellStartupLine(
+        let startupLine = MarkdownChatPillCommand.shellStartupLine(
             agent: agent,
             markdownFilePath: nil,
             surface: .fallback(typeLabel: "onboarding"),
             userPrompt: prompt,
             launchDirectory: cwd
         )
-    }
-
-    private static func shellScriptStartupLine(cwd: String, script: String) -> String {
-        "cd \(ZebraAgentLaunchCommand.shellQuote(cwd)) && /bin/bash -lc \(ZebraAgentLaunchCommand.shellQuote(script))\r"
+        if shellEnvironmentPrefix.isEmpty {
+            return startupLine
+        }
+        return "\(shellEnvironmentPrefix)\(startupLine)"
     }
 
     private static func launchDirectory(selectedVaultPath: String?) -> String {
