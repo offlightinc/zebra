@@ -196,9 +196,6 @@ public struct ZebraGBrainOnboardingStore {
         }
 
         var reasons: [String] = []
-        if resolved.target.complete != true {
-            reasons.append("target_incomplete")
-        }
         if !targetResolutionVerifies(resolved.target.targetResolution) {
             reasons.append("target_confirmation_missing")
         }
@@ -224,9 +221,8 @@ public struct ZebraGBrainOnboardingStore {
         selectedAgent: MarkdownPillAgent
     ) -> LaunchContext? {
         guard let helperPath = installHelperScript() else { return nil }
-        let launchDirectory = standardizedExistingDirectoryPath(selectedVaultPath)
-            ?? fallbackHomeDirectory()
         let selectedVault = standardizedExistingDirectoryPath(selectedVaultPath)
+        let launchDirectory = selectedVault ?? onboardingWorkDirectoryPath()
         let allowTrustedAutomation = selectedVault != nil
         let currentResult = completionResult(selectedVaultPath: selectedVault)
         let docsSnapshot = prepareDocsSnapshot()
@@ -258,7 +254,9 @@ public struct ZebraGBrainOnboardingStore {
                 method: nil,
                 confirmedAt: nil
             )
-        let waitingForUser = selectedVault == nil && resolvedTargetKey == nil ? "target_resolution" : nil
+        let waitingForUser = selectedVault == nil && resolvedTargetKey == nil
+            ? "topology_and_brain_repo_target"
+            : nil
         let nextSection = nextSection(in: state, completedSections: completedSections)
         state.progress = Progress(
             launchDirectory: launchDirectory,
@@ -309,9 +307,9 @@ public struct ZebraGBrainOnboardingStore {
             """
         } else {
             targetContext = """
-            No Zebra vault is selected. You are starting from the home directory only as the launch directory.
+            No Zebra vault is selected. You are starting from Zebra's onboarding work directory, not a brain repo target.
             Do not implicitly use the home directory as the GBrain source target.
-            Before import, sync, source registration, or receipt write, ask the user where their markdown/brain repo is, or ask whether to create a new brain repo.
+            Before `gbrain init`, import, sync, source registration, or receipt write, ask the user to choose topology and where their markdown/brain repo is, or ask whether to create a new brain repo.
             You may use the home directory only if the user explicitly confirms it as the brain repo target, then use targetResolution.method=user_confirmed_home.
             Discovery scans are allowed only to present candidates. Do not choose or import a discovered candidate until the user confirms it.
             """
@@ -324,6 +322,7 @@ public struct ZebraGBrainOnboardingStore {
         complete: \(completionResult.isComplete ? "true" : "false")
         reasons: \(completionResult.reasons.isEmpty ? "none" : completionResult.reasons.joined(separator: ", "))
         next section: \(state.progress?.nextSection ?? "unknown")
+        waitingForUser: \(state.progress?.waitingForUser ?? "none")
         """
 
         return """
@@ -349,6 +348,13 @@ public struct ZebraGBrainOnboardingStore {
 
         State file:
         \(statePath)
+
+        Zebra hard gates:
+        - Zebra hard gates override INSTALL_FOR_AGENTS.md command order.
+        - `waitingForUser` is a Zebra block reason, not an INSTALL_FOR_AGENTS.md section.
+        - Continue to follow INSTALL_FOR_AGENTS.md `##` section order, but do not run Step 3 commands until this block reason is resolved.
+        - In Step 3, do not run `gbrain init`, `gbrain init --pglite`, Supabase setup, import, sync, or source registration until the user has explicitly chosen both topology and brain repo target.
+        - Required Step 3 decisions: topology is local PGLite or Supabase; brain repo target is an existing repo path or a new repo path.
 
         Required target-resolution guard:
         - Allowed targetResolution.method values: selected_vault, user_existing_repo, user_created_repo, user_confirmed_home.
@@ -796,6 +802,7 @@ public struct ZebraGBrainOnboardingStore {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        process.environment = processEnvironment()
         if let cwd {
             process.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
         }
@@ -895,8 +902,12 @@ public struct ZebraGBrainOnboardingStore {
         return standardized
     }
 
-    private func fallbackHomeDirectory() -> String {
-        homeDirectoryPath.isEmpty ? "/" : homeDirectoryPath
+    private func onboardingWorkDirectoryPath() -> String {
+        let directory = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-work", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return Self.standardizedPath(directory.path)
     }
 
     private func executablePath(_ path: String?) -> String? {
@@ -905,7 +916,7 @@ public struct ZebraGBrainOnboardingStore {
     }
 
     private func findExecutableOnPATH(named name: String) -> String? {
-        let path = environment["PATH"] ?? ""
+        let path = toolSearchPath()
         for directory in path.split(separator: ":") {
             let candidate = (String(directory) as NSString).appendingPathComponent(name)
             if fileManager.isExecutableFile(atPath: candidate) {
@@ -913,6 +924,45 @@ public struct ZebraGBrainOnboardingStore {
             }
         }
         return nil
+    }
+
+    private func processEnvironment() -> [String: String] {
+        var output = environment
+        output["PATH"] = toolSearchPath()
+        if output["HOME"] == nil {
+            output["HOME"] = homeDirectoryPath
+        }
+        if output["BUN_INSTALL"] == nil {
+            output["BUN_INSTALL"] = (homeDirectoryPath as NSString).appendingPathComponent(".bun")
+        }
+        return output
+    }
+
+    private func toolSearchPath() -> String {
+        let home = homeDirectoryPath
+        let fallbackDirectories = [
+            (home as NSString).appendingPathComponent(".bun/bin"),
+            (home as NSString).appendingPathComponent(".local/bin"),
+            (home as NSString).appendingPathComponent("gbrain/bin"),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+        var seen = Set<String>()
+        var directories: [String] = []
+        for directory in ((environment["PATH"] ?? "").split(separator: ":").map(String.init) + fallbackDirectories) {
+            let standardized = Self.standardizedPath((directory as NSString).expandingTildeInPath)
+            guard !standardized.isEmpty,
+                  !seen.contains(standardized) else {
+                continue
+            }
+            seen.insert(standardized)
+            directories.append(standardized)
+        }
+        return directories.joined(separator: ":")
     }
 
     private func nonEmpty(_ value: String?) -> String? {

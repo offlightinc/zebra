@@ -96,6 +96,56 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertFalse(store.isSetupCompleted(selectedVaultPath: vault.path))
     }
 
+    func testLiveVerifierFindsBunShimWhenAppPathIsEmpty() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "brain\n".write(to: vault.appendingPathComponent(".gbrain-source"), atomically: true, encoding: .utf8)
+        try installFakeBunBackedGBrain(root: root, sourceId: "brain", localPath: vault.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: vault.path,
+            sourceId: "brain",
+            method: "user_created_repo"
+        )
+
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": ""]
+        )
+
+        XCTAssertTrue(store.isSetupCompleted(selectedVaultPath: nil))
+    }
+
+    func testLiveVerifierCanRecoverStaleIncompleteReceipt() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "brain\n".write(to: vault.appendingPathComponent(".gbrain-source"), atomically: true, encoding: .utf8)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: vault.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: vault.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            complete: false
+        )
+
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": bin.path]
+        )
+
+        XCTAssertTrue(store.isSetupCompleted(selectedVaultPath: nil))
+        let target = try receiptTarget(in: stateURL, targetPath: vault.path)
+        XCTAssertEqual(target["complete"] as? Bool, true)
+        XCTAssertEqual(target["reasons"] as? [String], [])
+    }
+
     func testPrepareLaunchWithoutSelectedVaultRequiresTargetResolution() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root.appendingPathComponent("state.json")
@@ -106,12 +156,21 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
 
         let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let expectedWorkDirectory = root.appendingPathComponent("gbrain-work", isDirectory: true)
+        var isDirectory: ObjCBool = false
 
-        XCTAssertEqual(launch.launchDirectory, root.path)
+        XCTAssertEqual(launch.launchDirectory, expectedWorkDirectory.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: expectedWorkDirectory.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
         XCTAssertFalse(launch.allowTrustedAutomation)
         XCTAssertTrue(launch.startupPrompt.contains("Do not implicitly use the home directory"))
+        XCTAssertTrue(launch.startupPrompt.contains("do not run `gbrain init`"))
+        XCTAssertTrue(launch.startupPrompt.contains("waitingForUser: topology_and_brain_repo_target"))
         XCTAssertTrue(launch.startupPrompt.contains("user_existing_repo"))
         XCTAssertTrue(launch.shellEnvironmentPrefix.contains("ZEBRA_GBRAIN_STATE"))
+        let progress = try progressObject(in: stateURL)
+        XCTAssertEqual(progress["waitingForUser"] as? String, "topology_and_brain_repo_target")
+        XCTAssertEqual(progress["nextSection"] as? String, "Step 3: Create the Brain")
     }
 
     func testPrepareLaunchAddsDocsSnapshotManifest() throws {
@@ -192,7 +251,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         _ stateURL: URL,
         targetPath: String,
         sourceId: String,
-        method: String
+        method: String,
+        complete: Bool = true
     ) throws {
         let key = "vault:\((targetPath as NSString).standardizingPath)"
         let json = """
@@ -208,7 +268,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "vaultPath": "\(targetPath)",
                 "sourceId": "\(sourceId)",
                 "profileId": "default",
-                "complete": true,
+                "complete": \(complete ? "true" : "false"),
                 "targetResolution": {
                   "method": "\(method)",
                   "confirmedAt": "2026-06-02T00:00:00Z"
@@ -226,14 +286,48 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         try json.write(to: stateURL, atomically: true, encoding: .utf8)
     }
 
+    private func receiptTarget(in stateURL: URL, targetPath: String) throws -> [String: Any] {
+        let data = try Data(contentsOf: stateURL)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let receipt = try XCTUnwrap(object["receipt"] as? [String: Any])
+        let targets = try XCTUnwrap(receipt["targets"] as? [String: Any])
+        let key = "vault:\((targetPath as NSString).standardizingPath)"
+        return try XCTUnwrap(targets[key] as? [String: Any])
+    }
+
     private func installFakeGBrain(root: URL, sourceId: String, localPath: String) throws -> URL {
         let bin = root.appendingPathComponent("bin", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let script = bin.appendingPathComponent("gbrain", isDirectory: false)
+        try writeFakeGBrainScript(script, sourceId: sourceId, localPath: localPath, shebang: "#!/bin/sh")
+        return bin
+    }
+
+    private func installFakeBunBackedGBrain(root: URL, sourceId: String, localPath: String) throws {
+        let bin = root.appendingPathComponent(".bun/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let bun = bin.appendingPathComponent("fakebun", isDirectory: false)
+        try """
+        #!/bin/sh
+        exec /bin/sh "$@"
+        """
+        .write(to: bun, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bun.path)
+
+        let script = bin.appendingPathComponent("gbrain", isDirectory: false)
+        try writeFakeGBrainScript(script, sourceId: sourceId, localPath: localPath, shebang: "#!/usr/bin/env fakebun")
+    }
+
+    private func writeFakeGBrainScript(
+        _ script: URL,
+        sourceId: String,
+        localPath: String,
+        shebang: String
+    ) throws {
         let escapedPath = localPath.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         let content = """
-        #!/bin/sh
+        \(shebang)
         if [ "$1" = "--version" ]; then
           echo "gbrain test"
           exit 0
@@ -254,7 +348,6 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         """
         try content.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
-        return bin
     }
 
     private func markCompletedSection(_ section: String, in stateURL: URL) throws {
