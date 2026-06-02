@@ -2,6 +2,10 @@ import XCTest
 @testable import ZebraVault
 
 final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
+    private static let vaultPathsDefaultsKey = "verticalTabsSidebar.vaultPaths"
+    private static let selectedVaultPathDefaultsKey = "verticalTabsSidebar.selectedVaultPath"
+    private static let selectedVaultExplicitDefaultsKey = "verticalTabsSidebar.selectedVaultExplicitlyChosen"
+
     @MainActor
     func testVaultSelectionDefaultsToHomeDirectoryWhenNothingStored() throws {
         let defaults = try makeDefaults()
@@ -62,6 +66,35 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
         XCTAssertEqual(restoredState.selectedVaultPath, brainOfflight.path)
         XCTAssertTrue(restoredState.selectedVaultWasExplicitlyChosen)
         XCTAssertTrue(restoredState.vaults.contains { $0.path == brainOfflight.path })
+    }
+
+    @MainActor
+    func testLegacyStoredHomeSelectionIsNotTreatedAsExplicitVaultChoice() throws {
+        let defaults = try makeDefaults()
+        let home = try makeTemporaryDirectory(named: "home")
+        defaults.set([home.path], forKey: Self.vaultPathsDefaultsKey)
+        defaults.set(home.path, forKey: Self.selectedVaultPathDefaultsKey)
+
+        let state = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
+
+        XCTAssertEqual(state.selectedVaultPath, home.path)
+        XCTAssertFalse(state.selectedVaultWasExplicitlyChosen)
+        XCTAssertFalse(defaults.bool(forKey: Self.selectedVaultExplicitDefaultsKey))
+    }
+
+    @MainActor
+    func testStoredHomeSelectionStaysExplicitWhenMarkerExists() throws {
+        let defaults = try makeDefaults()
+        let home = try makeTemporaryDirectory(named: "home")
+        defaults.set([home.path], forKey: Self.vaultPathsDefaultsKey)
+        defaults.set(home.path, forKey: Self.selectedVaultPathDefaultsKey)
+        defaults.set(true, forKey: Self.selectedVaultExplicitDefaultsKey)
+
+        let state = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
+
+        XCTAssertEqual(state.selectedVaultPath, home.path)
+        XCTAssertTrue(state.selectedVaultWasExplicitlyChosen)
+        XCTAssertTrue(defaults.bool(forKey: Self.selectedVaultExplicitDefaultsKey))
     }
 
     func testTaskStateRoundTripsByRootPath() throws {
