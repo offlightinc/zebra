@@ -146,7 +146,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(target["reasons"] as? [String], [])
     }
 
-    func testPrepareLaunchWithoutSelectedVaultRequiresTargetResolution() throws {
+    func testPrepareLaunchWithoutSelectedVaultRequiresTopologyResolutionFirst() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root.appendingPathComponent("state.json")
         let store = ZebraGBrainOnboardingStore(
@@ -166,14 +166,46 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(launch.allowLaunchDirectoryTrust)
         XCTAssertTrue(launch.startupPrompt.contains("Do not implicitly use the home directory"))
         XCTAssertTrue(launch.startupPrompt.contains("do not run `gbrain init`"))
-        XCTAssertTrue(launch.startupPrompt.contains("waitingForUser: topology_and_brain_repo_target"))
-        XCTAssertTrue(launch.startupPrompt.contains("Ask only for these Step 3 decisions now"))
+        XCTAssertTrue(launch.startupPrompt.contains("waitingForUser: topology_resolution"))
+        XCTAssertTrue(launch.startupPrompt.contains("Ask only for the Step 3 topology decision now"))
+        XCTAssertTrue(launch.startupPrompt.contains("Do not ask for the brain repo target in this gate"))
         XCTAssertTrue(launch.startupPrompt.contains("Do not ask for Step 2 API keys in this gate"))
+        XCTAssertTrue(launch.startupPrompt.contains("Target-resolution timing"))
         XCTAssertFalse(launch.startupPrompt.contains("User decisions you must stop and ask for"))
-        XCTAssertTrue(launch.startupPrompt.contains("user_existing_repo"))
         XCTAssertTrue(launch.shellEnvironmentPrefix.contains("ZEBRA_GBRAIN_STATE"))
         let progress = try progressObject(in: stateURL)
-        XCTAssertEqual(progress["waitingForUser"] as? String, "topology_and_brain_repo_target")
+        XCTAssertEqual(progress["waitingForUser"] as? String, "topology_resolution")
+        XCTAssertEqual(progress["nextSection"] as? String, "Step 3: Create the Brain")
+    }
+
+    func testPrepareLaunchPreservesBrainRepoTargetResolutionGate() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        try """
+        {
+          "schemaVersion": 1,
+          "progress": {
+            "launchDirectory": "\(root.path)",
+            "completedSections": [],
+            "waitingForUser": "brain_repo_target_resolution",
+            "nextSection": "Step 3: Create the Brain"
+          }
+        }
+        """.write(to: stateURL, atomically: true, encoding: .utf8)
+
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let progress = try progressObject(in: stateURL)
+
+        XCTAssertTrue(launch.startupPrompt.contains("waitingForUser: brain_repo_target_resolution"))
+        XCTAssertTrue(launch.startupPrompt.contains("Ask only for the Step 3 brain repo target now"))
+        XCTAssertFalse(launch.startupPrompt.contains("Ask only for the Step 3 topology decision now"))
+        XCTAssertEqual(progress["waitingForUser"] as? String, "brain_repo_target_resolution")
         XCTAssertEqual(progress["nextSection"] as? String, "Step 3: Create the Brain")
     }
 

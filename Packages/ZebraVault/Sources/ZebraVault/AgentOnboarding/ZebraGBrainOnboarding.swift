@@ -255,9 +255,11 @@ public struct ZebraGBrainOnboardingStore {
                 method: nil,
                 confirmedAt: nil
             )
-        let waitingForUser = selectedVault == nil && resolvedTargetKey == nil
-            ? "topology_and_brain_repo_target"
-            : nil
+        let waitingForUser = unresolvedInitialStep3Decision(
+            selectedVault: selectedVault,
+            resolvedTargetKey: resolvedTargetKey,
+            previousWaitingForUser: previousProgress?.waitingForUser
+        )
         let nextSection = nextSection(in: state, completedSections: completedSections)
         state.progress = Progress(
             launchDirectory: launchDirectory,
@@ -311,7 +313,8 @@ public struct ZebraGBrainOnboardingStore {
             targetContext = """
             No Zebra vault is selected. You are starting from Zebra's onboarding work directory, not a brain repo target.
             Do not implicitly use the home directory as the GBrain source target.
-            Before `gbrain init`, import, sync, source registration, or receipt write, ask the user to choose topology and where their markdown/brain repo is, or ask whether to create a new brain repo.
+            Before `gbrain init`, ask only for the topology decision. Do not ask for the brain repo target in the same prompt.
+            After topology is chosen and `gbrain init`/doctor have run, ask separately where their markdown/brain repo is, or ask whether to create a new brain repo before import, sync, source registration, or receipt write.
             You may use the home directory only if the user explicitly confirms it as the brain repo target, then use targetResolution.method=user_confirmed_home.
             Discovery scans are allowed only to present candidates. Do not choose or import a discovered candidate until the user confirms it.
             """
@@ -320,6 +323,7 @@ public struct ZebraGBrainOnboardingStore {
         let docsContext = docsPromptContext(state: state)
         let sectionContext = sectionPromptContext(state: state)
         let decisionContext = decisionPromptContext(state: state)
+        let targetResolutionGuard = targetResolutionGuardContext(state: state)
         let statusContext = """
         Current Zebra verification status:
         complete: \(completionResult.isComplete ? "true" : "false")
@@ -357,16 +361,11 @@ public struct ZebraGBrainOnboardingStore {
         Zebra hard gates:
         - Zebra hard gates override INSTALL_FOR_AGENTS.md command order.
         - `waitingForUser` is a Zebra block reason, not an INSTALL_FOR_AGENTS.md section.
-        - Continue to follow INSTALL_FOR_AGENTS.md `##` section order, but do not run Step 3 commands until this block reason is resolved.
-        - In Step 3, do not run `gbrain init`, `gbrain init --pglite`, Supabase setup, import, sync, or source registration until the user has explicitly chosen both topology and brain repo target.
-        - Required Step 3 decisions: topology is local PGLite or Supabase; brain repo target is an existing repo path or a new repo path.
+        - Continue to follow INSTALL_FOR_AGENTS.md `##` section order, but respect the current `waitingForUser` block reason first.
+        - In Step 3, do not run `gbrain init`, `gbrain init --pglite`, or Supabase setup until the user has explicitly chosen topology.
+        - In Step 3, do not import, sync, register a source, or write a completion receipt until the user has explicitly resolved the brain repo target.
 
-        Required target-resolution guard:
-        - Allowed targetResolution.method values: selected_vault, user_existing_repo, user_created_repo, user_confirmed_home.
-        - Forbidden target choices: implicit_home, auto_discovered_candidate.
-        - Before import/sync/source registration/receipt write, resolve the brain repo target with the user unless the selected vault is being used.
-        - If using an existing repo the user names, use method=user_existing_repo.
-        - If creating a new repo, ask for the path first, create it, git init there if needed, then use method=user_created_repo.
+        \(targetResolutionGuard)
 
         Progress reporting:
         - Before a section: `zebra-gbrain-onboarding report --status started --section "<section title>"`
@@ -646,16 +645,34 @@ public struct ZebraGBrainOnboardingStore {
         """
     }
 
+    private func unresolvedInitialStep3Decision(
+        selectedVault: String?,
+        resolvedTargetKey: String?,
+        previousWaitingForUser: String?
+    ) -> String? {
+        guard selectedVault == nil && resolvedTargetKey == nil else { return nil }
+        if previousWaitingForUser == "brain_repo_target_resolution" {
+            return previousWaitingForUser
+        }
+        return "topology_resolution"
+    }
+
     private func decisionPromptContext(state: State) -> String {
         let nextSection = state.progress?.nextSection ?? ""
         let waitingForUser = state.progress?.waitingForUser
-        if waitingForUser == "topology_and_brain_repo_target" {
+        if waitingForUser == "topology_resolution" {
             return """
             Current user-decision gate:
-            Ask only for these Step 3 decisions now:
-            - topology: local PGLite or Supabase/Postgres
-            - brain repo target: existing markdown/brain repo path or new repo path to create
+            Ask only for the Step 3 topology decision now: local PGLite or Supabase/Postgres.
+            Do not ask for the brain repo target in this gate. Ask for that later, after topology is chosen and Step 3 init/doctor have run.
             Do not ask for Step 2 API keys in this gate. Ask for credentials later only if the current section or command actually requires them.
+            """
+        }
+        if waitingForUser == "brain_repo_target_resolution" {
+            return """
+            Current user-decision gate:
+            Ask only for the Step 3 brain repo target now: an existing markdown/brain repo path or a new repo path to create.
+            Do not ask for topology in this gate. Do not ask for Step 2 API keys unless the current Step 3 command refuses to continue without one.
             """
         }
         if nextSection.localizedCaseInsensitiveContains("Step 2") {
@@ -675,6 +692,24 @@ public struct ZebraGBrainOnboardingStore {
         return """
         Current user-decision gate:
         Ask only for decisions required by the current section.
+        """
+    }
+
+    private func targetResolutionGuardContext(state: State) -> String {
+        if state.progress?.waitingForUser == "topology_resolution" {
+            return """
+            Target-resolution timing:
+            - Do not ask for the brain repo target in the topology prompt.
+            - After topology is chosen and Step 3 init/doctor have run, ask separately for the brain repo target before import, sync, source registration, or receipt write.
+            """
+        }
+        return """
+        Required target-resolution guard:
+        - Allowed targetResolution.method values: selected_vault, user_existing_repo, user_created_repo, user_confirmed_home.
+        - Forbidden target choices: implicit_home, auto_discovered_candidate.
+        - Before import/sync/source registration/receipt write, resolve the brain repo target with the user unless the selected vault is being used.
+        - If using an existing repo the user names, use method=user_existing_repo.
+        - If creating a new repo, ask for the path first, create it, git init there if needed, then use method=user_created_repo.
         """
     }
 
