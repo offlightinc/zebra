@@ -1258,7 +1258,7 @@ verify_and_complete_agent_ready() {
   local agent="$1"
   printf 'Checking %s readiness...\n' "$(display_name "$agent")"
   if complete_if_agent_ready "$agent" readiness-probe; then
-    printf '\nZebra verified %s readiness. Onboarding is complete.\n' "$(display_name "$agent")"
+    printf '\nZebra saved %s as your primary agent.\n' "$(display_name "$agent")"
     return 0
   fi
   printf '\nZebra could not verify %s readiness yet.\n' "$(display_name "$agent")"
@@ -1324,7 +1324,7 @@ launch_selected_agent() {
 
   if ready_event_exists "$agent"; then
     stop_readiness_watcher "$readiness_watcher_pid"
-    printf '\nZebra onboarding is complete.\n'
+    printf '\nZebra saved %s as your primary agent.\n' "$(display_name "$agent")"
     return 0
   fi
 
@@ -1404,7 +1404,7 @@ resume_existing_flow() {
     complete)
       if [[ -n "$SAVED_PRIMARY" ]]; then
         RESUME_FLOW_HANDLED=1
-        printf 'Zebra agent onboarding is already complete.\n'
+        printf 'Zebra already has %s saved as your primary agent.\n' "$(display_name "$SAVED_PRIMARY")"
       fi
       return 0
       ;;

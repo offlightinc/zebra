@@ -347,12 +347,7 @@ public enum ZebraOnboardingChecklistCommand {
             ) else {
                 return nil
             }
-            return agentStartupLine(
-                cwd: launch.launchDirectory,
-                prompt: launch.startupPrompt,
-                agent: agent,
-                shellEnvironmentPrefix: launch.shellEnvironmentPrefix
-            )
+            return gbrainSetupAgentStartupLine(launch: launch, agent: agent)
         case .adapter:
             return agentStartupLine(
                 cwd: cwd,
@@ -378,6 +373,25 @@ public enum ZebraOnboardingChecklistCommand {
                 """
             )
         }
+    }
+
+    private static func gbrainSetupAgentStartupLine(
+        launch: ZebraGBrainOnboardingStore.LaunchContext,
+        agent: MarkdownPillAgent
+    ) -> String {
+        let cwd = launch.launchDirectory
+        let prompt = launch.startupPrompt
+        _ = MarkdownChatPillCommand.prepareLaunchEnvironment(
+            agent: agent,
+            markdownFilePath: nil,
+            launchDirectory: cwd
+        )
+        let startupLine = MarkdownChatPillCommand.shellStartupLineForGBrainSetup(
+            agent: agent,
+            cwd: cwd,
+            userPrompt: prompt
+        )
+        return "\(launch.shellEnvironmentPrefix)\(startupLine)"
     }
 
     private static func agentStartupLine(

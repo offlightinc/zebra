@@ -218,6 +218,18 @@ public enum MarkdownChatPillCommand {
         return "\(invocation(agent: agent, cwd: cwd, trustEligible: trustEligible, contextPrefix: contextPrefix, prompt: userPrompt))\r"
     }
 
+    public static func shellStartupLineForGBrainSetup(
+        agent: MarkdownPillAgent,
+        cwd: String,
+        userPrompt: String
+    ) -> String {
+        let contextPrefix = MarkdownChatPillContextPrefix.build(
+            markdownFilePath: nil,
+            surface: .fallback(typeLabel: "onboarding")
+        )
+        return "\(invocation(agent: agent, cwd: cwd, trustEligible: true, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup))\r"
+    }
+
     public static func worktreeFrontmatterPath(_ markdownContent: String?) -> String? {
         guard let markdownContent,
               let block = FrontmatterUtils.extractFrontmatterBlock(from: markdownContent) else {
@@ -285,7 +297,8 @@ public enum MarkdownChatPillCommand {
         cwd: String,
         trustEligible: Bool,
         contextPrefix: String,
-        prompt: String
+        prompt: String,
+        mode: InvocationMode = .standard
     ) -> String {
         let promptArgument = singleLineShellArgument(prompt)
         // Visible context = surface advisory + gbrain advisory + blank line + user prompt
@@ -305,13 +318,24 @@ public enum MarkdownChatPillCommand {
                 let trustOverride = "projects.\"\(trustCwd)\".trust_level=\"trusted\""
                 parts.append("-c \(shellQuote(trustOverride))")
             }
+            if mode == .gbrainSetup {
+                parts.append("--sandbox workspace-write")
+                parts.append("--ask-for-approval on-request")
+                parts.append("-c \(shellQuote("approvals_reviewer=\"auto_review\""))")
+            }
             parts.append(shellQuote(visibleContextPrompt))
             return parts.joined(separator: " ")
         case .claude:
-            return "cd \(shellQuote(cwd)) && claude --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
+            let permissionMode = mode == .gbrainSetup ? " --permission-mode auto" : ""
+            return "cd \(shellQuote(cwd)) && claude\(permissionMode) --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
         case .antigravity:
             return "cd \(shellQuote(cwd)) && agy --prompt-interactive --add-dir \(shellQuote(cwd)) \(shellQuote(visibleContextPrompt))"
         }
+    }
+
+    private enum InvocationMode {
+        case standard
+        case gbrainSetup
     }
 
     private static func standardizedPath(_ path: String) -> String {

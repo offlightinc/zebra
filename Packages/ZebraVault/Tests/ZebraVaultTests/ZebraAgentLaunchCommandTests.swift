@@ -65,6 +65,38 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(line.contains("gemini"))
     }
 
+    func testGBrainCodexLaunchUsesAutoReviewWithoutDroppingTrustOverride() throws {
+        let cwd = try makeTemporaryDirectory()
+
+        let line = MarkdownChatPillCommand.shellStartupLineForGBrainSetup(
+            agent: .codex,
+            cwd: cwd.path,
+            userPrompt: "Set up GBrain"
+        )
+
+        XCTAssertTrue(line.contains("cd '\(cwd.path)' && codex"))
+        XCTAssertTrue(line.contains("-C '\(cwd.path)'"))
+        XCTAssertTrue(line.contains("--sandbox workspace-write"))
+        XCTAssertTrue(line.contains("--ask-for-approval on-request"))
+        XCTAssertTrue(line.contains("'approvals_reviewer=\"auto_review\"'"))
+        XCTAssertTrue(line.contains("'projects.\"\(cwd.path)\".trust_level=\"trusted\"'"))
+        XCTAssertFalse(line.contains("\r\r"))
+    }
+
+    func testGBrainClaudeLaunchUsesAutoPermissionModeWithSystemPrompt() throws {
+        let cwd = try makeTemporaryDirectory()
+
+        let line = MarkdownChatPillCommand.shellStartupLineForGBrainSetup(
+            agent: .claude,
+            cwd: cwd.path,
+            userPrompt: "Set up GBrain"
+        )
+
+        XCTAssertTrue(line.contains("cd '\(cwd.path)' && claude --permission-mode auto --append-system-prompt"))
+        XCTAssertTrue(line.contains("'Set up GBrain'"))
+        XCTAssertFalse(line.contains("\r\r"))
+    }
+
     func testOnboardingStartupCommandRunsScriptWithCwd() {
         let line = ZebraAgentOnboardingStartup.shellStartupLine(
             scriptPath: "/Applications/Zebra.app/Contents/Resources/zebra-agent-onboarding",
