@@ -72,6 +72,7 @@ RESOLVE_STATUS=""
 RESOLVE_PATH=""
 RESOLVE_BROKEN_REASON=""
 INSTALL_RESULT=""
+INSTALL_FAILURE_ACTION=""
 CLI_PROBE_STDOUT=""
 CLI_PROBE_STDERR=""
 CLI_PROBE_STATUS=0
@@ -885,6 +886,18 @@ select_primary_agent() {
   prompt_menu "Which agent should Zebra use by default?"
 }
 
+select_alternate_agent() {
+  local current="$1"
+  local agent
+  MENU_AGENTS=()
+  for agent in "${AGENTS[@]}"; do
+    [[ "$agent" == "$current" ]] && continue
+    MENU_AGENTS+=("$agent")
+  done
+  write_state choose_primary ""
+  prompt_menu "Choose another agent for Zebra:"
+}
+
 select_install_target() {
   MENU_AGENTS=("${AGENTS[@]}")
   write_state choose_install_target ""
@@ -899,6 +912,12 @@ continue_with_selected_agent() {
   else
     install_then_launch "$agent"
   fi
+}
+
+choose_alternate_agent() {
+  local current="$1"
+  select_alternate_agent "$current" || return 1
+  continue_with_selected_agent "$PROMPT_RESULT" user_recovered_primary
 }
 
 primary_missing_flow() {
@@ -987,26 +1006,29 @@ install_failure_menu() {
   local agent="$1"
   local command_label choice
   command_label="$(installer_command "$agent")"
+  INSTALL_FAILURE_ACTION=""
   while true; do
     printf '\n%s install did not complete.\n' "$(display_name "$agent")"
     printf '  1. Retry %s install\n' "$(display_name "$agent")"
-    printf '  2. Show manual install command\n'
-    printf '  3. Exit for now\n'
+    printf '  2. Choose another agent\n'
+    printf '  3. Show manual install command\n'
     printf 'Selection [1-3]: '
     read -r choice || return 1
     case "$choice" in
       1)
+        INSTALL_FAILURE_ACTION=retry
         PROMPT_RESULT="$agent"
         return 0
         ;;
       2)
+        INSTALL_FAILURE_ACTION=handled
+        choose_alternate_agent "$agent"
+        return
+        ;;
+      3)
         printf '\nManual install command for %s:\n\n  %s\n\n' "$(display_name "$agent")" "$command_label"
         printf 'Press Return to continue.'
         read -r _ || true
-        ;;
-      3)
-        append_event agent_onboarding_failed ',"reason":"install_failed_exit"'
-        return 1
         ;;
       *)
         printf 'Enter a valid option.\n'
@@ -1027,6 +1049,7 @@ rescan_after_install() {
 
 install_then_launch() {
   local agent="$1"
+  local menu_status
   while true; do
     if run_installer "$agent"; then
       printf '\nInstall complete. Re-scanning...\n'
@@ -1042,8 +1065,13 @@ install_then_launch() {
       printf '\nInstaller was not run.\n'
     fi
 
-    if ! install_failure_menu "$agent"; then
+    install_failure_menu "$agent"
+    menu_status="$?"
+    if [[ "$menu_status" -ne 0 ]]; then
       return 1
+    fi
+    if [[ "$INSTALL_FAILURE_ACTION" == "handled" ]]; then
+      return 0
     fi
     agent="$PROMPT_RESULT"
     if is_agent_installed "$agent"; then
@@ -1358,7 +1386,7 @@ post_launch_continue_menu() {
   while true; do
     printf '\n%s did not finish Zebra setup.\n' "$(display_name "$agent")"
     printf '  1. Try %s again\n' "$(display_name "$agent")"
-    printf '  2. Exit for now\n'
+    printf '  2. Choose another agent\n'
     printf 'Selection [1-2]: '
     read -r choice || return 1
     case "$choice" in
@@ -1367,7 +1395,8 @@ post_launch_continue_menu() {
         return
         ;;
       2)
-        return 1
+        choose_alternate_agent "$agent"
+        return
         ;;
       *)
         printf 'Enter a valid option.\n'
@@ -1397,6 +1426,7 @@ force_choose_flow() {
 resume_existing_flow() {
   local resume_phase="$STATE_PHASE"
   local resume_agent="$STATE_SELECTED_AGENT"
+  local install_menu_status
   RESUME_FLOW_HANDLED=0
   [[ -n "$resume_phase" ]] || return 0
 
@@ -1458,7 +1488,14 @@ resume_existing_flow() {
       printf 'Resuming Zebra agent onboarding after an interrupted %s install.\n' "$(display_name "$resume_agent")"
       append_resume_event "$resume_phase" "$resume_agent"
       scan_agents_for_resume
-      install_failure_menu "$resume_agent" || return 1
+      install_failure_menu "$resume_agent"
+      install_menu_status="$?"
+      if [[ "$install_menu_status" -ne 0 ]]; then
+        return 1
+      fi
+      if [[ "$INSTALL_FAILURE_ACTION" == "handled" ]]; then
+        return 0
+      fi
       install_then_launch "$PROMPT_RESULT"
       return $?
       ;;
