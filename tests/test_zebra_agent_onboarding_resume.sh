@@ -53,6 +53,13 @@ assert_contains() {
   [[ "$haystack" == *"$needle"* ]] || fail "$label: missing <$needle>"
 }
 
+assert_not_contains() {
+  local haystack="$1"
+  local needle="$2"
+  local label="$3"
+  [[ "$haystack" != *"$needle"* ]] || fail "$label: unexpected <$needle>"
+}
+
 plist_raw() {
   plutil -extract "$2" raw -o - "$1"
 }
@@ -82,6 +89,16 @@ fake_agent_binary_name() {
     codex) printf 'codex' ;;
     antigravity) printf 'agy' ;;
     *) fail "unknown fake agent: $agent" ;;
+  esac
+}
+
+display_name_for_agent() {
+  local agent="$1"
+  case "$agent" in
+    claude) printf 'Claude Code' ;;
+    codex) printf 'Codex' ;;
+    antigravity) printf 'Antigravity' ;;
+    *) fail "unknown display agent: $agent" ;;
   esac
 }
 
@@ -299,11 +316,13 @@ test_waiting_for_continue_resumes_menu() {
   write_preferences antigravity
   write_state waiting_for_continue run-waiting antigravity
 
-  run_onboarding $'2\n'
+  run_onboarding ''
 
-  assert_eq "$RUN_STATUS" "1" "exit-for-now status"
+  assert_eq "$RUN_STATUS" "1" "no-selection status"
   assert_contains "$RUN_OUTPUT" "Resuming Zebra agent onboarding for Antigravity." "resume message"
   assert_contains "$RUN_OUTPUT" "Antigravity did not finish Zebra setup." "continue menu"
+  assert_contains "$RUN_OUTPUT" "2. Choose another agent" "alternate agent option"
+  assert_not_contains "$RUN_OUTPUT" "Exit for now" "continue menu does not include exit"
   assert_eq "$(plist_raw "$STATE_FILE" runId)" "run-waiting" "run id is preserved"
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "waiting_for_continue" "phase remains waiting"
   assert_eq "$(cat "$FAKE_LOG")" "" "agent is not relaunched automatically"
@@ -314,25 +333,46 @@ test_agent_working_resumes_to_continue_menu() {
   write_preferences antigravity
   write_state agent_working run-working antigravity
 
-  run_onboarding $'2\n'
+  run_onboarding ''
 
-  assert_eq "$RUN_STATUS" "1" "exit-for-now status"
+  assert_eq "$RUN_STATUS" "1" "no-selection status"
   assert_contains "$RUN_OUTPUT" "Resuming Zebra agent onboarding for Antigravity." "resume message"
   assert_contains "$RUN_OUTPUT" "Antigravity did not finish Zebra setup." "continue menu"
+  assert_contains "$RUN_OUTPUT" "2. Choose another agent" "alternate agent option"
+  assert_not_contains "$RUN_OUTPUT" "Exit for now" "continue menu does not include exit"
   assert_eq "$(plist_raw "$STATE_FILE" runId)" "run-working" "run id is preserved"
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "waiting_for_continue" "working phase moves to waiting"
   assert_eq "$(cat "$FAKE_LOG")" "" "agent is not relaunched automatically"
+}
+
+test_waiting_for_continue_can_choose_another_agent() {
+  setup_case waiting-choose-another
+  write_preferences antigravity
+  write_state waiting_for_continue run-waiting-other antigravity
+  add_fake_agent codex
+  set_ready_agents codex
+
+  run_onboarding $'2\n2\n'
+
+  assert_eq "$RUN_STATUS" "0" "alternate agent completes"
+  assert_contains "$RUN_OUTPUT" "Choose another agent for Zebra:" "alternate menu"
+  assert_contains "$RUN_OUTPUT" "2. Codex [installed]" "installed alternate option"
+  assert_contains "$(cat "$FAKE_LOG")" "codex:" "alternate agent launches"
+  [[ "$(cat "$FAKE_LOG")" != *"antigravity:"* ]] || fail "failed agent should not relaunch when choosing another"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "alternate agent completes state"
+  assert_eq "$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent)" "codex" "alternate agent is saved"
 }
 
 test_choose_install_target_resumes_install_menu() {
   setup_case install-target
   write_state choose_install_target run-install
 
-  run_onboarding $'3\nn\n3\n'
+  run_onboarding $'3\nn\n'
 
   assert_eq "$RUN_STATUS" "1" "declined install exit status"
   assert_contains "$RUN_OUTPUT" "Resuming Zebra agent onboarding at install selection." "resume message"
   assert_contains "$RUN_OUTPUT" "Zebra will run the official installer for Antigravity:" "install prompt"
+  assert_not_contains "$RUN_OUTPUT" "Exit for now" "install failure menu does not include exit"
   assert_eq "$(plist_raw "$STATE_FILE" runId)" "run-install" "run id is preserved"
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "choose_install_target" "phase remains install selection"
 }
@@ -341,26 +381,90 @@ test_fresh_choice_lists_missing_agents() {
   setup_case fresh-missing
   add_fake_agent codex
 
-  run_onboarding $'3\nn\n3\n'
+  run_onboarding $'3\nn\n'
 
   assert_eq "$RUN_STATUS" "1" "declined missing-agent install status"
   assert_contains "$RUN_OUTPUT" "Which agent should Zebra use by default?" "primary prompt"
   assert_contains "$RUN_OUTPUT" "2. Codex [installed]" "installed option"
   assert_contains "$RUN_OUTPUT" "3. Antigravity [not installed]" "missing option"
   assert_contains "$RUN_OUTPUT" "Zebra will run the official installer for Antigravity:" "missing selection installs"
+  assert_not_contains "$RUN_OUTPUT" "Exit for now" "install failure menu does not include exit"
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "choose_primary" "declined install returns to primary choice state"
   assert_eq "$(cat "$FAKE_LOG")" "" "installed agent is not launched when missing agent is selected"
+}
+
+assert_declined_install_can_choose_another_agent() {
+  local failed_agent="$1"
+  local failed_selection="$2"
+  local alternate_agent="$3"
+  local alternate_selection="$4"
+  local failed_display alternate_display
+  failed_display="$(display_name_for_agent "$failed_agent")"
+  alternate_display="$(display_name_for_agent "$alternate_agent")"
+  setup_case "declined-install-${failed_agent}-choose-${alternate_agent}"
+  add_fake_agent "$alternate_agent"
+  set_ready_agents "$alternate_agent"
+
+  run_onboarding "$(printf '%s\nn\n2\n%s\n' "$failed_selection" "$alternate_selection")"
+
+  assert_eq "$RUN_STATUS" "0" "$failed_agent alternate agent completes after declined install"
+  assert_contains "$RUN_OUTPUT" "$failed_display install did not complete." "$failed_agent install recovery menu"
+  assert_contains "$RUN_OUTPUT" "2. Choose another agent" "$failed_agent alternate agent option"
+  assert_contains "$RUN_OUTPUT" "Choose another agent for Zebra:" "$failed_agent alternate menu"
+  assert_contains "$(cat "$FAKE_LOG")" "$alternate_agent:" "$failed_agent alternate agent launches"
+  [[ "$(cat "$FAKE_LOG")" != *"$failed_agent:"* ]] || fail "$failed_agent should not launch when choosing another"
+  [[ "$RUN_OUTPUT" != *"Zebra will run the official installer for $alternate_display:"* ]] || fail "handled alternate selection should not start a second $alternate_agent install flow"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "$failed_agent alternate agent completes state"
+  assert_eq "$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent)" "$alternate_agent" "$failed_agent alternate agent is saved"
+}
+
+assert_failed_install_resume_can_choose_another_agent() {
+  local failed_agent="$1"
+  local alternate_agent="$2"
+  local alternate_selection="$3"
+  local failed_display alternate_display
+  failed_display="$(display_name_for_agent "$failed_agent")"
+  alternate_display="$(display_name_for_agent "$alternate_agent")"
+  setup_case "failed-install-${failed_agent}-resume-choose-${alternate_agent}"
+  write_state failed "run-failed-${failed_agent}" "$failed_agent"
+  add_fake_agent "$alternate_agent"
+  set_ready_agents "$alternate_agent"
+
+  run_onboarding "$(printf '2\n%s\n' "$alternate_selection")"
+
+  assert_eq "$RUN_STATUS" "0" "$failed_agent alternate agent completes from failed install resume"
+  assert_contains "$RUN_OUTPUT" "Resuming Zebra agent onboarding after an interrupted $failed_display install." "$failed_agent failed install resume message"
+  assert_contains "$RUN_OUTPUT" "$failed_display install did not complete." "$failed_agent install recovery menu"
+  assert_contains "$RUN_OUTPUT" "Choose another agent for Zebra:" "$failed_agent alternate menu"
+  assert_contains "$(cat "$FAKE_LOG")" "$alternate_agent:" "$failed_agent alternate agent launches"
+  [[ "$(cat "$FAKE_LOG")" != *"$failed_agent:"* ]] || fail "$failed_agent should not launch when resuming and choosing another"
+  [[ "$RUN_OUTPUT" != *"Zebra will run the official installer for $alternate_display:"* ]] || fail "handled alternate selection should not start a second $alternate_agent install flow"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "$failed_agent alternate agent completes state"
+  assert_eq "$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent)" "$alternate_agent" "$failed_agent alternate agent is saved"
+}
+
+test_declined_install_can_choose_another_agent_for_any_agent() {
+  assert_declined_install_can_choose_another_agent claude 1 codex 1
+  assert_declined_install_can_choose_another_agent codex 2 claude 1
+  assert_declined_install_can_choose_another_agent antigravity 3 codex 2
+}
+
+test_failed_install_resume_can_choose_another_agent_for_any_agent() {
+  assert_failed_install_resume_can_choose_another_agent claude codex 1
+  assert_failed_install_resume_can_choose_another_agent codex claude 1
+  assert_failed_install_resume_can_choose_another_agent antigravity codex 2
 }
 
 test_fresh_choice_launches_installed_selection() {
   setup_case fresh-installed
   add_fake_agent codex
 
-  run_onboarding $'2\n2\n'
+  run_onboarding $'2\n'
 
-  assert_eq "$RUN_STATUS" "1" "exit-for-now status"
+  assert_eq "$RUN_STATUS" "1" "no-selection status"
   assert_contains "$RUN_OUTPUT" "2. Codex [installed]" "installed option"
   assert_contains "$RUN_OUTPUT" "Starting Codex for Zebra onboarding." "selected installed agent launches"
+  assert_not_contains "$RUN_OUTPUT" "Exit for now" "continue menu does not include exit"
   assert_contains "$(cat "$FAKE_LOG")" "codex:" "fake codex launched"
   assert_contains "$(cat "$FAKE_LOG")" "codex:login status" "codex readiness uses login status"
   [[ ! -f "$APP_DIR/agent/preferences.json" ]] || fail "primary preference should not be saved before mark-ready"
@@ -457,11 +561,12 @@ test_antigravity_launch_starts_interactive_cli_without_prompt() {
   setup_case antigravity-installed
   add_fake_agent antigravity
 
-  run_onboarding $'3\n2\n'
+  run_onboarding $'3\n'
 
-  assert_eq "$RUN_STATUS" "1" "exit-for-now status"
+  assert_eq "$RUN_STATUS" "1" "no-selection status"
   assert_contains "$RUN_OUTPUT" "3. Antigravity [installed]" "installed antigravity option"
   assert_contains "$RUN_OUTPUT" "Starting Antigravity for Zebra onboarding." "antigravity launches"
+  assert_not_contains "$RUN_OUTPUT" "Exit for now" "continue menu does not include exit"
   assert_contains "$(cat "$FAKE_LOG")" "antigravity:" "agy launches interactively"
   [[ "$(cat "$FAKE_LOG")" != *"--prompt-interactive"* ]] || fail "agy onboarding launch should not pass a prompt"
   [[ "$(cat "$FAKE_LOG")" != *"--add-dir"* ]] || fail "agy onboarding launch should not add a directory"
@@ -547,8 +652,11 @@ test_complete_state_exits_without_scan() {
 
 test_waiting_for_continue_resumes_menu
 test_agent_working_resumes_to_continue_menu
+test_waiting_for_continue_can_choose_another_agent
 test_choose_install_target_resumes_install_menu
 test_fresh_choice_lists_missing_agents
+test_declined_install_can_choose_another_agent_for_any_agent
+test_failed_install_resume_can_choose_another_agent_for_any_agent
 test_fresh_choice_launches_installed_selection
 test_claude_status_probe_completes_onboarding
 test_codex_status_probe_completes_onboarding

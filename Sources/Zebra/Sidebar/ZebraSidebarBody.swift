@@ -239,8 +239,26 @@ struct ZebraSidebarBody: View {
             return
         }
         onboardingChecklistStore.beginLaunch(stepID: stepID)
-        if stepID == .agent,
-           sendAgentOnboardingToInitialTerminalIfAvailable(startupLine, in: workspace) {
+        if let agent = onboardingChecklistAgent(for: stepID) {
+            guard let agentTerminals = zebra?.agentTerminals else { return }
+            let source = ZebraAgentTerminalSource.onboardingChecklist(stepID)
+            if stepID == .agent,
+               sendAgentOnboardingToInitialTerminalIfAvailable(
+                   startupLine,
+                   in: workspace,
+                   source: source,
+                   agent: agent,
+                   markedBy: agentTerminals
+               ) {
+                return
+            }
+            workspace.openZebraAgentTerminal(
+                startupLine: startupLine,
+                source: source,
+                agent: agent,
+                anchor: .focusAnchored,
+                markedBy: agentTerminals
+            )
             return
         }
         _ = workspace.newTerminalSurfaceInFocusedPane(
@@ -249,9 +267,23 @@ struct ZebraSidebarBody: View {
         )
     }
 
+    private func onboardingChecklistAgent(for stepID: ZebraOnboardingChecklistStepID) -> MarkdownPillAgent? {
+        switch stepID {
+        case .agent, .adapter, .ingest, .goals:
+            return MarkdownPillAgent.defaultAgent()
+        case .email:
+            return ZebraClawvisorAgent.default.markdownPillAgent
+        case .gbrain:
+            return nil
+        }
+    }
+
     private func sendAgentOnboardingToInitialTerminalIfAvailable(
         _ startupLine: String,
-        in workspace: Workspace
+        in workspace: Workspace,
+        source: ZebraAgentTerminalSource,
+        agent: MarkdownPillAgent,
+        markedBy registry: ZebraAgentTerminalRegistry
     ) -> Bool {
         let terminalPanels = workspace.panels.values.compactMap { $0 as? TerminalPanel }
         guard terminalPanels.count == 1,
@@ -260,6 +292,8 @@ struct ZebraSidebarBody: View {
               canReuseTerminalForAgentOnboarding(terminalPanel, in: workspace) else {
             return false
         }
+        registry.prune(validPanelIds: Set(workspace.panels.keys))
+        registry.mark(panelId: terminalPanel.id, source: source, agent: agent)
         terminalPanel.focus()
         terminalPanel.sendInput(startupLine)
         return true
