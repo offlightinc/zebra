@@ -96,8 +96,8 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(line.contains("cd '\(cwd.path)' && codex"))
         XCTAssertTrue(line.contains("-C '\(cwd.path)'"))
         XCTAssertFalse(line.contains("--sandbox workspace-write"))
-        XCTAssertFalse(line.contains("--ask-for-approval on-request"))
-        XCTAssertFalse(line.contains("approvals_reviewer"))
+        XCTAssertTrue(line.contains("--ask-for-approval on-request"))
+        XCTAssertTrue(line.contains("'approvals_reviewer=\"auto_review\"'"))
         XCTAssertFalse(line.contains("trust_level=\"trusted\""))
         XCTAssertFalse(line.contains("\r\r"))
     }
