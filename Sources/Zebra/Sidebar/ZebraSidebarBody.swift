@@ -234,7 +234,7 @@ struct ZebraSidebarBody: View {
         guard let workspace = tabManager.selectedWorkspace,
               let startupLine = ZebraOnboardingChecklistCommand.shellStartupLine(
                 for: stepID,
-                selectedVaultPath: vaultState.selectedVaultPath
+                selectedVaultPath: onboardingSelectedVaultPath
               ) else {
             return
         }
@@ -280,9 +280,13 @@ struct ZebraSidebarBody: View {
 
     private func refreshOnboardingChecklist() {
         onboardingChecklistStore.syncExternalState(
-            selectedVaultPath: vaultState.selectedVaultPath,
+            selectedVaultPath: onboardingSelectedVaultPath,
             emailConnected: emailListStore.isConnected
         )
+    }
+
+    private var onboardingSelectedVaultPath: String? {
+        vaultState.selectedVaultWasExplicitlyChosen ? vaultState.selectedVaultPath : nil
     }
 
     private func openMarkdownFile(filePath: String) {

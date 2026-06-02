@@ -12,6 +12,7 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
         let state = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
 
         XCTAssertEqual(state.selectedVaultPath, home.path)
+        XCTAssertFalse(state.selectedVaultWasExplicitlyChosen)
         XCTAssertEqual(state.vaults.map(\.path), [home.path])
     }
 
@@ -27,6 +28,7 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
         let restoredState = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
 
         XCTAssertEqual(restoredState.selectedVaultPath, custom.path)
+        XCTAssertTrue(restoredState.selectedVaultWasExplicitlyChosen)
         XCTAssertTrue(restoredState.vaults.contains { $0.path == custom.path })
         XCTAssertFalse(restoredState.vaults.contains { $0.path == brainOfflight.path })
     }
@@ -43,6 +45,7 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
         let restoredState = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
 
         XCTAssertEqual(restoredState.selectedVaultPath, home.path)
+        XCTAssertFalse(restoredState.selectedVaultWasExplicitlyChosen)
         XCTAssertEqual(restoredState.vaults.map(\.path), [home.path])
     }
 
@@ -57,6 +60,7 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
         let restoredState = VerticalTabsSidebarVaultState(defaults: defaults, homeDirectoryPath: home.path)
 
         XCTAssertEqual(restoredState.selectedVaultPath, brainOfflight.path)
+        XCTAssertTrue(restoredState.selectedVaultWasExplicitlyChosen)
         XCTAssertTrue(restoredState.vaults.contains { $0.path == brainOfflight.path })
     }
 

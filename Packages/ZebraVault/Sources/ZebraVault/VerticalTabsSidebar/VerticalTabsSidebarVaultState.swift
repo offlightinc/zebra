@@ -15,9 +15,11 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
     private let homeDirectoryPath: String
 
     @Published public private(set) var vaults: [VerticalTabsSidebarVault]
+    @Published public private(set) var selectedVaultWasExplicitlyChosen: Bool
     @Published public var selectedVaultPath: String? {
         didSet {
             guard selectedVaultPath != oldValue else { return }
+            selectedVaultWasExplicitlyChosen = selectedVaultPath != nil
             persist()
         }
     }
@@ -35,6 +37,7 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
     ) {
         self.defaults = defaults
         self.homeDirectoryPath = Self.normalizedPath(homeDirectoryPath)
+        self.selectedVaultWasExplicitlyChosen = false
 
         let resolvedPaths = vaultPaths ?? Self.loadVaultPaths(
             defaults: defaults,
@@ -52,15 +55,19 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
                 self.vaults.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             }
             self.selectedVaultPath = normalizedSelectedPath
+            self.selectedVaultWasExplicitlyChosen = true
         } else if let homeDefaultPath = Self.homeDefaultVaultPath(homeDirectoryPath: self.homeDirectoryPath),
                   self.vaults.contains(where: { $0.path == homeDefaultPath }) {
             self.selectedVaultPath = homeDefaultPath
+            self.selectedVaultWasExplicitlyChosen = false
         } else {
             self.selectedVaultPath = self.vaults.first?.path
+            self.selectedVaultWasExplicitlyChosen = false
         }
     }
 
     public func selectVault(_ vault: VerticalTabsSidebarVault) {
+        selectedVaultWasExplicitlyChosen = true
         selectedVaultPath = vault.path
     }
 
@@ -71,6 +78,7 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
             vaults.append(Self.makeVault(path: path))
             vaults.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
+        selectedVaultWasExplicitlyChosen = true
         selectedVaultPath = path
         persist()
     }
