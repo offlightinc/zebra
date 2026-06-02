@@ -6,13 +6,26 @@ public enum ZebraAgentTerminalSource: Hashable, Sendable {
     case emailThread(String)
     case clawvisorOnboarding
     case brainSyncFailure
+    case onboardingChecklist(ZebraOnboardingChecklistStepID)
 }
 
 public struct ZebraAgentTerminalRegistration: Equatable, Sendable {
     public let panelId: UUID
     public let source: ZebraAgentTerminalSource
-    public let agent: MarkdownPillAgent
+    public let agent: MarkdownPillAgent?
     public let createdAt: Date
+
+    public init(
+        panelId: UUID,
+        source: ZebraAgentTerminalSource,
+        agent: MarkdownPillAgent?,
+        createdAt: Date
+    ) {
+        self.panelId = panelId
+        self.source = source
+        self.agent = agent
+        self.createdAt = createdAt
+    }
 }
 
 public enum ZebraAgentTerminalPlacementAnchor: Equatable, Sendable {
@@ -34,7 +47,7 @@ public final class ZebraAgentTerminalRegistry {
     public func mark(
         panelId: UUID,
         source: ZebraAgentTerminalSource,
-        agent: MarkdownPillAgent,
+        agent: MarkdownPillAgent?,
         createdAt: Date = Date()
     ) {
         registrationsByPanelId[panelId] = ZebraAgentTerminalRegistration(
@@ -46,7 +59,7 @@ public final class ZebraAgentTerminalRegistry {
     }
 
     public func unmark(panelId: UUID) {
-        registrationsByPanelId[panelId] = nil
+        registrationsByPanelId.removeValue(forKey: panelId)
     }
 
     public func registration(panelId: UUID) -> ZebraAgentTerminalRegistration? {
@@ -64,6 +77,7 @@ public final class ZebraAgentTerminalRegistry {
         panelIds
             .compactMap { registrationsByPanelId[$0] }
             .filter { $0.source == source }
+            .filter { $0.agent != nil }
             .max { lhs, rhs in lhs.createdAt < rhs.createdAt }?
             .agent
     }

@@ -272,6 +272,38 @@ final class MarkdownSidebarOpeningTests: XCTestCase {
     }
 
     @MainActor
+    func testZebraSidebarMarkdownOpenSkipsReusedOnboardingChecklistAgentPane() throws {
+        let root = try makeMarkdownFixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let fileURL = root.appendingPathComponent("first.md")
+        try "# first\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let workspace = Workspace()
+        let terminalPaneId = try XCTUnwrap(workspace.bonsplitController.allPaneIds.first)
+        let terminalPanelId = try XCTUnwrap(workspace.focusedPanelId)
+        let registry = ZebraAgentTerminalRegistry()
+        registry.mark(
+            panelId: terminalPanelId,
+            source: .onboardingChecklist(.agent),
+            agent: .codex
+        )
+
+        let excludedPaneIds = workspace.zebraAgentCompanionPaneIds(markedBy: registry)
+        let openedPanel = try XCTUnwrap(
+            workspace.openMarkdownFromZebraSidebar(
+                inPane: terminalPaneId,
+                filePath: fileURL.path,
+                excludedAgentCompanionPaneIds: excludedPaneIds
+            )
+        )
+
+        XCTAssertEqual(excludedPaneIds, Set([terminalPaneId]))
+        XCTAssertNotEqual(workspace.paneId(forPanelId: openedPanel.id), terminalPaneId)
+        XCTAssertEqual(workspace.bonsplitController.allPaneIds.count, 2)
+    }
+
+    @MainActor
     private func assertZebraSidebarMarkdownOpenSkipsAgentPane(
         source: ZebraAgentTerminalSource,
         agent: MarkdownPillAgent
