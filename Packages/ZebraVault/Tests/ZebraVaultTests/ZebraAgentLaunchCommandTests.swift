@@ -102,6 +102,26 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(line.contains("\r\r"))
     }
 
+    func testGBrainCodexLaunchCanTrustSafeWorkdirWithoutTrustedAutomation() throws {
+        let cwd = try makeTemporaryDirectory()
+
+        let line = MarkdownChatPillCommand.shellStartupLineForGBrainSetup(
+            agent: .codex,
+            cwd: cwd.path,
+            userPrompt: "Set up GBrain",
+            allowTrustedAutomation: false,
+            allowLaunchDirectoryTrust: true
+        )
+
+        XCTAssertTrue(line.contains("cd '\(cwd.path)' && codex"))
+        XCTAssertTrue(line.contains("-C '\(cwd.path)'"))
+        XCTAssertFalse(line.contains("--sandbox workspace-write"))
+        XCTAssertTrue(line.contains("--ask-for-approval on-request"))
+        XCTAssertTrue(line.contains("'approvals_reviewer=\"auto_review\"'"))
+        XCTAssertTrue(line.contains("'projects.\"\(cwd.path)\".trust_level=\"trusted\"'"))
+        XCTAssertFalse(line.contains("\r\r"))
+    }
+
     func testGBrainClaudeLaunchUsesAutoPermissionModeWithSystemPrompt() throws {
         let cwd = try makeTemporaryDirectory()
 

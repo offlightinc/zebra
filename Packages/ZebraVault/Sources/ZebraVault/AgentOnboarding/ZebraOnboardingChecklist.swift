@@ -381,7 +381,7 @@ public enum ZebraOnboardingChecklistCommand {
     ) -> String {
         let cwd = launch.launchDirectory
         let prompt = launch.startupPrompt
-        if launch.allowTrustedAutomation {
+        if launch.allowLaunchDirectoryTrust {
             _ = MarkdownChatPillCommand.prepareLaunchEnvironment(
                 agent: agent,
                 markdownFilePath: nil,
@@ -392,7 +392,8 @@ public enum ZebraOnboardingChecklistCommand {
             agent: agent,
             cwd: cwd,
             userPrompt: prompt,
-            allowTrustedAutomation: launch.allowTrustedAutomation
+            allowTrustedAutomation: launch.allowTrustedAutomation,
+            allowLaunchDirectoryTrust: launch.allowLaunchDirectoryTrust
         )
         return "\(launch.shellEnvironmentPrefix)\(startupLine)"
     }

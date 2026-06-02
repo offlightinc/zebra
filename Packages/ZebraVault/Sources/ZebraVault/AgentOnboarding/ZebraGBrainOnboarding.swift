@@ -6,6 +6,7 @@ public struct ZebraGBrainOnboardingStore {
         public let startupPrompt: String
         public let shellEnvironmentPrefix: String
         public let allowTrustedAutomation: Bool
+        public let allowLaunchDirectoryTrust: Bool
     }
 
     struct CompletionResult: Equatable {
@@ -286,7 +287,8 @@ public struct ZebraGBrainOnboardingStore {
                 completionResult: currentResult
             ),
             shellEnvironmentPrefix: environmentPrefix,
-            allowTrustedAutomation: allowTrustedAutomation
+            allowTrustedAutomation: allowTrustedAutomation,
+            allowLaunchDirectoryTrust: true
         )
     }
 
@@ -317,6 +319,7 @@ public struct ZebraGBrainOnboardingStore {
 
         let docsContext = docsPromptContext(state: state)
         let sectionContext = sectionPromptContext(state: state)
+        let decisionContext = decisionPromptContext(state: state)
         let statusContext = """
         Current Zebra verification status:
         complete: \(completionResult.isComplete ? "true" : "false")
@@ -337,6 +340,8 @@ public struct ZebraGBrainOnboardingStore {
         \(sectionContext)
 
         \(statusContext)
+
+        \(decisionContext)
 
         Launch directory:
         \(launchDirectory)
@@ -375,11 +380,10 @@ public struct ZebraGBrainOnboardingStore {
         - Include `--profile-id "<profile>"` if a profile was selected.
         - Verify must pass before the Zebra checklist can become checked.
 
-        User decisions you must stop and ask for:
-        - API keys or credential entry.
-        - search mode.
-        - topology.
-        - brain repo target when no selected vault exists or when the user wants a different target.
+        User decision rule:
+        - Ask only for decisions required by the current `next section` or current `waitingForUser` block.
+        - Do not batch decisions from later sections into the current prompt.
+        - If a later command reveals a new required decision, stop and ask then.
         """
     }
 
@@ -639,6 +643,38 @@ public struct ZebraGBrainOnboardingStore {
         commit: \(state.docsCommit ?? "unknown")
         files:
         \(files.isEmpty ? "- none" : files)
+        """
+    }
+
+    private func decisionPromptContext(state: State) -> String {
+        let nextSection = state.progress?.nextSection ?? ""
+        let waitingForUser = state.progress?.waitingForUser
+        if waitingForUser == "topology_and_brain_repo_target" {
+            return """
+            Current user-decision gate:
+            Ask only for these Step 3 decisions now:
+            - topology: local PGLite or Supabase/Postgres
+            - brain repo target: existing markdown/brain repo path or new repo path to create
+            Do not ask for Step 2 API keys in this gate. Ask for credentials later only if the current section or command actually requires them.
+            """
+        }
+        if nextSection.localizedCaseInsensitiveContains("Step 2") {
+            return """
+            Current user-decision gate:
+            Ask only for Step 2 credential decisions needed by the current command.
+            Do not ask for Step 3 topology or brain repo target until Step 3 is the current section.
+            """
+        }
+        if nextSection.localizedCaseInsensitiveContains("Step 3") {
+            return """
+            Current user-decision gate:
+            Ask only for Step 3 decisions that are not already resolved.
+            Do not ask for Step 2 API keys unless a Step 3 command refuses to continue without one.
+            """
+        }
+        return """
+        Current user-decision gate:
+        Ask only for decisions required by the current section.
         """
     }
 

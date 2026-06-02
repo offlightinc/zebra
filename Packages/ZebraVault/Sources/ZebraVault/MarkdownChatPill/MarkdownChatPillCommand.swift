@@ -223,13 +223,15 @@ public enum MarkdownChatPillCommand {
         cwd: String,
         userPrompt: String,
         allowTrustedAutomation: Bool = true,
+        allowLaunchDirectoryTrust: Bool? = nil,
         allowApprovalAutomation: Bool = true
     ) -> String {
         let contextPrefix = MarkdownChatPillContextPrefix.build(
             markdownFilePath: nil,
             surface: .fallback(typeLabel: "onboarding")
         )
-        return "\(invocation(agent: agent, cwd: cwd, trustEligible: allowTrustedAutomation, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation))\r"
+        let trustEligible = allowLaunchDirectoryTrust ?? allowTrustedAutomation
+        return "\(invocation(agent: agent, cwd: cwd, trustEligible: trustEligible, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation))\r"
     }
 
     public static func worktreeFrontmatterPath(_ markdownContent: String?) -> String? {
