@@ -83,6 +83,25 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(line.contains("\r\r"))
     }
 
+    func testGBrainCodexLaunchWithoutSelectedVaultDisablesTrustedAutomation() throws {
+        let cwd = try makeTemporaryDirectory()
+
+        let line = MarkdownChatPillCommand.shellStartupLineForGBrainSetup(
+            agent: .codex,
+            cwd: cwd.path,
+            userPrompt: "Set up GBrain",
+            allowTrustedAutomation: false
+        )
+
+        XCTAssertTrue(line.contains("cd '\(cwd.path)' && codex"))
+        XCTAssertTrue(line.contains("-C '\(cwd.path)'"))
+        XCTAssertFalse(line.contains("--sandbox workspace-write"))
+        XCTAssertFalse(line.contains("--ask-for-approval on-request"))
+        XCTAssertFalse(line.contains("approvals_reviewer"))
+        XCTAssertFalse(line.contains("trust_level=\"trusted\""))
+        XCTAssertFalse(line.contains("\r\r"))
+    }
+
     func testGBrainClaudeLaunchUsesAutoPermissionModeWithSystemPrompt() throws {
         let cwd = try makeTemporaryDirectory()
 
@@ -94,6 +113,21 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
 
         XCTAssertTrue(line.contains("cd '\(cwd.path)' && claude --permission-mode auto --append-system-prompt"))
         XCTAssertTrue(line.contains("'Set up GBrain'"))
+        XCTAssertFalse(line.contains("\r\r"))
+    }
+
+    func testGBrainClaudeLaunchWithoutSelectedVaultDisablesAutoPermission() throws {
+        let cwd = try makeTemporaryDirectory()
+
+        let line = MarkdownChatPillCommand.shellStartupLineForGBrainSetup(
+            agent: .claude,
+            cwd: cwd.path,
+            userPrompt: "Set up GBrain",
+            allowTrustedAutomation: false
+        )
+
+        XCTAssertTrue(line.contains("cd '\(cwd.path)' && claude --append-system-prompt"))
+        XCTAssertFalse(line.contains("--permission-mode auto"))
         XCTAssertFalse(line.contains("\r\r"))
     }
 

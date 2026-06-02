@@ -221,13 +221,14 @@ public enum MarkdownChatPillCommand {
     public static func shellStartupLineForGBrainSetup(
         agent: MarkdownPillAgent,
         cwd: String,
-        userPrompt: String
+        userPrompt: String,
+        allowTrustedAutomation: Bool = true
     ) -> String {
         let contextPrefix = MarkdownChatPillContextPrefix.build(
             markdownFilePath: nil,
             surface: .fallback(typeLabel: "onboarding")
         )
-        return "\(invocation(agent: agent, cwd: cwd, trustEligible: true, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup))\r"
+        return "\(invocation(agent: agent, cwd: cwd, trustEligible: allowTrustedAutomation, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowAutomation: allowTrustedAutomation))\r"
     }
 
     public static func worktreeFrontmatterPath(_ markdownContent: String?) -> String? {
@@ -298,7 +299,8 @@ public enum MarkdownChatPillCommand {
         trustEligible: Bool,
         contextPrefix: String,
         prompt: String,
-        mode: InvocationMode = .standard
+        mode: InvocationMode = .standard,
+        allowAutomation: Bool = true
     ) -> String {
         let promptArgument = singleLineShellArgument(prompt)
         // Visible context = surface advisory + gbrain advisory + blank line + user prompt
@@ -318,7 +320,7 @@ public enum MarkdownChatPillCommand {
                 let trustOverride = "projects.\"\(trustCwd)\".trust_level=\"trusted\""
                 parts.append("-c \(shellQuote(trustOverride))")
             }
-            if mode == .gbrainSetup {
+            if mode == .gbrainSetup && allowAutomation {
                 parts.append("--sandbox workspace-write")
                 parts.append("--ask-for-approval on-request")
                 parts.append("-c \(shellQuote("approvals_reviewer=\"auto_review\""))")
@@ -326,7 +328,7 @@ public enum MarkdownChatPillCommand {
             parts.append(shellQuote(visibleContextPrompt))
             return parts.joined(separator: " ")
         case .claude:
-            let permissionMode = mode == .gbrainSetup ? " --permission-mode auto" : ""
+            let permissionMode = mode == .gbrainSetup && allowAutomation ? " --permission-mode auto" : ""
             return "cd \(shellQuote(cwd)) && claude\(permissionMode) --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
         case .antigravity:
             return "cd \(shellQuote(cwd)) && agy --prompt-interactive --add-dir \(shellQuote(cwd)) \(shellQuote(visibleContextPrompt))"

@@ -5,6 +5,7 @@ public struct ZebraGBrainOnboardingStore {
         public let launchDirectory: String
         public let startupPrompt: String
         public let shellEnvironmentPrefix: String
+        public let allowTrustedAutomation: Bool
     }
 
     struct CompletionResult: Equatable {
@@ -98,6 +99,8 @@ public struct ZebraGBrainOnboardingStore {
     private struct DocsManifest: Codable {
         var generatedAt: String
         var sourceRepoPath: String?
+        var sourceKind: String?
+        var sourceRef: String?
         var files: [DocsFile]
         var installForAgentsSections: [DocsSection]
     }
@@ -118,6 +121,20 @@ public struct ZebraGBrainOnboardingStore {
         var manifest: DocsManifest
     }
 
+    private struct LiveVerificationResult {
+        var complete: Bool
+        var reasons: [String]
+        var globalReadiness: GlobalReadiness
+        var target: Target
+    }
+
+    private struct ProcessRunResult {
+        var exitCode: Int32
+        var stdout: String
+        var stderr: String
+        var timedOut: Bool
+    }
+
     private static let allowedTargetResolutionMethods: Set<String> = [
         "selected_vault",
         "user_existing_repo",
@@ -129,17 +146,20 @@ public struct ZebraGBrainOnboardingStore {
     private let fileManager: FileManager
     private let homeDirectoryPath: String
     private let gbrainDocsRepoURL: URL?
+    private let environment: [String: String]
 
     public init(
         stateURL: URL = ZebraGBrainOnboardingStore.defaultStateURL(),
         fileManager: FileManager = .default,
         homeDirectoryPath: String = NSHomeDirectory(),
-        gbrainDocsRepoURL: URL? = nil
+        gbrainDocsRepoURL: URL? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.stateURL = stateURL
         self.fileManager = fileManager
         self.homeDirectoryPath = Self.standardizedPath(homeDirectoryPath)
         self.gbrainDocsRepoURL = gbrainDocsRepoURL
+        self.environment = environment
     }
 
     public static func defaultStateURL() -> URL {
@@ -171,9 +191,6 @@ public struct ZebraGBrainOnboardingStore {
         guard let receipt = state.receipt else {
             return CompletionResult(isComplete: false, reasons: ["missing_receipt"])
         }
-        guard globalReadinessVerifies(receipt.globalReadiness) else {
-            return CompletionResult(isComplete: false, reasons: ["missing_gbrain_executable"])
-        }
         guard let resolved = resolveTarget(in: receipt, selectedVaultPath: selectedVaultPath) else {
             return CompletionResult(isComplete: false, reasons: ["receipt_target_missing"])
         }
@@ -193,10 +210,13 @@ public struct ZebraGBrainOnboardingStore {
             reasons.append("source_not_registered")
             return CompletionResult(isComplete: false, reasons: reasons)
         }
-        if !sourceRoutingVerifies(target: resolved.target, vaultPath: vaultPath, sourceId: sourceId) {
-            reasons.append("source_not_registered")
+        if !reasons.isEmpty {
+            return CompletionResult(isComplete: false, reasons: reasons)
         }
-        return CompletionResult(isComplete: reasons.isEmpty, reasons: reasons)
+
+        let live = liveVerificationResult(target: resolved.target, vaultPath: vaultPath, sourceId: sourceId)
+        updateReceipt(with: live, targetKey: resolved.key)
+        return CompletionResult(isComplete: live.complete, reasons: live.reasons)
     }
 
     public func prepareLaunch(
@@ -207,28 +227,46 @@ public struct ZebraGBrainOnboardingStore {
         let launchDirectory = standardizedExistingDirectoryPath(selectedVaultPath)
             ?? fallbackHomeDirectory()
         let selectedVault = standardizedExistingDirectoryPath(selectedVaultPath)
+        let allowTrustedAutomation = selectedVault != nil
         let currentResult = completionResult(selectedVaultPath: selectedVault)
         let docsSnapshot = prepareDocsSnapshot()
         let runId = "gbrain-\(UUID().uuidString)"
         var state = loadState() ?? State.empty()
+        let previousProgress = state.progress
+        let previousDocsFingerprint = Self.docsManifestFingerprint(state.docsManifest)
         state.currentRunId = runId
         state.docsCommit = docsSnapshot?.commit ?? state.docsCommit ?? "unavailable"
         state.docsFetchedAt = Self.isoTimestamp()
         state.docsSnapshotPath = docsSnapshot?.path ?? state.docsSnapshotPath
         state.docsManifest = docsSnapshot?.manifest ?? state.docsManifest
         state.selectedAgent = selectedAgent.rawValue
-        let nextSection = nextSection(in: state)
+        let currentDocsFingerprint = Self.docsManifestFingerprint(state.docsManifest)
+        let resolvedTargetKey = selectedVault.map(Self.targetKey(for:))
+            ?? previousProgress?.resolvedTargetKey
+        let canReuseProgress = previousProgress != nil
+            && previousProgress?.resolvedTargetKey == resolvedTargetKey
+            && previousDocsFingerprint == currentDocsFingerprint
+        let completedSections = canReuseProgress ? previousProgress?.completedSections ?? [] : []
+        let targetResolution = selectedVault != nil
+            ? TargetResolution(
+                status: "candidate",
+                method: "selected_vault",
+                confirmedAt: Self.isoTimestamp()
+            )
+            : previousProgress?.targetResolution ?? TargetResolution(
+                status: "unresolved",
+                method: nil,
+                confirmedAt: nil
+            )
+        let waitingForUser = selectedVault == nil && resolvedTargetKey == nil ? "target_resolution" : nil
+        let nextSection = nextSection(in: state, completedSections: completedSections)
         state.progress = Progress(
             launchDirectory: launchDirectory,
             selectedVaultPath: selectedVault,
-            resolvedTargetKey: selectedVault.map(Self.targetKey(for:)),
-            targetResolution: TargetResolution(
-                status: selectedVault == nil ? "unresolved" : "candidate",
-                method: selectedVault == nil ? nil : "selected_vault",
-                confirmedAt: selectedVault == nil ? nil : Self.isoTimestamp()
-            ),
-            completedSections: state.progress?.completedSections ?? [],
-            waitingForUser: selectedVault == nil ? "target_resolution" : nil,
+            resolvedTargetKey: resolvedTargetKey,
+            targetResolution: targetResolution,
+            completedSections: completedSections,
+            waitingForUser: waitingForUser,
             lastFailure: nil,
             nextSection: nextSection
         )
@@ -249,7 +287,8 @@ public struct ZebraGBrainOnboardingStore {
                 state: state,
                 completionResult: currentResult
             ),
-            shellEnvironmentPrefix: environmentPrefix
+            shellEnvironmentPrefix: environmentPrefix,
+            allowTrustedAutomation: allowTrustedAutomation
         )
     }
 
@@ -339,19 +378,32 @@ public struct ZebraGBrainOnboardingStore {
     }
 
     private func prepareDocsSnapshot() -> DocsSnapshot? {
-        guard let repoURL = resolveDocsRepoURL() else { return nil }
-        let commit = gitCommitHash(in: repoURL) ?? "local"
-        let snapshotDirectory = stateURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("gbrain-docs", isDirectory: true)
-            .appendingPathComponent(commit, isDirectory: true)
-        let docsPaths = [
+        if let repoURL = explicitDocsRepoURL() {
+            return prepareLocalDocsSnapshot(repoURL: repoURL)
+        }
+        if environment["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED"] != "1",
+           let remoteSnapshot = prepareRemoteDocsSnapshot() {
+            return remoteSnapshot
+        }
+        return resolveFallbackDocsRepoURL().flatMap(prepareLocalDocsSnapshot(repoURL:))
+    }
+
+    private var docsPaths: [String] {
+        [
             "INSTALL_FOR_AGENTS.md",
             "README.md",
             "AGENTS.md",
             "docs/GBRAIN_VERIFY.md",
             "skills/setup/SKILL.md",
         ]
+    }
+
+    private func prepareLocalDocsSnapshot(repoURL: URL) -> DocsSnapshot? {
+        let commit = gitCommitHash(in: repoURL) ?? "local"
+        let snapshotDirectory = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-docs", isDirectory: true)
+            .appendingPathComponent(commit, isDirectory: true)
 
         var files: [DocsFile] = []
         for relativePath in docsPaths {
@@ -380,6 +432,8 @@ public struct ZebraGBrainOnboardingStore {
         let manifest = DocsManifest(
             generatedAt: Self.isoTimestamp(),
             sourceRepoPath: repoURL.path,
+            sourceKind: "local",
+            sourceRef: commit,
             files: files,
             installForAgentsSections: Self.installForAgentsSections(from: installForAgents)
         )
@@ -390,12 +444,64 @@ public struct ZebraGBrainOnboardingStore {
         )
     }
 
-    private func resolveDocsRepoURL() -> URL? {
+    private func prepareRemoteDocsSnapshot() -> DocsSnapshot? {
+        guard let ref = remoteDocsRef() else { return nil }
+        let rawBase = environment["ZEBRA_GBRAIN_DOCS_RAW_BASE"]
+            ?? "https://raw.githubusercontent.com/garrytan/gbrain"
+        let snapshotDirectory = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-docs", isDirectory: true)
+            .appendingPathComponent(ref, isDirectory: true)
+
+        var files: [DocsFile] = []
+        var installForAgents = ""
+        for relativePath in docsPaths {
+            guard let url = URL(string: "\(rawBase)/\(ref)/\(relativePath)"),
+                  let content = fetchRemoteText(url: url) else {
+                continue
+            }
+            let destinationURL = snapshotDirectory.appendingPathComponent(relativePath, isDirectory: false)
+            do {
+                try fileManager.createDirectory(
+                    at: destinationURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try content.write(to: destinationURL, atomically: true, encoding: .utf8)
+                files.append(DocsFile(path: relativePath, hash: Self.stableHash(content)))
+                if relativePath == "INSTALL_FOR_AGENTS.md" {
+                    installForAgents = content
+                }
+            } catch {
+                continue
+            }
+        }
+
+        guard !files.isEmpty else { return nil }
+        let manifest = DocsManifest(
+            generatedAt: Self.isoTimestamp(),
+            sourceRepoPath: rawBase,
+            sourceKind: "remote",
+            sourceRef: ref,
+            files: files,
+            installForAgentsSections: Self.installForAgentsSections(from: installForAgents)
+        )
+        return DocsSnapshot(
+            commit: ref,
+            path: snapshotDirectory.path,
+            manifest: manifest
+        )
+    }
+
+    private func explicitDocsRepoURL() -> URL? {
+        if let gbrainDocsRepoURL {
+            return gbrainDocsRepoURL
+        }
+        return environment["ZEBRA_GBRAIN_DOCS_REPO"].map(URL.init(fileURLWithPath:))
+    }
+
+    private func resolveFallbackDocsRepoURL() -> URL? {
         let candidates: [URL?] = [
-            gbrainDocsRepoURL,
-            ProcessInfo.processInfo.environment["ZEBRA_GBRAIN_DOCS_REPO"].map(URL.init(fileURLWithPath:)),
             URL(fileURLWithPath: homeDirectoryPath).appendingPathComponent("gbrain", isDirectory: true),
-            URL(fileURLWithPath: "/Users/han/gbrain", isDirectory: true),
         ]
 
         for candidate in candidates {
@@ -407,6 +513,54 @@ public struct ZebraGBrainOnboardingStore {
             }
         }
         return nil
+    }
+
+    private func remoteDocsRef() -> String? {
+        if let ref = nonEmpty(environment["ZEBRA_GBRAIN_DOCS_REF"]) {
+            return ref
+        }
+        let commitURLString = environment["ZEBRA_GBRAIN_DOCS_COMMIT_URL"]
+            ?? "https://api.github.com/repos/garrytan/gbrain/commits/main"
+        guard let url = URL(string: commitURLString),
+              let raw = fetchRemoteText(url: url),
+              let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let sha = nonEmpty(object["sha"] as? String) {
+            return sha
+        }
+        if let object = object["object"] as? [String: Any],
+           let sha = nonEmpty(object["sha"] as? String) {
+            return sha
+        }
+        return nil
+    }
+
+    private func fetchRemoteText(url: URL) -> String? {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("zebra-gbrain-onboarding", forHTTPHeaderField: "User-Agent")
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var output: String?
+        let task = URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { semaphore.signal() }
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode),
+                  let data,
+                  let text = String(data: data, encoding: .utf8) else {
+                return
+            }
+            output = text
+        }
+        task.resume()
+        if semaphore.wait(timeout: .now() + 10) == .timedOut {
+            task.cancel()
+            return nil
+        }
+        return output
     }
 
     private func gitCommitHash(in repoURL: URL) -> String? {
@@ -453,8 +607,8 @@ public struct ZebraGBrainOnboardingStore {
         return sections
     }
 
-    private func nextSection(in state: State) -> String {
-        let completed = Set(state.progress?.completedSections ?? [])
+    private func nextSection(in state: State, completedSections: [String]? = nil) -> String {
+        let completed = Set(completedSections ?? state.progress?.completedSections ?? [])
         guard let sections = state.docsManifest?.installForAgentsSections,
               !sections.isEmpty else {
             return "Step 3: Create the Brain"
@@ -520,45 +674,179 @@ public struct ZebraGBrainOnboardingStore {
         return (primaryTargetKey, target)
     }
 
-    private func globalReadinessVerifies(_ readiness: GlobalReadiness?) -> Bool {
-        guard let readiness else { return false }
-        if readiness.complete == true || readiness.doctorOk == true {
-            return true
-        }
-        if let path = executablePath(readiness.gbrainExecutablePath) {
-            return fileManager.isExecutableFile(atPath: path)
-        }
-        if let path = executablePath(readiness.wrapperPath) {
-            return fileManager.isExecutableFile(atPath: path)
-        }
-        return findExecutableOnPATH(named: "gbrain") != nil
-    }
-
     private func targetResolutionVerifies(_ resolution: TargetResolution?) -> Bool {
         guard let method = nonEmpty(resolution?.method) else { return false }
         return Self.allowedTargetResolutionMethods.contains(method)
     }
 
-    private func sourceRoutingVerifies(target: Target, vaultPath: String, sourceId: String) -> Bool {
-        if let result = target.sourcesCurrentResult,
-           result.ok == true,
-           result.sourceId == sourceId,
-           let localPath = result.localPath,
-           Self.standardizedPath(localPath) == vaultPath {
-            return true
+    private func liveVerificationResult(
+        target: Target,
+        vaultPath: String,
+        sourceId: String
+    ) -> LiveVerificationResult {
+        var reasons: [String] = []
+        var updatedTarget = target
+        let executable = resolveGBrainExecutable(readiness: nil, target: target)
+
+        guard let executable else {
+            reasons.append("missing_gbrain_executable")
+            updatedTarget.complete = false
+            updatedTarget.reasons = reasons
+            return LiveVerificationResult(
+                complete: false,
+                reasons: reasons,
+                globalReadiness: GlobalReadiness(
+                    complete: false,
+                    gbrainExecutablePath: nil,
+                    wrapperPath: nil,
+                    doctorOk: false,
+                    verifiedAt: Self.isoTimestamp()
+                ),
+                target: updatedTarget
+            )
         }
-        guard let markerSourceId = sourceMarker(in: vaultPath) else {
-            return false
+
+        let doctor = runProcess(executable: executable, arguments: ["doctor", "--json"], cwd: vaultPath, timeout: 20)
+        let doctorOk = doctor.exitCode == 0 && !doctor.timedOut
+        if !doctorOk {
+            reasons.append("doctor_failed")
         }
-        return markerSourceId == sourceId
+
+        let current = runProcess(executable: executable, arguments: ["sources", "current", "--json"], cwd: vaultPath, timeout: 12)
+        let currentObject = Self.jsonObject(from: current.stdout)
+        let currentSourceId = currentObject?["source_id"] as? String
+        let currentOk = current.exitCode == 0
+            && !current.timedOut
+            && currentSourceId == sourceId
+
+        let list = runProcess(executable: executable, arguments: ["sources", "list", "--json"], cwd: vaultPath, timeout: 12)
+        let listedLocalPath = Self.sourceLocalPath(sourceId: sourceId, fromSourcesListJSON: list.stdout)
+        let listOk = list.exitCode == 0
+            && !list.timedOut
+            && listedLocalPath.map(Self.standardizedPath) == vaultPath
+
+        if !currentOk || !listOk {
+            reasons.append("source_not_registered")
+        }
+
+        let complete = reasons.isEmpty
+        updatedTarget.gbrainExecutablePath = executable
+        updatedTarget.doctorStatus = ProbeResult(ok: doctorOk, status: doctorOk ? "ok" : "failed")
+        updatedTarget.sourcesCurrentResult = SourceProbeResult(
+            ok: currentOk && listOk,
+            sourceId: currentSourceId ?? sourceId,
+            localPath: listedLocalPath
+        )
+        updatedTarget.searchProbeResult = ProbeResult(ok: complete, status: complete ? "not_run" : "blocked")
+        updatedTarget.verifiedAt = Self.isoTimestamp()
+        updatedTarget.complete = complete
+        updatedTarget.reasons = reasons
+
+        return LiveVerificationResult(
+            complete: complete,
+            reasons: reasons,
+            globalReadiness: GlobalReadiness(
+                complete: doctorOk,
+                gbrainExecutablePath: executable,
+                wrapperPath: target.wrapperPath,
+                doctorOk: doctorOk,
+                verifiedAt: Self.isoTimestamp()
+            ),
+            target: updatedTarget
+        )
     }
 
-    private func sourceMarker(in vaultPath: String) -> String? {
-        let markerPath = (vaultPath as NSString).appendingPathComponent(".gbrain-source")
-        guard let raw = try? String(contentsOfFile: markerPath, encoding: .utf8) else {
+    private func updateReceipt(with live: LiveVerificationResult, targetKey: String) {
+        guard var state = loadState() else { return }
+        var receipt = state.receipt ?? Receipt(globalReadiness: nil, primaryTargetKey: nil, targets: nil)
+        receipt.globalReadiness = live.globalReadiness
+        var targets = receipt.targets ?? [:]
+        targets[targetKey] = live.target
+        receipt.targets = targets
+        state.receipt = receipt
+        writeState(state)
+    }
+
+    private func resolveGBrainExecutable(readiness: GlobalReadiness?, target: Target?) -> String? {
+        if let path = executablePath(target?.gbrainExecutablePath),
+           fileManager.isExecutableFile(atPath: path) {
+            return path
+        }
+        if let path = executablePath(target?.wrapperPath),
+           fileManager.isExecutableFile(atPath: path) {
+            return path
+        }
+        if let path = executablePath(readiness?.gbrainExecutablePath),
+           fileManager.isExecutableFile(atPath: path) {
+            return path
+        }
+        if let path = executablePath(readiness?.wrapperPath),
+           fileManager.isExecutableFile(atPath: path) {
+            return path
+        }
+        return findExecutableOnPATH(named: "gbrain")
+    }
+
+    private func runProcess(
+        executable: String,
+        arguments: [String],
+        cwd: String?,
+        timeout: TimeInterval
+    ) -> ProcessRunResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        if let cwd {
+            process.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
+        }
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        do {
+            try process.run()
+        } catch {
+            return ProcessRunResult(exitCode: 127, stdout: "", stderr: "\(error)", timedOut: false)
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        var timedOut = false
+        if process.isRunning {
+            timedOut = true
+            process.terminate()
+        }
+        process.waitUntilExit()
+        let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return ProcessRunResult(
+            exitCode: timedOut ? 124 : process.terminationStatus,
+            stdout: stdoutText,
+            stderr: stderrText,
+            timedOut: timedOut
+        )
+    }
+
+    private static func jsonObject(from text: String) -> [String: Any]? {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        return raw.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        return object
+    }
+
+    private static func sourceLocalPath(sourceId: String, fromSourcesListJSON text: String) -> String? {
+        guard let object = jsonObject(from: text),
+              let sources = object["sources"] as? [[String: Any]] else {
+            return nil
+        }
+        for source in sources {
+            guard source["id"] as? String == sourceId else { continue }
+            return source["local_path"] as? String
+        }
+        return nil
     }
 
     private func loadState() -> State? {
@@ -617,7 +905,7 @@ public struct ZebraGBrainOnboardingStore {
     }
 
     private func findExecutableOnPATH(named name: String) -> String? {
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        let path = environment["PATH"] ?? ""
         for directory in path.split(separator: ":") {
             let candidate = (String(directory) as NSString).appendingPathComponent(name)
             if fileManager.isExecutableFile(atPath: candidate) {
@@ -650,6 +938,18 @@ public struct ZebraGBrainOnboardingStore {
             (partial ^ UInt64(byte)) &* prime
         }
         return String(format: "%016llx", hash)
+    }
+
+    private static func docsManifestFingerprint(_ manifest: DocsManifest?) -> String? {
+        guard let manifest else { return nil }
+        let files = manifest.files
+            .map { "\($0.path)=\($0.hash)" }
+            .sorted()
+            .joined(separator: "|")
+        let sections = manifest.installForAgentsSections
+            .map { "\($0.title)=\($0.hash)" }
+            .joined(separator: "|")
+        return stableHash("\(manifest.sourceRef ?? "")|\(files)|\(sections)")
     }
 
     private static let helperScript = """
@@ -737,13 +1037,30 @@ public struct ZebraGBrainOnboardingStore {
                 return candidate
         return None
 
-    def source_marker(target):
-        marker = os.path.join(target, ".gbrain-source")
+    def run_json(argv, cwd=None, timeout=30):
         try:
-            with open(marker, "r", encoding="utf-8") as handle:
-                return handle.read().strip()
-        except Exception:
-            return None
+            result = subprocess.run(
+                argv,
+                cwd=cwd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            return False, {}, str(exc)
+        if result.returncode != 0:
+            return False, {}, result.stderr.strip() or result.stdout.strip()
+        try:
+            return True, json.loads(result.stdout or "{}"), ""
+        except Exception as exc:
+            return False, {}, str(exc)
+
+    def source_list_local_path(payload, source_id):
+        for source in payload.get("sources") or []:
+            if source.get("id") == source_id:
+                return source.get("local_path")
+        return None
 
     def report():
         flags = parse_flags(args)
@@ -793,11 +1110,6 @@ public struct ZebraGBrainOnboardingStore {
         if method not in allowed_methods:
             reasons.append("target_confirmation_missing")
 
-        marker = source_marker(target) if target and os.path.isdir(target) else None
-        if target and os.path.isdir(target) and source_id:
-            if marker != source_id:
-                reasons.append("source_not_registered")
-
         executable = gbrain_executable()
         if not executable:
             reasons.append("missing_gbrain_executable")
@@ -819,6 +1131,33 @@ public struct ZebraGBrainOnboardingStore {
             except Exception:
                 reasons.append("doctor_failed")
 
+        current_ok = False
+        current_source_id = None
+        list_ok = False
+        listed_local_path = None
+        if executable and target and os.path.isdir(target) and source_id:
+            current_ok, current_payload, _ = run_json(
+                [executable, "sources", "current", "--json"],
+                cwd=target,
+                timeout=12,
+            )
+            current_source_id = current_payload.get("source_id")
+            current_ok = current_ok and current_source_id == source_id
+
+            list_ok, list_payload, _ = run_json(
+                [executable, "sources", "list", "--json"],
+                cwd=target,
+                timeout=12,
+            )
+            listed_local_path = source_list_local_path(list_payload, source_id)
+            list_ok = (
+                list_ok
+                and listed_local_path
+                and os.path.abspath(os.path.expanduser(listed_local_path)) == target
+            )
+            if not current_ok or not list_ok:
+                reasons.append("source_not_registered")
+
         complete = len(reasons) == 0
         state = load_state()
         receipt = state.setdefault("receipt", {})
@@ -838,9 +1177,9 @@ public struct ZebraGBrainOnboardingStore {
                 "gbrainExecutablePath": executable,
                 "doctorStatus": {"ok": doctor_ok},
                 "sourcesCurrentResult": {
-                    "ok": marker == source_id,
-                    "sourceId": source_id,
-                    "localPath": target,
+                    "ok": current_ok and list_ok,
+                    "sourceId": current_source_id or source_id,
+                    "localPath": listed_local_path,
                 },
                 "searchProbeResult": {"ok": complete},
                 "verifiedAt": now(),
