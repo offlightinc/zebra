@@ -4,6 +4,7 @@ public struct ZebraGBrainOnboardingStore {
     public struct LaunchContext {
         public let launchDirectory: String
         public let startupPrompt: String
+        public let setupPacketPath: String
         public let shellEnvironmentPrefix: String
         public let allowTrustedAutomation: Bool
         public let allowLaunchDirectoryTrust: Bool
@@ -223,10 +224,44 @@ public struct ZebraGBrainOnboardingStore {
         if !reasons.isEmpty {
             return CompletionResult(isComplete: false, reasons: reasons)
         }
+        if activeRunRequiresImportIndexCompletion(in: state),
+           !hasCompletedImportIndex(in: state) {
+            reasons.append("import_index_not_completed")
+            return CompletionResult(isComplete: false, reasons: reasons)
+        }
 
         let live = liveVerificationResult(target: resolved.target, vaultPath: vaultPath, sourceId: sourceId)
         updateReceipt(with: live, targetKey: resolved.key)
         return CompletionResult(isComplete: live.complete, reasons: live.reasons)
+    }
+
+    private func activeRunRequiresImportIndexCompletion(in state: State) -> Bool {
+        guard let progress = state.progress else { return false }
+        return state.currentRunId != nil
+            || progress.nextSection != nil
+            || progress.waitingForUser != nil
+            || !(progress.completedSections ?? []).isEmpty
+    }
+
+    private func hasCompletedImportIndex(in state: State) -> Bool {
+        guard let completedSections = state.progress?.completedSections else { return false }
+        return completedSections.contains { Self.isImportIndexSectionTitle($0) }
+    }
+
+    private static func isImportIndexSectionTitle(_ title: String) -> Bool {
+        let normalized = normalizedSectionTitle(title)
+        return normalized.contains("step 4")
+            && normalized.contains("import")
+            && normalized.contains("index")
+    }
+
+    private static func normalizedSectionTitle(_ title: String) -> String {
+        let scalars = title.lowercased().unicodeScalars.map { scalar -> Character in
+            CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : " "
+        }
+        return String(scalars)
+            .split(separator: " ")
+            .joined(separator: " ")
     }
 
     public func prepareLaunch(
@@ -285,6 +320,16 @@ public struct ZebraGBrainOnboardingStore {
         )
         writeState(state)
 
+        let setupPacket = startupPrompt(
+            selectedVaultPath: selectedVault,
+            launchDirectory: launchDirectory,
+            helperPath: helperPath.path,
+            statePath: stateURL.path,
+            state: state,
+            completionResult: currentResult
+        )
+        guard let setupPacketURL = writeSetupPacket(setupPacket, runId: runId) else { return nil }
+
         let helperDirectory = helperPath.deletingLastPathComponent().path
         let environmentPrefix = [
             "export ZEBRA_GBRAIN_STATE=\(ZebraAgentLaunchCommand.shellQuote(stateURL.path))",
@@ -292,18 +337,25 @@ public struct ZebraGBrainOnboardingStore {
         ].joined(separator: " && ") + " && "
         return LaunchContext(
             launchDirectory: launchDirectory,
-            startupPrompt: startupPrompt(
-                selectedVaultPath: selectedVault,
-                launchDirectory: launchDirectory,
-                helperPath: helperPath.path,
-                statePath: stateURL.path,
-                state: state,
-                completionResult: currentResult
-            ),
+            startupPrompt: bootstrapPrompt(setupPacketPath: setupPacketURL.path),
+            setupPacketPath: setupPacketURL.path,
             shellEnvironmentPrefix: environmentPrefix,
             allowTrustedAutomation: allowTrustedAutomation,
             allowLaunchDirectoryTrust: true
         )
+    }
+
+    private func bootstrapPrompt(setupPacketPath: String) -> String {
+        """
+        Your first visible response must be exactly:
+        Zebra GBrain setup is starting. I am reading the setup packet now. Please wait.
+
+        Do not run tools or read files before printing that line.
+        After printing it, read the complete setup packet at:
+        \(setupPacketPath)
+
+        Then follow the setup packet exactly. The setup packet is authoritative for this GBrain setup run.
+        """
     }
 
     private func startupPrompt(
@@ -326,7 +378,8 @@ public struct ZebraGBrainOnboardingStore {
             No Zebra vault is selected. You are starting from Zebra's onboarding work directory, not a brain repo target.
             Do not implicitly use the home directory as the GBrain source target.
             Before `gbrain init`, ask only for the topology decision. Do not ask for the brain repo target in the same prompt.
-            After topology is chosen and `gbrain init`/doctor have run, ask separately where their markdown/brain repo is, or ask whether to create a new brain repo before import, sync, source registration, or receipt write.
+            After topology is chosen and `gbrain init`/doctor have run, ask separately for the brain repo target before import, sync, source registration, or receipt write.
+            When asking for the brain repo target, present the numbered options in the target-resolution guard. Do not ask only as an open-ended sentence.
             You may use the home directory only if the user explicitly confirms it as the brain repo target, then use targetResolution.method=user_confirmed_home.
             Discovery scans are allowed only to present candidates. Do not choose or import a discovered candidate until the user confirms it.
             """
@@ -686,7 +739,11 @@ public struct ZebraGBrainOnboardingStore {
         if waitingForUser == "brain_repo_target_resolution" {
             return """
             Current user-decision gate:
-            Ask only for the Step 3 brain repo target now: an existing markdown/brain repo path or a new repo path to create.
+            Ask only for the Step 3 brain repo target now. Present exactly these numbered options:
+            1. Use an existing markdown/brain repo
+            2. Create a new brain repo at ~/brain
+            3. Create a new brain repo at a custom path
+            If the user chooses 1, ask for the full existing repo path. If the user chooses 2, ask for yes/no confirmation before creating ~/brain. If the user chooses 3, ask for the full path to create.
             Do not ask for topology in this gate. Do not ask for Step 2 API keys unless the current Step 3 command refuses to continue without one.
             """
         }
@@ -723,6 +780,12 @@ public struct ZebraGBrainOnboardingStore {
         - Allowed targetResolution.method values: selected_vault, user_existing_repo, user_created_repo, user_confirmed_home.
         - Forbidden target choices: implicit_home, auto_discovered_candidate.
         - Before import/sync/source registration/receipt write, resolve the brain repo target with the user unless the selected vault is being used.
+        - When resolving the brain repo target in terminal, present exactly these numbered options:
+          1. Use an existing markdown/brain repo
+          2. Create a new brain repo at ~/brain
+          3. Create a new brain repo at a custom path
+        - If the user chooses 1, ask for the full existing repo path. If the user chooses 2, ask for yes/no confirmation before creating ~/brain. If the user chooses 3, ask for the full path to create.
+        - Do not ask only as an open-ended "give a path or create new" sentence.
         - If using an existing repo the user names, use method=user_existing_repo.
         - If creating a new repo, ask for the path first, create it, git init there if needed, then use method=user_created_repo.
         """
@@ -971,6 +1034,21 @@ public struct ZebraGBrainOnboardingStore {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             try Self.helperScript.write(to: url, atomically: true, encoding: .utf8)
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    private func writeSetupPacket(_ content: String, runId: String) -> URL? {
+        let directory = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-setup-packets", isDirectory: true)
+        let url = directory.appendingPathComponent("\(runId).md", isDirectory: false)
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             return url
         } catch {
             return nil
