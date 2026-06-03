@@ -303,6 +303,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(packet.contains("Do not ask for the brain repo target in this gate"))
         XCTAssertTrue(packet.contains("Do not ask for Step 2 API keys in the topology prompt"))
         XCTAssertTrue(packet.contains("Do not run `gbrain init --pglite --no-embedding`"))
+        XCTAssertTrue(packet.contains("provider key provided: set one of `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, or `VOYAGE_API_KEY`"))
+        XCTAssertTrue(packet.contains("defer embeddings: initialize with `gbrain init --pglite --no-embedding` now"))
         XCTAssertTrue(packet.contains("Target-resolution timing"))
         XCTAssertFalse(packet.contains("User decisions you must stop and ask for"))
         XCTAssertTrue(launch.shellEnvironmentPrefix.contains("ZEBRA_GBRAIN_STATE"))

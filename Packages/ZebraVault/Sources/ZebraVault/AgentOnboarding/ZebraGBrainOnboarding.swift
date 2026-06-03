@@ -551,6 +551,9 @@ public struct ZebraGBrainOnboardingStore {
         - Continue to follow INSTALL_FOR_AGENTS.md `##` section order, but respect the current `waitingForUser` block reason first.
         - In Step 3, do not run `gbrain init`, `gbrain init --pglite`, or Supabase setup until the user has explicitly chosen topology.
         - Do not run `gbrain init --pglite --no-embedding`, accept deferred embeddings, or otherwise disable embeddings until the user explicitly chooses that path.
+        - When an embedding provider decision is required, show only these two numbered options:
+          1. provider key provided: set one of `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, or `VOYAGE_API_KEY` in the environment, then continue.
+          2. defer embeddings: initialize with `gbrain init --pglite --no-embedding` now; embeddings can be configured later.
         - Record the user's Step 2 embedding decision with `zebra-gbrain-onboarding report --status completed --section "Step 2: API Keys" --embedding-decision "<provider_key|defer_embeddings>"`. This records the decision only; never write API key values to Zebra state.
         - In Step 3, do not import, sync, register a source, or write a completion receipt until the user has explicitly resolved the brain repo target.
 
@@ -863,7 +866,7 @@ public struct ZebraGBrainOnboardingStore {
             Current user-decision gate:
             Ask only for the Step 3 topology decision now: local PGLite or Supabase/Postgres.
             Do not ask for the brain repo target in this gate. Ask for that later, after topology is chosen and Step 3 init/doctor have run.
-            Do not ask for Step 2 API keys in the topology prompt. However, if a Step 3 command needs an embedding provider or offers `--no-embedding`/deferred embeddings, stop and ask the user whether to provide a provider key or defer embeddings before using that option.
+            Do not ask for Step 2 API keys in the topology prompt. However, if a Step 3 command needs an embedding provider or offers `--no-embedding`/deferred embeddings, stop and show only the two embedding provider decision options from Zebra hard gates.
             """
         }
         if waitingForUser == "brain_repo_target_resolution" {
@@ -874,14 +877,14 @@ public struct ZebraGBrainOnboardingStore {
             2. Create a new brain repo at ~/brain
             3. Create a new brain repo at a custom path
             If the user chooses 1, ask for the full existing repo path. If the user chooses 2, ask for yes/no confirmation before creating ~/brain. If the user chooses 3, ask for the full path to create.
-            Do not ask for topology in this gate. Do not ask for Step 2 API keys unless the current Step 3 command refuses to continue without one. Do not silently choose `--no-embedding`; ask and record `--embedding-decision` first.
+            Do not ask for topology in this gate. Do not ask for Step 2 API keys unless the current Step 3 command refuses to continue without one. Do not silently choose `--no-embedding`; show only the two embedding provider decision options from Zebra hard gates and record `--embedding-decision` first.
             """
         }
         if nextSection.localizedCaseInsensitiveContains("Step 2") {
             return """
             Current user-decision gate:
             Ask only for Step 2 credential decisions needed by the current command.
-            If no embedding provider is configured, ask whether to provide a provider key or defer embeddings. Do not choose deferred/no-embedding mode without explicit user confirmation.
+            If no embedding provider is configured, show only the two embedding provider decision options from Zebra hard gates. Do not choose deferred/no-embedding mode without explicit user confirmation.
             Do not ask for Step 3 topology or brain repo target until Step 3 is the current section.
             """
         }
@@ -889,7 +892,7 @@ public struct ZebraGBrainOnboardingStore {
             return """
             Current user-decision gate:
             Ask only for Step 3 decisions that are not already resolved.
-            Do not ask for Step 2 API keys unless a Step 3 command refuses to continue without one. If it offers `--no-embedding` or embedding deferral, ask the user before using that path and record the decision.
+            Do not ask for Step 2 API keys unless a Step 3 command refuses to continue without one. If it offers `--no-embedding` or embedding deferral, show only the two embedding provider decision options from Zebra hard gates before using that path and record the decision.
             """
         }
         return """
