@@ -22,6 +22,7 @@ public struct ZebraGBrainOnboardingStore {
         var docsSnapshotPath: String?
         var docsManifest: DocsManifest?
         var selectedAgent: String?
+        var sectionRoles: [String: SectionRoleRecord]?
         var progress: Progress?
         var receipt: Receipt?
 
@@ -34,10 +35,21 @@ public struct ZebraGBrainOnboardingStore {
                 docsSnapshotPath: nil,
                 docsManifest: nil,
                 selectedAgent: nil,
+                sectionRoles: nil,
                 progress: nil,
                 receipt: nil
             )
         }
+    }
+
+    private struct SectionRoleRecord: Codable {
+        var section: String?
+        var sectionHash: String?
+        var role: String?
+        var roleSource: String?
+        var roleConfidence: String?
+        var roleEvidence: [String]?
+        var updatedAt: String?
     }
 
     private struct Progress: Codable {
@@ -372,6 +384,9 @@ public struct ZebraGBrainOnboardingStore {
         - After a section: `zebra-gbrain-onboarding report --status completed --section "<section title>"`
         - When waiting for the user: `zebra-gbrain-onboarding report --status waiting_for_user --section "<section title>" --note "<what you need>"`
         - On failure: `zebra-gbrain-onboarding report --status failed --section "<section title>" --note "<reason>"`
+        - When Step 3 resolves a brain repo target, include `--target "<brain repo path>" --method "<targetResolution.method>"` on the completed report.
+        - After the user chooses search mode, explicitly run `gbrain config set search.mode <mode>` even when it matches the auto-applied default, then verify with `gbrain search modes`.
+        - If report rejects a section because the role is unknown, read the current section and report the role with `zebra-gbrain-onboarding report --status mapped_role --section "<section title>" --role "<install|credentials|create_brain|search_mode|import_index|verify>" --evidence "<why>"`, then retry the original report only after the missing prerequisite is satisfied.
 
         Completion verification:
         - Do not say setup is complete until verify returns complete true.
@@ -1107,6 +1122,16 @@ public struct ZebraGBrainOnboardingStore {
         "user_created_repo",
         "user_confirmed_home",
     }
+    allowed_roles = {
+        "install",
+        "credentials",
+        "create_brain",
+        "search_mode",
+        "import_index",
+        "verify",
+    }
+    known_roles = allowed_roles | {"non_role"}
+    allowed_search_modes = {"conservative", "balanced", "tokenmax"}
 
     def now():
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -1183,6 +1208,499 @@ public struct ZebraGBrainOnboardingStore {
                 return source.get("local_path")
         return None
 
+    def stable_hash(value):
+        hash_value = 0xcbf29ce484222325
+        for byte in value.encode("utf-8"):
+            hash_value ^= byte
+            hash_value = (hash_value * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        return f"{hash_value:016x}"
+
+    def normalize_title(value):
+        without_parenthetical = []
+        depth = 0
+        for char in (value or "").lower():
+            if char == "(":
+                depth += 1
+                without_parenthetical.append(" ")
+                continue
+            if char == ")":
+                depth = max(0, depth - 1)
+                without_parenthetical.append(" ")
+                continue
+            if depth == 0:
+                without_parenthetical.append(char)
+        normalized = []
+        for char in "".join(without_parenthetical):
+            if char.isalnum():
+                normalized.append(char)
+            else:
+                normalized.append(" ")
+        return " ".join("".join(normalized).split())
+
+    def docs_manifest_sections(state):
+        manifest = state.get("docsManifest") or {}
+        sections = manifest.get("installForAgentsSections") or []
+        out = []
+        for index, section in enumerate(sections):
+            title = section.get("title") or ""
+            out.append({
+                "title": title,
+                "hash": section.get("hash"),
+                "body": "",
+                "orderIndex": index,
+            })
+        return out
+
+    def parse_install_sections(state):
+        snapshot = state.get("docsSnapshotPath")
+        path = os.path.join(snapshot, "INSTALL_FOR_AGENTS.md") if snapshot else None
+        if not path or not os.path.exists(path):
+            return docs_manifest_sections(state)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        except Exception:
+            return docs_manifest_sections(state)
+
+        sections = []
+        current_title = None
+        current_lines = []
+
+        def finish():
+            if current_title is None:
+                return
+            body = "\\n".join(current_lines)
+            sections.append({
+                "title": current_title,
+                "hash": stable_hash(body),
+                "body": body,
+                "orderIndex": len(sections),
+            })
+
+        for line in text.splitlines():
+            if line.startswith("## "):
+                finish()
+                current_title = line[3:].strip()
+                current_lines = [line]
+            elif current_title is not None:
+                current_lines.append(line)
+        finish()
+        return sections or docs_manifest_sections(state)
+
+    def section_entry(state, section_title):
+        sections = parse_install_sections(state)
+        normalized = normalize_title(section_title)
+        for section in sections:
+            if section.get("title") == section_title:
+                return section, sections
+        for section in sections:
+            if normalize_title(section.get("title")) == normalized:
+                return section, sections
+        return {
+            "title": section_title,
+            "hash": None,
+            "body": section_title or "",
+            "orderIndex": len(sections),
+        }, sections
+
+    def role_key(entry, section_title):
+        section_hash = entry.get("hash")
+        if section_hash:
+            return "hash:" + section_hash
+        return "title:" + normalize_title(section_title or entry.get("title") or "")
+
+    def known_title_role(title):
+        normalized = normalize_title(title)
+        if "step 1" in normalized and ("install gbrain" in normalized or "install cli" in normalized):
+            return "install"
+        if "step 2" in normalized and ("api key" in normalized or "credential" in normalized):
+            return "credentials"
+        if ("step 3 5" in normalized or "search mode" in normalized) and "confirm" in normalized:
+            return "search_mode"
+        if "step 3" in normalized and ("create the brain" in normalized or "initialize brain" in normalized):
+            return "create_brain"
+        if "step 4" in normalized and "import" in normalized and "index" in normalized:
+            return "import_index"
+        if "step 9" in normalized and "verify" in normalized:
+            return "verify"
+        return None
+
+    def non_role_title(title):
+        normalized = normalize_title(title)
+        return (
+            normalized.startswith("step 0 ")
+            or normalized.startswith("step 4 5 ")
+            or normalized.startswith("step 5 ")
+            or normalized.startswith("step 6 ")
+            or normalized.startswith("step 7 ")
+            or normalized.startswith("step 8 ")
+            or normalized == "upgrade"
+            or normalized.startswith("upgrade ")
+            or normalized.startswith("v0 42 0 onboard surface")
+        )
+
+    def signature_role(body):
+        text = (body or "").lower()
+        if "gbrain --version" in text and ("bun install -g github:garrytan/gbrain" in text or "install gbrain" in text):
+            return "install"
+        if "zeroentropy_api_key" in text or "openai_api_key" in text or "anthropic_api_key" in text:
+            return "credentials"
+        if (
+            "gbrain init" in text
+            and "gbrain doctor --json" in text
+            and ("brain repo" in text or "markdown files" in text)
+            and ("ask the user where their files are" in text or "create a new brain repo" in text)
+        ):
+            return "create_brain"
+        if (
+            "conservative" in text
+            and "balanced" in text
+            and "tokenmax" in text
+            and "gbrain config set search.mode" in text
+            and "gbrain search modes" in text
+        ):
+            return "search_mode"
+        if "gbrain import" in text and "gbrain embed --stale" in text:
+            return "import_index"
+        if "docs/gbrain_verify.md" in text or "verification checks" in text:
+            return "verify"
+        return None
+
+    def role_order_is_sane(role, entry, sections):
+        if len(sections) <= 1:
+            return True
+        index = entry.get("orderIndex", len(sections))
+        previous_roles = set()
+        for section in sections:
+            if section.get("orderIndex", 0) >= index:
+                continue
+            previous_roles.add(known_title_role(section.get("title")) or signature_role(section.get("body")) or "")
+        if role == "search_mode":
+            return "create_brain" in previous_roles
+        if role == "import_index":
+            return "create_brain" in previous_roles
+        return True
+
+    def section_role(state, section_title, record=False):
+        entry, sections = section_entry(state, section_title)
+        key = role_key(entry, section_title)
+        roles = state.setdefault("sectionRoles", {}) if record else state.get("sectionRoles", {})
+        existing = roles.get(key) if isinstance(roles, dict) else None
+        if existing and existing.get("role") in known_roles:
+            if not entry.get("hash") or existing.get("sectionHash") == entry.get("hash"):
+                return existing.get("role"), existing.get("roleSource") or "known_hash", entry
+
+        if non_role_title(entry.get("title")):
+            role = "non_role"
+            source = "non_role_title"
+        else:
+            role = known_title_role(entry.get("title"))
+            source = "exact_title" if role else None
+            if not role:
+                role = signature_role(entry.get("body"))
+                source = "signature" if role else None
+        if role and not role_order_is_sane(role, entry, sections):
+            role = None
+            source = None
+        if role and record:
+            roles[key] = {
+                "section": entry.get("title") or section_title,
+                "sectionHash": entry.get("hash"),
+                "role": role,
+                "roleSource": source,
+                "roleConfidence": "deterministic",
+                "roleEvidence": [source],
+                "updatedAt": now(),
+            }
+        return role or "unknown", source or "unknown", entry
+
+    def record_agent_role(state, section_title, role, evidence):
+        if role not in allowed_roles:
+            return False
+        entry, _ = section_entry(state, section_title)
+        if not entry.get("hash") or non_role_title(entry.get("title")):
+            return False
+        key = role_key(entry, section_title)
+        state.setdefault("sectionRoles", {})[key] = {
+            "section": entry.get("title") or section_title,
+            "sectionHash": entry.get("hash"),
+            "role": role,
+            "roleSource": "agent_judgment",
+            "roleConfidence": "agent_asserted",
+            "roleEvidence": evidence,
+            "updatedAt": now(),
+        }
+        return True
+
+    def completed_roles(state):
+        progress = state.get("progress") or {}
+        roles = set()
+        for section in progress.get("completedSections") or []:
+            role, _, _ = section_role(state, section, record=False)
+            if role in allowed_roles:
+                roles.add(role)
+        return roles
+
+    def apply_target_flags(state, flags):
+        target = flags.get("target") or flags.get("target_path")
+        method = flags.get("method")
+        source_id = flags.get("source_id")
+        profile_id = flags.get("profile_id")
+        if not target and not method and not source_id and not profile_id:
+            return None
+        if not target:
+            return "target_not_resolved"
+        if method not in allowed_methods:
+            return "target_confirmation_missing"
+
+        target = os.path.abspath(os.path.expanduser(target))
+        key = target_key(target)
+        progress = state.setdefault("progress", {})
+        progress["resolvedTargetKey"] = key
+        progress["targetResolution"] = {
+            "status": "resolved",
+            "method": method,
+            "confirmedAt": now(),
+        }
+        receipt = state.setdefault("receipt", {})
+        targets = receipt.setdefault("targets", {})
+        target_entry = targets.setdefault(key, {})
+        target_entry["vaultPath"] = target
+        target_entry["targetResolution"] = {
+            "method": method,
+            "confirmedAt": now(),
+        }
+        if source_id:
+            target_entry["sourceId"] = source_id
+        if profile_id:
+            target_entry["profileId"] = profile_id
+        if not progress.get("selectedVaultPath"):
+            receipt["primaryTargetKey"] = key
+        return None
+
+    def resolved_target(state):
+        progress = state.get("progress") or {}
+        receipt = state.get("receipt") or {}
+        key = progress.get("resolvedTargetKey") or receipt.get("primaryTargetKey")
+        targets = receipt.get("targets") or {}
+        target_entry = targets.get(key) if key else None
+        target_path = target_entry.get("vaultPath") if target_entry else None
+        if not target_path and key and key.startswith("vault:"):
+            target_path = key[6:]
+        resolution = progress.get("targetResolution") or {}
+        method = resolution.get("method")
+        if not method and target_entry:
+            method = (target_entry.get("targetResolution") or {}).get("method")
+        return key, target_path, method, target_entry or {}
+
+    def target_is_tool_repo(path):
+        return (
+            path
+            and os.path.isfile(os.path.join(path, "INSTALL_FOR_AGENTS.md"))
+            and os.path.isdir(os.path.join(path, "skills"))
+            and os.path.isfile(os.path.join(path, "package.json"))
+        )
+
+    def target_guard_reasons(state):
+        _, target_path, method, _ = resolved_target(state)
+        reasons = []
+        if not target_path:
+            reasons.append("brain_repo_target_unresolved")
+            return reasons
+        target_path = os.path.abspath(os.path.expanduser(target_path))
+        if method not in allowed_methods:
+            reasons.append("target_confirmation_missing")
+        if target_path == os.path.abspath(os.path.expanduser("~")) and method != "user_confirmed_home":
+            reasons.append("implicit_home_target")
+        if target_is_tool_repo(target_path):
+            reasons.append("gbrain_tool_repo_target")
+        if not os.path.isdir(target_path):
+            reasons.append("brain_repo_target_missing")
+        return reasons
+
+    def gbrain_version_ok():
+        executable = gbrain_executable()
+        if not executable:
+            return False
+        try:
+            result = subprocess.run(
+                [executable, "--version"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def doctor_ok(state):
+        executable = gbrain_executable()
+        if not executable:
+            return False
+        _, target_path, _, _ = resolved_target(state)
+        cwd = target_path if target_path and os.path.isdir(target_path) else None
+        try:
+            result = subprocess.run(
+                [executable, "doctor", "--json"],
+                cwd=cwd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=45,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def source_registered(state, flags):
+        executable = gbrain_executable()
+        if not executable:
+            return False
+        _, target_path, _, target_entry = resolved_target(state)
+        source_id = flags.get("source_id") or target_entry.get("sourceId")
+        if not target_path or not os.path.isdir(target_path) or not source_id:
+            return False
+        current_ok, current_payload, _ = run_json(
+            [executable, "sources", "current", "--json"],
+            cwd=target_path,
+            timeout=12,
+        )
+        current_ok = current_ok and current_payload.get("source_id") == source_id
+        list_ok, list_payload, _ = run_json(
+            [executable, "sources", "list", "--json"],
+            cwd=target_path,
+            timeout=12,
+        )
+        listed_local_path = source_list_local_path(list_payload, source_id)
+        list_ok = (
+            list_ok
+            and listed_local_path
+            and os.path.abspath(os.path.expanduser(listed_local_path)) == os.path.abspath(target_path)
+        )
+        return bool(current_ok and list_ok)
+
+    def search_mode_configured(state):
+        executable = gbrain_executable()
+        if not executable:
+            return False
+        _, target_path, _, _ = resolved_target(state)
+        cwd = target_path if target_path and os.path.isdir(target_path) else None
+        try:
+            result = subprocess.run(
+                [executable, "config", "get", "search.mode"],
+                cwd=cwd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=12,
+            )
+        except Exception:
+            return False
+        if result.returncode != 0:
+            return False
+        for line in reversed((result.stdout + "\\n" + result.stderr).splitlines()):
+            tokens = []
+            for chunk in line.lower().replace("=", " ").replace(":", " ").split():
+                token = "".join(char for char in chunk if char.isalnum())
+                if token:
+                    tokens.append(token)
+            if any(token in allowed_search_modes for token in tokens):
+                return True
+        return False
+
+    def receipt_verify_complete(state):
+        receipt = state.get("receipt") or {}
+        global_readiness = receipt.get("globalReadiness") or {}
+        if not global_readiness.get("complete"):
+            return False
+        key, _, _, target_entry = resolved_target(state)
+        if key and target_entry:
+            return bool(target_entry.get("complete"))
+        for target in (receipt.get("targets") or {}).values():
+            if target.get("complete"):
+                return True
+        return False
+
+    def reject_report(state, reason, section, status, next_action=None):
+        progress = state.setdefault("progress", {})
+        progress["lastFailure"] = reason
+        progress["lastStatus"] = "rejected"
+        progress["updatedAt"] = now()
+        if reason in {
+            "brain_repo_target_unresolved",
+            "target_confirmation_missing",
+            "implicit_home_target",
+            "gbrain_tool_repo_target",
+            "brain_repo_target_missing",
+        }:
+            progress["waitingForUser"] = "brain_repo_target_resolution"
+        elif reason == "section_role_unknown":
+            progress["waitingForUser"] = "section_role_mapping_resolution"
+        save_state(state)
+        payload = {
+            "ok": False,
+            "reason": reason,
+            "section": section,
+            "status": status,
+        }
+        if next_action:
+            payload["nextAction"] = next_action
+        print(json.dumps(payload, sort_keys=True))
+        sys.exit(1)
+
+    def report_guard_reason(state, status, role, flags):
+        if status not in {"started", "completed"}:
+            return None
+        roles = completed_roles(state)
+        target_reasons = target_guard_reasons(state)
+        if role == "unknown" and status == "completed":
+            return "section_role_unknown"
+        if role == "install" and status == "completed" and not gbrain_version_ok():
+            return "gbrain_version_failed"
+        if role == "create_brain" and status == "completed":
+            if target_reasons:
+                return target_reasons[0]
+            if not doctor_ok(state):
+                return "doctor_failed"
+        if role == "search_mode":
+            if "create_brain" not in roles:
+                return "create_brain_not_completed"
+            if target_reasons:
+                return target_reasons[0]
+            if status == "completed" and not search_mode_configured(state):
+                return "search_mode_not_configured"
+        if role == "import_index":
+            if "create_brain" not in roles:
+                return "create_brain_not_completed"
+            if "search_mode" not in roles:
+                return "search_mode_not_completed"
+            if target_reasons:
+                return target_reasons[0]
+            if status == "completed" and not source_registered(state, flags):
+                return "source_not_registered"
+        if role == "verify" and status == "completed" and not receipt_verify_complete(state):
+            return "verify_incomplete"
+        return None
+
+    def target_confirmation_flags_present(flags):
+        return bool(flags.get("target") or flags.get("target_path") or flags.get("method") or flags.get("profile_id"))
+
+    def should_clear_waiting_for_user(progress, status, role, flags):
+        waiting = progress.get("waitingForUser")
+        if not waiting:
+            return False
+        if waiting == "topology_resolution":
+            return role == "create_brain" and status in {"started", "completed"}
+        if waiting == "brain_repo_target_resolution":
+            return (
+                role == "create_brain"
+                and status == "completed"
+                and bool(flags.get("target") or flags.get("target_path"))
+                and flags.get("method") in allowed_methods
+            )
+        return False
+
     def report():
         flags = parse_flags(args)
         positional = flags.get("_positional", [])
@@ -1190,6 +1708,41 @@ public struct ZebraGBrainOnboardingStore {
         section = flags.get("section") or ""
         note = flags.get("note")
         state = load_state()
+        if status == "mapped_role":
+            role = flags.get("role")
+            evidence = []
+            if flags.get("evidence"):
+                evidence.append(flags.get("evidence"))
+            if note:
+                evidence.append(note)
+            if not section or not record_agent_role(state, section, role, evidence):
+                reject_report(state, "invalid_section_role_mapping", section, status)
+            progress = state.setdefault("progress", {})
+            if progress.get("waitingForUser") == "section_role_mapping_resolution":
+                progress.pop("waitingForUser", None)
+            progress["updatedAt"] = now()
+            save_state(state)
+            print(json.dumps({"ok": True, "status": status, "section": section, "role": role}, sort_keys=True))
+            return
+
+        candidate_state = json.loads(json.dumps(state))
+        role, _, _ = section_role(candidate_state, section, record=True)
+        if target_confirmation_flags_present(flags):
+            if not (role == "create_brain" and status == "completed"):
+                reject_report(state, "target_flags_not_allowed", section, status)
+            target_error = apply_target_flags(candidate_state, flags)
+            if target_error:
+                reject_report(state, target_error, section, status)
+        guard_reason = report_guard_reason(candidate_state, status, role, flags)
+        if guard_reason:
+            next_action = None
+            if guard_reason == "section_role_unknown":
+                next_action = "report mapped_role with role and evidence, or report waiting_for_user"
+            elif guard_reason in {"brain_repo_target_unresolved", "target_confirmation_missing"}:
+                next_action = "report waiting_for_user for brain_repo_target_resolution"
+            reject_report(state, guard_reason, section, status, next_action=next_action)
+
+        state = candidate_state
         progress = state.setdefault("progress", {})
         if section:
             progress["nextSection"] = section
@@ -1199,7 +1752,7 @@ public struct ZebraGBrainOnboardingStore {
                 completed.append(section)
         if status == "waiting_for_user":
             progress["waitingForUser"] = note or section or "user input required"
-        else:
+        elif should_clear_waiting_for_user(progress, status, role, flags):
             progress.pop("waitingForUser", None)
         if status == "failed":
             progress["lastFailure"] = note or section or "failed"
