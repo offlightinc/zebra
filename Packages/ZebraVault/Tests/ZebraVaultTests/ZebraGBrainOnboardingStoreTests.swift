@@ -146,6 +146,69 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(target["reasons"] as? [String], [])
     }
 
+    func testWaitingForUserSkipsLiveVerification() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "brain\n".write(to: vault.appendingPathComponent(".gbrain-source"), atomically: true, encoding: .utf8)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: vault.path,
+            sourceId: "brain",
+            method: "user_created_repo"
+        )
+        try writeActiveProgress(
+            stateURL,
+            targetPath: vault.path,
+            completedSections: [],
+            waitingForUser: "topology_resolution"
+        )
+
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": ""]
+        )
+
+        let result = store.completionResult(selectedVaultPath: nil)
+        XCTAssertFalse(result.isComplete)
+        XCTAssertEqual(result.reasons, ["waiting_for_user:topology_resolution"])
+    }
+
+    func testLiveVerifierDoesNotRewriteReceiptWhenMaterialStateIsUnchanged() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "brain\n".write(to: vault.appendingPathComponent(".gbrain-source"), atomically: true, encoding: .utf8)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: vault.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: vault.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            complete: false
+        )
+
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": bin.path]
+        )
+
+        XCTAssertTrue(store.isSetupCompleted(selectedVaultPath: nil))
+        try rewriteReceiptVerifiedAt(
+            stateURL,
+            targetPath: vault.path,
+            value: "2000-01-01T00:00:00Z"
+        )
+        let timestampOnlyState = try String(contentsOf: stateURL, encoding: .utf8)
+        XCTAssertTrue(store.isSetupCompleted(selectedVaultPath: nil))
+        let afterSecondVerification = try String(contentsOf: stateURL, encoding: .utf8)
+        XCTAssertEqual(afterSecondVerification, timestampOnlyState)
+    }
+
     func testActiveRunDoesNotCompleteBeforeImportIndexReport() throws {
         let root = try makeTemporaryDirectory()
         let vault = root.appendingPathComponent("brain", isDirectory: true)
@@ -865,13 +928,14 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
     private func writeActiveProgress(
         _ stateURL: URL,
         targetPath: String,
-        completedSections: [String]
+        completedSections: [String],
+        waitingForUser: String? = nil
     ) throws {
         let data = try Data(contentsOf: stateURL)
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let key = "vault:\((targetPath as NSString).standardizingPath)"
         object["currentRunId"] = "gbrain-test-run"
-        object["progress"] = [
+        var progress: [String: Any] = [
             "launchDirectory": targetPath,
             "resolvedTargetKey": key,
             "targetResolution": [
@@ -882,6 +946,10 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             "completedSections": completedSections,
             "nextSection": "Step 4: Import and Index",
         ]
+        if let waitingForUser {
+            progress["waitingForUser"] = waitingForUser
+        }
+        object["progress"] = progress
         let updated = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         try updated.write(to: stateURL, options: .atomic)
     }
@@ -893,6 +961,28 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let targets = try XCTUnwrap(receipt["targets"] as? [String: Any])
         let key = "vault:\((targetPath as NSString).standardizingPath)"
         return try XCTUnwrap(targets[key] as? [String: Any])
+    }
+
+    private func rewriteReceiptVerifiedAt(
+        _ stateURL: URL,
+        targetPath: String,
+        value: String
+    ) throws {
+        let data = try Data(contentsOf: stateURL)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var receipt = try XCTUnwrap(object["receipt"] as? [String: Any])
+        var globalReadiness = try XCTUnwrap(receipt["globalReadiness"] as? [String: Any])
+        globalReadiness["verifiedAt"] = value
+        receipt["globalReadiness"] = globalReadiness
+        var targets = try XCTUnwrap(receipt["targets"] as? [String: Any])
+        let key = "vault:\((targetPath as NSString).standardizingPath)"
+        var target = try XCTUnwrap(targets[key] as? [String: Any])
+        target["verifiedAt"] = value
+        targets[key] = target
+        receipt["targets"] = targets
+        object["receipt"] = receipt
+        let updated = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try updated.write(to: stateURL, options: .atomic)
     }
 
     private func stateObject(in stateURL: URL) throws -> [String: Any] {

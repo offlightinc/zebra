@@ -70,7 +70,7 @@ public struct ZebraGBrainOnboardingStore {
         var targets: [String: Target]?
     }
 
-    private struct GlobalReadiness: Codable {
+    private struct GlobalReadiness: Codable, Equatable {
         var complete: Bool?
         var gbrainExecutablePath: String?
         var wrapperPath: String?
@@ -78,7 +78,7 @@ public struct ZebraGBrainOnboardingStore {
         var verifiedAt: String?
     }
 
-    private struct Target: Codable {
+    private struct Target: Codable, Equatable {
         var vaultPath: String?
         var sourceId: String?
         var profileId: String?
@@ -93,18 +93,18 @@ public struct ZebraGBrainOnboardingStore {
         var reasons: [String]?
     }
 
-    private struct TargetResolution: Codable {
+    private struct TargetResolution: Codable, Equatable {
         var status: String?
         var method: String?
         var confirmedAt: String?
     }
 
-    private struct ProbeResult: Codable {
+    private struct ProbeResult: Codable, Equatable {
         var ok: Bool?
         var status: String?
     }
 
-    private struct SourceProbeResult: Codable {
+    private struct SourceProbeResult: Codable, Equatable {
         var ok: Bool?
         var sourceId: String?
         var localPath: String?
@@ -201,6 +201,9 @@ public struct ZebraGBrainOnboardingStore {
     func completionResult(selectedVaultPath: String?) -> CompletionResult {
         guard let state = loadState() else {
             return CompletionResult(isComplete: false, reasons: ["missing_receipt"])
+        }
+        if let waitingForUser = nonEmpty(state.progress?.waitingForUser) {
+            return CompletionResult(isComplete: false, reasons: ["waiting_for_user:\(waitingForUser)"])
         }
         guard let receipt = state.receipt else {
             return CompletionResult(isComplete: false, reasons: ["missing_receipt"])
@@ -914,12 +917,33 @@ public struct ZebraGBrainOnboardingStore {
     private func updateReceipt(with live: LiveVerificationResult, targetKey: String) {
         guard var state = loadState() else { return }
         var receipt = state.receipt ?? Receipt(globalReadiness: nil, primaryTargetKey: nil, targets: nil)
+        if receiptMateriallyMatches(receipt, live: live, targetKey: targetKey) {
+            return
+        }
         receipt.globalReadiness = live.globalReadiness
         var targets = receipt.targets ?? [:]
         targets[targetKey] = live.target
         receipt.targets = targets
         state.receipt = receipt
         writeState(state)
+    }
+
+    private func receiptMateriallyMatches(
+        _ receipt: Receipt,
+        live: LiveVerificationResult,
+        targetKey: String
+    ) -> Bool {
+        var existingReadiness = receipt.globalReadiness
+        var nextReadiness = live.globalReadiness
+        existingReadiness?.verifiedAt = nil
+        nextReadiness.verifiedAt = nil
+
+        var existingTarget = receipt.targets?[targetKey]
+        var nextTarget = live.target
+        existingTarget?.verifiedAt = nil
+        nextTarget.verifiedAt = nil
+
+        return existingReadiness == nextReadiness && existingTarget == nextTarget
     }
 
     private func resolveGBrainExecutable(readiness: GlobalReadiness?, target: Target?) -> String? {

@@ -230,6 +230,8 @@ verify completed
 
 체크리스트 자동 완료 판정도 같은 경계를 따라야 한다. 진행 중인 run(`currentRunId` 또는 `progress`)이 있는 경우에는 live verifier가 source/doctor를 통과하더라도 `import_index` 역할의 Step 4 완료 report가 trusted progress에 남기 전까지 UI를 checked로 올리지 않는다. 이미 설치가 끝난 기존 사용자의 stale receipt처럼 active progress가 없는 경우에는 기존대로 live verifier가 receipt를 복구할 수 있다.
 
+`waitingForUser`가 설정된 상태에서는 체크리스트 자동 완료 판정이 `gbrain doctor`, `gbrain sources current`, `gbrain sources list` 같은 live probe를 반복 실행하면 안 된다. 사용자 결정을 기다리는 동안은 setup이 완료될 수 없으므로 즉시 incomplete를 반환한다. 또한 live verifier가 통과한 뒤 receipt를 갱신할 때는 `verifiedAt` 같은 timestamp만 바뀐 경우 state 파일을 다시 쓰지 않는다. 그렇지 않으면 state write -> file watcher refresh -> live verify -> state write 루프가 생겨 CPU/fseventsd 부하가 커진다.
+
 `--target`, `--method`, `--profile-id` 같은 target 확정용 flags는 `create_brain completed` report에서만 state/receipt에 반영한다. 다른 section report에 붙은 target flags는 target을 확정하지 않고 거부한다. `source-id`는 import/source 검증용 보조 입력으로만 사용할 수 있고, 단독으로 target을 확정하지 않는다.
 
 거부 시 helper는 report를 성공 상태로 기록하지 않는다.
