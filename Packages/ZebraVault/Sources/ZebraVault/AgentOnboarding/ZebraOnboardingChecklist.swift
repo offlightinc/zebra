@@ -47,6 +47,8 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private var selectedVaultPath: String?
     private var emailConnected = false
     private var launchGeneration = 0
+    private var gbrainDocsPrefetchTask: Task<Bool, Never>?
+    private var didStartGBrainDocsPrefetch = false
 #if DEBUG
     private static let developmentCompletedStepIDsDefaultsKey = "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
     private static let developmentManuallyCompletableStepIDs: Set<ZebraOnboardingChecklistStepID> = [
@@ -93,6 +95,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     }
 
     deinit {
+        gbrainDocsPrefetchTask?.cancel()
 #if os(macOS)
         completionRefreshWorkItem?.cancel()
         completionWatchSources.forEach { $0.cancel() }
@@ -114,6 +117,25 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     public var isVisible: Bool {
         completedCount < totalCount
+    }
+
+    public func prefetchGBrainDocsIfNeeded() {
+        guard !completedStepIDs.contains(.gbrain),
+              !didStartGBrainDocsPrefetch,
+              gbrainDocsPrefetchTask == nil else {
+            return
+        }
+        didStartGBrainDocsPrefetch = true
+        let store = gbrainOnboardingStore
+        let task = Task.detached(priority: .utility) {
+            store.prefetchDocsSnapshotIfNeeded()
+        }
+        gbrainDocsPrefetchTask = task
+        Task { @MainActor [weak self, task] in
+            _ = await task.value
+            guard let self else { return }
+            self.gbrainDocsPrefetchTask = nil
+        }
     }
 
     public var snapshots: [ZebraOnboardingChecklistStepSnapshot] {
@@ -479,6 +501,9 @@ public struct ZebraOnboardingChecklistCard: View {
                 .shadow(color: Color.black.opacity(0.48), radius: 24, x: 0, y: 10)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("ZebraOnboardingChecklistCard")
+                .onAppear {
+                    store.prefetchGBrainDocsIfNeeded()
+                }
             }
         }
     }

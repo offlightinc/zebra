@@ -181,6 +181,13 @@ public struct ZebraGBrainOnboardingStore {
         var manifest: DocsManifest
     }
 
+    private struct DocsSnapshotRecord: Codable {
+        var commit: String
+        var path: String
+        var manifest: DocsManifest
+        var storedAt: String
+    }
+
     private struct LiveVerificationResult {
         var complete: Bool
         var reasons: [String]
@@ -242,6 +249,20 @@ public struct ZebraGBrainOnboardingStore {
 
     public func isSetupCompleted(selectedVaultPath: String?) -> Bool {
         completionResult(selectedVaultPath: selectedVaultPath).isComplete
+    }
+
+    @discardableResult
+    public func prefetchDocsSnapshotIfNeeded() -> Bool {
+        guard explicitDocsRepoURL() == nil,
+              environment["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED"] != "1" else {
+            return false
+        }
+        let hasUsableCache = cachedDocsSnapshot() != nil
+        guard let snapshot = prepareRemoteDocsSnapshot() else {
+            return hasUsableCache
+        }
+        writeDocsSnapshotCache(snapshot)
+        return true
     }
 
     func completionResult(selectedVaultPath: String?) -> CompletionResult {
@@ -586,8 +607,12 @@ public struct ZebraGBrainOnboardingStore {
         if let repoURL = explicitDocsRepoURL() {
             return prepareLocalDocsSnapshot(repoURL: repoURL)
         }
+        if let cachedSnapshot = cachedDocsSnapshot() {
+            return cachedSnapshot
+        }
         if environment["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED"] != "1",
            let remoteSnapshot = prepareRemoteDocsSnapshot() {
+            writeDocsSnapshotCache(remoteSnapshot)
             return remoteSnapshot
         }
         return resolveFallbackDocsRepoURL().flatMap(prepareLocalDocsSnapshot(repoURL:))
@@ -660,9 +685,13 @@ public struct ZebraGBrainOnboardingStore {
 
         var files: [DocsFile] = []
         var installForAgents = ""
+        let remoteURLs = docsPaths.compactMap { relativePath -> (path: String, url: URL)? in
+            guard let url = URL(string: "\(rawBase)/\(ref)/\(relativePath)") else { return nil }
+            return (relativePath, url)
+        }
+        let remoteContents = fetchRemoteTexts(urlsByPath: remoteURLs)
         for relativePath in docsPaths {
-            guard let url = URL(string: "\(rawBase)/\(ref)/\(relativePath)"),
-                  let content = fetchRemoteText(url: url) else {
+            guard let content = remoteContents[relativePath] else {
                 continue
             }
             let destinationURL = snapshotDirectory.appendingPathComponent(relativePath, isDirectory: false)
@@ -681,7 +710,7 @@ public struct ZebraGBrainOnboardingStore {
             }
         }
 
-        guard !files.isEmpty else { return nil }
+        guard !installForAgents.isEmpty else { return nil }
         let manifest = DocsManifest(
             generatedAt: Self.isoTimestamp(),
             sourceRepoPath: rawBase,
@@ -720,6 +749,82 @@ public struct ZebraGBrainOnboardingStore {
         return nil
     }
 
+    private func cachedDocsSnapshot() -> DocsSnapshot? {
+        if let record = readDocsSnapshotCache(),
+           isValidDocsSnapshot(path: record.path, manifest: record.manifest) {
+            return DocsSnapshot(
+                commit: record.commit,
+                path: record.path,
+                manifest: record.manifest
+            )
+        }
+
+        guard let state = loadState(),
+              let path = state.docsSnapshotPath,
+              let manifest = state.docsManifest,
+              isValidDocsSnapshot(path: path, manifest: manifest) else {
+            return nil
+        }
+        return DocsSnapshot(
+            commit: state.docsCommit ?? manifest.sourceRef ?? "cached",
+            path: path,
+            manifest: manifest
+        )
+    }
+
+    private func readDocsSnapshotCache() -> DocsSnapshotRecord? {
+        guard let data = try? Data(contentsOf: docsSnapshotRecordURL()) else { return nil }
+        return try? JSONDecoder().decode(DocsSnapshotRecord.self, from: data)
+    }
+
+    private func writeDocsSnapshotCache(_ snapshot: DocsSnapshot) {
+        let record = DocsSnapshotRecord(
+            commit: snapshot.commit,
+            path: snapshot.path,
+            manifest: snapshot.manifest,
+            storedAt: Self.isoTimestamp()
+        )
+        do {
+            try fileManager.createDirectory(
+                at: docsSnapshotRecordURL().deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(record)
+            try data.write(to: docsSnapshotRecordURL(), options: .atomic)
+        } catch {
+            return
+        }
+    }
+
+    private func docsSnapshotRecordURL() -> URL {
+        stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-docs", isDirectory: true)
+            .appendingPathComponent("latest-snapshot.json", isDirectory: false)
+    }
+
+    private func isValidDocsSnapshot(path: String, manifest: DocsManifest) -> Bool {
+        guard !manifest.files.isEmpty else { return false }
+        guard manifest.files.contains(where: { $0.path == "INSTALL_FOR_AGENTS.md" }),
+              !manifest.installForAgentsSections.isEmpty else {
+            return false
+        }
+        let snapshotURL = URL(fileURLWithPath: path, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: snapshotURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return false
+        }
+        return manifest.files.allSatisfy { file in
+            let filePath = snapshotURL
+                .appendingPathComponent(file.path, isDirectory: false)
+                .path
+            return fileManager.fileExists(atPath: filePath)
+        }
+    }
+
     private func remoteDocsRef() -> String? {
         if let ref = nonEmpty(environment["ZEBRA_GBRAIN_DOCS_REF"]) {
             return ref
@@ -743,11 +848,7 @@ public struct ZebraGBrainOnboardingStore {
     }
 
     private func fetchRemoteText(url: URL) -> String? {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 8
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("zebra-gbrain-onboarding", forHTTPHeaderField: "User-Agent")
-
+        let request = remoteTextRequest(url: url)
         let semaphore = DispatchSemaphore(value: 0)
         var output: String?
         let task = URLSession.shared.dataTask(with: request) { data, response, _ in
@@ -766,6 +867,48 @@ public struct ZebraGBrainOnboardingStore {
             return nil
         }
         return output
+    }
+
+    private func fetchRemoteTexts(urlsByPath: [(path: String, url: URL)]) -> [String: String] {
+        guard !urlsByPath.isEmpty else { return [:] }
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var output: [String: String] = [:]
+        var tasks: [URLSessionDataTask] = []
+
+        for entry in urlsByPath {
+            group.enter()
+            let task = URLSession.shared.dataTask(with: remoteTextRequest(url: entry.url)) { data, response, _ in
+                defer { group.leave() }
+                guard let http = response as? HTTPURLResponse,
+                      (200..<300).contains(http.statusCode),
+                      let data,
+                      let text = String(data: data, encoding: .utf8) else {
+                    return
+                }
+                lock.lock()
+                output[entry.path] = text
+                lock.unlock()
+            }
+            tasks.append(task)
+        }
+
+        tasks.forEach { $0.resume() }
+        if group.wait(timeout: .now() + 10) == .timedOut {
+            tasks.forEach { $0.cancel() }
+        }
+        lock.lock()
+        let result = output
+        lock.unlock()
+        return result
+    }
+
+    private func remoteTextRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("zebra-gbrain-onboarding", forHTTPHeaderField: "User-Agent")
+        return request
     }
 
     private func gitCommitHash(in repoURL: URL) -> String? {

@@ -385,6 +385,123 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(state.contains("\"docsSnapshotPath\""))
     }
 
+    func testPrepareLaunchUsesPrefetchedDocsSnapshotRecordWhenRemoteDisabled() throws {
+        let root = try makeTemporaryDirectory()
+        let snapshot = root
+            .appendingPathComponent("gbrain-docs", isDirectory: true)
+            .appendingPathComponent("cached-ref", isDirectory: true)
+        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
+        try """
+        # Install
+
+        ## Step 1: Cached Install
+
+        Use the prefetched docs snapshot.
+
+        ## Step 2: Cached API Keys
+
+        Configure keys.
+        """
+        .write(to: snapshot.appendingPathComponent("INSTALL_FOR_AGENTS.md"), atomically: true, encoding: .utf8)
+
+        let recordURL = root
+            .appendingPathComponent("gbrain-docs", isDirectory: true)
+            .appendingPathComponent("latest-snapshot.json", isDirectory: false)
+        try """
+        {
+          "commit": "cached-ref",
+          "manifest": {
+            "files": [
+              {
+                "hash": "install-hash",
+                "path": "INSTALL_FOR_AGENTS.md"
+              }
+            ],
+            "generatedAt": "2026-06-03T00:00:00Z",
+            "installForAgentsSections": [
+              {
+                "hash": "step-1-hash",
+                "title": "Step 1: Cached Install"
+              },
+              {
+                "hash": "step-2-hash",
+                "title": "Step 2: Cached API Keys"
+              }
+            ],
+            "sourceKind": "remote",
+            "sourceRef": "cached-ref",
+            "sourceRepoPath": "https://raw.githubusercontent.com/garrytan/gbrain"
+          },
+          "path": "\(snapshot.path)",
+          "storedAt": "2026-06-03T00:00:00Z"
+        }
+        """.write(to: recordURL, atomically: true, encoding: .utf8)
+
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let packet = try setupPacketContent(launch)
+        let state = try String(contentsOf: stateURL, encoding: .utf8)
+
+        XCTAssertTrue(packet.contains("path: \(snapshot.path)"))
+        XCTAssertTrue(packet.contains("commit: cached-ref"))
+        XCTAssertTrue(packet.contains("Step 1: Cached Install"))
+        XCTAssertFalse(packet.contains("GBrain docs snapshot:\nunavailable"))
+        XCTAssertTrue(state.contains("\"docsSnapshotPath\""))
+        XCTAssertTrue(state.contains("\"cached-ref\""))
+    }
+
+    func testPrepareLaunchIgnoresPartialPrefetchedDocsSnapshotRecord() throws {
+        let root = try makeTemporaryDirectory()
+        let snapshot = root
+            .appendingPathComponent("gbrain-docs", isDirectory: true)
+            .appendingPathComponent("partial-ref", isDirectory: true)
+        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
+        try "# GBrain\n".write(to: snapshot.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+
+        let recordURL = root
+            .appendingPathComponent("gbrain-docs", isDirectory: true)
+            .appendingPathComponent("latest-snapshot.json", isDirectory: false)
+        try """
+        {
+          "commit": "partial-ref",
+          "manifest": {
+            "files": [
+              {
+                "hash": "readme-hash",
+                "path": "README.md"
+              }
+            ],
+            "generatedAt": "2026-06-03T00:00:00Z",
+            "installForAgentsSections": [],
+            "sourceKind": "remote",
+            "sourceRef": "partial-ref",
+            "sourceRepoPath": "https://raw.githubusercontent.com/garrytan/gbrain"
+          },
+          "path": "\(snapshot.path)",
+          "storedAt": "2026-06-03T00:00:00Z"
+        }
+        """.write(to: recordURL, atomically: true, encoding: .utf8)
+
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let packet = try setupPacketContent(launch)
+
+        XCTAssertTrue(packet.contains("GBrain docs snapshot:\nunavailable"))
+        XCTAssertFalse(packet.contains("partial-ref"))
+    }
+
     func testPrepareLaunchResetsCompletedSectionsWhenDocsChange() throws {
         let root = try makeTemporaryDirectory()
         let repo = root.appendingPathComponent("gbrain-docs-source", isDirectory: true)
