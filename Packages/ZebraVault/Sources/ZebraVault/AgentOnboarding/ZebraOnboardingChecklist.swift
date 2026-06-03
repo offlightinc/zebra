@@ -48,6 +48,8 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private var emailConnected = false
     private var launchGeneration = 0
     private var gbrainDocsPrefetchTask: Task<Bool, Never>?
+    private var gbrainCompletionRefreshTask: Task<Bool, Never>?
+    private var completionRefreshGeneration = 0
     private var didStartGBrainDocsPrefetch = false
 #if DEBUG
     private static let developmentCompletedStepIDsDefaultsKey = "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
@@ -97,6 +99,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     deinit {
         gbrainDocsPrefetchTask?.cancel()
+        gbrainCompletionRefreshTask?.cancel()
 #if os(macOS)
         completionRefreshWorkItem?.cancel()
         completionWatchSources.forEach { $0.cancel() }
@@ -206,12 +209,44 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 #endif
 
     public func refreshDetectedCompletion() {
+        completionRefreshGeneration += 1
+        let generation = completionRefreshGeneration
+        applyDetectedCompletion(
+            gbrainCompleted: gbrainOnboardingStore.isSetupCompletedFromCachedReceipt(
+                selectedVaultPath: selectedVaultPath
+            )
+        )
+        refreshGBrainCompletionInBackground(generation: generation)
+    }
+
+    private func refreshGBrainCompletionInBackground(generation: Int) {
+        guard gbrainCompletionRefreshTask == nil else { return }
+        let store = gbrainOnboardingStore
+        let selectedVaultPath = selectedVaultPath
+        let task = Task.detached(priority: .utility) {
+            store.isSetupCompleted(selectedVaultPath: selectedVaultPath)
+        }
+        gbrainCompletionRefreshTask = task
+        Task { @MainActor [weak self, task] in
+            let completed = await task.value
+            guard let self else { return }
+            self.gbrainCompletionRefreshTask = nil
+            guard self.completionRefreshGeneration == generation,
+                  self.selectedVaultPath == selectedVaultPath else {
+                self.refreshDetectedCompletion()
+                return
+            }
+            self.applyDetectedCompletion(gbrainCompleted: completed)
+        }
+    }
+
+    private func applyDetectedCompletion(gbrainCompleted: Bool) {
         var completed = Set<ZebraOnboardingChecklistStepID>()
 
         if !ZebraAgentOnboardingStartup.shouldRunAutomaticWelcome() {
             completed.insert(.agent)
         }
-        if gbrainOnboardingStore.isSetupCompleted(selectedVaultPath: selectedVaultPath) {
+        if gbrainCompleted {
             completed.insert(.gbrain)
         }
         // TODO(Zebra onboarding): Final step 3 should read the Zebra-owned

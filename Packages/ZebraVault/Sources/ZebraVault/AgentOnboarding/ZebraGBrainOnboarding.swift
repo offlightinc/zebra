@@ -253,6 +253,10 @@ public struct ZebraGBrainOnboardingStore {
         completionResult(selectedVaultPath: selectedVaultPath).isComplete
     }
 
+    public func isSetupCompletedFromCachedReceipt(selectedVaultPath: String?) -> Bool {
+        cachedCompletionResult(selectedVaultPath: selectedVaultPath).isComplete
+    }
+
     @discardableResult
     public func prefetchDocsSnapshotIfNeeded() -> Bool {
         guard explicitDocsRepoURL() == nil,
@@ -320,6 +324,47 @@ public struct ZebraGBrainOnboardingStore {
         let live = liveVerificationResult(target: resolved.target, vaultPath: vaultPath, sourceId: sourceId)
         updateReceipt(with: live, targetKey: resolved.key)
         return CompletionResult(isComplete: live.complete, reasons: live.reasons)
+    }
+
+    func cachedCompletionResult(selectedVaultPath: String?) -> CompletionResult {
+        guard var state = loadState() else {
+            return CompletionResult(isComplete: false, reasons: ["missing_receipt"])
+        }
+        guard let receipt = state.receipt else {
+            return CompletionResult(isComplete: false, reasons: ["missing_receipt"])
+        }
+        if clearStaleLegacyWaitingForUserIfNeeded(in: &state, receipt: receipt, selectedVaultPath: selectedVaultPath) {
+            writeState(state)
+        }
+        if let waitingForUser = blockingWaitingForUser(in: state, receipt: receipt, selectedVaultPath: selectedVaultPath) {
+            return CompletionResult(isComplete: false, reasons: ["waiting_for_user:\(waitingForUser)"])
+        }
+        guard let resolved = resolveTarget(in: receipt, selectedVaultPath: selectedVaultPath) else {
+            return CompletionResult(isComplete: false, reasons: ["receipt_target_missing"])
+        }
+
+        var reasons: [String] = []
+        if !targetResolutionVerifies(resolved.target.targetResolution) {
+            reasons.append("target_confirmation_missing")
+        }
+        guard standardizedExistingDirectoryPath(resolved.target.vaultPath) != nil else {
+            reasons.append("receipt_target_missing")
+            return CompletionResult(isComplete: false, reasons: reasons)
+        }
+        guard nonEmpty(resolved.target.sourceId) != nil else {
+            reasons.append("source_not_registered")
+            return CompletionResult(isComplete: false, reasons: reasons)
+        }
+        if activeRunRequiresImportIndexCompletion(in: state),
+           !hasCompletedImportIndex(in: state) {
+            reasons.append("import_index_not_completed")
+            return CompletionResult(isComplete: false, reasons: reasons)
+        }
+        guard receiptIsComplete(receipt, selectedVaultPath: selectedVaultPath) else {
+            reasons.append("receipt_incomplete")
+            return CompletionResult(isComplete: false, reasons: reasons)
+        }
+        return CompletionResult(isComplete: true, reasons: [])
     }
 
     private func activeRunRequiresImportIndexCompletion(in state: State) -> Bool {
@@ -846,44 +891,7 @@ public struct ZebraGBrainOnboardingStore {
         if let ref = nonEmpty(environment["ZEBRA_GBRAIN_DOCS_REF"]) {
             return ref
         }
-        let commitURLString = environment["ZEBRA_GBRAIN_DOCS_COMMIT_URL"]
-            ?? "https://api.github.com/repos/garrytan/gbrain/commits/main"
-        guard let url = URL(string: commitURLString),
-              let raw = fetchRemoteText(url: url),
-              let data = raw.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        if let sha = nonEmpty(object["sha"] as? String) {
-            return sha
-        }
-        if let object = object["object"] as? [String: Any],
-           let sha = nonEmpty(object["sha"] as? String) {
-            return sha
-        }
-        return nil
-    }
-
-    private func fetchRemoteText(url: URL) -> String? {
-        let request = remoteTextRequest(url: url)
-        let semaphore = DispatchSemaphore(value: 0)
-        var output: String?
-        let task = URLSession.shared.dataTask(with: request) { data, response, _ in
-            defer { semaphore.signal() }
-            guard let http = response as? HTTPURLResponse,
-                  (200..<300).contains(http.statusCode),
-                  let data,
-                  let text = String(data: data, encoding: .utf8) else {
-                return
-            }
-            output = text
-        }
-        task.resume()
-        if semaphore.wait(timeout: .now() + 10) == .timedOut {
-            task.cancel()
-            return nil
-        }
-        return output
+        return "main"
     }
 
     private func fetchRemoteTexts(urlsByPath: [(path: String, url: URL)]) -> [String: String] {
