@@ -337,13 +337,15 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
         let progress = try progressObject(in: stateURL)
         let packet = try setupPacketContent(launch)
+        let recommendedBrainPath = root.appendingPathComponent("brain", isDirectory: true).path
 
         XCTAssertTrue(launch.startupPrompt.contains("Zebra GBrain setup is starting"))
         XCTAssertTrue(packet.contains("waitingForUser: brain_repo_target_resolution"))
         XCTAssertTrue(packet.contains("Ask only for the Step 3 brain repo target now"))
-        XCTAssertTrue(packet.contains("1. Use an existing markdown/brain repo"))
-        XCTAssertTrue(packet.contains("2. Create a new brain repo at ~/brain"))
+        XCTAssertTrue(packet.contains("1. Create a new brain repo at \(recommendedBrainPath) (recommended)"))
+        XCTAssertTrue(packet.contains("2. Use an existing markdown/brain repo path that the user provides"))
         XCTAssertTrue(packet.contains("3. Create a new brain repo at a custom path"))
+        XCTAssertTrue(packet.contains("Do not present Zebra's onboarding work directory"))
         XCTAssertTrue(packet.contains("Do not ask only as an open-ended"))
         XCTAssertFalse(packet.contains("Ask only for the Step 3 topology decision now"))
         XCTAssertEqual(waitingForUserReason(in: progress), "brain_repo_target_resolution")

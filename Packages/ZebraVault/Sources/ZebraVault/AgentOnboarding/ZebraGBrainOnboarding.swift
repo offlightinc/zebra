@@ -1029,6 +1029,7 @@ public struct ZebraGBrainOnboardingStore {
     private func decisionPromptContext(state: State) -> String {
         let nextSection = state.progress?.nextSection ?? ""
         let waitingForUser = waitingForUserDisplay(state.progress?.waitingForUser)
+        let recommendedBrainRepoPath = recommendedBrainRepoPath()
         if waitingForUser == "topology_resolution" {
             return """
             Current user-decision gate:
@@ -1041,10 +1042,11 @@ public struct ZebraGBrainOnboardingStore {
             return """
             Current user-decision gate:
             Ask only for the Step 3 brain repo target now. Present exactly these numbered options:
-            1. Use an existing markdown/brain repo
-            2. Create a new brain repo at ~/brain
+            1. Create a new brain repo at \(recommendedBrainRepoPath) (recommended)
+            2. Use an existing markdown/brain repo path that the user provides
             3. Create a new brain repo at a custom path
-            If the user chooses 1, ask for the full existing repo path. If the user chooses 2, ask for yes/no confirmation before creating ~/brain. If the user chooses 3, ask for the full path to create.
+            If the user chooses 1, ask for yes/no confirmation before creating \(recommendedBrainRepoPath). If the user chooses 2, ask for the full existing repo path. If the user chooses 3, ask for the full path to create.
+            Do not present Zebra's onboarding work directory, launch directory, or any path under it as a brain repo target option.
             Do not ask for topology in this gate. Do not ask for Step 2 API keys unless the current Step 3 command refuses to continue without one. Do not silently choose `--no-embedding`; show only the two embedding provider decision options from Zebra hard gates and record `--embedding-decision` first.
             """
         }
@@ -1070,6 +1072,7 @@ public struct ZebraGBrainOnboardingStore {
     }
 
     private func targetResolutionGuardContext(state: State) -> String {
+        let recommendedBrainRepoPath = recommendedBrainRepoPath()
         if waitingForUserDisplay(state.progress?.waitingForUser) == "topology_resolution" {
             return """
             Target-resolution timing:
@@ -1083,10 +1086,11 @@ public struct ZebraGBrainOnboardingStore {
         - Forbidden target choices: implicit_home, auto_discovered_candidate.
         - Before import/sync/source registration/receipt write, resolve the brain repo target with the user unless the selected vault is being used.
         - When resolving the brain repo target in terminal, present exactly these numbered options:
-          1. Use an existing markdown/brain repo
-          2. Create a new brain repo at ~/brain
+          1. Create a new brain repo at \(recommendedBrainRepoPath) (recommended)
+          2. Use an existing markdown/brain repo path that the user provides
           3. Create a new brain repo at a custom path
-        - If the user chooses 1, ask for the full existing repo path. If the user chooses 2, ask for yes/no confirmation before creating ~/brain. If the user chooses 3, ask for the full path to create.
+        - If the user chooses 1, ask for yes/no confirmation before creating \(recommendedBrainRepoPath). If the user chooses 2, ask for the full existing repo path. If the user chooses 3, ask for the full path to create.
+        - Do not present Zebra's onboarding work directory, launch directory, or any path under it as a brain repo target option.
         - Do not ask only as an open-ended "give a path or create new" sentence.
         - If using an existing repo the user names, use method=user_existing_repo.
         - If creating a new repo, ask for the path first, create it, git init there if needed, then use method=user_created_repo.
@@ -1395,6 +1399,10 @@ public struct ZebraGBrainOnboardingStore {
             .appendingPathComponent("gbrain-work", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         return Self.standardizedPath(directory.path)
+    }
+
+    private func recommendedBrainRepoPath() -> String {
+        Self.standardizedPath((homeDirectoryPath as NSString).appendingPathComponent("brain"))
     }
 
     private func executablePath(_ path: String?) -> String? {
