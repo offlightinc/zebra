@@ -193,6 +193,7 @@ public struct ZebraGBrainOnboardingStore {
         var reasons: [String]
         var globalReadiness: GlobalReadiness
         var target: Target
+        var hasTransientProbeFailure: Bool
     }
 
     private struct ProcessRunResult {
@@ -200,6 +201,12 @@ public struct ZebraGBrainOnboardingStore {
         var stdout: String
         var stderr: String
         var timedOut: Bool
+    }
+
+    private enum SourceProbeStatus {
+        case verified
+        case mismatch
+        case transientFailure
     }
 
     private static let allowedTargetResolutionMethods: Set<String> = [
@@ -322,6 +329,9 @@ public struct ZebraGBrainOnboardingStore {
         }
 
         let live = liveVerificationResult(target: resolved.target, vaultPath: vaultPath, sourceId: sourceId)
+        if preservesCompletedReceiptOnTransientFailure(receipt: receipt, live: live, targetKey: resolved.key) {
+            return CompletionResult(isComplete: true, reasons: [])
+        }
         updateReceipt(with: live, targetKey: resolved.key)
         return CompletionResult(isComplete: live.complete, reasons: live.reasons)
     }
@@ -1163,40 +1173,36 @@ public struct ZebraGBrainOnboardingStore {
                     doctorOk: false,
                     verifiedAt: Self.isoTimestamp()
                 ),
-                target: updatedTarget
+                target: updatedTarget,
+                hasTransientProbeFailure: false
             )
         }
 
         let doctor = runProcess(executable: executable, arguments: ["doctor", "--json"], cwd: vaultPath, timeout: 20)
         let doctorOk = doctor.exitCode == 0 && !doctor.timedOut
-        if !doctorOk {
+        let doctorTransientFailure = !doctorOk && Self.isTransientGBrainProbeFailure(doctor)
+        if !doctorOk && !doctorTransientFailure {
             reasons.append("doctor_failed")
         }
 
-        let current = runProcess(executable: executable, arguments: ["sources", "current", "--json"], cwd: vaultPath, timeout: 12)
-        let currentObject = Self.jsonObject(from: current.stdout)
-        let currentSourceId = currentObject?["source_id"] as? String
-        let currentOk = current.exitCode == 0
-            && !current.timedOut
-            && currentSourceId == sourceId
+        let sourceProbe = sourceProbeResult(
+            executable: executable,
+            vaultPath: vaultPath,
+            sourceId: sourceId
+        )
 
-        let list = runProcess(executable: executable, arguments: ["sources", "list", "--json"], cwd: vaultPath, timeout: 12)
-        let listedLocalPath = Self.sourceLocalPath(sourceId: sourceId, fromSourcesListJSON: list.stdout)
-        let listOk = list.exitCode == 0
-            && !list.timedOut
-            && listedLocalPath.map(Self.standardizedPath) == vaultPath
-
-        if !currentOk || !listOk {
+        if sourceProbe.status == .mismatch {
             reasons.append("source_not_registered")
         }
 
-        let complete = reasons.isEmpty
+        let hasTransientProbeFailure = doctorTransientFailure || sourceProbe.status == .transientFailure
+        let complete = reasons.isEmpty && doctorOk && sourceProbe.status == .verified
         updatedTarget.gbrainExecutablePath = executable
         updatedTarget.doctorStatus = ProbeResult(ok: doctorOk, status: doctorOk ? "ok" : "failed")
         updatedTarget.sourcesCurrentResult = SourceProbeResult(
-            ok: currentOk && listOk,
-            sourceId: currentSourceId ?? sourceId,
-            localPath: listedLocalPath
+            ok: sourceProbe.status == .verified,
+            sourceId: sourceProbe.currentSourceId ?? sourceId,
+            localPath: sourceProbe.listedLocalPath
         )
         updatedTarget.searchProbeResult = ProbeResult(ok: complete, status: complete ? "not_run" : "blocked")
         updatedTarget.verifiedAt = Self.isoTimestamp()
@@ -1213,13 +1219,47 @@ public struct ZebraGBrainOnboardingStore {
                 doctorOk: doctorOk,
                 verifiedAt: Self.isoTimestamp()
             ),
-            target: updatedTarget
+            target: updatedTarget,
+            hasTransientProbeFailure: hasTransientProbeFailure
         )
+    }
+
+    private func sourceProbeResult(
+        executable: String,
+        vaultPath: String,
+        sourceId: String
+    ) -> (status: SourceProbeStatus, currentSourceId: String?, listedLocalPath: String?) {
+        let current = runProcess(executable: executable, arguments: ["sources", "current", "--json"], cwd: vaultPath, timeout: 12)
+        guard current.exitCode == 0,
+              !current.timedOut,
+              let currentObject = Self.jsonObject(from: current.stdout) else {
+            return (.transientFailure, nil, nil)
+        }
+        let currentSourceId = currentObject["source_id"] as? String
+        guard currentSourceId == sourceId else {
+            return (.mismatch, currentSourceId, nil)
+        }
+
+        let list = runProcess(executable: executable, arguments: ["sources", "list", "--json"], cwd: vaultPath, timeout: 12)
+        guard list.exitCode == 0,
+              !list.timedOut,
+              Self.jsonObject(from: list.stdout) != nil else {
+            return (.transientFailure, currentSourceId, nil)
+        }
+        let listedLocalPath = Self.sourceLocalPath(sourceId: sourceId, fromSourcesListJSON: list.stdout)
+        guard listedLocalPath.map(Self.standardizedPath) == vaultPath else {
+            return (.mismatch, currentSourceId, listedLocalPath)
+        }
+
+        return (.verified, currentSourceId, listedLocalPath)
     }
 
     private func updateReceipt(with live: LiveVerificationResult, targetKey: String) {
         guard var state = loadState() else { return }
         var receipt = state.receipt ?? Receipt(globalReadiness: nil, primaryTargetKey: nil, targets: nil)
+        if preservesCompletedReceiptOnTransientFailure(receipt: receipt, live: live, targetKey: targetKey) {
+            return
+        }
         if receiptMateriallyMatches(receipt, live: live, targetKey: targetKey) {
             return
         }
@@ -1229,6 +1269,29 @@ public struct ZebraGBrainOnboardingStore {
         receipt.targets = targets
         state.receipt = receipt
         writeState(state)
+    }
+
+    private func preservesCompletedReceiptOnTransientFailure(
+        receipt: Receipt,
+        live: LiveVerificationResult,
+        targetKey: String
+    ) -> Bool {
+        guard receipt.globalReadiness?.complete == true,
+              receipt.targets?[targetKey]?.complete == true,
+              live.target.complete == false,
+              live.target.reasons?.isEmpty == true,
+              live.hasTransientProbeFailure else {
+            return false
+        }
+        return true
+    }
+
+    private static func isTransientGBrainProbeFailure(_ result: ProcessRunResult) -> Bool {
+        if result.timedOut { return true }
+        let output = "\(result.stderr)\n\(result.stdout)".lowercased()
+        return output.contains("timed out waiting for pglite lock")
+            || output.contains("connect timed out")
+            || output.contains("connection timed out")
     }
 
     private func receiptMateriallyMatches(
@@ -1612,11 +1675,44 @@ public struct ZebraGBrainOnboardingStore {
         except Exception as exc:
             return False, {}, str(exc)
 
+    def transient_probe_failure(message):
+        text = (message or "").lower()
+        return (
+            "timed out waiting for pglite lock" in text
+            or "connect timed out" in text
+            or "connection timed out" in text
+            or "timed out" in text
+        )
+
     def source_list_local_path(payload, source_id):
         for source in payload.get("sources") or []:
             if source.get("id") == source_id:
                 return source.get("local_path")
         return None
+
+    def source_probe_status(executable, target_path, source_id):
+        current_ok, current_payload, _ = run_json(
+            [executable, "sources", "current", "--json"],
+            cwd=target_path,
+            timeout=12,
+        )
+        if not current_ok:
+            return "transient", None, None
+        current_source_id = current_payload.get("source_id")
+        if current_source_id != source_id:
+            return "mismatch", current_source_id, None
+
+        list_ok, list_payload, _ = run_json(
+            [executable, "sources", "list", "--json"],
+            cwd=target_path,
+            timeout=12,
+        )
+        if not list_ok:
+            return "transient", current_source_id, None
+        listed_local_path = source_list_local_path(list_payload, source_id)
+        if not listed_local_path or os.path.abspath(os.path.expanduser(listed_local_path)) != os.path.abspath(target_path):
+            return "mismatch", current_source_id, listed_local_path
+        return "verified", current_source_id, listed_local_path
 
     def stable_hash(value):
         hash_value = 0xcbf29ce484222325
@@ -2012,24 +2108,8 @@ public struct ZebraGBrainOnboardingStore {
         source_id = flags.get("source_id") or target_entry.get("sourceId")
         if not target_path or not os.path.isdir(target_path) or not source_id:
             return False
-        current_ok, current_payload, _ = run_json(
-            [executable, "sources", "current", "--json"],
-            cwd=target_path,
-            timeout=12,
-        )
-        current_ok = current_ok and current_payload.get("source_id") == source_id
-        list_ok, list_payload, _ = run_json(
-            [executable, "sources", "list", "--json"],
-            cwd=target_path,
-            timeout=12,
-        )
-        listed_local_path = source_list_local_path(list_payload, source_id)
-        list_ok = (
-            list_ok
-            and listed_local_path
-            and os.path.abspath(os.path.expanduser(listed_local_path)) == os.path.abspath(target_path)
-        )
-        return bool(current_ok and list_ok)
+        status, _, _ = source_probe_status(executable, target_path, source_id)
+        return status == "verified"
 
     def search_mode_configured(state):
         executable = gbrain_executable()
@@ -2266,6 +2346,7 @@ public struct ZebraGBrainOnboardingStore {
             reasons.append("missing_gbrain_executable")
 
         doctor_ok = False
+        doctor_transient = False
         if executable:
             try:
                 result = subprocess.run(
@@ -2277,50 +2358,52 @@ public struct ZebraGBrainOnboardingStore {
                     timeout=45,
                 )
                 doctor_ok = result.returncode == 0
-                if not doctor_ok:
+                doctor_transient = not doctor_ok and transient_probe_failure((result.stderr or "") + "\\n" + (result.stdout or ""))
+                if not doctor_ok and not doctor_transient:
                     reasons.append("doctor_failed")
-            except Exception:
-                reasons.append("doctor_failed")
+            except Exception as exc:
+                doctor_transient = transient_probe_failure(str(exc))
+                if not doctor_transient:
+                    reasons.append("doctor_failed")
 
+        source_probe = "transient"
         current_ok = False
         current_source_id = None
         list_ok = False
         listed_local_path = None
         if executable and target and os.path.isdir(target) and source_id:
-            current_ok, current_payload, _ = run_json(
-                [executable, "sources", "current", "--json"],
-                cwd=target,
-                timeout=12,
-            )
-            current_source_id = current_payload.get("source_id")
-            current_ok = current_ok and current_source_id == source_id
-
-            list_ok, list_payload, _ = run_json(
-                [executable, "sources", "list", "--json"],
-                cwd=target,
-                timeout=12,
-            )
-            listed_local_path = source_list_local_path(list_payload, source_id)
-            list_ok = (
-                list_ok
-                and listed_local_path
-                and os.path.abspath(os.path.expanduser(listed_local_path)) == target
-            )
-            if not current_ok or not list_ok:
+            source_probe, current_source_id, listed_local_path = source_probe_status(executable, target, source_id)
+            current_ok = source_probe == "verified"
+            list_ok = source_probe == "verified"
+            if source_probe == "mismatch":
                 reasons.append("source_not_registered")
 
-        complete = len(reasons) == 0
         state = load_state()
         receipt = state.setdefault("receipt", {})
+        key = target_key(target) if target and os.path.isdir(target) else None
+        existing_target = (receipt.get("targets") or {}).get(key) if key else None
+        transient_source_probe = source_probe == "transient" and executable and target and os.path.isdir(target) and source_id
+        transient_probe = doctor_transient or transient_source_probe
+        preserve_complete = (
+            transient_probe
+            and len(reasons) == 0
+            and bool(receipt.get("globalReadiness", {}).get("complete"))
+            and bool((existing_target or {}).get("complete"))
+            and bool(executable)
+        )
+        complete = preserve_complete or (len(reasons) == 0 and doctor_ok and source_probe == "verified")
         receipt["globalReadiness"] = {
             "complete": bool(executable and doctor_ok),
             "gbrainExecutablePath": executable,
             "doctorOk": doctor_ok,
             "verifiedAt": now(),
         }
-        if target and os.path.isdir(target):
-            key = target_key(target)
+        if key:
             targets = receipt.setdefault("targets", {})
+            if preserve_complete:
+                print(json.dumps({"complete": True, "reasons": []}, sort_keys=True))
+                save_state(state)
+                sys.exit(0)
             targets[key] = {
                 "vaultPath": target,
                 "sourceId": source_id,
