@@ -58,10 +58,56 @@ public struct ZebraGBrainOnboardingStore {
         var selectedVaultPath: String?
         var resolvedTargetKey: String?
         var targetResolution: TargetResolution?
+        var embeddingDecision: EmbeddingDecision?
         var completedSections: [String]?
-        var waitingForUser: String?
+        var waitingForUser: PendingUserDecision?
         var lastFailure: String?
         var nextSection: String?
+    }
+
+    private struct EmbeddingDecision: Codable {
+        var decision: String?
+        var confirmedAt: String?
+    }
+
+    private struct PendingUserDecision: Codable, Equatable {
+        var section: String?
+        var reason: String?
+        var note: String?
+        var createdAt: String?
+        var legacyString: Bool?
+
+        init(
+            section: String?,
+            reason: String?,
+            note: String?,
+            createdAt: String? = nil,
+            legacyString: Bool? = nil
+        ) {
+            self.section = section
+            self.reason = reason
+            self.note = note
+            self.createdAt = createdAt
+            self.legacyString = legacyString
+        }
+
+        init(from decoder: Decoder) throws {
+            if let value = try? decoder.singleValueContainer().decode(String.self) {
+                self.section = nil
+                self.reason = value
+                self.note = value
+                self.createdAt = nil
+                self.legacyString = true
+                return
+            }
+
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.section = try container.decodeIfPresent(String.self, forKey: .section)
+            self.reason = try container.decodeIfPresent(String.self, forKey: .reason)
+            self.note = try container.decodeIfPresent(String.self, forKey: .note)
+            self.createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+            self.legacyString = try container.decodeIfPresent(Bool.self, forKey: .legacyString)
+        }
     }
 
     private struct Receipt: Codable {
@@ -199,14 +245,17 @@ public struct ZebraGBrainOnboardingStore {
     }
 
     func completionResult(selectedVaultPath: String?) -> CompletionResult {
-        guard let state = loadState() else {
+        guard var state = loadState() else {
             return CompletionResult(isComplete: false, reasons: ["missing_receipt"])
-        }
-        if let waitingForUser = nonEmpty(state.progress?.waitingForUser) {
-            return CompletionResult(isComplete: false, reasons: ["waiting_for_user:\(waitingForUser)"])
         }
         guard let receipt = state.receipt else {
             return CompletionResult(isComplete: false, reasons: ["missing_receipt"])
+        }
+        if clearStaleLegacyWaitingForUserIfNeeded(in: &state, receipt: receipt, selectedVaultPath: selectedVaultPath) {
+            writeState(state)
+        }
+        if let waitingForUser = blockingWaitingForUser(in: state, receipt: receipt, selectedVaultPath: selectedVaultPath) {
+            return CompletionResult(isComplete: false, reasons: ["waiting_for_user:\(waitingForUser)"])
         }
         guard let resolved = resolveTarget(in: receipt, selectedVaultPath: selectedVaultPath) else {
             return CompletionResult(isComplete: false, reasons: ["receipt_target_missing"])
@@ -249,6 +298,75 @@ public struct ZebraGBrainOnboardingStore {
     private func hasCompletedImportIndex(in state: State) -> Bool {
         guard let completedSections = state.progress?.completedSections else { return false }
         return completedSections.contains { Self.isImportIndexSectionTitle($0) }
+    }
+
+    private func blockingWaitingForUser(
+        in state: State,
+        receipt: Receipt,
+        selectedVaultPath: String?
+    ) -> String? {
+        guard let waitingForUser = state.progress?.waitingForUser,
+              let reason = waitingForUserDisplay(waitingForUser) else {
+            return nil
+        }
+        if isStaleLegacyWaitingForUser(waitingForUser, in: state, receipt: receipt, selectedVaultPath: selectedVaultPath) {
+            return nil
+        }
+        return reason
+    }
+
+    private func clearStaleLegacyWaitingForUserIfNeeded(
+        in state: inout State,
+        receipt: Receipt,
+        selectedVaultPath: String?
+    ) -> Bool {
+        guard let waitingForUser = state.progress?.waitingForUser,
+              isStaleLegacyWaitingForUser(waitingForUser, in: state, receipt: receipt, selectedVaultPath: selectedVaultPath) else {
+            return false
+        }
+        state.progress?.waitingForUser = nil
+        return true
+    }
+
+    private func isStaleLegacyWaitingForUser(
+        _ waitingForUser: PendingUserDecision,
+        in state: State,
+        receipt: Receipt,
+        selectedVaultPath: String?
+    ) -> Bool {
+        guard waitingForUser.legacyString == true,
+              hasCompletedVerify(in: state),
+              receiptIsComplete(receipt, selectedVaultPath: selectedVaultPath) else {
+            return false
+        }
+        return true
+    }
+
+    private func hasCompletedVerify(in state: State) -> Bool {
+        guard let completedSections = state.progress?.completedSections else { return false }
+        return completedSections.contains { title in
+            let normalized = Self.normalizedSectionTitle(title)
+            return normalized.contains("step 9") && normalized.contains("verify")
+        }
+    }
+
+    private func receiptIsComplete(_ receipt: Receipt, selectedVaultPath: String?) -> Bool {
+        guard receipt.globalReadiness?.complete == true else { return false }
+        if let resolved = resolveTarget(in: receipt, selectedVaultPath: selectedVaultPath) {
+            return resolved.target.complete == true
+        }
+        return receipt.targets?.values.contains { $0.complete == true } == true
+    }
+
+    private func waitingForUserDisplay(_ waitingForUser: PendingUserDecision?) -> String? {
+        let reason = nonEmpty(waitingForUser?.reason)
+        let note = nonEmpty(waitingForUser?.note)
+        if reason == "user_input_required", note != nil {
+            return note
+        }
+        return reason
+            ?? note
+            ?? nonEmpty(waitingForUser?.section)
     }
 
     private static func isImportIndexSectionTitle(_ title: String) -> Bool {
@@ -316,6 +434,7 @@ public struct ZebraGBrainOnboardingStore {
             selectedVaultPath: selectedVault,
             resolvedTargetKey: resolvedTargetKey,
             targetResolution: targetResolution,
+            embeddingDecision: canReuseProgress ? previousProgress?.embeddingDecision : nil,
             completedSections: completedSections,
             waitingForUser: waitingForUser,
             lastFailure: nil,
@@ -397,7 +516,7 @@ public struct ZebraGBrainOnboardingStore {
         complete: \(completionResult.isComplete ? "true" : "false")
         reasons: \(completionResult.reasons.isEmpty ? "none" : completionResult.reasons.joined(separator: ", "))
         next section: \(state.progress?.nextSection ?? "unknown")
-        waitingForUser: \(state.progress?.waitingForUser ?? "none")
+        waitingForUser: \(waitingForUserDisplay(state.progress?.waitingForUser) ?? "none")
         """
 
         return """
@@ -431,6 +550,8 @@ public struct ZebraGBrainOnboardingStore {
         - `waitingForUser` is a Zebra block reason, not an INSTALL_FOR_AGENTS.md section.
         - Continue to follow INSTALL_FOR_AGENTS.md `##` section order, but respect the current `waitingForUser` block reason first.
         - In Step 3, do not run `gbrain init`, `gbrain init --pglite`, or Supabase setup until the user has explicitly chosen topology.
+        - Do not run `gbrain init --pglite --no-embedding`, accept deferred embeddings, or otherwise disable embeddings until the user explicitly chooses that path.
+        - Record the user's Step 2 embedding decision with `zebra-gbrain-onboarding report --status completed --section "Step 2: API Keys" --embedding-decision "<provider_key|defer_embeddings>"`. This records the decision only; never write API key values to Zebra state.
         - In Step 3, do not import, sync, register a source, or write a completion receipt until the user has explicitly resolved the brain repo target.
 
         \(targetResolutionGuard)
@@ -442,6 +563,7 @@ public struct ZebraGBrainOnboardingStore {
         - On failure: `zebra-gbrain-onboarding report --status failed --section "<section title>" --note "<reason>"`
         - When Step 3 resolves a brain repo target, include `--target "<brain repo path>" --method "<targetResolution.method>"` on the completed report.
         - After the user chooses search mode, explicitly run `gbrain config set search.mode <mode>` even when it matches the auto-applied default, then verify with `gbrain search modes`.
+        - After the user chooses provider keys or deferred/no-embedding mode, report Step 2 with `--embedding-decision "provider_key"` or `--embedding-decision "defer_embeddings"` before continuing.
         - If report rejects a section because the role is unknown, read the current section and report the role with `zebra-gbrain-onboarding report --status mapped_role --section "<section title>" --role "<install|credentials|create_brain|search_mode|import_index|verify>" --evidence "<why>"`, then retry the original report only after the missing prerequisite is satisfied.
 
         Completion verification:
@@ -719,24 +841,29 @@ public struct ZebraGBrainOnboardingStore {
     private func unresolvedInitialStep3Decision(
         selectedVault: String?,
         resolvedTargetKey: String?,
-        previousWaitingForUser: String?
-    ) -> String? {
+        previousWaitingForUser: PendingUserDecision?
+    ) -> PendingUserDecision? {
         guard selectedVault == nil && resolvedTargetKey == nil else { return nil }
-        if previousWaitingForUser == "brain_repo_target_resolution" {
+        if waitingForUserDisplay(previousWaitingForUser) == "brain_repo_target_resolution" {
             return previousWaitingForUser
         }
-        return "topology_resolution"
+        return PendingUserDecision(
+            section: "Step 3: Create the Brain",
+            reason: "topology_resolution",
+            note: "Choose local PGLite or Supabase/Postgres.",
+            createdAt: Self.isoTimestamp()
+        )
     }
 
     private func decisionPromptContext(state: State) -> String {
         let nextSection = state.progress?.nextSection ?? ""
-        let waitingForUser = state.progress?.waitingForUser
+        let waitingForUser = waitingForUserDisplay(state.progress?.waitingForUser)
         if waitingForUser == "topology_resolution" {
             return """
             Current user-decision gate:
             Ask only for the Step 3 topology decision now: local PGLite or Supabase/Postgres.
             Do not ask for the brain repo target in this gate. Ask for that later, after topology is chosen and Step 3 init/doctor have run.
-            Do not ask for Step 2 API keys in this gate. Ask for credentials later only if the current section or command actually requires them.
+            Do not ask for Step 2 API keys in the topology prompt. However, if a Step 3 command needs an embedding provider or offers `--no-embedding`/deferred embeddings, stop and ask the user whether to provide a provider key or defer embeddings before using that option.
             """
         }
         if waitingForUser == "brain_repo_target_resolution" {
@@ -747,13 +874,14 @@ public struct ZebraGBrainOnboardingStore {
             2. Create a new brain repo at ~/brain
             3. Create a new brain repo at a custom path
             If the user chooses 1, ask for the full existing repo path. If the user chooses 2, ask for yes/no confirmation before creating ~/brain. If the user chooses 3, ask for the full path to create.
-            Do not ask for topology in this gate. Do not ask for Step 2 API keys unless the current Step 3 command refuses to continue without one.
+            Do not ask for topology in this gate. Do not ask for Step 2 API keys unless the current Step 3 command refuses to continue without one. Do not silently choose `--no-embedding`; ask and record `--embedding-decision` first.
             """
         }
         if nextSection.localizedCaseInsensitiveContains("Step 2") {
             return """
             Current user-decision gate:
             Ask only for Step 2 credential decisions needed by the current command.
+            If no embedding provider is configured, ask whether to provide a provider key or defer embeddings. Do not choose deferred/no-embedding mode without explicit user confirmation.
             Do not ask for Step 3 topology or brain repo target until Step 3 is the current section.
             """
         }
@@ -761,7 +889,7 @@ public struct ZebraGBrainOnboardingStore {
             return """
             Current user-decision gate:
             Ask only for Step 3 decisions that are not already resolved.
-            Do not ask for Step 2 API keys unless a Step 3 command refuses to continue without one.
+            Do not ask for Step 2 API keys unless a Step 3 command refuses to continue without one. If it offers `--no-embedding` or embedding deferral, ask the user before using that path and record the decision.
             """
         }
         return """
@@ -771,7 +899,7 @@ public struct ZebraGBrainOnboardingStore {
     }
 
     private func targetResolutionGuardContext(state: State) -> String {
-        if state.progress?.waitingForUser == "topology_resolution" {
+        if waitingForUserDisplay(state.progress?.waitingForUser) == "topology_resolution" {
             return """
             Target-resolution timing:
             - Do not ask for the brain repo target in the topology prompt.
@@ -1234,6 +1362,7 @@ public struct ZebraGBrainOnboardingStore {
     }
     known_roles = allowed_roles | {"non_role"}
     allowed_search_modes = {"conservative", "balanced", "tokenmax"}
+    allowed_embedding_decisions = {"provider_key", "defer_embeddings"}
 
     def now():
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -1580,6 +1709,47 @@ public struct ZebraGBrainOnboardingStore {
             receipt["primaryTargetKey"] = key
         return None
 
+    def embedding_decision_flags_present(flags):
+        return bool(flags.get("embedding_decision"))
+
+    def apply_embedding_decision(state, flags):
+        decision = flags.get("embedding_decision")
+        if not decision:
+            return None
+        if decision not in allowed_embedding_decisions:
+            return "invalid_embedding_decision"
+        progress = state.setdefault("progress", {})
+        progress["embeddingDecision"] = {
+            "decision": decision,
+            "confirmedAt": now(),
+        }
+        return None
+
+    def embedding_decision_recorded(state):
+        progress = state.get("progress") or {}
+        decision = progress.get("embeddingDecision") or {}
+        return decision.get("decision") in allowed_embedding_decisions
+
+    def waiting_reason(waiting):
+        if isinstance(waiting, dict):
+            return waiting.get("reason") or waiting.get("note") or waiting.get("section")
+        if isinstance(waiting, str):
+            return waiting
+        return None
+
+    def waiting_section(waiting):
+        if isinstance(waiting, dict):
+            return waiting.get("section")
+        return None
+
+    def set_waiting_for_user(progress, section, reason, note=None):
+        progress["waitingForUser"] = {
+            "section": section or None,
+            "reason": reason or "user_input_required",
+            "note": note or section or reason or "user input required",
+            "createdAt": now(),
+        }
+
     def resolved_target(state):
         progress = state.get("progress") or {}
         receipt = state.get("receipt") or {}
@@ -1736,9 +1906,9 @@ public struct ZebraGBrainOnboardingStore {
             "gbrain_tool_repo_target",
             "brain_repo_target_missing",
         }:
-            progress["waitingForUser"] = "brain_repo_target_resolution"
+            set_waiting_for_user(progress, section, "brain_repo_target_resolution", "Resolve the GBrain brain repo target.")
         elif reason == "section_role_unknown":
-            progress["waitingForUser"] = "section_role_mapping_resolution"
+            set_waiting_for_user(progress, section, "section_role_mapping_resolution", "Map this INSTALL_FOR_AGENTS section to a known Zebra role.")
         save_state(state)
         payload = {
             "ok": False,
@@ -1760,9 +1930,13 @@ public struct ZebraGBrainOnboardingStore {
             return "section_role_unknown"
         if role == "install" and status == "completed" and not gbrain_version_ok():
             return "gbrain_version_failed"
+        if role == "credentials" and status == "completed" and not embedding_decision_recorded(state):
+            return "embedding_decision_required"
         if role == "create_brain" and status == "completed":
             if target_reasons:
                 return target_reasons[0]
+            if not embedding_decision_recorded(state):
+                return "embedding_decision_required"
             if not doctor_ok(state):
                 return "doctor_failed"
         if role == "search_mode":
@@ -1788,19 +1962,35 @@ public struct ZebraGBrainOnboardingStore {
     def target_confirmation_flags_present(flags):
         return bool(flags.get("target") or flags.get("target_path") or flags.get("method") or flags.get("profile_id"))
 
-    def should_clear_waiting_for_user(progress, status, role, flags):
+    def should_clear_waiting_for_user(state, progress, status, role, flags, section):
         waiting = progress.get("waitingForUser")
         if not waiting:
             return False
-        if waiting == "topology_resolution":
+        reason = waiting_reason(waiting)
+        if reason == "topology_resolution":
             return role == "create_brain" and status in {"started", "completed"}
-        if waiting == "brain_repo_target_resolution":
+        if reason == "brain_repo_target_resolution":
             return (
                 role == "create_brain"
                 and status == "completed"
                 and bool(flags.get("target") or flags.get("target_path"))
                 and flags.get("method") in allowed_methods
             )
+        waited_section = waiting_section(waiting)
+        if (
+            waited_section
+            and section
+            and normalize_title(waited_section) == normalize_title(section)
+            and status in {"completed", "skipped", "deferred"}
+        ):
+            return True
+        if (
+            status == "completed"
+            and role == "verify"
+            and receipt_verify_complete(state)
+            and reason not in {"topology_resolution", "brain_repo_target_resolution", "section_role_mapping_resolution"}
+        ):
+            return True
         return False
 
     def report():
@@ -1820,7 +2010,7 @@ public struct ZebraGBrainOnboardingStore {
             if not section or not record_agent_role(state, section, role, evidence):
                 reject_report(state, "invalid_section_role_mapping", section, status)
             progress = state.setdefault("progress", {})
-            if progress.get("waitingForUser") == "section_role_mapping_resolution":
+            if waiting_reason(progress.get("waitingForUser")) == "section_role_mapping_resolution":
                 progress.pop("waitingForUser", None)
             progress["updatedAt"] = now()
             save_state(state)
@@ -1835,6 +2025,12 @@ public struct ZebraGBrainOnboardingStore {
             target_error = apply_target_flags(candidate_state, flags)
             if target_error:
                 reject_report(state, target_error, section, status)
+        if embedding_decision_flags_present(flags):
+            if not (role == "credentials" and status == "completed"):
+                reject_report(state, "embedding_decision_flags_not_allowed", section, status)
+            embedding_error = apply_embedding_decision(candidate_state, flags)
+            if embedding_error:
+                reject_report(state, embedding_error, section, status)
         guard_reason = report_guard_reason(candidate_state, status, role, flags)
         if guard_reason:
             next_action = None
@@ -1853,12 +2049,12 @@ public struct ZebraGBrainOnboardingStore {
             if section not in completed:
                 completed.append(section)
         if status == "waiting_for_user":
-            progress["waitingForUser"] = note or section or "user input required"
-        elif should_clear_waiting_for_user(progress, status, role, flags):
+            set_waiting_for_user(progress, section, flags.get("reason") or "user_input_required", note)
+        elif should_clear_waiting_for_user(state, progress, status, role, flags, section):
             progress.pop("waitingForUser", None)
         if status == "failed":
             progress["lastFailure"] = note or section or "failed"
-        elif status in ("started", "completed", "skipped"):
+        elif status in ("started", "completed", "skipped", "deferred"):
             progress.pop("lastFailure", None)
         progress["lastStatus"] = status
         progress["updatedAt"] = now()

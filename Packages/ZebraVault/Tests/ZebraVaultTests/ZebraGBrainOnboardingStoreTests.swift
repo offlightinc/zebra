@@ -301,12 +301,13 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(packet.contains("waitingForUser: topology_resolution"))
         XCTAssertTrue(packet.contains("Ask only for the Step 3 topology decision now"))
         XCTAssertTrue(packet.contains("Do not ask for the brain repo target in this gate"))
-        XCTAssertTrue(packet.contains("Do not ask for Step 2 API keys in this gate"))
+        XCTAssertTrue(packet.contains("Do not ask for Step 2 API keys in the topology prompt"))
+        XCTAssertTrue(packet.contains("Do not run `gbrain init --pglite --no-embedding`"))
         XCTAssertTrue(packet.contains("Target-resolution timing"))
         XCTAssertFalse(packet.contains("User decisions you must stop and ask for"))
         XCTAssertTrue(launch.shellEnvironmentPrefix.contains("ZEBRA_GBRAIN_STATE"))
         let progress = try progressObject(in: stateURL)
-        XCTAssertEqual(progress["waitingForUser"] as? String, "topology_resolution")
+        XCTAssertEqual(waitingForUserReason(in: progress), "topology_resolution")
         XCTAssertEqual(progress["nextSection"] as? String, "Step 3: Create the Brain")
     }
 
@@ -343,7 +344,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(packet.contains("3. Create a new brain repo at a custom path"))
         XCTAssertTrue(packet.contains("Do not ask only as an open-ended"))
         XCTAssertFalse(packet.contains("Ask only for the Step 3 topology decision now"))
-        XCTAssertEqual(progress["waitingForUser"] as? String, "brain_repo_target_resolution")
+        XCTAssertEqual(waitingForUserReason(in: progress), "brain_repo_target_resolution")
         XCTAssertEqual(progress["nextSection"] as? String, "Step 3: Create the Brain")
     }
 
@@ -449,11 +450,47 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
 
         XCTAssertNotEqual(result.exitCode, 0)
         XCTAssertTrue(result.stdout.contains("brain_repo_target_unresolved"), "stdout: \(result.stdout) stderr: \(result.stderr)")
-        XCTAssertEqual(progress["waitingForUser"] as? String, "brain_repo_target_resolution")
+        XCTAssertEqual(waitingForUserReason(in: progress), "brain_repo_target_resolution")
         XCTAssertEqual(progress["completedSections"] as? [String], [])
     }
 
     func testReportGuardAllowsCreateBrainCompletionWithExplicitTarget() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        let progress = try progressObject(in: stateURL)
+        let targetResolution = try XCTUnwrap(progress["targetResolution"] as? [String: Any])
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue((progress["completedSections"] as? [String] ?? []).contains("Step 3: Create the Brain"))
+        XCTAssertEqual(targetResolution["method"] as? String, "user_created_repo")
+        XCTAssertEqual(progress["resolvedTargetKey"] as? String, "vault:\(target.path)")
+    }
+
+    func testReportGuardRejectsCreateBrainCompletionWithoutEmbeddingDecision() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
         let target = root.appendingPathComponent("brain", isDirectory: true)
@@ -479,13 +516,33 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "--method", "user_created_repo",
             ]
         )
+
+        XCTAssertNotEqual(result.exitCode, 0)
+        XCTAssertTrue(result.stdout.contains("embedding_decision_required"), "stdout: \(result.stdout) stderr: \(result.stderr)")
+    }
+
+    func testReportRecordsEmbeddingDecisionWithoutSecretValue() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: root.appendingPathComponent("brain").path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path, decision: "provider_key")
         let progress = try progressObject(in: stateURL)
-        let targetResolution = try XCTUnwrap(progress["targetResolution"] as? [String: Any])
+        let decision = try XCTUnwrap(progress["embeddingDecision"] as? [String: Any])
 
         XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
-        XCTAssertEqual(progress["completedSections"] as? [String], ["Step 3: Create the Brain"])
-        XCTAssertEqual(targetResolution["method"] as? String, "user_created_repo")
-        XCTAssertEqual(progress["resolvedTargetKey"] as? String, "vault:\(target.path)")
+        XCTAssertEqual(decision["decision"] as? String, "provider_key")
+        XCTAssertNil(decision["apiKey"])
+        XCTAssertNil(decision["key"])
+        XCTAssertTrue((progress["completedSections"] as? [String] ?? []).contains("Step 2: API Keys"))
     }
 
     func testReportGuardRejectsImportBeforeSearchModeCompletion() throws {
@@ -502,6 +559,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
         _ = try runHelper(
             stateURL: stateURL,
             path: bin.path,
@@ -527,7 +585,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
 
         XCTAssertNotEqual(result.exitCode, 0)
         XCTAssertTrue(result.stdout.contains("search_mode_not_completed"), "stdout: \(result.stdout) stderr: \(result.stderr)")
-        XCTAssertEqual(progress["completedSections"] as? [String], ["Step 3: Create the Brain"])
+        XCTAssertTrue((progress["completedSections"] as? [String] ?? []).contains("Step 3: Create the Brain"))
     }
 
     func testReportGuardRejectsImportCompletionWithoutSourceRegistration() throws {
@@ -546,6 +604,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
         _ = try runHelper(
             stateURL: stateURL,
             path: bin.path,
@@ -596,6 +655,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
         _ = try runHelper(
             stateURL: stateURL,
             path: bin.path,
@@ -659,7 +719,81 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let progress = try progressObject(in: stateURL)
 
         XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
-        XCTAssertEqual(progress["waitingForUser"] as? String, "brain_repo_target_resolution")
+        XCTAssertEqual(waitingForUserReason(in: progress), "brain_repo_target_resolution")
+    }
+
+    func testReportClearsWaitingForUserWhenSameSectionIsResolved() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: root.appendingPathComponent("brain").path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let waiting = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "waiting_for_user",
+                "--section", "Step 8: Integrations",
+                "--note", "Need Gmail credential gateway choice for email-to-brain",
+            ]
+        )
+        var progress = try progressObject(in: stateURL)
+        XCTAssertEqual(waiting.exitCode, 0, "stdout: \(waiting.stdout) stderr: \(waiting.stderr)")
+        XCTAssertEqual(waitingForUserSection(in: progress), "Step 8: Integrations")
+
+        let completed = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 8: Integrations",
+            ]
+        )
+        progress = try progressObject(in: stateURL)
+
+        XCTAssertEqual(completed.exitCode, 0, "stdout: \(completed.stdout) stderr: \(completed.stderr)")
+        XCTAssertNil(progress["waitingForUser"])
+    }
+
+    func testLegacyFreeformWaitingDoesNotBlockAfterVerifyReceiptComplete() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "brain\n".write(to: vault.appendingPathComponent(".gbrain-source"), atomically: true, encoding: .utf8)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: vault.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: vault.path,
+            sourceId: "brain",
+            method: "user_created_repo"
+        )
+        try writeActiveProgress(
+            stateURL,
+            targetPath: vault.path,
+            completedSections: [
+                "Step 4: Import and Index",
+                "Step 9: Verify",
+            ],
+            waitingForUser: "Need Gmail credential gateway choice for email-to-brain: ClawVisor or Google OAuth2 direct"
+        )
+
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": bin.path]
+        )
+
+        XCTAssertTrue(store.isSetupCompleted(selectedVaultPath: nil))
     }
 
     func testReportRejectsTargetFlagsOutsideCreateBrainCompletion() throws {
@@ -709,6 +843,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
         _ = try runHelper(
             stateURL: stateURL,
             path: bin.path,
@@ -775,6 +910,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
         _ = try runHelper(
             stateURL: stateURL,
             path: bin.path,
@@ -835,6 +971,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
         _ = try runHelper(
             stateURL: stateURL,
             path: bin.path,
@@ -1029,6 +1166,24 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
     }
 
+    @discardableResult
+    private func recordEmbeddingDecision(
+        stateURL: URL,
+        path: String,
+        decision: String = "defer_embeddings"
+    ) throws -> HelperRunResult {
+        try runHelper(
+            stateURL: stateURL,
+            path: path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 2: API Keys",
+                "--embedding-decision", decision,
+            ]
+        )
+    }
+
     private func writeGuardDocs(
         root: URL,
         includeRenamedSearchMode: Bool = false,
@@ -1198,6 +1353,24 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let data = try Data(contentsOf: stateURL)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         return try XCTUnwrap(object["progress"] as? [String: Any])
+    }
+
+    private func waitingForUserReason(in progress: [String: Any]) -> String? {
+        if let value = progress["waitingForUser"] as? String {
+            return value
+        }
+        let value = progress["waitingForUser"] as? [String: Any]
+        return value?["reason"] as? String
+            ?? value?["note"] as? String
+            ?? value?["section"] as? String
+    }
+
+    private func waitingForUserSection(in progress: [String: Any]) -> String? {
+        if progress["waitingForUser"] is String {
+            return nil
+        }
+        let value = progress["waitingForUser"] as? [String: Any]
+        return value?["section"] as? String
     }
 
     private func makeTemporaryDirectory() throws -> URL {
