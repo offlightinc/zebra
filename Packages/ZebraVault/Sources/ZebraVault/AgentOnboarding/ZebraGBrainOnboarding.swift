@@ -208,6 +208,8 @@ public struct ZebraGBrainOnboardingStore {
         "user_created_repo",
         "user_confirmed_home",
     ]
+    private static let launchPrefetchWaitSeconds: TimeInterval = 0.6
+    private static let docsPrefetchCoordinator = GBrainDocsPrefetchCoordinator()
 
     private let stateURL: URL
     private let fileManager: FileManager
@@ -257,6 +259,18 @@ public struct ZebraGBrainOnboardingStore {
               environment["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED"] != "1" else {
             return false
         }
+        return Self.docsPrefetchCoordinator.prefetchIfNeeded(store: self)
+    }
+
+    fileprivate var docsPrefetchKey: String {
+        stateURL.path
+    }
+
+    fileprivate func hasCachedDocsSnapshot() -> Bool {
+        cachedDocsSnapshot() != nil
+    }
+
+    fileprivate func fetchAndCacheRemoteDocsSnapshot() -> Bool {
         let hasUsableCache = cachedDocsSnapshot() != nil
         guard let snapshot = prepareRemoteDocsSnapshot() else {
             return hasUsableCache
@@ -611,9 +625,12 @@ public struct ZebraGBrainOnboardingStore {
             return cachedSnapshot
         }
         if environment["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED"] != "1",
-           let remoteSnapshot = prepareRemoteDocsSnapshot() {
-            writeDocsSnapshotCache(remoteSnapshot)
-            return remoteSnapshot
+           Self.docsPrefetchCoordinator.waitForRunningPrefetch(
+            stateURL: stateURL,
+            timeout: Self.launchPrefetchWaitSeconds
+           ),
+           let cachedSnapshot = cachedDocsSnapshot() {
+            return cachedSnapshot
         }
         return resolveFallbackDocsRepoURL().flatMap(prepareLocalDocsSnapshot(repoURL:))
     }
@@ -2336,6 +2353,43 @@ public struct ZebraGBrainOnboardingStore {
         sys.exit(2)
     PY
     """
+}
+
+private final class GBrainDocsPrefetchCoordinator {
+    private let lock = NSLock()
+    private var startedKeys: Set<String> = []
+    private var runningGroupsByKey: [String: DispatchGroup] = [:]
+
+    func prefetchIfNeeded(store: ZebraGBrainOnboardingStore) -> Bool {
+        let key = store.docsPrefetchKey
+        let group = DispatchGroup()
+
+        lock.lock()
+        if runningGroupsByKey[key] != nil || startedKeys.contains(key) {
+            lock.unlock()
+            return store.hasCachedDocsSnapshot()
+        }
+        startedKeys.insert(key)
+        group.enter()
+        runningGroupsByKey[key] = group
+        lock.unlock()
+
+        let result = store.fetchAndCacheRemoteDocsSnapshot()
+
+        lock.lock()
+        runningGroupsByKey[key] = nil
+        lock.unlock()
+        group.leave()
+        return result
+    }
+
+    func waitForRunningPrefetch(stateURL: URL, timeout: TimeInterval) -> Bool {
+        lock.lock()
+        let group = runningGroupsByKey[stateURL.path]
+        lock.unlock()
+        guard let group else { return false }
+        return group.wait(timeout: .now() + timeout) == .success
+    }
 }
 
 private extension String {

@@ -92,6 +92,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         startCompletionFileWatching()
 #endif
         refreshDetectedCompletion()
+        prefetchGBrainDocsIfNeeded()
     }
 
     deinit {
@@ -166,6 +167,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             self.emailConnected = emailConnected
         }
         refreshDetectedCompletion()
+        prefetchGBrainDocsIfNeeded()
     }
 
     public func beginLaunch(stepID: ZebraOnboardingChecklistStepID) {
