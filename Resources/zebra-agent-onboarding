@@ -21,6 +21,7 @@ INCLUDE_GLOBAL_AGENT_PATHS="${ZEBRA_AGENT_ONBOARDING_INCLUDE_GLOBAL_PATHS:-1}"
 STATUS_PROBE_TIMEOUT_SECONDS="${ZEBRA_AGENT_STATUS_TIMEOUT_SECONDS:-8}"
 READINESS_POLL_INTERVAL_SECONDS="${ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS:-3}"
 ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS="${ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS:-15}"
+ONBOARDING_LANGUAGE="${ZEBRA_ONBOARDING_LANGUAGE:-}"
 case "$STATUS_PROBE_TIMEOUT_SECONDS" in
   ''|*[!0-9]*) STATUS_PROBE_TIMEOUT_SECONDS=8 ;;
 esac
@@ -85,8 +86,8 @@ RESUME_FLOW_HANDLED=0
 
 usage() {
   cat <<'USAGE'
-zebra-agent-onboarding [run|choose-primary] [--cwd <path>] [--agent <agent>]
-zebra-agent-onboarding mark-ready --agent <agent> --run-id <runId>
+zebra-agent-onboarding [run|choose-primary] [--cwd <path>] [--agent <agent>] [--language <en|ja|ko>]
+zebra-agent-onboarding mark-ready --agent <agent> --run-id <runId> [--language <en|ja|ko>]
 
 Commands:
   run             Scan supported CLIs, choose/install a primary agent, then launch it.
@@ -102,6 +103,263 @@ State:
   ~/Library/Application Support/zebra/onboarding/agent-cli-events.jsonl
   ~/Library/Application Support/zebra/agent/preferences.json
 USAGE
+}
+
+normalize_language() {
+  local raw lower
+  raw="${1:-}"
+  lower="$(printf '%s' "$raw" | tr '[:upper:]_' '[:lower:]-')"
+  case "$lower" in
+    ko|ko-*) printf 'ko' ;;
+    ja|ja-*) printf 'ja' ;;
+    en|en-*) printf 'en' ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_system_language() {
+  local raw
+  raw="$(defaults read -g AppleLanguages 2>/dev/null | awk -F'"' '/"/ { print $2; exit }' || true)"
+  normalize_language "$raw" 2>/dev/null || printf 'en'
+}
+
+set_onboarding_language() {
+  local requested="${1:-${ONBOARDING_LANGUAGE:-}}"
+  if ONBOARDING_LANGUAGE="$(normalize_language "$requested" 2>/dev/null)"; then
+    export ZEBRA_ONBOARDING_LANGUAGE="$ONBOARDING_LANGUAGE"
+    return
+  fi
+  ONBOARDING_LANGUAGE="$(detect_system_language)"
+  export ZEBRA_ONBOARDING_LANGUAGE="$ONBOARDING_LANGUAGE"
+}
+
+language_argument() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --language)
+        printf '%s\n' "${2:-}"
+        return
+        ;;
+    esac
+    shift
+  done
+}
+
+msg_en() {
+  local key="$1"
+  shift || true
+  case "$key" in
+    agent_already_complete) printf 'Zebra agent onboarding is already complete.\n' "$@" ;;
+    agent_found_installed) printf '\nZebra found %s installed at %s.\n' "$@" ;;
+    agent_missing_local) printf '\nZebra could not find %s locally. Opening setup flow.\n' "$@" ;;
+    already_has_primary) printf 'Zebra already has %s saved as your primary agent.\n' "$@" ;;
+    alternate_title) printf 'Choose another agent for Zebra:' "$@" ;;
+    auth_authenticated) printf ' [signed in]' "$@" ;;
+    auth_config_present) printf ' [previous local config found]' "$@" ;;
+    auth_signed_out) printf ' [not signed in]' "$@" ;;
+    candidate_line) printf '  - %s: %s' "$@" ;;
+    checking_readiness) printf 'Checking %s readiness...\n' "$@" ;;
+    choose_install_target_title) printf 'Choose the agent Zebra should use:' "$@" ;;
+    choose_recovery_action) printf '\nChoose a recovery action:\n' "$@" ;;
+    continue_choose_another) printf '  2. Choose another agent\n' "$@" ;;
+    continue_did_not_finish) printf '\n%s did not finish Zebra setup.\n' "$@" ;;
+    continue_try_again) printf '  1. Try %s again\n' "$@" ;;
+    enter_number) printf 'Enter a number from 1 to %s.\n' "$@" ;;
+    install_complete_rescan) printf '\nInstall complete. Re-scanning...\n' "$@" ;;
+    install_failed_title) printf '\n%s install did not complete.\n' "$@" ;;
+    install_found_at) printf '%s found at %s.\n' "$@" ;;
+    install_manual_command) printf '\nManual install command for %s:\n\n  %s\n\n' "$@" ;;
+    install_not_run) printf '\nInstaller was not run.\n' "$@" ;;
+    install_official_prompt) printf '\nZebra will run the official installer for %s:\n\n  %s\n\n' "$@" ;;
+    install_press_return) printf 'Press Return to continue.' "$@" ;;
+    install_retry) printf '  1. Retry %s install\n' "$@" ;;
+    install_show_manual) printf '  3. Show manual install command\n' "$@" ;;
+    installing) printf '\nInstalling %s...\n\n' "$@" ;;
+    mark_ready_complete) printf 'Zebra onboarding marked ready for %s.\n' "$@" ;;
+    mark_ready_requires_agent) printf 'mark-ready requires --agent claude|codex|antigravity\n' "$@" ;;
+    mark_ready_requires_run_id) printf 'mark-ready requires --run-id\n' "$@" ;;
+    no_selection) printf '\nNo selection received.\n' "$@" ;;
+    no_onboarding_state) printf 'no onboarding state found at %s\n' "$@" ;;
+    primary_missing) printf '\nZebra could not find your saved primary agent: %s.\n' "$@" ;;
+    primary_title) printf 'Which agent should Zebra use by default?' "$@" ;;
+    provider_signin) printf 'The provider CLI may ask you to sign in or create an account.\n\n' "$@" ;;
+    readiness_failed) printf '\nZebra could not verify %s readiness yet.\n' "$@" ;;
+    readiness_verified) printf '\nZebra verified %s readiness. Onboarding is complete.\n' "$@" ;;
+    recovery_choose_another) printf '  2. Choose another agent\n' "$@" ;;
+    recovery_reinstall) printf '  1. Reinstall %s\n' "$@" ;;
+    resume_agent) printf 'Resuming Zebra agent onboarding for %s.\n\n' "$@" ;;
+    resume_install_selection) printf 'Resuming Zebra agent onboarding at install selection.\n' "$@" ;;
+    resume_interrupted_install) printf 'Resuming Zebra agent onboarding after an interrupted %s install.\n' "$@" ;;
+    resume_primary_selection) printf 'Resuming Zebra agent onboarding at primary-agent selection.\n' "$@" ;;
+    resume_recovery) printf 'Resuming Zebra agent onboarding recovery for %s.\n' "$@" ;;
+    run_installer_confirm) printf 'Run this installer now? [y/N]: ' "$@" ;;
+    selection_prompt) printf 'Selection [1-%s]: ' "$@" ;;
+    start_agent) printf '\nStarting %s for Zebra onboarding.\n' "$@" ;;
+    state_broken) printf 'needs repair' "$@" ;;
+    state_installed) printf 'installed' "$@" ;;
+    state_label_broken) printf ' [needs repair]' "$@" ;;
+    state_label_installed) printf ' [installed]' "$@" ;;
+    state_label_missing) printf ' [not installed]' "$@" ;;
+    state_missing) printf 'not installed' "$@" ;;
+    state_path) printf 'State: %s\n\n' "$@" ;;
+    title) printf 'Zebra agent onboarding\n' "$@" ;;
+    unknown_agent) printf 'unknown agent: %s\n\n' "$@" ;;
+    unknown_option) printf 'unknown option: %s\n\n' "$@" ;;
+    unknown_option_mark_ready) printf 'unknown option for mark-ready: %s\n' "$@" ;;
+    using_saved_primary) printf '\nUsing saved primary agent: %s.\n' "$@" ;;
+    valid_option) printf 'Enter a valid option.\n' "$@" ;;
+    run_id_mismatch) printf 'run id mismatch: expected current run %s, got %s\n' "$@" ;;
+    agent_mismatch) printf 'agent mismatch: current selected agent is %s, got %s\n' "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+msg_ko() {
+  local key="$1"
+  shift || true
+  case "$key" in
+    agent_already_complete) printf 'Zebra agent onboarding이 이미 완료되었습니다.\n' "$@" ;;
+    agent_found_installed) printf '\n%s가 %s에 installed 상태로 있습니다.\n' "$@" ;;
+    agent_missing_local) printf '\n로컬에서 %s를 찾지 못했습니다. setup flow를 엽니다.\n' "$@" ;;
+    already_has_primary) printf 'Zebra에 %s가 primary agent로 이미 저장되어 있습니다.\n' "$@" ;;
+    alternate_title) printf 'Zebra에서 사용할 다른 agent를 선택하세요:' "$@" ;;
+    auth_authenticated) printf ' [signed in]' "$@" ;;
+    auth_config_present) printf ' [previous local config found]' "$@" ;;
+    auth_signed_out) printf ' [not signed in]' "$@" ;;
+    candidate_line) printf '  - %s: %s' "$@" ;;
+    checking_readiness) printf '%s readiness를 확인하는 중입니다...\n' "$@" ;;
+    choose_install_target_title) printf 'Zebra에서 사용할 agent를 선택하세요:' "$@" ;;
+    choose_recovery_action) printf '\nrecovery action을 선택하세요:\n' "$@" ;;
+    continue_choose_another) printf '  2. 다른 agent 선택\n' "$@" ;;
+    continue_did_not_finish) printf '\n%s가 Zebra setup을 완료하지 못했습니다.\n' "$@" ;;
+    continue_try_again) printf '  1. %s 다시 시도\n' "$@" ;;
+    enter_number) printf '1부터 %s까지의 숫자를 입력하세요.\n' "$@" ;;
+    install_complete_rescan) printf '\ninstall이 완료되었습니다. 다시 scan합니다...\n' "$@" ;;
+    install_failed_title) printf '\n%s install이 완료되지 않았습니다.\n' "$@" ;;
+    install_found_at) printf '%s를 %s에서 찾았습니다.\n' "$@" ;;
+    install_manual_command) printf '\n%s manual install command:\n\n  %s\n\n' "$@" ;;
+    install_not_run) printf '\ninstaller를 실행하지 않았습니다.\n' "$@" ;;
+    install_official_prompt) printf '\nZebra가 %s official installer를 실행합니다:\n\n  %s\n\n' "$@" ;;
+    install_press_return) printf '계속하려면 Return을 누르세요.' "$@" ;;
+    install_retry) printf '  1. %s install 재시도\n' "$@" ;;
+    install_show_manual) printf '  3. manual install command 보기\n' "$@" ;;
+    installing) printf '\n%s install 중...\n\n' "$@" ;;
+    mark_ready_complete) printf 'Zebra onboarding marked ready for %s.\n' "$@" ;;
+    mark_ready_requires_agent) printf 'mark-ready에는 --agent claude|codex|antigravity가 필요합니다.\n' "$@" ;;
+    mark_ready_requires_run_id) printf 'mark-ready에는 --run-id가 필요합니다.\n' "$@" ;;
+    no_selection) printf '\n선택값을 받지 못했습니다.\n' "$@" ;;
+    no_onboarding_state) printf '%s에 onboarding state가 없습니다.\n' "$@" ;;
+    primary_missing) printf '\n저장된 primary agent를 찾지 못했습니다: %s.\n' "$@" ;;
+    primary_title) printf '어떤 agent를 Zebra의 default로 사용할까요?' "$@" ;;
+    provider_signin) printf 'provider CLI가 sign in 또는 account 생성을 요청할 수 있습니다.\n\n' "$@" ;;
+    readiness_failed) printf '\n아직 %s readiness를 확인하지 못했습니다.\n' "$@" ;;
+    readiness_verified) printf '\nZebra가 %s readiness를 확인했습니다. Onboarding is complete.\n' "$@" ;;
+    recovery_choose_another) printf '  2. 다른 agent 선택\n' "$@" ;;
+    recovery_reinstall) printf '  1. %s reinstall\n' "$@" ;;
+    resume_agent) printf '%s Zebra agent onboarding을 이어서 진행합니다.\n\n' "$@" ;;
+    resume_install_selection) printf 'install selection에서 Zebra agent onboarding을 이어서 진행합니다.\n' "$@" ;;
+    resume_interrupted_install) printf '중단된 %s install 이후 Zebra agent onboarding을 이어서 진행합니다.\n' "$@" ;;
+    resume_primary_selection) printf 'primary-agent selection에서 Zebra agent onboarding을 이어서 진행합니다.\n' "$@" ;;
+    resume_recovery) printf '%s recovery로 Zebra agent onboarding을 이어서 진행합니다.\n' "$@" ;;
+    run_installer_confirm) printf '지금 installer를 실행할까요? [y/N]: ' "$@" ;;
+    selection_prompt) printf '선택 [1-%s]: ' "$@" ;;
+    start_agent) printf '\nZebra onboarding을 위해 %s를 시작합니다.\n' "$@" ;;
+    state_broken) printf 'needs repair' "$@" ;;
+    state_installed) printf 'installed' "$@" ;;
+    state_label_broken) printf ' [needs repair]' "$@" ;;
+    state_label_installed) printf ' [installed]' "$@" ;;
+    state_label_missing) printf ' [not installed]' "$@" ;;
+    state_missing) printf 'not installed' "$@" ;;
+    state_path) printf 'State: %s\n\n' "$@" ;;
+    title) printf 'Zebra agent onboarding\n' "$@" ;;
+    unknown_agent) printf '알 수 없는 agent: %s\n\n' "$@" ;;
+    unknown_option) printf '알 수 없는 option: %s\n\n' "$@" ;;
+    unknown_option_mark_ready) printf 'mark-ready의 알 수 없는 option: %s\n' "$@" ;;
+    using_saved_primary) printf '\n저장된 primary agent를 사용합니다: %s.\n' "$@" ;;
+    valid_option) printf '유효한 option을 입력하세요.\n' "$@" ;;
+    run_id_mismatch) printf 'run id mismatch: current run은 %s, 입력값은 %s입니다.\n' "$@" ;;
+    agent_mismatch) printf 'agent mismatch: current selected agent는 %s, 입력값은 %s입니다.\n' "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+msg_ja() {
+  local key="$1"
+  shift || true
+  case "$key" in
+    agent_already_complete) printf 'Zebra agent onboardingはすでに完了しています。\n' "$@" ;;
+    agent_found_installed) printf '\n%sは%sにinstalled状態で見つかりました。\n' "$@" ;;
+    agent_missing_local) printf '\nローカルで%sが見つかりません。setup flowを開きます。\n' "$@" ;;
+    already_has_primary) printf 'Zebraには%sがprimary agentとして保存済みです。\n' "$@" ;;
+    alternate_title) printf 'Zebraで使う別のagentを選択してください:' "$@" ;;
+    auth_authenticated) printf ' [signed in]' "$@" ;;
+    auth_config_present) printf ' [previous local config found]' "$@" ;;
+    auth_signed_out) printf ' [not signed in]' "$@" ;;
+    candidate_line) printf '  - %s: %s' "$@" ;;
+    checking_readiness) printf '%s readinessを確認しています...\n' "$@" ;;
+    choose_install_target_title) printf 'Zebraで使うagentを選択してください:' "$@" ;;
+    choose_recovery_action) printf '\nrecovery actionを選択してください:\n' "$@" ;;
+    continue_choose_another) printf '  2. 別のagentを選択\n' "$@" ;;
+    continue_did_not_finish) printf '\n%sはZebra setupを完了できませんでした。\n' "$@" ;;
+    continue_try_again) printf '  1. %sを再試行\n' "$@" ;;
+    enter_number) printf '1から%sまでの数字を入力してください。\n' "$@" ;;
+    install_complete_rescan) printf '\ninstallが完了しました。再scanします...\n' "$@" ;;
+    install_failed_title) printf '\n%s installは完了しませんでした。\n' "$@" ;;
+    install_found_at) printf '%sを%sで見つけました。\n' "$@" ;;
+    install_manual_command) printf '\n%s manual install command:\n\n  %s\n\n' "$@" ;;
+    install_not_run) printf '\ninstallerは実行されませんでした。\n' "$@" ;;
+    install_official_prompt) printf '\nZebraが%s official installerを実行します:\n\n  %s\n\n' "$@" ;;
+    install_press_return) printf '続けるにはReturnを押してください。' "$@" ;;
+    install_retry) printf '  1. %s installを再試行\n' "$@" ;;
+    install_show_manual) printf '  3. manual install commandを表示\n' "$@" ;;
+    installing) printf '\n%s install中...\n\n' "$@" ;;
+    mark_ready_complete) printf 'Zebra onboarding marked ready for %s.\n' "$@" ;;
+    mark_ready_requires_agent) printf 'mark-readyには--agent claude|codex|antigravityが必要です。\n' "$@" ;;
+    mark_ready_requires_run_id) printf 'mark-readyには--run-idが必要です。\n' "$@" ;;
+    no_selection) printf '\n選択を受け取れませんでした。\n' "$@" ;;
+    no_onboarding_state) printf '%sにonboarding stateがありません。\n' "$@" ;;
+    primary_missing) printf '\n保存済みのprimary agentが見つかりません: %s.\n' "$@" ;;
+    primary_title) printf 'どのagentをZebraのdefaultにしますか?' "$@" ;;
+    provider_signin) printf 'provider CLIがsign inまたはaccount作成を求める場合があります。\n\n' "$@" ;;
+    readiness_failed) printf '\nまだ%s readinessを確認できませんでした。\n' "$@" ;;
+    readiness_verified) printf '\nZebraが%s readinessを確認しました。Onboarding is complete.\n' "$@" ;;
+    recovery_choose_another) printf '  2. 別のagentを選択\n' "$@" ;;
+    recovery_reinstall) printf '  1. %sをreinstall\n' "$@" ;;
+    resume_agent) printf '%sのZebra agent onboardingを再開します。\n\n' "$@" ;;
+    resume_install_selection) printf 'install selectionでZebra agent onboardingを再開します。\n' "$@" ;;
+    resume_interrupted_install) printf '中断された%s installの後からZebra agent onboardingを再開します。\n' "$@" ;;
+    resume_primary_selection) printf 'primary-agent selectionでZebra agent onboardingを再開します。\n' "$@" ;;
+    resume_recovery) printf '%s recoveryでZebra agent onboardingを再開します。\n' "$@" ;;
+    run_installer_confirm) printf '今installerを実行しますか? [y/N]: ' "$@" ;;
+    selection_prompt) printf '選択 [1-%s]: ' "$@" ;;
+    start_agent) printf '\nZebra onboardingのために%sを起動します。\n' "$@" ;;
+    state_broken) printf 'needs repair' "$@" ;;
+    state_installed) printf 'installed' "$@" ;;
+    state_label_broken) printf ' [needs repair]' "$@" ;;
+    state_label_installed) printf ' [installed]' "$@" ;;
+    state_label_missing) printf ' [not installed]' "$@" ;;
+    state_missing) printf 'not installed' "$@" ;;
+    state_path) printf 'State: %s\n\n' "$@" ;;
+    title) printf 'Zebra agent onboarding\n' "$@" ;;
+    unknown_agent) printf '不明なagent: %s\n\n' "$@" ;;
+    unknown_option) printf '不明なoption: %s\n\n' "$@" ;;
+    unknown_option_mark_ready) printf 'mark-readyの不明なoption: %s\n' "$@" ;;
+    using_saved_primary) printf '\n保存済みprimary agentを使います: %s.\n' "$@" ;;
+    valid_option) printf '有効なoptionを入力してください。\n' "$@" ;;
+    run_id_mismatch) printf 'run id mismatch: current runは%s、入力値は%sです。\n' "$@" ;;
+    agent_mismatch) printf 'agent mismatch: current selected agentは%s、入力値は%sです。\n' "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+msg() {
+  local key="$1"
+  shift || true
+  case "${ONBOARDING_LANGUAGE:-en}" in
+    ko) msg_ko "$key" "$@" || msg_en "$key" "$@" ;;
+    ja) msg_ja "$key" "$@" || msg_en "$key" "$@" ;;
+    *) msg_en "$key" "$@" ;;
+  esac
 }
 
 now_iso() {
@@ -788,7 +1046,7 @@ print_candidates() {
     version="${CANDIDATE_VERSIONS[$i]}"
     state="${CANDIDATE_INSTALL_STATES[$i]}"
     auth="${CANDIDATE_AUTH_STATES[$i]}"
-    printf '  - %s: %s' "$(display_name "$agent")" "$state"
+    msg candidate_line "$(display_name "$agent")" "$(msg "state_$state")"
     if [[ -n "$path" ]]; then
       printf ' at %s' "$path"
     fi
@@ -797,13 +1055,13 @@ print_candidates() {
     fi
     case "$auth" in
       authenticated)
-        printf ' [signed in]'
+        msg auth_authenticated
         ;;
       configPresent)
-        printf ' [previous local config found]'
+        msg auth_config_present
         ;;
       probablySignedOut)
-        printf ' [not signed in]'
+        msg auth_signed_out
         ;;
     esac
     printf '\n'
@@ -836,13 +1094,13 @@ print_menu_agent_state() {
   local agent="$1"
   case "$(install_state_for_agent "$agent")" in
     installed)
-      printf ' [installed]'
+      msg state_label_installed
       ;;
     broken)
-      printf ' [needs repair]'
+      msg state_label_broken
       ;;
     *)
-      printf ' [not installed]'
+      msg state_label_missing
       ;;
   esac
 }
@@ -860,21 +1118,21 @@ prompt_menu() {
   done
   printf '\n'
   while true; do
-    printf 'Selection [1-%s]: ' "$count"
+    msg selection_prompt "$count"
     if ! read -r choice; then
-      printf '\nNo selection received.\n' >&2
+      msg no_selection >&2
       return 1
     fi
     case "$choice" in
       ''|*[!0-9]*)
-        printf 'Enter a number from 1 to %s.\n' "$count"
+        msg enter_number "$count"
         ;;
       *)
         if [[ "$choice" -ge 1 && "$choice" -le "$count" ]]; then
           PROMPT_RESULT="${MENU_AGENTS[$((choice - 1))]}"
           return 0
         fi
-        printf 'Enter a number from 1 to %s.\n' "$count"
+        msg enter_number "$count"
         ;;
     esac
   done
@@ -883,7 +1141,7 @@ prompt_menu() {
 select_primary_agent() {
   MENU_AGENTS=("${AGENTS[@]}")
   write_state choose_primary ""
-  prompt_menu "Which agent should Zebra use by default?"
+  prompt_menu "$(msg primary_title)"
 }
 
 select_alternate_agent() {
@@ -895,13 +1153,13 @@ select_alternate_agent() {
     MENU_AGENTS+=("$agent")
   done
   write_state choose_primary ""
-  prompt_menu "Choose another agent for Zebra:"
+  prompt_menu "$(msg alternate_title)"
 }
 
 select_install_target() {
   MENU_AGENTS=("${AGENTS[@]}")
   write_state choose_install_target ""
-  prompt_menu "Choose the agent Zebra should use:"
+  prompt_menu "$(msg choose_install_target_title)"
 }
 
 continue_with_selected_agent() {
@@ -924,13 +1182,13 @@ primary_missing_flow() {
   local saved="$1"
   local choice
   write_state primary_missing "$saved"
-  printf '\nZebra could not find your saved primary agent: %s.\n' "$(display_name "$saved")"
+  msg primary_missing "$(display_name "$saved")"
   print_candidates
   while true; do
-    printf '\nChoose a recovery action:\n'
-    printf '  1. Reinstall %s\n' "$(display_name "$saved")"
-    printf '  2. Choose another agent\n'
-    printf 'Selection [1-2]: '
+    msg choose_recovery_action
+    msg recovery_reinstall "$(display_name "$saved")"
+    msg recovery_choose_another
+    msg selection_prompt 2
     if ! read -r choice; then
       return 1
     fi
@@ -945,7 +1203,7 @@ primary_missing_flow() {
         return
         ;;
     esac
-    printf 'Enter a valid option.\n'
+    msg valid_option
   done
 }
 
@@ -954,8 +1212,8 @@ run_installer() {
   local command_label answer status extra
   command_label="$(installer_command "$agent")"
   INSTALL_RESULT=failed
-  printf '\nZebra will run the official installer for %s:\n\n  %s\n\n' "$(display_name "$agent")" "$command_label"
-  printf 'Run this installer now? [y/N]: '
+  msg install_official_prompt "$(display_name "$agent")" "$command_label"
+  msg run_installer_confirm
   read -r answer || answer=""
   case "$answer" in
     y|Y|yes|YES|Yes) ;;
@@ -974,7 +1232,7 @@ run_installer() {
   extra+="$(json_string "$command_label")"
   append_event install_started "$extra"
 
-  printf '\nInstalling %s...\n\n' "$(display_name "$agent")"
+  msg installing "$(display_name "$agent")"
   if /bin/bash -lc "$command_label"; then
     status=0
   else
@@ -1008,11 +1266,11 @@ install_failure_menu() {
   command_label="$(installer_command "$agent")"
   INSTALL_FAILURE_ACTION=""
   while true; do
-    printf '\n%s install did not complete.\n' "$(display_name "$agent")"
-    printf '  1. Retry %s install\n' "$(display_name "$agent")"
-    printf '  2. Choose another agent\n'
-    printf '  3. Show manual install command\n'
-    printf 'Selection [1-3]: '
+    msg install_failed_title "$(display_name "$agent")"
+    msg install_retry "$(display_name "$agent")"
+    msg continue_choose_another
+    msg install_show_manual
+    msg selection_prompt 3
     read -r choice || return 1
     case "$choice" in
       1)
@@ -1026,12 +1284,12 @@ install_failure_menu() {
         return
         ;;
       3)
-        printf '\nManual install command for %s:\n\n  %s\n\n' "$(display_name "$agent")" "$command_label"
-        printf 'Press Return to continue.'
+        msg install_manual_command "$(display_name "$agent")" "$command_label"
+        msg install_press_return
         read -r _ || true
         ;;
       *)
-        printf 'Enter a valid option.\n'
+        msg valid_option
         ;;
     esac
   done
@@ -1052,17 +1310,17 @@ install_then_launch() {
   local menu_status
   while true; do
     if run_installer "$agent"; then
-      printf '\nInstall complete. Re-scanning...\n'
+      msg install_complete_rescan
       rescan_after_install "$agent"
       if is_agent_installed "$agent"; then
-        printf '%s found at %s.\n' "$(display_name "$agent")" "$(path_for_agent "$agent")"
+        msg install_found_at "$(display_name "$agent")" "$(path_for_agent "$agent")"
         select_and_launch "$agent" post_install
         return
       fi
       set_state_error install_failed "$agent" "Installer completed, but $(binary_name "$agent") was not found on PATH or known install paths." true
       write_state failed "$agent"
     elif [[ "$INSTALL_RESULT" == "declined" ]]; then
-      printf '\nInstaller was not run.\n'
+      msg install_not_run
     fi
 
     install_failure_menu "$agent"
@@ -1284,12 +1542,12 @@ stop_readiness_watcher() {
 
 verify_and_complete_agent_ready() {
   local agent="$1"
-  printf 'Checking %s readiness...\n' "$(display_name "$agent")"
+  msg checking_readiness "$(display_name "$agent")"
   if complete_if_agent_ready "$agent" readiness-probe; then
-    printf '\nZebra saved %s as your primary agent.\n' "$(display_name "$agent")"
+    msg readiness_verified "$(display_name "$agent")"
     return 0
   fi
-  printf '\nZebra could not verify %s readiness yet.\n' "$(display_name "$agent")"
+  msg readiness_failed "$(display_name "$agent")"
   return 1
 }
 
@@ -1311,8 +1569,8 @@ launch_selected_agent() {
   extra+="$(json_string "$command_label")"
   append_event agent_launch_started "$extra"
 
-  printf '\nStarting %s for Zebra onboarding.\n' "$(display_name "$agent")"
-  printf 'The provider CLI may ask you to sign in or create an account.\n\n'
+  msg start_agent "$(display_name "$agent")"
+  msg provider_signin
   write_state agent_working "$agent"
   if [[ "$agent" == "antigravity" ]]; then
     write_antigravity_auth_log_baseline
@@ -1352,7 +1610,7 @@ launch_selected_agent() {
 
   if ready_event_exists "$agent"; then
     stop_readiness_watcher "$readiness_watcher_pid"
-    printf '\nZebra saved %s as your primary agent.\n' "$(display_name "$agent")"
+    msg readiness_verified "$(display_name "$agent")"
     return 0
   fi
 
@@ -1384,10 +1642,10 @@ post_launch_continue_menu() {
   local choice
   write_state waiting_for_continue "$agent"
   while true; do
-    printf '\n%s did not finish Zebra setup.\n' "$(display_name "$agent")"
-    printf '  1. Try %s again\n' "$(display_name "$agent")"
-    printf '  2. Choose another agent\n'
-    printf 'Selection [1-2]: '
+    msg continue_did_not_finish "$(display_name "$agent")"
+    msg continue_try_again "$(display_name "$agent")"
+    msg continue_choose_another
+    msg selection_prompt 2
     read -r choice || return 1
     case "$choice" in
       1)
@@ -1399,7 +1657,7 @@ post_launch_continue_menu() {
         return
         ;;
       *)
-        printf 'Enter a valid option.\n'
+        msg valid_option
         ;;
     esac
   done
@@ -1434,7 +1692,7 @@ resume_existing_flow() {
     complete)
       if [[ -n "$SAVED_PRIMARY" ]]; then
         RESUME_FLOW_HANDLED=1
-        printf 'Zebra already has %s saved as your primary agent.\n' "$(display_name "$SAVED_PRIMARY")"
+        msg agent_already_complete
       fi
       return 0
       ;;
@@ -1442,7 +1700,7 @@ resume_existing_flow() {
       [[ -n "$STATE_RUN_ID" && -n "$resume_agent" ]] || return 0
       RESUME_FLOW_HANDLED=1
       SELECTED_AGENT="$resume_agent"
-      printf 'Resuming Zebra agent onboarding for %s.\n\n' "$(display_name "$resume_agent")"
+      msg resume_agent "$(display_name "$resume_agent")"
       append_resume_event "$resume_phase" "$resume_agent"
       scan_agents_for_resume
       if verify_and_complete_agent_ready "$resume_agent"; then
@@ -1454,7 +1712,7 @@ resume_existing_flow() {
     choose_primary)
       [[ -n "$STATE_RUN_ID" ]] || return 0
       RESUME_FLOW_HANDLED=1
-      printf 'Resuming Zebra agent onboarding at primary-agent selection.\n'
+      msg resume_primary_selection
       append_resume_event "$resume_phase"
       scan_agents_for_resume
       print_candidates
@@ -1465,7 +1723,7 @@ resume_existing_flow() {
     choose_install_target)
       [[ -n "$STATE_RUN_ID" ]] || return 0
       RESUME_FLOW_HANDLED=1
-      printf 'Resuming Zebra agent onboarding at install selection.\n'
+      msg resume_install_selection
       append_resume_event "$resume_phase"
       scan_agents_for_resume
       print_candidates
@@ -1476,7 +1734,7 @@ resume_existing_flow() {
     primary_missing)
       [[ -n "$STATE_RUN_ID" && -n "$resume_agent" ]] || return 0
       RESUME_FLOW_HANDLED=1
-      printf 'Resuming Zebra agent onboarding recovery for %s.\n' "$(display_name "$resume_agent")"
+      msg resume_recovery "$(display_name "$resume_agent")"
       append_resume_event "$resume_phase" "$resume_agent"
       scan_agents_for_resume
       primary_missing_flow "$resume_agent"
@@ -1485,7 +1743,7 @@ resume_existing_flow() {
     installing|failed)
       [[ -n "$STATE_RUN_ID" && -n "$resume_agent" ]] || return 0
       RESUME_FLOW_HANDLED=1
-      printf 'Resuming Zebra agent onboarding after an interrupted %s install.\n' "$(display_name "$resume_agent")"
+      msg resume_interrupted_install "$(display_name "$resume_agent")"
       append_resume_event "$resume_phase" "$resume_agent"
       scan_agents_for_resume
       install_failure_menu "$resume_agent"
@@ -1508,10 +1766,10 @@ resume_existing_flow() {
 requested_agent_flow() {
   local agent="$1"
   if is_agent_installed "$agent"; then
-    printf '\nZebra found %s installed at %s.\n' "$(display_name "$agent")" "$(path_for_agent "$agent")"
+    msg agent_found_installed "$(display_name "$agent")" "$(path_for_agent "$agent")"
     select_and_launch "$agent" direct_selected_primary
   else
-    printf '\nZebra could not find %s locally. Opening setup flow.\n' "$(display_name "$agent")"
+    msg agent_missing_local "$(display_name "$agent")"
     install_then_launch "$agent"
   fi
 }
@@ -1536,8 +1794,8 @@ run_flow() {
     fi
   fi
 
-  printf 'Zebra agent onboarding\n'
-  printf 'State: %s\n\n' "$STATE_FILE"
+  msg title
+  msg state_path "$STATE_FILE"
   if [[ "$force_choose" -eq 0 && -n "$STATE_PHASE" && -n "$STATE_RUN_ID" && "$RUN_ID" == "$STATE_RUN_ID" ]]; then
     append_resume_event "$STATE_PHASE" "$STATE_SELECTED_AGENT"
   fi
@@ -1559,7 +1817,7 @@ run_flow() {
 
   if [[ -n "$SAVED_PRIMARY" ]]; then
     if is_agent_installed "$SAVED_PRIMARY"; then
-      printf '\nUsing saved primary agent: %s.\n' "$(display_name "$SAVED_PRIMARY")"
+      msg using_saved_primary "$(display_name "$SAVED_PRIMARY")"
       select_and_launch "$SAVED_PRIMARY" saved_primary
       return
     fi
@@ -1575,6 +1833,7 @@ mark_ready() {
   local agent=""
   local run_id=""
   local current_run current_agent
+  set_onboarding_language "$(language_argument "$@")"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --agent)
@@ -1585,44 +1844,47 @@ mark_ready() {
         run_id="${2:-}"
         shift 2
         ;;
+      --language)
+        shift 2
+        ;;
       --help|-h)
         usage
         exit 0
         ;;
       *)
-        printf 'unknown option for mark-ready: %s\n' "$1" >&2
+        msg unknown_option_mark_ready "$1" >&2
         usage >&2
         exit 2
         ;;
     esac
   done
   valid_agent "$agent" || {
-    printf 'mark-ready requires --agent claude|codex|antigravity\n' >&2
+    msg mark_ready_requires_agent >&2
     exit 2
   }
   [[ -n "$run_id" ]] || {
-    printf 'mark-ready requires --run-id\n' >&2
+    msg mark_ready_requires_run_id >&2
     exit 2
   }
   [[ -f "$STATE_FILE" ]] || {
-    printf 'no onboarding state found at %s\n' "$STATE_FILE" >&2
+    msg no_onboarding_state "$STATE_FILE" >&2
     exit 1
   }
   current_run="$(read_plist_raw_key "$STATE_FILE" runId || true)"
   if [[ "$current_run" != "$run_id" ]]; then
-    printf 'run id mismatch: expected current run %s, got %s\n' "$current_run" "$run_id" >&2
+    msg run_id_mismatch "$current_run" "$run_id" >&2
     exit 1
   fi
   current_agent="$(read_plist_raw_key "$STATE_FILE" selectedAgent || true)"
   if [[ -n "$current_agent" && "$current_agent" != "$agent" ]]; then
-    printf 'agent mismatch: current selected agent is %s, got %s\n' "$current_agent" "$agent" >&2
+    msg agent_mismatch "$current_agent" "$agent" >&2
     exit 1
   fi
 
   RUN_ID="$run_id"
   mkdirs
   complete_onboarding "$agent" mark-ready
-  printf 'Zebra onboarding marked ready for %s.\n' "$(display_name "$agent")"
+  msg mark_ready_complete "$(display_name "$agent")"
 }
 
 main() {
@@ -1645,6 +1907,7 @@ main() {
       mark_ready "$@"
       ;;
     run|choose-primary)
+      set_onboarding_language "$(language_argument "$@")"
       while [[ $# -gt 0 ]]; do
         case "$1" in
           --cwd)
@@ -1654,10 +1917,14 @@ main() {
           --agent)
             REQUESTED_AGENT="${2:-}"
             valid_agent "$REQUESTED_AGENT" || {
-              printf 'unknown agent: %s\n\n' "$REQUESTED_AGENT" >&2
+              msg unknown_agent "$REQUESTED_AGENT" >&2
               usage >&2
               exit 2
             }
+            shift 2
+            ;;
+          --language)
+            ONBOARDING_LANGUAGE="${2:-}"
             shift 2
             ;;
           --help|-h)
@@ -1665,7 +1932,7 @@ main() {
             exit 0
             ;;
           *)
-            printf 'unknown option: %s\n\n' "$1" >&2
+            msg unknown_option "$1" >&2
             usage >&2
             exit 2
             ;;

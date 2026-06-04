@@ -402,11 +402,13 @@ public enum ZebraOnboardingChecklistCommand {
         selectedVaultPath: String?
     ) -> String? {
         let cwd = launchDirectory(selectedVaultPath: selectedVaultPath)
+        let language = ZebraOnboardingLanguage.current()
         switch stepID {
         case .agent:
             return ZebraAgentOnboardingScriptCommand.shellStartupLine(
                 command: .run,
-                cwd: cwd
+                cwd: cwd,
+                languageCode: language.code
             )
         case .gbrain:
             let agent = MarkdownPillAgent.defaultAgent()
@@ -473,6 +475,7 @@ public enum ZebraOnboardingChecklistCommand {
         agent: MarkdownPillAgent = MarkdownPillAgent.defaultAgent(),
         shellEnvironmentPrefix: String = ""
     ) -> String {
+        let localizedPrompt = "\(ZebraOnboardingLanguage.current().promptPolicy)\n\n\(prompt)"
         _ = MarkdownChatPillCommand.prepareLaunchEnvironment(
             agent: agent,
             markdownFilePath: nil,
@@ -482,7 +485,7 @@ public enum ZebraOnboardingChecklistCommand {
             agent: agent,
             markdownFilePath: nil,
             surface: .fallback(typeLabel: "onboarding"),
-            userPrompt: prompt,
+            userPrompt: localizedPrompt,
             launchDirectory: cwd
         )
         if shellEnvironmentPrefix.isEmpty {

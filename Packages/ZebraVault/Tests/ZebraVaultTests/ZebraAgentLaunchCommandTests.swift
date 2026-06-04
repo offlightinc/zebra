@@ -154,24 +154,26 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
     func testOnboardingStartupCommandRunsScriptWithCwd() {
         let line = ZebraAgentOnboardingStartup.shellStartupLine(
             scriptPath: "/Applications/Zebra.app/Contents/Resources/zebra-agent-onboarding",
-            cwd: "/Users/han/zebra phase3"
+            cwd: "/Users/han/zebra phase3",
+            languageCode: "en"
         )
 
         XCTAssertEqual(
             line,
-            "'/Applications/Zebra.app/Contents/Resources/zebra-agent-onboarding' 'run' '--cwd' '/Users/han/zebra phase3'\n"
+            "'/Applications/Zebra.app/Contents/Resources/zebra-agent-onboarding' 'run' '--cwd' '/Users/han/zebra phase3' '--language' 'en'\n"
         )
     }
 
     func testOnboardingStartupCommandQuotesSingleQuotes() {
         let line = ZebraAgentOnboardingStartup.shellStartupLine(
             scriptPath: "/tmp/zebra-agent-onboarding",
-            cwd: "/Users/han/project/it's-zebra"
+            cwd: "/Users/han/project/it's-zebra",
+            languageCode: "ko-KR"
         )
 
         XCTAssertEqual(
             line,
-            "'/tmp/zebra-agent-onboarding' 'run' '--cwd' '/Users/han/project/it'\\''s-zebra'\n"
+            "'/tmp/zebra-agent-onboarding' 'run' '--cwd' '/Users/han/project/it'\\''s-zebra' '--language' 'ko'\n"
         )
     }
 

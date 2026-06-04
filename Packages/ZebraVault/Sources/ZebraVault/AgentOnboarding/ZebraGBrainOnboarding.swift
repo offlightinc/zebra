@@ -229,19 +229,28 @@ public struct ZebraGBrainOnboardingStore {
     private let homeDirectoryPath: String
     private let gbrainDocsRepoURL: URL?
     private let environment: [String: String]
+    private let onboardingLanguage: ZebraOnboardingLanguage
 
     public init(
         stateURL: URL = ZebraGBrainOnboardingStore.defaultStateURL(),
         fileManager: FileManager = .default,
         homeDirectoryPath: String = NSHomeDirectory(),
         gbrainDocsRepoURL: URL? = nil,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        appPreferredLocalizations: [String] = Bundle.main.preferredLocalizations,
+        preferredLanguages: [String] = Locale.preferredLanguages,
+        currentLocaleIdentifier: String = Locale.current.identifier
     ) {
         self.stateURL = stateURL
         self.fileManager = fileManager
         self.homeDirectoryPath = Self.standardizedPath(homeDirectoryPath)
         self.gbrainDocsRepoURL = gbrainDocsRepoURL
         self.environment = environment
+        self.onboardingLanguage = ZebraOnboardingLanguage.current(
+            appPreferredLocalizations: appPreferredLocalizations,
+            preferredLanguages: preferredLanguages,
+            currentLocaleIdentifier: currentLocaleIdentifier
+        )
     }
 
     public static func defaultStateURL() -> URL {
@@ -588,6 +597,7 @@ public struct ZebraGBrainOnboardingStore {
         let environmentPrefix = [
             "export ZEBRA_GBRAIN_STATE=\(ZebraAgentLaunchCommand.shellQuote(stateURL.path))",
             "export ZEBRA_GBRAIN_HOME=\(ZebraAgentLaunchCommand.shellQuote(homeDirectoryPath))",
+            "export ZEBRA_ONBOARDING_LANGUAGE=\(ZebraAgentLaunchCommand.shellQuote(onboardingLanguage.code))",
             "export PATH=\(ZebraAgentLaunchCommand.shellQuote(helperDirectory)):\"$PATH\"",
         ].joined(separator: " && ") + " && "
         return LaunchContext(
@@ -602,8 +612,7 @@ public struct ZebraGBrainOnboardingStore {
 
     private func bootstrapPrompt(setupPacketPath: String) -> String {
         """
-        Your first visible response must be exactly:
-        Zebra GBrain setup is starting. I am reading the setup packet now. Please wait.
+        \(onboardingLanguage.firstVisibleGBrainSetupInstruction)
 
         Do not run tools or read files before printing that line.
         After printing it, read the complete setup packet at:
@@ -644,6 +653,7 @@ public struct ZebraGBrainOnboardingStore {
         let sectionContext = sectionPromptContext(state: state)
         let decisionContext = decisionPromptContext(state: state)
         let targetResolutionGuard = targetResolutionGuardContext(state: state)
+        let embeddingProviderDecisionOptions = onboardingLanguage.embeddingProviderDecisionOptions
         let statusContext = """
         Current Zebra verification status:
         complete: \(completionResult.isComplete ? "true" : "false")
@@ -654,6 +664,8 @@ public struct ZebraGBrainOnboardingStore {
 
         return """
         You are Zebra's GBrain setup agent.
+
+        \(onboardingLanguage.promptPolicy)
 
         Use the provided latest GBrain docs snapshot as your source of truth when it is available.
         Use `INSTALL_FOR_AGENTS.md` as the completion standard.
@@ -686,9 +698,7 @@ public struct ZebraGBrainOnboardingStore {
         - Do not run `gbrain init --pglite --no-embedding`, accept deferred embeddings, or otherwise disable embeddings until the user explicitly chooses that path.
         - Do not install/start autopilot, recurring jobs, or run a foreground dream only to satisfy `cycle_freshness`. A lone `cycle_freshness` doctor failure means the source has not completed a full cycle yet; it is not a Step 3/4 blocker.
         - Step 7 recurring jobs are maintenance, not a prerequisite for Step 4 import/index.
-        - When an embedding provider decision is required, show only these two numbered options:
-          1. provider key provided: set one of `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, or `VOYAGE_API_KEY` in the environment, then continue.
-          2. defer embeddings: initialize with `gbrain init --pglite --no-embedding` now; embeddings can be configured later.
+        - \(embeddingProviderDecisionOptions)
         - Record the user's Step 2 embedding decision with `zebra-gbrain-onboarding report --status completed --section "Step 2: API Keys" --embedding-decision "<provider_key|defer_embeddings>"`. This records the decision only; never write API key values to Zebra state.
         - In Step 3, do not import, sync, register a source, or write a completion receipt until the user has explicitly resolved the brain repo target.
         - Before Step 4 import/embed/sync, ensure the resolved brain repo target is registered as a GBrain source and that `gbrain sources current --json` / `gbrain sources list --json` identify that source id for the target path. Do not import the target into the implicit `default` source. If this is a new Zebra-created brain repo and no existing source id is confirmed, register source id `brain` for that target before importing.
@@ -1086,7 +1096,7 @@ public struct ZebraGBrainOnboardingStore {
         return PendingUserDecision(
             section: "Step 3: Create the Brain",
             reason: "topology_resolution",
-            note: "Choose local PGLite or Supabase/Postgres.",
+            note: onboardingLanguage.topologyDecisionNote,
             createdAt: Self.isoTimestamp()
         )
     }
@@ -1098,19 +1108,19 @@ public struct ZebraGBrainOnboardingStore {
         if waitingForUser == "topology_resolution" {
             return """
             Current user-decision gate:
-            Ask only for the Step 3 topology decision now: local PGLite or Supabase/Postgres.
+            \(onboardingLanguage.topologyDecisionPrompt)
             Do not ask for the brain repo target in this gate. Ask for that later, after topology is chosen and Step 3 init/doctor have run.
             Do not ask for Step 2 API keys in the topology prompt. However, if a Step 3 command needs an embedding provider or offers `--no-embedding`/deferred embeddings, stop and show only the two embedding provider decision options from Zebra hard gates.
             """
         }
         if waitingForUser == "brain_repo_target_resolution" {
+            let brainRepoTargetOptions = onboardingLanguage.brainRepoTargetOptions(recommendedPath: recommendedBrainRepoPath)
+            let brainRepoTargetFollowUp = onboardingLanguage.brainRepoTargetFollowUp(recommendedPath: recommendedBrainRepoPath)
             return """
             Current user-decision gate:
             Ask only for the Step 3 brain repo target now. Present exactly these numbered options:
-            1. Create a new brain repo at \(recommendedBrainRepoPath) (recommended)
-            2. Use an existing markdown/brain repo path that the user provides
-            3. Create a new brain repo at a custom path
-            If the user chooses 1, ask for yes/no confirmation before creating \(recommendedBrainRepoPath). If the user chooses 2, ask for the full existing repo path. If the user chooses 3, ask for the full path to create.
+            \(brainRepoTargetOptions)
+            \(brainRepoTargetFollowUp)
             Do not present Zebra's onboarding work directory, launch directory, or any path under it as a brain repo target option.
             Do not ask for topology in this gate. Do not ask for Step 2 API keys unless the current Step 3 command refuses to continue without one. Do not silently choose `--no-embedding`; show only the two embedding provider decision options from Zebra hard gates and record `--embedding-decision` first.
             """
@@ -1145,16 +1155,16 @@ public struct ZebraGBrainOnboardingStore {
             - After topology is chosen and Step 3 init/doctor have run, ask separately for the brain repo target before import, sync, source registration, or receipt write.
             """
         }
+        let brainRepoTargetOptions = onboardingLanguage.brainRepoTargetOptions(recommendedPath: recommendedBrainRepoPath)
+        let brainRepoTargetFollowUp = onboardingLanguage.brainRepoTargetFollowUp(recommendedPath: recommendedBrainRepoPath)
         return """
         Required target-resolution guard:
         - Allowed targetResolution.method values: selected_vault, user_existing_repo, user_created_repo, user_confirmed_home.
         - Forbidden target choices: implicit_home, onboarding_work_directory_target, auto_discovered_candidate.
         - Before import/sync/source registration/receipt write, resolve the brain repo target with the user unless the selected vault is being used.
         - When resolving the brain repo target in terminal, present exactly these numbered options:
-          1. Create a new brain repo at \(recommendedBrainRepoPath) (recommended)
-          2. Use an existing markdown/brain repo path that the user provides
-          3. Create a new brain repo at a custom path
-        - If the user chooses 1, ask for yes/no confirmation before creating \(recommendedBrainRepoPath). If the user chooses 2, ask for the full existing repo path. If the user chooses 3, ask for the full path to create.
+          \(brainRepoTargetOptions)
+        - \(brainRepoTargetFollowUp)
         - Do not present Zebra's onboarding work directory, launch directory, or any path under it as a brain repo target option.
         - Do not ask only as an open-ended "give a path or create new" sentence.
         - If using an existing repo the user names, use method=user_existing_repo.
@@ -2228,25 +2238,54 @@ public struct ZebraGBrainOnboardingStore {
     def recommended_brain_repo_path():
         return os.path.abspath(os.path.join(zebra_home_directory(), "brain"))
 
+    def onboarding_language():
+        raw = (os.environ.get("ZEBRA_ONBOARDING_LANGUAGE") or "en").lower().replace("_", "-")
+        if raw == "ko" or raw.startswith("ko-"):
+            return "ko"
+        if raw == "ja" or raw.startswith("ja-"):
+            return "ja"
+        return "en"
+
+    def target_option_descriptions(recommended):
+        language = onboarding_language()
+        if language == "ko":
+            return [
+                f"{recommended}에 새 brain repo를 만듭니다 (recommended)",
+                "사용자가 제공하는 기존 markdown/brain repo path를 사용합니다",
+                "custom path에 새 brain repo를 만듭니다",
+            ]
+        if language == "ja":
+            return [
+                f"{recommended}に新しいbrain repoを作成します (recommended)",
+                "ユーザーが指定する既存のmarkdown/brain repo pathを使用します",
+                "custom pathに新しいbrain repoを作成します",
+            ]
+        return [
+            f"Create a new brain repo at {recommended} (recommended)",
+            "Use an existing markdown/brain repo path that the user provides",
+            "Create a new brain repo at a custom path",
+        ]
+
     def target_resolution_next_action():
         recommended = recommended_brain_repo_path()
+        descriptions = target_option_descriptions(recommended)
         return {
             "nextAction": "ask_user_for_brain_repo_target",
             "targetOptions": [
                 {
                     "reply": "1",
-                    "description": f"Create a new brain repo at {recommended} (recommended)",
+                    "description": descriptions[0],
                     "path": recommended,
                     "method": "user_created_repo",
                 },
                 {
                     "reply": "2 <path>",
-                    "description": "Use an existing markdown/brain repo path that the user provides",
+                    "description": descriptions[1],
                     "method": "user_existing_repo",
                 },
                 {
                     "reply": "3 <path>",
-                    "description": "Create a new brain repo at a custom path",
+                    "description": descriptions[2],
                     "method": "user_created_repo",
                 },
             ],

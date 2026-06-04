@@ -363,7 +363,9 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let store = ZebraGBrainOnboardingStore(
             stateURL: stateURL,
             homeDirectoryPath: root.path,
-            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
         )
 
         let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
@@ -397,6 +399,57 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(progress["nextSection"] as? String, "Step 1: Install GBrain")
     }
 
+    func testPrepareLaunchUsesKoreanAppLanguagePolicyInBootstrapAndPacket() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["ko"],
+            preferredLanguages: ["ko-KR"]
+        )
+
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let packet = try setupPacketContent(launch)
+
+        XCTAssertTrue(launch.startupPrompt.contains("Your first visible response must be a brief Korean sentence"))
+        XCTAssertTrue(launch.startupPrompt.contains("Preserve `Zebra GBrain setup` and `setup packet` exactly."))
+        XCTAssertFalse(launch.startupPrompt.contains("Zebra GBrain setup을 시작합니다"))
+        XCTAssertTrue(launch.startupPrompt.unicodeScalars.allSatisfy { $0.isASCII })
+        XCTAssertTrue(packet.contains("Use Zebra's app language (Korean) for user-facing prose."))
+        XCTAssertTrue(packet.contains("Preserve technical terms, domain terminology, product names, commands, identifiers, file paths, environment variables, API names, CLI flags, JSON keys, error codes, and quoted/source text in their original English spelling."))
+        XCTAssertTrue(packet.contains("provider key provided: `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, `VOYAGE_API_KEY` 중 하나를 environment에 설정한 뒤 계속합니다."))
+        XCTAssertTrue(packet.contains("defer embeddings: 지금 `gbrain init --pglite --no-embedding`으로 초기화합니다. embeddings는 나중에 설정할 수 있습니다."))
+        XCTAssertTrue(packet.contains("새 brain repo를 만듭니다 (recommended)"))
+        XCTAssertTrue(packet.contains("기존 markdown/brain repo path를 사용합니다"))
+        XCTAssertTrue(packet.contains("custom path에 새 brain repo를 만듭니다"))
+        XCTAssertFalse(packet.contains("provider key provided: set one of `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, or `VOYAGE_API_KEY`"))
+        XCTAssertFalse(packet.contains("Use Zebra's app language (English) for user-facing prose."))
+    }
+
+    func testOnboardingLanguageFallsBackToEnglishForUnsupportedLocale() {
+        let language = ZebraOnboardingLanguage.current(
+            appPreferredLocalizations: ["fr"],
+            preferredLanguages: ["fr-FR"],
+            currentLocaleIdentifier: "fr_FR"
+        )
+
+        XCTAssertEqual(language, .en)
+        XCTAssertTrue(language.promptPolicy.contains("Use Zebra's app language (English)"))
+    }
+
+    func testOnboardingLanguageUsesAppPreferredLocalizationBeforeSystemLocale() {
+        let language = ZebraOnboardingLanguage.current(
+            appPreferredLocalizations: ["ja"],
+            preferredLanguages: ["ko-KR"],
+            currentLocaleIdentifier: "ko_KR"
+        )
+
+        XCTAssertEqual(language, .ja)
+        XCTAssertTrue(language.promptPolicy.contains("Use Zebra's app language (Japanese)"))
+    }
+
     func testPrepareLaunchPreservesBrainRepoTargetResolutionGate() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
@@ -404,7 +457,9 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let store = ZebraGBrainOnboardingStore(
             stateURL: stateURL,
             homeDirectoryPath: root.path,
-            gbrainDocsRepoURL: repo
+            gbrainDocsRepoURL: repo,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
         try writeProgress(
@@ -439,7 +494,9 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let store = ZebraGBrainOnboardingStore(
             stateURL: stateURL,
             homeDirectoryPath: root.path,
-            gbrainDocsRepoURL: repo
+            gbrainDocsRepoURL: repo,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
         try writeProgress(
@@ -480,7 +537,9 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let store = ZebraGBrainOnboardingStore(
             stateURL: stateURL,
             homeDirectoryPath: root.path,
-            gbrainDocsRepoURL: repo
+            gbrainDocsRepoURL: repo,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
         )
 
         let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
@@ -718,6 +777,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let result = try runHelper(
             stateURL: stateURL,
             path: bin.path,
+            languageCode: "ko",
             arguments: [
                 "report",
                 "--status", "waiting_for_user",
@@ -732,7 +792,11 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
         XCTAssertEqual(waitingForUserReason(in: progress), "brain_repo_target_resolution")
         XCTAssertEqual(payload["nextAction"] as? String, "ask_user_for_brain_repo_target")
+        XCTAssertEqual(options.count, 3)
         XCTAssertEqual(options.first?["path"] as? String, root.appendingPathComponent("brain", isDirectory: true).path)
+        XCTAssertTrue((options.first?["description"] as? String)?.contains("새 brain repo를 만듭니다") == true)
+        XCTAssertTrue((options[1]["description"] as? String)?.contains("기존 markdown/brain repo path를 사용합니다") == true)
+        XCTAssertTrue((options[2]["description"] as? String)?.contains("custom path에 새 brain repo를 만듭니다") == true)
         XCTAssertFalse(options.contains { ($0["path"] as? String) == root.path })
         XCTAssertFalse(options.contains { ($0["path"] as? String)?.contains("gbrain-work") == true })
         XCTAssertNil(payload["forbiddenTargets"])
@@ -1746,6 +1810,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
     private func runHelper(
         stateURL: URL,
         path: String,
+        languageCode: String? = nil,
         arguments: [String]
     ) throws -> HelperRunResult {
         let helper = stateURL
@@ -1755,11 +1820,15 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let process = Process()
         process.executableURL = helper
         process.arguments = arguments
-        process.environment = [
+        var environment = [
             "PATH": "\(path):/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
             "ZEBRA_GBRAIN_STATE": stateURL.path,
             "ZEBRA_GBRAIN_HOME": stateURL.deletingLastPathComponent().path,
         ]
+        if let languageCode {
+            environment["ZEBRA_ONBOARDING_LANGUAGE"] = languageCode
+        }
+        process.environment = environment
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout

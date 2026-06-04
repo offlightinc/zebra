@@ -8,22 +8,34 @@ public enum ZebraAgentOnboardingStartup {
         !(hasCompletedState(at: stateURL) && hasValidPrimaryAgent(at: preferencesURL))
     }
 
-    public static func appResourceShellStartupLine(cwd: String = NSHomeDirectory()) -> String? {
+    public static func appResourceShellStartupLine(
+        cwd: String = NSHomeDirectory(),
+        languageCode: String? = nil
+    ) -> String? {
         guard let scriptURL = Bundle.main.url(
             forResource: "zebra-agent-onboarding",
             withExtension: nil
         ) else {
             return nil
         }
-        return shellStartupLine(scriptPath: scriptURL.path, cwd: cwd)
+        return shellStartupLine(scriptPath: scriptURL.path, cwd: cwd, languageCode: languageCode)
     }
 
-    public static func shellStartupLine(scriptPath: String, cwd: String) -> String {
-        [
+    public static func shellStartupLine(
+        scriptPath: String,
+        cwd: String,
+        languageCode: String? = nil
+    ) -> String {
+        let resolvedLanguageCode = languageCode
+            .flatMap(ZebraOnboardingLanguage.resolve(_:))?
+            .code ?? ZebraOnboardingLanguage.current().code
+        return [
             scriptPath,
             "run",
             "--cwd",
-            cwd
+            cwd,
+            "--language",
+            resolvedLanguageCode
         ]
         .map(shellQuote)
         .joined(separator: " ") + "\n"
