@@ -1001,6 +1001,58 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains("source_not_registered"), "stdout: \(result.stdout) stderr: \(result.stderr)")
     }
 
+    func testImportCompletionRecordsVerifiedSourceId() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3.5: Confirm search mode with the user (DO NOT SKIP)",
+            ]
+        )
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 4: Import and Index",
+                "--source-id", "brain",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let targetReceipt = try receiptTarget(in: stateURL, targetPath: target.path)
+        XCTAssertEqual(targetReceipt["sourceId"] as? String, "brain")
+    }
+
     func testHelperVerifyPreservesCompleteReceiptWhenSourceProbeIsTransient() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)

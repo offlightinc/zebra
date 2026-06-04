@@ -670,6 +670,7 @@ public struct ZebraGBrainOnboardingStore {
           2. defer embeddings: initialize with `gbrain init --pglite --no-embedding` now; embeddings can be configured later.
         - Record the user's Step 2 embedding decision with `zebra-gbrain-onboarding report --status completed --section "Step 2: API Keys" --embedding-decision "<provider_key|defer_embeddings>"`. This records the decision only; never write API key values to Zebra state.
         - In Step 3, do not import, sync, register a source, or write a completion receipt until the user has explicitly resolved the brain repo target.
+        - Before Step 4 import/embed/sync, ensure the resolved brain repo target is registered as a GBrain source and that `gbrain sources current --json` / `gbrain sources list --json` identify that source id for the target path. Do not import the target into the implicit `default` source. If this is a new Zebra-created brain repo and no existing source id is confirmed, register source id `brain` for that target before importing.
 
         \(targetResolutionGuard)
 
@@ -679,6 +680,7 @@ public struct ZebraGBrainOnboardingStore {
         - When waiting for the user: `zebra-gbrain-onboarding report --status waiting_for_user --section "<section title>" --note "<what you need>"`
         - On failure: `zebra-gbrain-onboarding report --status failed --section "<section title>" --note "<reason>"`
         - When Step 3 resolves a brain repo target, include `--target "<brain repo path>" --method "<targetResolution.method>"` on the completed report.
+        - When Step 4 completes import/index, include `--source-id "<source id>"` on the completed report after the source probe verifies that source id for the target path.
         - After the user chooses search mode, explicitly run `gbrain config set search.mode <mode>` even when it matches the auto-applied default, then verify with `gbrain search modes`.
         - After the user chooses provider keys or deferred/no-embedding mode, report Step 2 with `--embedding-decision "provider_key"` or `--embedding-decision "defer_embeddings"` before continuing.
         - If report rejects a section because the role is unknown, read the current section and report the role with `zebra-gbrain-onboarding report --status mapped_role --section "<section title>" --role "<install|credentials|create_brain|search_mode|import_index|verify>" --evidence "<why>"`, then retry the original report only after the missing prerequisite is satisfied.
@@ -2140,6 +2142,25 @@ public struct ZebraGBrainOnboardingStore {
         decision = progress.get("embeddingDecision") or {}
         return decision.get("decision") in allowed_embedding_decisions
 
+    def record_verified_source_id(state, flags):
+        source_id = flags.get("source_id")
+        if not source_id:
+            return None
+        key, target_path, _, target_entry = resolved_target(state)
+        if not key or not target_path or not target_entry:
+            return "brain_repo_target_unresolved"
+        receipt = state.setdefault("receipt", {})
+        targets = receipt.setdefault("targets", {})
+        target_entry = targets.setdefault(key, target_entry)
+        target_entry["vaultPath"] = target_path
+        target_entry["sourceId"] = source_id
+        profile_id = flags.get("profile_id")
+        if profile_id:
+            target_entry["profileId"] = profile_id
+        if not receipt.get("primaryTargetKey"):
+            receipt["primaryTargetKey"] = key
+        return None
+
     def waiting_reason(waiting):
         if isinstance(waiting, dict):
             return waiting.get("reason") or waiting.get("note") or waiting.get("section")
@@ -2553,6 +2574,10 @@ public struct ZebraGBrainOnboardingStore {
             }:
                 next_action = "report waiting_for_user for brain_repo_target_resolution"
             reject_report(state, guard_reason, section, status, next_action=next_action)
+        if role == "import_index" and status == "completed":
+            source_record_error = record_verified_source_id(candidate_state, flags)
+            if source_record_error:
+                reject_report(state, source_record_error, section, status)
 
         state = candidate_state
         progress = state.setdefault("progress", {})
