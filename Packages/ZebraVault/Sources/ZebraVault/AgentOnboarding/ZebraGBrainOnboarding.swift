@@ -196,6 +196,10 @@ public struct ZebraGBrainOnboardingStore {
         var hasTransientProbeFailure: Bool
     }
 
+    private struct DoctorResult {
+        var ok: Bool
+    }
+
     private struct ProcessRunResult {
         var exitCode: Int32
         var stdout: String
@@ -203,11 +207,13 @@ public struct ZebraGBrainOnboardingStore {
         var timedOut: Bool
     }
 
-    private enum SourceProbeStatus {
+    private enum SourceProbeStatus: Equatable {
         case verified
         case mismatch
-        case transientFailure
+        case transientFailure(reason: String)
     }
+
+    private static let pgliteBusyReason = "pglite_busy"
 
     private static let allowedTargetResolutionMethods: Set<String> = [
         "selected_vault",
@@ -315,6 +321,13 @@ public struct ZebraGBrainOnboardingStore {
             reasons.append("receipt_target_missing")
             return CompletionResult(isComplete: false, reasons: reasons)
         }
+        if let forbiddenReason = forbiddenBrainRepoTargetReason(
+            vaultPath,
+            method: resolved.target.targetResolution?.method
+        ) {
+            reasons.append(forbiddenReason)
+            return CompletionResult(isComplete: false, reasons: reasons)
+        }
         guard let sourceId = nonEmpty(resolved.target.sourceId) else {
             reasons.append("source_not_registered")
             return CompletionResult(isComplete: false, reasons: reasons)
@@ -359,6 +372,14 @@ public struct ZebraGBrainOnboardingStore {
         }
         guard standardizedExistingDirectoryPath(resolved.target.vaultPath) != nil else {
             reasons.append("receipt_target_missing")
+            return CompletionResult(isComplete: false, reasons: reasons)
+        }
+        if let vaultPath = standardizedExistingDirectoryPath(resolved.target.vaultPath),
+           let forbiddenReason = forbiddenBrainRepoTargetReason(
+            vaultPath,
+            method: resolved.target.targetResolution?.method
+           ) {
+            reasons.append(forbiddenReason)
             return CompletionResult(isComplete: false, reasons: reasons)
         }
         guard nonEmpty(resolved.target.sourceId) != nil else {
@@ -545,6 +566,7 @@ public struct ZebraGBrainOnboardingStore {
         let helperDirectory = helperPath.deletingLastPathComponent().path
         let environmentPrefix = [
             "export ZEBRA_GBRAIN_STATE=\(ZebraAgentLaunchCommand.shellQuote(stateURL.path))",
+            "export ZEBRA_GBRAIN_HOME=\(ZebraAgentLaunchCommand.shellQuote(homeDirectoryPath))",
             "export PATH=\(ZebraAgentLaunchCommand.shellQuote(helperDirectory)):\"$PATH\"",
         ].joined(separator: " && ") + " && "
         return LaunchContext(
@@ -592,7 +614,7 @@ public struct ZebraGBrainOnboardingStore {
             Before `gbrain init`, ask only for the topology decision. Do not ask for the brain repo target in the same prompt.
             After topology is chosen and `gbrain init`/doctor have run, ask separately for the brain repo target before import, sync, source registration, or receipt write.
             When asking for the brain repo target, present the numbered options in the target-resolution guard. Do not ask only as an open-ended sentence.
-            You may use the home directory only if the user explicitly confirms it as the brain repo target, then use targetResolution.method=user_confirmed_home.
+            Do not present or use the home directory itself as the brain repo target.
             Discovery scans are allowed only to present candidates. Do not choose or import a discovered candidate until the user confirms it.
             """
         }
@@ -641,6 +663,8 @@ public struct ZebraGBrainOnboardingStore {
         - Continue to follow INSTALL_FOR_AGENTS.md `##` section order, but respect the current `waitingForUser` block reason first.
         - In Step 3, do not run `gbrain init`, `gbrain init --pglite`, or Supabase setup until the user has explicitly chosen topology.
         - Do not run `gbrain init --pglite --no-embedding`, accept deferred embeddings, or otherwise disable embeddings until the user explicitly chooses that path.
+        - Do not install/start autopilot, recurring jobs, or run a foreground dream only to satisfy `cycle_freshness`. A lone `cycle_freshness` doctor failure means the source has not completed a full cycle yet; it is not a Step 3/4 blocker.
+        - Step 7 recurring jobs are maintenance, not a prerequisite for Step 4 import/index.
         - When an embedding provider decision is required, show only these two numbered options:
           1. provider key provided: set one of `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, or `VOYAGE_API_KEY` in the environment, then continue.
           2. defer embeddings: initialize with `gbrain init --pglite --no-embedding` now; embeddings can be configured later.
@@ -1093,7 +1117,7 @@ public struct ZebraGBrainOnboardingStore {
         return """
         Required target-resolution guard:
         - Allowed targetResolution.method values: selected_vault, user_existing_repo, user_created_repo, user_confirmed_home.
-        - Forbidden target choices: implicit_home, auto_discovered_candidate.
+        - Forbidden target choices: implicit_home, onboarding_work_directory_target, auto_discovered_candidate.
         - Before import/sync/source registration/receipt write, resolve the brain repo target with the user unless the selected vault is being used.
         - When resolving the brain repo target in terminal, present exactly these numbered options:
           1. Create a new brain repo at \(recommendedBrainRepoPath) (recommended)
@@ -1150,6 +1174,28 @@ public struct ZebraGBrainOnboardingStore {
         return Self.allowedTargetResolutionMethods.contains(method)
     }
 
+    private func forbiddenBrainRepoTargetReason(_ path: String, method: String?) -> String? {
+        let target = Self.standardizedPath((path as NSString).expandingTildeInPath)
+        if target == homeDirectoryPath,
+           method != "user_confirmed_home" {
+            return "implicit_home_target"
+        }
+        let workDirectory = Self.standardizedPath(
+            stateURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("gbrain-work", isDirectory: true)
+                .path
+        )
+        if Self.path(target, isEqualToOrInside: workDirectory) {
+            return "onboarding_work_directory_target"
+        }
+        return nil
+    }
+
+    private static func path(_ path: String, isEqualToOrInside directory: String) -> Bool {
+        path == directory || path.hasPrefix(directory + "/")
+    }
+
     private func liveVerificationResult(
         target: Target,
         vaultPath: String,
@@ -1179,9 +1225,12 @@ public struct ZebraGBrainOnboardingStore {
         }
 
         let doctor = runProcess(executable: executable, arguments: ["doctor", "--json"], cwd: vaultPath, timeout: 20)
-        let doctorOk = doctor.exitCode == 0 && !doctor.timedOut
+        let doctorResult = Self.strictDoctorResult(doctor)
+        let doctorOk = doctorResult.ok
         let doctorTransientFailure = !doctorOk && Self.isTransientGBrainProbeFailure(doctor)
-        if !doctorOk && !doctorTransientFailure {
+        if doctorTransientFailure {
+            reasons.append(Self.pgliteBusyReason)
+        } else if !doctorOk {
             reasons.append("doctor_failed")
         }
 
@@ -1191,14 +1240,26 @@ public struct ZebraGBrainOnboardingStore {
             sourceId: sourceId
         )
 
-        if sourceProbe.status == .mismatch {
+        if case .mismatch = sourceProbe.status {
             reasons.append("source_not_registered")
         }
+        if case .transientFailure(let reason) = sourceProbe.status,
+           !reasons.contains(reason) {
+            reasons.append(reason)
+        }
 
-        let hasTransientProbeFailure = doctorTransientFailure || sourceProbe.status == .transientFailure
+        let hasTransientProbeFailure: Bool
+        if case .transientFailure = sourceProbe.status {
+            hasTransientProbeFailure = true
+        } else {
+            hasTransientProbeFailure = doctorTransientFailure
+        }
         let complete = reasons.isEmpty && doctorOk && sourceProbe.status == .verified
         updatedTarget.gbrainExecutablePath = executable
-        updatedTarget.doctorStatus = ProbeResult(ok: doctorOk, status: doctorOk ? "ok" : "failed")
+        updatedTarget.doctorStatus = ProbeResult(
+            ok: doctorOk,
+            status: doctorOk ? "ok" : "failed"
+        )
         updatedTarget.sourcesCurrentResult = SourceProbeResult(
             ok: sourceProbe.status == .verified,
             sourceId: sourceProbe.currentSourceId ?? sourceId,
@@ -1233,7 +1294,10 @@ public struct ZebraGBrainOnboardingStore {
         guard current.exitCode == 0,
               !current.timedOut,
               let currentObject = Self.jsonObject(from: current.stdout) else {
-            return (.transientFailure, nil, nil)
+            if let reason = Self.transientGBrainProbeReason(current) {
+                return (.transientFailure(reason: reason), nil, nil)
+            }
+            return (.mismatch, nil, nil)
         }
         let currentSourceId = currentObject["source_id"] as? String
         guard currentSourceId == sourceId else {
@@ -1244,7 +1308,10 @@ public struct ZebraGBrainOnboardingStore {
         guard list.exitCode == 0,
               !list.timedOut,
               Self.jsonObject(from: list.stdout) != nil else {
-            return (.transientFailure, currentSourceId, nil)
+            if let reason = Self.transientGBrainProbeReason(list) {
+                return (.transientFailure(reason: reason), currentSourceId, nil)
+            }
+            return (.mismatch, currentSourceId, nil)
         }
         let listedLocalPath = Self.sourceLocalPath(sourceId: sourceId, fromSourcesListJSON: list.stdout)
         guard listedLocalPath.map(Self.standardizedPath) == vaultPath else {
@@ -1279,7 +1346,7 @@ public struct ZebraGBrainOnboardingStore {
         guard receipt.globalReadiness?.complete == true,
               receipt.targets?[targetKey]?.complete == true,
               live.target.complete == false,
-              live.target.reasons?.isEmpty == true,
+              Self.containsOnlyTransientProbeReasons(live.target.reasons ?? []),
               live.hasTransientProbeFailure else {
             return false
         }
@@ -1287,11 +1354,29 @@ public struct ZebraGBrainOnboardingStore {
     }
 
     private static func isTransientGBrainProbeFailure(_ result: ProcessRunResult) -> Bool {
-        if result.timedOut { return true }
+        transientGBrainProbeReason(result) != nil
+    }
+
+    private static func transientGBrainProbeReason(_ result: ProcessRunResult) -> String? {
+        if result.timedOut { return pgliteBusyReason }
         let output = "\(result.stderr)\n\(result.stdout)".lowercased()
-        return output.contains("timed out waiting for pglite lock")
+        if output.contains("timed out waiting for pglite lock")
             || output.contains("connect timed out")
-            || output.contains("connection timed out")
+            || output.contains("connection timed out") {
+            return pgliteBusyReason
+        }
+        return nil
+    }
+
+    private static func containsOnlyTransientProbeReasons(_ reasons: [String]) -> Bool {
+        reasons.allSatisfy { $0 == pgliteBusyReason }
+    }
+
+    private static func strictDoctorResult(_ result: ProcessRunResult) -> DoctorResult {
+        if result.exitCode == 0, !result.timedOut {
+            return DoctorResult(ok: true)
+        }
+        return DoctorResult(ok: false)
     }
 
     private func receiptMateriallyMatches(
@@ -1675,14 +1760,56 @@ public struct ZebraGBrainOnboardingStore {
         except Exception as exc:
             return False, {}, str(exc)
 
-    def transient_probe_failure(message):
+    PGLITE_BUSY_REASON = "pglite_busy"
+    CYCLE_FRESHNESS_CHECK_NAME = "cycle_freshness"
+
+    def transient_probe_reason(message):
         text = (message or "").lower()
-        return (
+        if (
             "timed out waiting for pglite lock" in text
             or "connect timed out" in text
             or "connection timed out" in text
             or "timed out" in text
-        )
+        ):
+            return PGLITE_BUSY_REASON
+        return None
+
+    def transient_probe_failure(message):
+        return transient_probe_reason(message) is not None
+
+    def strict_doctor_result(result):
+        return result.returncode == 0, False
+
+    def doctor_allows_create_or_import_progress(result):
+        if result.returncode == 0:
+            return True, False
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except Exception:
+            return False, False
+        checks = payload.get("checks") or []
+        if not checks:
+            return False, False
+        blocking = []
+        ignored_cycle_freshness = False
+        for check in checks:
+            status = str(check.get("status") or "").lower()
+            if status not in {"fail", "failed", "error"}:
+                continue
+            if check.get("name") == CYCLE_FRESHNESS_CHECK_NAME:
+                ignored_cycle_freshness = True
+            else:
+                blocking.append(check.get("name") or "unknown")
+        ok = len(blocking) == 0 and ignored_cycle_freshness
+        return ok, ok
+
+    def strict_doctor_ok(result):
+        ok, _ = strict_doctor_result(result)
+        return ok
+
+    def doctor_allows_create_or_import_progress_ok(result):
+        ok, _ = doctor_allows_create_or_import_progress(result)
+        return ok
 
     def source_list_local_path(payload, source_id):
         for source in payload.get("sources") or []:
@@ -1691,28 +1818,34 @@ public struct ZebraGBrainOnboardingStore {
         return None
 
     def source_probe_status(executable, target_path, source_id):
-        current_ok, current_payload, _ = run_json(
+        current_ok, current_payload, current_error = run_json(
             [executable, "sources", "current", "--json"],
             cwd=target_path,
             timeout=12,
         )
         if not current_ok:
-            return "transient", None, None
+            reason = transient_probe_reason(current_error)
+            if reason:
+                return "transient", None, None, reason
+            return "mismatch", None, None, None
         current_source_id = current_payload.get("source_id")
         if current_source_id != source_id:
-            return "mismatch", current_source_id, None
+            return "mismatch", current_source_id, None, None
 
-        list_ok, list_payload, _ = run_json(
+        list_ok, list_payload, list_error = run_json(
             [executable, "sources", "list", "--json"],
             cwd=target_path,
             timeout=12,
         )
         if not list_ok:
-            return "transient", current_source_id, None
+            reason = transient_probe_reason(list_error)
+            if reason:
+                return "transient", current_source_id, None, reason
+            return "mismatch", current_source_id, None, None
         listed_local_path = source_list_local_path(list_payload, source_id)
         if not listed_local_path or os.path.abspath(os.path.expanduser(listed_local_path)) != os.path.abspath(target_path):
-            return "mismatch", current_source_id, listed_local_path
-        return "verified", current_source_id, listed_local_path
+            return "mismatch", current_source_id, listed_local_path, None
+        return "verified", current_source_id, listed_local_path, None
 
     def stable_hash(value):
         hash_value = 0xcbf29ce484222325
@@ -1956,10 +2089,12 @@ public struct ZebraGBrainOnboardingStore {
             return None
         if not target:
             return "target_not_resolved"
+        target = os.path.abspath(os.path.expanduser(target))
+        forbidden_reason = forbidden_target_reason(target, method)
+        if forbidden_reason:
+            return forbidden_reason
         if method not in allowed_methods:
             return "target_confirmation_missing"
-
-        target = os.path.abspath(os.path.expanduser(target))
         key = target_key(target)
         progress = state.setdefault("progress", {})
         progress["resolvedTargetKey"] = key
@@ -2025,6 +2160,48 @@ public struct ZebraGBrainOnboardingStore {
             "createdAt": now(),
         }
 
+    def allowed_waiting_reasons(role):
+        if role == "create_brain":
+            return ["topology_resolution", "brain_repo_target_resolution"]
+        return []
+
+    def waiting_reason_guard_reason(role, requested_reason):
+        allowed = allowed_waiting_reasons(role)
+        if not allowed:
+            return None
+        if not requested_reason:
+            return "missing_waiting_reason"
+        if requested_reason not in allowed:
+            return "unsupported_waiting_reason"
+        return None
+
+    def recommended_brain_repo_path():
+        return os.path.abspath(os.path.join(zebra_home_directory(), "brain"))
+
+    def target_resolution_next_action():
+        recommended = recommended_brain_repo_path()
+        return {
+            "nextAction": "ask_user_for_brain_repo_target",
+            "targetOptions": [
+                {
+                    "reply": "1",
+                    "description": f"Create a new brain repo at {recommended} (recommended)",
+                    "path": recommended,
+                    "method": "user_created_repo",
+                },
+                {
+                    "reply": "2 <path>",
+                    "description": "Use an existing markdown/brain repo path that the user provides",
+                    "method": "user_existing_repo",
+                },
+                {
+                    "reply": "3 <path>",
+                    "description": "Create a new brain repo at a custom path",
+                    "method": "user_created_repo",
+                },
+            ],
+        }
+
     def resolved_target(state):
         progress = state.get("progress") or {}
         receipt = state.get("receipt") or {}
@@ -2048,6 +2225,29 @@ public struct ZebraGBrainOnboardingStore {
             and os.path.isfile(os.path.join(path, "package.json"))
         )
 
+    def path_equal_or_inside(path, directory):
+        if not path or not directory:
+            return False
+        path = os.path.abspath(os.path.expanduser(path))
+        directory = os.path.abspath(os.path.expanduser(directory))
+        return path == directory or path.startswith(directory + os.sep)
+
+    def zebra_home_directory():
+        return os.path.abspath(os.path.expanduser(os.environ.get("ZEBRA_GBRAIN_HOME") or "~"))
+
+    def onboarding_work_directory():
+        return os.path.join(os.path.dirname(state_path), "gbrain-work")
+
+    def forbidden_target_reason(path, method=None):
+        if not path:
+            return None
+        target = os.path.abspath(os.path.expanduser(path))
+        if target == zebra_home_directory() and method != "user_confirmed_home":
+            return "implicit_home_target"
+        if path_equal_or_inside(target, onboarding_work_directory()):
+            return "onboarding_work_directory_target"
+        return None
+
     def target_guard_reasons(state):
         _, target_path, method, _ = resolved_target(state)
         reasons = []
@@ -2055,10 +2255,11 @@ public struct ZebraGBrainOnboardingStore {
             reasons.append("brain_repo_target_unresolved")
             return reasons
         target_path = os.path.abspath(os.path.expanduser(target_path))
+        forbidden_reason = forbidden_target_reason(target_path, method)
+        if forbidden_reason:
+            reasons.append(forbidden_reason)
         if method not in allowed_methods:
             reasons.append("target_confirmation_missing")
-        if target_path == os.path.abspath(os.path.expanduser("~")) and method != "user_confirmed_home":
-            reasons.append("implicit_home_target")
         if target_is_tool_repo(target_path):
             reasons.append("gbrain_tool_repo_target")
         if not os.path.isdir(target_path):
@@ -2096,7 +2297,26 @@ public struct ZebraGBrainOnboardingStore {
                 stderr=subprocess.PIPE,
                 timeout=45,
             )
-            return result.returncode == 0
+            return strict_doctor_ok(result)
+        except Exception:
+            return False
+
+    def doctor_allows_create_brain_progress(state):
+        executable = gbrain_executable()
+        if not executable:
+            return False
+        _, target_path, _, _ = resolved_target(state)
+        cwd = target_path if target_path and os.path.isdir(target_path) else None
+        try:
+            result = subprocess.run(
+                [executable, "doctor", "--json"],
+                cwd=cwd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=45,
+            )
+            return doctor_allows_create_or_import_progress_ok(result)
         except Exception:
             return False
 
@@ -2108,8 +2328,21 @@ public struct ZebraGBrainOnboardingStore {
         source_id = flags.get("source_id") or target_entry.get("sourceId")
         if not target_path or not os.path.isdir(target_path) or not source_id:
             return False
-        status, _, _ = source_probe_status(executable, target_path, source_id)
+        status, _, _, _ = source_probe_status(executable, target_path, source_id)
         return status == "verified"
+
+    def source_registration_guard_reason(state, flags):
+        executable = gbrain_executable()
+        if not executable:
+            return "source_not_registered"
+        _, target_path, _, target_entry = resolved_target(state)
+        source_id = flags.get("source_id") or target_entry.get("sourceId")
+        if not target_path or not os.path.isdir(target_path) or not source_id:
+            return "source_not_registered"
+        status, _, _, transient_reason = source_probe_status(executable, target_path, source_id)
+        if status == "verified":
+            return None
+        return transient_reason or "source_not_registered"
 
     def search_mode_configured(state):
         executable = gbrain_executable()
@@ -2153,7 +2386,7 @@ public struct ZebraGBrainOnboardingStore {
                 return True
         return False
 
-    def reject_report(state, reason, section, status, next_action=None):
+    def reject_report(state, reason, section, status, next_action=None, extra_payload=None):
         progress = state.setdefault("progress", {})
         progress["lastFailure"] = reason
         progress["lastStatus"] = "rejected"
@@ -2162,6 +2395,7 @@ public struct ZebraGBrainOnboardingStore {
             "brain_repo_target_unresolved",
             "target_confirmation_missing",
             "implicit_home_target",
+            "onboarding_work_directory_target",
             "gbrain_tool_repo_target",
             "brain_repo_target_missing",
         }:
@@ -2175,7 +2409,11 @@ public struct ZebraGBrainOnboardingStore {
             "section": section,
             "status": status,
         }
-        if next_action:
+        if extra_payload:
+            payload.update(extra_payload)
+        if waiting_reason(progress.get("waitingForUser")) == "brain_repo_target_resolution":
+            payload.update(target_resolution_next_action())
+        elif next_action:
             payload["nextAction"] = next_action
         print(json.dumps(payload, sort_keys=True))
         sys.exit(1)
@@ -2196,7 +2434,7 @@ public struct ZebraGBrainOnboardingStore {
                 return target_reasons[0]
             if not embedding_decision_recorded(state):
                 return "embedding_decision_required"
-            if not doctor_ok(state):
+            if not doctor_allows_create_brain_progress(state):
                 return "doctor_failed"
         if role == "search_mode":
             if "create_brain" not in roles:
@@ -2212,8 +2450,10 @@ public struct ZebraGBrainOnboardingStore {
                 return "search_mode_not_completed"
             if target_reasons:
                 return target_reasons[0]
-            if status == "completed" and not source_registered(state, flags):
-                return "source_not_registered"
+            if status == "completed":
+                source_reason = source_registration_guard_reason(state, flags)
+                if source_reason:
+                    return source_reason
         if role == "verify" and status == "completed" and not receipt_verify_complete(state):
             return "verify_incomplete"
         return None
@@ -2278,6 +2518,16 @@ public struct ZebraGBrainOnboardingStore {
 
         candidate_state = json.loads(json.dumps(state))
         role, _, _ = section_role(candidate_state, section, record=True)
+        if status == "waiting_for_user":
+            waiting_error = waiting_reason_guard_reason(role, flags.get("reason"))
+            if waiting_error:
+                reject_report(
+                    state,
+                    waiting_error,
+                    section,
+                    status,
+                    extra_payload={"allowedReasons": allowed_waiting_reasons(role)},
+                )
         if target_confirmation_flags_present(flags):
             if not (role == "create_brain" and status == "completed"):
                 reject_report(state, "target_flags_not_allowed", section, status)
@@ -2295,7 +2545,12 @@ public struct ZebraGBrainOnboardingStore {
             next_action = None
             if guard_reason == "section_role_unknown":
                 next_action = "report mapped_role with role and evidence, or report waiting_for_user"
-            elif guard_reason in {"brain_repo_target_unresolved", "target_confirmation_missing"}:
+            elif guard_reason in {
+                "brain_repo_target_unresolved",
+                "target_confirmation_missing",
+                "implicit_home_target",
+                "onboarding_work_directory_target",
+            }:
                 next_action = "report waiting_for_user for brain_repo_target_resolution"
             reject_report(state, guard_reason, section, status, next_action=next_action)
 
@@ -2307,8 +2562,10 @@ public struct ZebraGBrainOnboardingStore {
             completed = progress.setdefault("completedSections", [])
             if section not in completed:
                 completed.append(section)
+        waiting_reason_value = None
         if status == "waiting_for_user":
-            set_waiting_for_user(progress, section, flags.get("reason") or "user_input_required", note)
+            waiting_reason_value = flags.get("reason") or "user_input_required"
+            set_waiting_for_user(progress, section, waiting_reason_value, note)
         elif should_clear_waiting_for_user(state, progress, status, role, flags, section):
             progress.pop("waitingForUser", None)
         if status == "failed":
@@ -2318,7 +2575,10 @@ public struct ZebraGBrainOnboardingStore {
         progress["lastStatus"] = status
         progress["updatedAt"] = now()
         save_state(state)
-        print(json.dumps({"ok": True, "status": status, "section": section}, sort_keys=True))
+        payload = {"ok": True, "status": status, "section": section}
+        if waiting_reason_value == "brain_repo_target_resolution":
+            payload.update(target_resolution_next_action())
+        print(json.dumps(payload, sort_keys=True))
 
     def status():
         print(json.dumps(load_state(), indent=2, sort_keys=True))
@@ -2334,6 +2594,9 @@ public struct ZebraGBrainOnboardingStore {
             reasons.append("target_not_resolved")
         else:
             target = os.path.abspath(os.path.expanduser(target))
+            forbidden_reason = forbidden_target_reason(target, method)
+            if forbidden_reason:
+                reasons.append(forbidden_reason)
             if not os.path.isdir(target):
                 reasons.append("receipt_target_missing")
         if not source_id:
@@ -2357,13 +2620,19 @@ public struct ZebraGBrainOnboardingStore {
                     stderr=subprocess.PIPE,
                     timeout=45,
                 )
-                doctor_ok = result.returncode == 0
-                doctor_transient = not doctor_ok and transient_probe_failure((result.stderr or "") + "\\n" + (result.stdout or ""))
-                if not doctor_ok and not doctor_transient:
+                doctor_ok, _ = strict_doctor_result(result)
+                doctor_transient_reason = None if doctor_ok else transient_probe_reason((result.stderr or "") + "\\n" + (result.stdout or ""))
+                doctor_transient = doctor_transient_reason is not None
+                if doctor_transient_reason and doctor_transient_reason not in reasons:
+                    reasons.append(doctor_transient_reason)
+                elif not doctor_ok:
                     reasons.append("doctor_failed")
             except Exception as exc:
-                doctor_transient = transient_probe_failure(str(exc))
-                if not doctor_transient:
+                doctor_transient_reason = transient_probe_reason(str(exc))
+                doctor_transient = doctor_transient_reason is not None
+                if doctor_transient_reason and doctor_transient_reason not in reasons:
+                    reasons.append(doctor_transient_reason)
+                elif not doctor_transient:
                     reasons.append("doctor_failed")
 
         source_probe = "transient"
@@ -2371,12 +2640,15 @@ public struct ZebraGBrainOnboardingStore {
         current_source_id = None
         list_ok = False
         listed_local_path = None
+        source_transient_reason = None
         if executable and target and os.path.isdir(target) and source_id:
-            source_probe, current_source_id, listed_local_path = source_probe_status(executable, target, source_id)
+            source_probe, current_source_id, listed_local_path, source_transient_reason = source_probe_status(executable, target, source_id)
             current_ok = source_probe == "verified"
             list_ok = source_probe == "verified"
             if source_probe == "mismatch":
                 reasons.append("source_not_registered")
+            elif source_transient_reason and source_transient_reason not in reasons:
+                reasons.append(source_transient_reason)
 
         state = load_state()
         receipt = state.setdefault("receipt", {})
@@ -2386,12 +2658,16 @@ public struct ZebraGBrainOnboardingStore {
         transient_probe = doctor_transient or transient_source_probe
         preserve_complete = (
             transient_probe
-            and len(reasons) == 0
+            and all(reason == PGLITE_BUSY_REASON for reason in reasons)
             and bool(receipt.get("globalReadiness", {}).get("complete"))
             and bool((existing_target or {}).get("complete"))
             and bool(executable)
         )
         complete = preserve_complete or (len(reasons) == 0 and doctor_ok and source_probe == "verified")
+        if preserve_complete:
+            print(json.dumps({"complete": True, "reasons": []}, sort_keys=True))
+            save_state(state)
+            sys.exit(0)
         receipt["globalReadiness"] = {
             "complete": bool(executable and doctor_ok),
             "gbrainExecutablePath": executable,
@@ -2400,16 +2676,15 @@ public struct ZebraGBrainOnboardingStore {
         }
         if key:
             targets = receipt.setdefault("targets", {})
-            if preserve_complete:
-                print(json.dumps({"complete": True, "reasons": []}, sort_keys=True))
-                save_state(state)
-                sys.exit(0)
             targets[key] = {
                 "vaultPath": target,
                 "sourceId": source_id,
                 "profileId": profile_id,
                 "gbrainExecutablePath": executable,
-                "doctorStatus": {"ok": doctor_ok},
+                "doctorStatus": {
+                    "ok": doctor_ok,
+                    "status": "ok" if doctor_ok else "failed",
+                },
                 "sourcesCurrentResult": {
                     "ok": current_ok and list_ok,
                     "sourceId": current_source_id or source_id,

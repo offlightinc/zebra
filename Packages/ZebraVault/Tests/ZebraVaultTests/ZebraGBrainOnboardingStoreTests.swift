@@ -144,6 +144,37 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let target = try receiptTarget(in: stateURL, targetPath: vault.path)
         XCTAssertEqual(target["complete"] as? Bool, true)
         XCTAssertEqual(target["reasons"] as? [String], [])
+        let doctorStatus = try XCTUnwrap(target["doctorStatus"] as? [String: Any])
+        XCTAssertEqual(doctorStatus["status"] as? String, "ok")
+    }
+
+    func testLiveVerifierKeepsCycleFreshnessAsStrictDoctorFailure() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "brain\n".write(to: vault.appendingPathComponent(".gbrain-source"), atomically: true, encoding: .utf8)
+        let bin = try installFakeGBrainWithOnlyCycleFreshnessFailure(root: root, localPath: vault.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: vault.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            complete: false
+        )
+
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": bin.path]
+        )
+
+        XCTAssertFalse(store.isSetupCompleted(selectedVaultPath: nil))
+        let target = try receiptTarget(in: stateURL, targetPath: vault.path)
+        XCTAssertEqual(target["complete"] as? Bool, false)
+        XCTAssertEqual(target["reasons"] as? [String], ["doctor_failed"])
+        let doctorStatus = try XCTUnwrap(target["doctorStatus"] as? [String: Any])
+        XCTAssertEqual(doctorStatus["status"] as? String, "failed")
     }
 
     func testWaitingForUserSkipsLiveVerification() throws {
@@ -619,12 +650,134 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "--section", "Step 3: Create the Brain",
             ]
         )
+        let payload = try helperPayload(result.stdout)
         let progress = try progressObject(in: stateURL)
 
         XCTAssertNotEqual(result.exitCode, 0)
         XCTAssertTrue(result.stdout.contains("brain_repo_target_unresolved"), "stdout: \(result.stdout) stderr: \(result.stderr)")
         XCTAssertEqual(waitingForUserReason(in: progress), "brain_repo_target_resolution")
+        XCTAssertEqual(payload["nextAction"] as? String, "ask_user_for_brain_repo_target")
+        XCTAssertNotNil(payload["targetOptions"])
         XCTAssertEqual(progress["completedSections"] as? [String], [])
+    }
+
+    func testReportWaitingForBrainTargetRequiresExplicitReasonForOptions() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: root.appendingPathComponent("brain").path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let missingReason = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "waiting_for_user",
+                "--section", "Step 3: Create the Brain",
+                "--note", "Need brain repo target confirmation before import, sync, or source registration",
+            ]
+        )
+        let missingReasonPayload = try helperPayload(missingReason.stdout)
+
+        XCTAssertNotEqual(missingReason.exitCode, 0)
+        XCTAssertEqual(missingReasonPayload["reason"] as? String, "missing_waiting_reason")
+        XCTAssertEqual(missingReasonPayload["allowedReasons"] as? [String], ["topology_resolution", "brain_repo_target_resolution"])
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "waiting_for_user",
+                "--section", "Step 3: Create the Brain",
+                "--reason", "brain_repo_target_resolution",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let progress = try progressObject(in: stateURL)
+        let options = try XCTUnwrap(payload["targetOptions"] as? [[String: Any]])
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertEqual(waitingForUserReason(in: progress), "brain_repo_target_resolution")
+        XCTAssertEqual(payload["nextAction"] as? String, "ask_user_for_brain_repo_target")
+        XCTAssertEqual(options.first?["path"] as? String, root.appendingPathComponent("brain", isDirectory: true).path)
+        XCTAssertFalse(options.contains { ($0["path"] as? String) == root.path })
+        XCTAssertFalse(options.contains { ($0["path"] as? String)?.contains("gbrain-work") == true })
+        XCTAssertNil(payload["forbiddenTargets"])
+    }
+
+    func testReportGuardRejectsForbiddenBrainTargets() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let workBrain = root
+            .appendingPathComponent("gbrain-work", isDirectory: true)
+            .appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: workBrain, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: workBrain.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+
+        let workTargetResult = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", workBrain.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        let homeTargetResult = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", root.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        let confirmedHomeResult = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", root.path,
+                "--method", "user_confirmed_home",
+            ]
+        )
+        let progress = try progressObject(in: stateURL)
+
+        XCTAssertNotEqual(workTargetResult.exitCode, 0)
+        XCTAssertTrue(
+            workTargetResult.stdout.contains("onboarding_work_directory_target"),
+            "stdout: \(workTargetResult.stdout) stderr: \(workTargetResult.stderr)"
+        )
+        XCTAssertNotEqual(homeTargetResult.exitCode, 0)
+        XCTAssertTrue(
+            homeTargetResult.stdout.contains("implicit_home_target"),
+            "stdout: \(homeTargetResult.stdout) stderr: \(homeTargetResult.stderr)"
+        )
+        XCTAssertEqual(confirmedHomeResult.exitCode, 0, "stdout: \(confirmedHomeResult.stdout) stderr: \(confirmedHomeResult.stderr)")
+        XCTAssertEqual(progress["resolvedTargetKey"] as? String, "vault:\(root.path)")
     }
 
     func testReportGuardAllowsCreateBrainCompletionWithExplicitTarget() throws {
@@ -661,6 +814,40 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue((progress["completedSections"] as? [String] ?? []).contains("Step 3: Create the Brain"))
         XCTAssertEqual(targetResolution["method"] as? String, "user_created_repo")
         XCTAssertEqual(progress["resolvedTargetKey"] as? String, "vault:\(target.path)")
+    }
+
+    func testReportGuardIgnoresCycleFreshnessAsCreateBrainBlocker() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrainWithOnlyCycleFreshnessFailure(root: root, localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        let progress = try progressObject(in: stateURL)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue((progress["completedSections"] as? [String] ?? []).contains("Step 3: Create the Brain"))
+        XCTAssertFalse(result.stdout.contains("doctor_failed"), "stdout: \(result.stdout) stderr: \(result.stderr)")
     }
 
     func testReportGuardRejectsCreateBrainCompletionWithoutEmbeddingDecision() throws {
@@ -851,6 +1038,46 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains(#""complete": true"#), "stdout: \(result.stdout) stderr: \(result.stderr)")
         let receipt = try receiptTarget(in: stateURL, targetPath: target.path)
         XCTAssertEqual(receipt["complete"] as? Bool, true)
+        let globalReadiness = try globalReadiness(in: stateURL)
+        XCTAssertEqual(globalReadiness["complete"] as? Bool, true)
+    }
+
+    func testHelperVerifyReportsPGLiteBusyInsteadOfSourceNotRegistered() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrainWithTransientSources(root: root)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: target.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            complete: false
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "verify",
+                "--target", target.path,
+                "--source-id", "brain",
+                "--method", "user_created_repo",
+            ]
+        )
+
+        XCTAssertNotEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("pglite_busy"), "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertFalse(result.stdout.contains("source_not_registered"), "stdout: \(result.stdout) stderr: \(result.stderr)")
     }
 
     func testHelperVerifyPreservesCompleteReceiptWhenDoctorProbeIsTransient() throws {
@@ -890,6 +1117,50 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains(#""complete": true"#), "stdout: \(result.stdout) stderr: \(result.stderr)")
         let receipt = try receiptTarget(in: stateURL, targetPath: target.path)
         XCTAssertEqual(receipt["complete"] as? Bool, true)
+        let globalReadiness = try globalReadiness(in: stateURL)
+        XCTAssertEqual(globalReadiness["complete"] as? Bool, true)
+    }
+
+    func testHelperVerifyKeepsCycleFreshnessAsStrictDoctorFailure() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrainWithOnlyCycleFreshnessFailure(root: root, localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: target.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            complete: false
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "verify",
+                "--target", target.path,
+                "--source-id", "brain",
+                "--method", "user_created_repo",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 1, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains(#""complete": false"#), "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let receipt = try receiptTarget(in: stateURL, targetPath: target.path)
+        XCTAssertEqual(receipt["complete"] as? Bool, false)
+        XCTAssertEqual(receipt["reasons"] as? [String], ["doctor_failed"])
+        let doctorStatus = try XCTUnwrap(receipt["doctorStatus"] as? [String: Any])
+        XCTAssertEqual(doctorStatus["status"] as? String, "failed")
     }
 
     func testReportGuardRejectsImportCompletionBeforeSearchModeCompletion() throws {
@@ -1351,6 +1622,13 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         return try XCTUnwrap(targets[key] as? [String: Any])
     }
 
+    private func globalReadiness(in stateURL: URL) throws -> [String: Any] {
+        let data = try Data(contentsOf: stateURL)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let receipt = try XCTUnwrap(object["receipt"] as? [String: Any])
+        return try XCTUnwrap(receipt["globalReadiness"] as? [String: Any])
+    }
+
     private func rewriteReceiptVerifiedAt(
         _ stateURL: URL,
         targetPath: String,
@@ -1375,6 +1653,11 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
 
     private func stateObject(in stateURL: URL) throws -> [String: Any] {
         let data = try Data(contentsOf: stateURL)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func helperPayload(_ stdout: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(stdout.data(using: .utf8))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
@@ -1403,6 +1686,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         process.environment = [
             "PATH": "\(path):/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
             "ZEBRA_GBRAIN_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_HOME": stateURL.deletingLastPathComponent().path,
         ]
         let stdout = Pipe()
         let stderr = Pipe()
@@ -1556,6 +1840,35 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         fi
         if [ "$1" = "doctor" ]; then
           echo "GBrain: Timed out waiting for PGLite lock." >&2
+          exit 1
+        fi
+        if [ "$1" = "sources" ] && [ "$2" = "current" ]; then
+          echo '{"source_id":"brain"}'
+          exit 0
+        fi
+        if [ "$1" = "sources" ] && [ "$2" = "list" ]; then
+          echo '{"sources":[{"id":"brain","local_path":"\(localPath)"}]}'
+          exit 0
+        fi
+        exit 1
+        """
+        .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return bin
+    }
+
+    private func installFakeGBrainWithOnlyCycleFreshnessFailure(root: URL, localPath: String) throws -> URL {
+        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let script = bin.appendingPathComponent("gbrain", isDirectory: false)
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo "gbrain test"
+          exit 0
+        fi
+        if [ "$1" = "doctor" ]; then
+          echo '{"checks":[{"name":"connection","status":"ok"},{"name":"cycle_freshness","status":"fail","message":"Source has never completed a full cycle"}]}'
           exit 1
         fi
         if [ "$1" = "sources" ] && [ "$2" = "current" ]; then

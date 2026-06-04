@@ -211,12 +211,22 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     public func refreshDetectedCompletion() {
         completionRefreshGeneration += 1
         let generation = completionRefreshGeneration
-        applyDetectedCompletion(
-            gbrainCompleted: gbrainOnboardingStore.isSetupCompletedFromCachedReceipt(
-                selectedVaultPath: selectedVaultPath
-            )
+        let cachedGBrainCompletion = gbrainOnboardingStore.cachedCompletionResult(
+            selectedVaultPath: selectedVaultPath
         )
+        applyDetectedCompletion(
+            gbrainCompleted: cachedGBrainCompletion.isComplete
+        )
+        guard shouldRefreshGBrainCompletionInBackground(cachedGBrainCompletion) else { return }
         refreshGBrainCompletionInBackground(generation: generation)
+    }
+
+    private func shouldRefreshGBrainCompletionInBackground(
+        _ cachedGBrainCompletion: ZebraGBrainOnboardingStore.CompletionResult
+    ) -> Bool {
+        // The setup helper owns expensive live verification. Once it has written
+        // a complete receipt, the checklist should not keep probing PGLite.
+        !cachedGBrainCompletion.isComplete
     }
 
     private func refreshGBrainCompletionInBackground(generation: Int) {
