@@ -487,6 +487,25 @@ public struct ZebraGBrainOnboardingStore {
             && normalized.contains("index")
     }
 
+    private static func isInstallSectionTitle(_ title: String) -> Bool {
+        let normalized = normalizedSectionTitle(title)
+        return normalized.contains("step 1")
+            && normalized.contains("install")
+            && (normalized.contains("gbrain") || normalized.contains("cli"))
+    }
+
+    private static func isCredentialsSectionTitle(_ title: String) -> Bool {
+        let normalized = normalizedSectionTitle(title)
+        return normalized.contains("step 2")
+            && (normalized.contains("api key") || normalized.contains("credential"))
+    }
+
+    private static func isCreateBrainSectionTitle(_ title: String) -> Bool {
+        let normalized = normalizedSectionTitle(title)
+        return normalized.contains("step 3")
+            && (normalized.contains("create the brain") || normalized.contains("initialize brain"))
+    }
+
     private static func normalizedSectionTitle(_ title: String) -> String {
         let scalars = title.lowercased().unicodeScalars.map { scalar -> Character in
             CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : " "
@@ -504,7 +523,6 @@ public struct ZebraGBrainOnboardingStore {
         let selectedVault = standardizedExistingDirectoryPath(selectedVaultPath)
         let launchDirectory = selectedVault ?? onboardingWorkDirectoryPath()
         let allowTrustedAutomation = selectedVault != nil
-        let currentResult = completionResult(selectedVaultPath: selectedVault)
         let docsSnapshot = prepareDocsSnapshot()
         let runId = "gbrain-\(UUID().uuidString)"
         var state = loadState() ?? State.empty()
@@ -534,12 +552,14 @@ public struct ZebraGBrainOnboardingStore {
                 method: nil,
                 confirmedAt: nil
             )
+        let nextSection = nextSection(in: state, completedSections: completedSections)
         let waitingForUser = unresolvedInitialStep3Decision(
             selectedVault: selectedVault,
             resolvedTargetKey: resolvedTargetKey,
+            nextSection: nextSection,
+            completedSections: completedSections,
             previousWaitingForUser: previousProgress?.waitingForUser
         )
-        let nextSection = nextSection(in: state, completedSections: completedSections)
         state.progress = Progress(
             launchDirectory: launchDirectory,
             selectedVaultPath: selectedVault,
@@ -552,6 +572,7 @@ public struct ZebraGBrainOnboardingStore {
             nextSection: nextSection
         )
         writeState(state)
+        let currentResult = completionResult(selectedVaultPath: selectedVault)
 
         let setupPacket = startupPrompt(
             selectedVaultPath: selectedVault,
@@ -611,8 +632,8 @@ public struct ZebraGBrainOnboardingStore {
             targetContext = """
             No Zebra vault is selected. You are starting from Zebra's onboarding work directory, not a brain repo target.
             Do not implicitly use the home directory as the GBrain source target.
-            Before `gbrain init`, ask only for the topology decision. Do not ask for the brain repo target in the same prompt.
-            After topology is chosen and `gbrain init`/doctor have run, ask separately for the brain repo target before import, sync, source registration, or receipt write.
+            When Step 3 is the current section, before `gbrain init`, ask only for the topology decision. Do not ask for the brain repo target in the same prompt.
+            After Step 3 topology is chosen and `gbrain init`/doctor have run, ask separately for the brain repo target before import, sync, source registration, or receipt write.
             When asking for the brain repo target, present the numbered options in the target-resolution guard. Do not ask only as an open-ended sentence.
             Do not present or use the home directory itself as the brain repo target.
             Discovery scans are allowed only to present candidates. Do not choose or import a discovered candidate until the user confirms it.
@@ -1020,7 +1041,7 @@ public struct ZebraGBrainOnboardingStore {
         let completed = Set(completedSections ?? state.progress?.completedSections ?? [])
         guard let sections = state.docsManifest?.installForAgentsSections,
               !sections.isEmpty else {
-            return "Step 3: Create the Brain"
+            return "Step 1: Install GBrain"
         }
         return sections.first { !completed.contains($0.title) }?.title ?? "verify"
     }
@@ -1048,10 +1069,18 @@ public struct ZebraGBrainOnboardingStore {
     private func unresolvedInitialStep3Decision(
         selectedVault: String?,
         resolvedTargetKey: String?,
+        nextSection: String,
+        completedSections: [String],
         previousWaitingForUser: PendingUserDecision?
     ) -> PendingUserDecision? {
         guard selectedVault == nil && resolvedTargetKey == nil else { return nil }
-        if waitingForUserDisplay(previousWaitingForUser) == "brain_repo_target_resolution" {
+        guard Self.isCreateBrainSectionTitle(nextSection),
+              completedSections.contains(where: Self.isInstallSectionTitle),
+              completedSections.contains(where: Self.isCredentialsSectionTitle) else {
+            return nil
+        }
+        let previousReason = waitingForUserDisplay(previousWaitingForUser)
+        if previousReason == "brain_repo_target_resolution" || previousReason == "topology_resolution" {
             return previousWaitingForUser
         }
         return PendingUserDecision(

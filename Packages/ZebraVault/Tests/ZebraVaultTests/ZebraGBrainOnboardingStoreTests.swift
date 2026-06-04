@@ -357,7 +357,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(store.isSetupCompleted(selectedVaultPath: nil))
     }
 
-    func testPrepareLaunchWithoutSelectedVaultRequiresTopologyResolutionFirst() throws {
+    func testPrepareLaunchWithoutSelectedVaultStartsAtInstallBeforeTopologyGate() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root.appendingPathComponent("state.json")
         let store = ZebraGBrainOnboardingStore(
@@ -380,41 +380,38 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertFalse(launch.startupPrompt.contains("Do not implicitly use the home directory"))
         let packet = try setupPacketContent(launch)
         XCTAssertTrue(packet.contains("Do not implicitly use the home directory"))
-        XCTAssertTrue(packet.contains("do not run `gbrain init`"))
-        XCTAssertTrue(packet.contains("waitingForUser: topology_resolution"))
-        XCTAssertTrue(packet.contains("Ask only for the Step 3 topology decision now"))
-        XCTAssertTrue(packet.contains("Do not ask for the brain repo target in this gate"))
-        XCTAssertTrue(packet.contains("Do not ask for Step 2 API keys in the topology prompt"))
+        XCTAssertTrue(packet.contains("When Step 3 is the current section"))
+        XCTAssertTrue(packet.contains("waitingForUser: none"))
+        XCTAssertFalse(packet.contains("waitingForUser: topology_resolution"))
+        XCTAssertFalse(packet.contains("Ask only for the Step 3 topology decision now"))
+        XCTAssertFalse(packet.contains("Do not ask for the brain repo target in this gate"))
+        XCTAssertFalse(packet.contains("Do not ask for Step 2 API keys in the topology prompt"))
         XCTAssertTrue(packet.contains("Do not run `gbrain init --pglite --no-embedding`"))
         XCTAssertTrue(packet.contains("provider key provided: set one of `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, or `VOYAGE_API_KEY`"))
         XCTAssertTrue(packet.contains("defer embeddings: initialize with `gbrain init --pglite --no-embedding` now"))
-        XCTAssertTrue(packet.contains("Target-resolution timing"))
+        XCTAssertFalse(packet.contains("Target-resolution timing"))
         XCTAssertFalse(packet.contains("User decisions you must stop and ask for"))
         XCTAssertTrue(launch.shellEnvironmentPrefix.contains("ZEBRA_GBRAIN_STATE"))
         let progress = try progressObject(in: stateURL)
-        XCTAssertEqual(waitingForUserReason(in: progress), "topology_resolution")
-        XCTAssertEqual(progress["nextSection"] as? String, "Step 3: Create the Brain")
+        XCTAssertNil(waitingForUserReason(in: progress))
+        XCTAssertEqual(progress["nextSection"] as? String, "Step 1: Install GBrain")
     }
 
     func testPrepareLaunchPreservesBrainRepoTargetResolutionGate() throws {
         let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
         let stateURL = root.appendingPathComponent("state.json")
-        try """
-        {
-          "schemaVersion": 1,
-          "progress": {
-            "launchDirectory": "\(root.path)",
-            "completedSections": [],
-            "waitingForUser": "brain_repo_target_resolution",
-            "nextSection": "Step 3: Create the Brain"
-          }
-        }
-        """.write(to: stateURL, atomically: true, encoding: .utf8)
-
         let store = ZebraGBrainOnboardingStore(
             stateURL: stateURL,
             homeDirectoryPath: root.path,
-            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+            gbrainDocsRepoURL: repo
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeProgress(
+            stateURL,
+            completedSections: ["Step 1: Install GBrain", "Step 2: API Keys"],
+            waitingForUser: "brain_repo_target_resolution",
+            nextSection: "Step 3: Create the Brain"
         )
 
         let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
@@ -433,6 +430,34 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertFalse(packet.contains("Ask only for the Step 3 topology decision now"))
         XCTAssertEqual(waitingForUserReason(in: progress), "brain_repo_target_resolution")
         XCTAssertEqual(progress["nextSection"] as? String, "Step 3: Create the Brain")
+    }
+
+    func testPrepareLaunchClearsStaleInitialTopologyGateFromPacketStatus() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeProgress(
+            stateURL,
+            completedSections: [],
+            waitingForUser: "topology_resolution",
+            nextSection: "Step 3: Create the Brain"
+        )
+
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let progress = try progressObject(in: stateURL)
+        let packet = try setupPacketContent(launch)
+
+        XCTAssertNil(waitingForUserReason(in: progress))
+        XCTAssertEqual(progress["nextSection"] as? String, "Step 1: Install GBrain")
+        XCTAssertTrue(packet.contains("waitingForUser: none"))
+        XCTAssertFalse(packet.contains("waiting_for_user:topology_resolution"))
+        XCTAssertFalse(packet.contains("waitingForUser: topology_resolution"))
     }
 
     func testPrepareLaunchAddsDocsSnapshotManifest() throws {
@@ -1262,17 +1287,6 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let repo = try writeGuardDocs(root: root)
         let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: root.appendingPathComponent("brain").path)
         let stateURL = root.appendingPathComponent("state.json")
-        try """
-        {
-          "schemaVersion": 1,
-          "progress": {
-            "launchDirectory": "\(root.path)",
-            "completedSections": [],
-            "waitingForUser": "brain_repo_target_resolution",
-            "nextSection": "Step 3: Create the Brain"
-          }
-        }
-        """.write(to: stateURL, atomically: true, encoding: .utf8)
         let store = ZebraGBrainOnboardingStore(
             stateURL: stateURL,
             homeDirectoryPath: root.path,
@@ -1280,6 +1294,12 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeProgress(
+            stateURL,
+            completedSections: ["Step 1: Install GBrain", "Step 2: API Keys"],
+            waitingForUser: "brain_repo_target_resolution",
+            nextSection: "Step 3: Create the Brain"
+        )
 
         let result = try runHelper(
             stateURL: stateURL,
@@ -2014,6 +2034,27 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         var progress = try XCTUnwrap(object["progress"] as? [String: Any])
         progress["completedSections"] = [section]
+        object["progress"] = progress
+        let updated = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try updated.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeProgress(
+        _ stateURL: URL,
+        completedSections: [String],
+        waitingForUser: String?,
+        nextSection: String
+    ) throws {
+        let data = try Data(contentsOf: stateURL)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var progress = try XCTUnwrap(object["progress"] as? [String: Any])
+        progress["completedSections"] = completedSections
+        progress["nextSection"] = nextSection
+        if let waitingForUser {
+            progress["waitingForUser"] = waitingForUser
+        } else {
+            progress.removeValue(forKey: "waitingForUser")
+        }
         object["progress"] = progress
         let updated = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         try updated.write(to: stateURL, options: .atomic)
