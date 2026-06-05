@@ -76,6 +76,9 @@ struct ZebraSidebarBody: View {
         .onChange(of: emailListStore.isConnected) { _ in
             refreshOnboardingChecklist()
         }
+        .onChange(of: emailListStore.connectionRepairState) { _ in
+            refreshOnboardingChecklist()
+        }
     }
 
     private var onboardingChecklistOverlay: some View {
@@ -175,7 +178,7 @@ struct ZebraSidebarBody: View {
                         errorMessage: emailListStore.lastError,
                         connectionRepairState: emailListStore.connectionRepairState,
                         selectedThreadId: emailDetailStore.selectedThreadId,
-                        onConnect: { agent in startClawvisorOnboardingAgent(agent: agent) },
+                        onConnect: { startClawvisorOnboardingAgent() },
                         onRefresh: { Task { await emailListStore.refresh() } },
                         onSelectThread: openEmailThread,
                         onCreateLabel: { emailListStore.localLabel(named: $0) }
@@ -201,27 +204,25 @@ struct ZebraSidebarBody: View {
     }
 
     /// Launch a fresh terminal tab in the focused pane, drop the user into
-    /// Claude Code, and seed an agent system prompt that walks them through
+    /// their primary agent, and seed a prompt that walks them through
     /// signing up at Clawvisor and writing `~/.gbrain/.env`. Replaces the
-    /// previous direct-OAuth flow (which is dead since the desktop moved to
-    /// the local SQLite + Clawvisor brain RPC client).
-    private func startClawvisorOnboardingAgent(agent: ZebraClawvisorAgent) {
-        // Defense in depth — the picker UI disables non-available rows, but
-        // a future keyboard shortcut / accessibility / socket-CLI path could
-        // still hand us a "Coming soon" agent. Drop those at the domain
-        // boundary instead of silently launching the Claude Code onboarding
-        // flow for the wrong agent label.
-        guard agent.isAvailable else { return }
+    /// previous direct-OAuth flow.
+    private func startClawvisorOnboardingAgent() {
         guard let workspace = tabManager.selectedWorkspace else { return }
-        // Ensure `~/.gbrain` exists and is pre-trusted in `~/.claude.json` so
-        // the user doesn't see Claude's "Trust this folder?" dialog mid-flow.
-        ZebraClawvisorOnboardingCommand.prepareLaunchEnvironment()
-        let startupLine = ZebraClawvisorOnboardingCommand.shellStartupLine(agent: agent)
         guard let agentTerminals = zebra?.agentTerminals else { return }
+        guard let agent = ZebraClawvisorOnboardingCommand.readyPrimaryAgent() else {
+            startAgentOnboardingStep(in: workspace)
+            return
+        }
+        let launchPlan = ZebraClawvisorOnboardingCommand.launchPlan(agent: agent)
+        guard launchPlan.launchEnvironmentReady else {
+            openClawvisorLaunchPreparationFailure(in: workspace, agent: launchPlan.agent)
+            return
+        }
         workspace.openZebraAgentTerminal(
-            startupLine: startupLine,
+            startupLine: launchPlan.startupLine,
             source: .clawvisorOnboarding,
-            agent: agent.markdownPillAgent,
+            agent: launchPlan.agent,
             anchor: .focusAnchored,
             markedBy: agentTerminals
         )
@@ -229,13 +230,17 @@ struct ZebraSidebarBody: View {
 
     private func startOnboardingChecklistStep(_ stepID: ZebraOnboardingChecklistStepID) {
         guard onboardingChecklistStore.runningStepID != stepID else { return }
-        guard let workspace = tabManager.selectedWorkspace,
-              let startupLine = ZebraOnboardingChecklistCommand.shellStartupLine(
-                for: stepID,
-                selectedVaultPath: onboardingSelectedVaultPath
-              ) else {
+        guard let workspace = tabManager.selectedWorkspace else {
             return
         }
+        if stepID == .email {
+            startOnboardingChecklistEmailStep(in: workspace)
+            return
+        }
+        guard let startupLine = ZebraOnboardingChecklistCommand.shellStartupLine(
+            for: stepID,
+            selectedVaultPath: onboardingSelectedVaultPath
+        ) else { return }
         onboardingChecklistStore.beginLaunch(stepID: stepID)
         let agent = onboardingChecklistAgent(for: stepID)
         #if DEBUG
@@ -276,12 +281,78 @@ struct ZebraSidebarBody: View {
             .zebraSendStartupLineWhenReady(startupLine)
     }
 
+    private func startOnboardingChecklistEmailStep(in workspace: Workspace) {
+        guard let agentTerminals = zebra?.agentTerminals else { return }
+        guard let agent = ZebraClawvisorOnboardingCommand.readyPrimaryAgent() else {
+            startAgentOnboardingStep(in: workspace)
+            return
+        }
+        let launchPlan = ZebraClawvisorOnboardingCommand.launchPlan(agent: agent)
+        guard launchPlan.launchEnvironmentReady else {
+            openClawvisorLaunchPreparationFailure(in: workspace, agent: launchPlan.agent)
+            return
+        }
+        onboardingChecklistStore.beginLaunch(stepID: .email)
+        workspace.openZebraAgentTerminal(
+            startupLine: launchPlan.startupLine,
+            source: .onboardingChecklist(.email),
+            agent: launchPlan.agent,
+            anchor: .focusAnchored,
+            markedBy: agentTerminals
+        )
+    }
+
+    private func openClawvisorLaunchPreparationFailure(
+        in workspace: Workspace,
+        agent: MarkdownPillAgent
+    ) {
+        let message = String(
+            format: String(
+                localized: "email.connect.launchPreparationFailed",
+                defaultValue: "Zebra could not prepare %@ folder trust for ~/.gbrain. Fix the agent config file permissions, then retry Gmail connection."
+            ),
+            agent.agentKind.displayName
+        )
+        _ = workspace.newTerminalSurfaceInFocusedPane(
+            focus: true,
+            initialInput: "printf '%s\\n' \(terminalShellQuote(message))\n"
+        )
+    }
+
+    private func startAgentOnboardingStep(in workspace: Workspace) {
+        guard onboardingChecklistStore.runningStepID != .agent else { return }
+        guard let startupLine = ZebraOnboardingChecklistCommand.shellStartupLine(
+            for: .agent,
+            selectedVaultPath: onboardingSelectedVaultPath
+        ) else { return }
+        guard let agentTerminals = zebra?.agentTerminals else { return }
+        let agent = MarkdownPillAgent.primaryAgent() ?? .codex
+        let source = ZebraAgentTerminalSource.onboardingChecklist(.agent)
+        onboardingChecklistStore.beginLaunch(stepID: .agent)
+        if sendAgentOnboardingToInitialTerminalIfAvailable(
+            startupLine,
+            in: workspace,
+            source: source,
+            agent: agent,
+            markedBy: agentTerminals
+        ) {
+            return
+        }
+        workspace.openZebraAgentTerminal(
+            startupLine: startupLine,
+            source: source,
+            agent: agent,
+            anchor: .focusAnchored,
+            markedBy: agentTerminals
+        )
+    }
+
     private func onboardingChecklistAgent(for stepID: ZebraOnboardingChecklistStepID) -> MarkdownPillAgent? {
         switch stepID {
         case .agent, .adapter, .ingest, .goals:
             return MarkdownPillAgent.defaultAgent()
         case .email:
-            return ZebraClawvisorAgent.default.markdownPillAgent
+            return MarkdownPillAgent.defaultAgent()
         case .gbrainRuntime, .gbrain:
             return nil
         }
@@ -330,12 +401,16 @@ struct ZebraSidebarBody: View {
     private func refreshOnboardingChecklist() {
         onboardingChecklistStore.syncExternalState(
             selectedVaultPath: onboardingSelectedVaultPath,
-            emailConnected: emailListStore.isConnected
+            emailConnectionRepairState: emailListStore.connectionRepairState
         )
     }
 
     private var onboardingSelectedVaultPath: String? {
         vaultState.selectedVaultWasExplicitlyChosen ? vaultState.selectedVaultPath : nil
+    }
+
+    private func terminalShellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private func openMarkdownFile(filePath: String) {
@@ -378,14 +453,5 @@ struct ZebraSidebarBody: View {
 enum ZebraSidebarComposer {
     static let composer = SidebarComposer { slots in
         AnyView(ZebraSidebarBody(slots: slots))
-    }
-}
-
-private extension ZebraClawvisorAgent {
-    var markdownPillAgent: MarkdownPillAgent {
-        switch self {
-        case .claudeCode, .claudeDesktop, .openClawHermes, .otherAgents:
-            return .claude
-        }
     }
 }

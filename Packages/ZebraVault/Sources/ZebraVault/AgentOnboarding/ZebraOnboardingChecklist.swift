@@ -73,7 +73,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private let gbrainOnboardingStateURL: URL
     private let gbrainAdapterOnboardingStateURL: URL
     private var selectedVaultPath: String?
-    private var emailConnected = false
+    private var emailConnectionRepairState: ZebraEmailConnectionRepairState?
     private var launchGeneration = 0
     private var gbrainDocsPrefetchTask: Task<Bool, Never>?
     private var gbrainCompletionRefreshTask: Task<Bool, Never>?
@@ -85,7 +85,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         .gbrainRuntime,
         .gbrain,
         .adapter,
-        .email,
         .ingest,
         .goals,
     ]
@@ -196,15 +195,15 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     public func syncExternalState(
         selectedVaultPath: String?,
-        emailConnected: Bool
+        emailConnectionRepairState: ZebraEmailConnectionRepairState? = nil
     ) {
         let validVaultPath = Self.validDirectoryPath(
             selectedVaultPath,
             fileManager: fileManager
         )
-        if self.selectedVaultPath != validVaultPath || self.emailConnected != emailConnected {
+        if self.selectedVaultPath != validVaultPath || self.emailConnectionRepairState != emailConnectionRepairState {
             self.selectedVaultPath = validVaultPath
-            self.emailConnected = emailConnected
+            self.emailConnectionRepairState = emailConnectionRepairState
         }
         refreshDetectedCompletion()
         prefetchGBrainDocsIfNeeded()
@@ -450,7 +449,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     private func emailCompletionResult() -> StepCompletionResult {
         StepCompletionResult(
-            isComplete: emailConnected || isClawvisorEmailConfigured,
+            isComplete: emailConnectionRepairState == nil && isClawvisorEmailConfigured,
             reasons: []
         )
     }
@@ -473,11 +472,16 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         completionWatchSources.forEach { $0.cancel() }
         completionWatchSources = []
 
+        let gbrainDirectoryPath = (homeDirectoryPath as NSString).appendingPathComponent(".gbrain")
         let directoryPaths = Set(watchedCompletionFiles.map { $0.url.deletingLastPathComponent().path })
 
         for directoryPath in directoryPaths {
-            installCompletionDirectoryWatcher(directoryPath: directoryPath)
+            installCompletionDirectoryWatcher(
+                directoryPath: directoryPath,
+                securePermissions: directoryPath == gbrainDirectoryPath
+            )
         }
+
     }
 
     private func stopCompletionFileWatching() {
@@ -489,12 +493,18 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         watchedCompletionFileSignatures = [:]
     }
 
-    private func installCompletionDirectoryWatcher(directoryPath: String) {
+    private func installCompletionDirectoryWatcher(
+        directoryPath: String,
+        securePermissions: Bool
+    ) {
         try? fileManager.createDirectory(
             atPath: directoryPath,
             withIntermediateDirectories: true,
-            attributes: nil
+            attributes: securePermissions ? [.posixPermissions: 0o700] : nil
         )
+        if securePermissions {
+            try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryPath)
+        }
         let fd = open(directoryPath, O_EVTONLY)
         guard fd >= 0 else { return }
 
@@ -508,7 +518,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 guard self.isCompletionWatching else { return }
-                if flags.contains(.delete) || flags.contains(.rename) {
+                if securePermissions || flags.contains(.delete) || flags.contains(.rename) {
                     self.startCompletionFileWatching()
                 }
                 self.scheduleCompletionRefresh(for: self.changedWatchedStepIDs())
@@ -545,6 +555,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             WatchedCompletionFile(url: gbrainRuntimeOnboardingStateURL, stepID: .gbrainRuntime),
             WatchedCompletionFile(url: gbrainOnboardingStateURL, stepID: .gbrain),
             WatchedCompletionFile(url: gbrainAdapterOnboardingStateURL, stepID: .adapter),
+            WatchedCompletionFile(url: clawvisorEmailEnvURL, stepID: .email),
         ]
     }
 
@@ -606,20 +617,26 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     }
 
     private var isClawvisorEmailConfigured: Bool {
-        let dotEnvPath = (homeDirectoryPath as NSString).appendingPathComponent(".gbrain/.env")
-        guard let raw = try? String(contentsOfFile: dotEnvPath, encoding: .utf8) else {
+        guard let raw = try? String(contentsOf: clawvisorEmailEnvURL, encoding: .utf8) else {
             return false
         }
         let requiredKeys = [
             "CLAWVISOR_URL",
             "CLAWVISOR_AGENT_TOKEN",
             "CLAWVISOR_GMAIL_TASK_ID",
+            "ZEBRA_CLAWVISOR_GMAIL_ACCOUNT",
         ]
         return requiredKeys.allSatisfy { key in
             raw.split(separator: "\n").contains { line in
                 String(line).trimmingCharacters(in: .whitespaces).hasPrefix("\(key)=")
             }
         }
+    }
+
+    private var clawvisorEmailEnvURL: URL {
+        URL(fileURLWithPath: homeDirectoryPath, isDirectory: true)
+            .appendingPathComponent(".gbrain", isDirectory: true)
+            .appendingPathComponent(".env", isDirectory: false)
     }
 
     private static func validDirectoryPath(
@@ -672,8 +689,10 @@ public enum ZebraOnboardingChecklistCommand {
                 selectedVaultPath: selectedVaultPath
             )?.startupLine
         case .email:
-            ZebraClawvisorOnboardingCommand.prepareLaunchEnvironment()
-            return ZebraClawvisorOnboardingCommand.shellStartupLine(agent: .default)
+            guard let agent = ZebraClawvisorOnboardingCommand.readyPrimaryAgent() else {
+                return nil
+            }
+            return ZebraClawvisorOnboardingCommand.launchPlan(agent: agent).startupLine
         case .ingest:
             return agentStartupLine(
                 cwd: cwd,

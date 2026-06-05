@@ -1368,7 +1368,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false),
             gbrainOnboardingStateURL: stateURL
         )
-        store.syncExternalState(selectedVaultPath: vault.path, emailConnected: false)
+        store.syncExternalState(selectedVaultPath: vault.path)
 
         try? await Task.sleep(nanoseconds: 300_000_000)
 
@@ -1419,10 +1419,144 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             gbrainOnboardingStateURL: gbrainStateURL,
             gbrainAdapterOnboardingStateURL: adapterStateURL
         )
-        store.syncExternalState(selectedVaultPath: vault.path, emailConnected: false)
+        store.syncExternalState(selectedVaultPath: vault.path)
 
         XCTAssertTrue(store.completedStepIDs.contains(.gbrain))
         XCTAssertTrue(store.completedStepIDs.contains(.adapter))
+    }
+
+    @MainActor
+    func testEmailStepDoesNotCompleteFromExternalConnectedCache() throws {
+        let root = try makeTemporaryDirectory()
+        let store = makeChecklistStore(homeURL: root)
+
+        store.syncExternalState(selectedVaultPath: nil)
+
+        XCTAssertFalse(store.completedStepIDs.contains(.email))
+    }
+
+    @MainActor
+    func testEmailStepCompletesFromClawvisorEnv() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=https://app.clawvisor.com
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            CLAWVISOR_GMAIL_TASK_ID=task_test
+            ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=test@example.com
+            """,
+            homeURL: root
+        )
+
+        let store = makeChecklistStore(homeURL: root)
+
+        XCTAssertTrue(store.completedStepIDs.contains(.email))
+    }
+
+    @MainActor
+    func testEmailStepDoesNotCompleteWhenConnectionRepairIsActive() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=https://app.clawvisor.com
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            CLAWVISOR_GMAIL_TASK_ID=task_test
+            ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=test@example.com
+            """,
+            homeURL: root
+        )
+        let store = makeChecklistStore(homeURL: root)
+
+        store.syncExternalState(
+            selectedVaultPath: nil,
+            emailConnectionRepairState: ZebraEmailConnectionRepairState(kind: .taskPendingApproval)
+        )
+
+        XCTAssertFalse(store.completedStepIDs.contains(.email))
+    }
+
+    @MainActor
+    func testEmailStepDoesNotCompleteWhenClawvisorTaskIdIsMissing() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=https://app.clawvisor.com
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=test@example.com
+            """,
+            homeURL: root
+        )
+
+        let store = makeChecklistStore(homeURL: root)
+
+        XCTAssertFalse(store.completedStepIDs.contains(.email))
+    }
+
+    @MainActor
+    func testEmailStepDoesNotCompleteWhenGmailAccountIsMissing() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=https://app.clawvisor.com
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            CLAWVISOR_GMAIL_TASK_ID=task_test
+            """,
+            homeURL: root
+        )
+
+        let store = makeChecklistStore(homeURL: root)
+
+        XCTAssertFalse(store.completedStepIDs.contains(.email))
+    }
+
+#if DEBUG
+    @MainActor
+    func testEmailStepCannotBeCompletedByDevelopmentToggle() throws {
+        let root = try makeTemporaryDirectory()
+        let store = makeChecklistStore(homeURL: root)
+
+        store.developmentToggleStepCompleted(.email)
+
+        XCTAssertFalse(store.completedStepIDs.contains(.email))
+    }
+#endif
+
+#if os(macOS)
+    @MainActor
+    func testCompletionWatcherCreatesGbrainDirectoryWithPrivatePermissions() throws {
+        let root = try makeTemporaryDirectory()
+
+        let store = makeChecklistStore(homeURL: root)
+        store.activateCompletionWatching()
+
+        let gbrainURL = root.appendingPathComponent(".gbrain", isDirectory: true)
+        let attributes = try FileManager.default.attributesOfItem(atPath: gbrainURL.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
+        XCTAssertEqual(permissions & 0o777, 0o700)
+    }
+#endif
+
+    @MainActor
+    private func makeChecklistStore(homeURL: URL) -> ZebraOnboardingChecklistStore {
+        ZebraOnboardingChecklistStore(
+            homeDirectoryPath: homeURL.path,
+            gbrainRuntimeOnboardingStateURL: homeURL
+                .appendingPathComponent("onboarding", isDirectory: true)
+                .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false),
+            gbrainOnboardingStateURL: homeURL
+                .appendingPathComponent("onboarding", isDirectory: true)
+                .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        )
+    }
+
+    private func writeClawvisorEnv(_ raw: String, homeURL: URL) throws {
+        let gbrainURL = homeURL.appendingPathComponent(".gbrain", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainURL, withIntermediateDirectories: true)
+        try raw.write(
+            to: gbrainURL.appendingPathComponent(".env", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     private func writeCompletedRuntimeState(

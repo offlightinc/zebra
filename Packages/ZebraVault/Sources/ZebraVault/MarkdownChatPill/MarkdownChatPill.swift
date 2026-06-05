@@ -325,10 +325,6 @@ extension View {
 /// dropdown can be rendered at the body level (outside `pillShell`'s
 /// `clipShape(RoundedRectangle)` that would otherwise truncate the popup
 /// trying to extend above the pill).
-///
-/// `fileprivate` on purpose — the email sidebar has its own
-/// `EmailAgentButtonAnchorKey` so the two view trees can never leak
-/// anchors into each other if one is ever nested inside the other.
 fileprivate struct AgentButtonAnchorKey: PreferenceKey {
     static let defaultValue: Anchor<CGRect>? = nil
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {

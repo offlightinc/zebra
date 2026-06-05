@@ -151,6 +151,219 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(line.contains("\r\r"))
     }
 
+    func testClawvisorCodexOnboardingLaunchCarriesPrompt() throws {
+        let cwd = try makeTemporaryDirectory()
+
+        let line = ZebraClawvisorOnboardingCommand.shellStartupLine(
+            agent: .codex,
+            launchDirectory: cwd.path
+        )
+
+        XCTAssertTrue(line.contains("cd '\(cwd.path)' && codex -C '\(cwd.path)'"))
+        XCTAssertTrue(line.contains("-c 'projects.\"\(cwd.path)\".trust_level=\"trusted\"'"))
+        XCTAssertTrue(line.contains("using Codex"))
+        XCTAssertTrue(line.contains("CLAWVISOR_GMAIL_TASK_ID"))
+        XCTAssertFalse(line.contains("claude --append-system-prompt"))
+        XCTAssertFalse(line.contains("dangerously-bypass"))
+    }
+
+    func testClawvisorCodexOnboardingPersistsFolderTrust() throws {
+        let cwd = try makeTemporaryDirectory()
+        let configURL = try makeTemporaryDirectory()
+            .appendingPathComponent("config.toml", isDirectory: false)
+
+        XCTAssertTrue(ZebraClawvisorOnboardingCommand.markCodexProjectTrusted(
+            cwd: cwd.path,
+            configURL: configURL
+        ))
+        XCTAssertTrue(ZebraClawvisorOnboardingCommand.markCodexProjectTrusted(
+            cwd: cwd.path,
+            configURL: configURL
+        ))
+
+        let raw = try String(contentsOf: configURL, encoding: .utf8)
+        let section = "[projects.\"\(cwd.path)\"]"
+        XCTAssertEqual(raw.components(separatedBy: section).count - 1, 1)
+        XCTAssertTrue(raw.contains(section))
+        XCTAssertTrue(raw.contains("trust_level = \"trusted\""))
+        XCTAssertFalse(raw.contains("dangerously-bypass"))
+    }
+
+    func testClawvisorCodexLaunchPlanReportsReadyWhenTrustIsWritten() throws {
+        let cwd = try makeTemporaryDirectory()
+        let configURL = try makeTemporaryDirectory()
+            .appendingPathComponent("config.toml", isDirectory: false)
+        let onboardingDirectoryURL = try makeTemporaryDirectory()
+
+        let plan = ZebraClawvisorOnboardingCommand.launchPlan(
+            agent: .codex,
+            launchDirectory: cwd.path,
+            codexConfigURL: configURL,
+            onboardingDirectoryURL: onboardingDirectoryURL
+        )
+
+        let raw = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(plan.launchEnvironmentReady)
+        XCTAssertTrue(raw.contains("[projects.\"\(cwd.path)\"]"))
+        XCTAssertTrue(raw.contains("trust_level = \"trusted\""))
+    }
+
+    func testClawvisorCodexLaunchPlanReportsNotReadyWhenTrustCannotBeWritten() throws {
+        let cwd = try makeTemporaryDirectory()
+        let configURL = try makeTemporaryDirectory()
+            .appendingPathComponent("config.toml", isDirectory: true)
+        let onboardingDirectoryURL = try makeTemporaryDirectory()
+        try FileManager.default.createDirectory(at: configURL, withIntermediateDirectories: true)
+
+        let plan = ZebraClawvisorOnboardingCommand.launchPlan(
+            agent: .codex,
+            launchDirectory: cwd.path,
+            codexConfigURL: configURL,
+            onboardingDirectoryURL: onboardingDirectoryURL
+        )
+
+        XCTAssertFalse(plan.launchEnvironmentReady)
+        XCTAssertTrue(plan.startupLine.contains("codex"))
+    }
+
+    func testClawvisorEmailFlowKindUsesOpenClawRuntimeOverPrimaryAgent() {
+        let runtime = ZebraGBrainRuntimeOnboardingStore.SelectedRuntime(
+            runtime: "openclaw",
+            executablePath: "/tmp/openclaw"
+        )
+
+        XCTAssertEqual(
+            ZebraClawvisorOnboardingCommand.resolveFlowKind(agent: .claude, selectedRuntime: runtime),
+            .openClaw
+        )
+        XCTAssertEqual(
+            ZebraClawvisorOnboardingCommand.resolveFlowKind(agent: .codex, selectedRuntime: runtime),
+            .openClaw
+        )
+    }
+
+    func testClawvisorEmailFlowKindTreatsHermesRuntimeAsPrimaryAgentFlow() {
+        let runtime = ZebraGBrainRuntimeOnboardingStore.SelectedRuntime(
+            runtime: "hermes",
+            executablePath: "/tmp/hermes"
+        )
+
+        XCTAssertEqual(
+            ZebraClawvisorOnboardingCommand.resolveFlowKind(agent: .claude, selectedRuntime: runtime),
+            .claudeCode
+        )
+        XCTAssertEqual(
+            ZebraClawvisorOnboardingCommand.resolveFlowKind(agent: .codex, selectedRuntime: runtime),
+            .genericAgent
+        )
+    }
+
+    func testClawvisorLaunchPlanWritesSetupPacketStateAndHelper() throws {
+        let cwd = try makeTemporaryDirectory()
+        let configURL = try makeTemporaryDirectory()
+            .appendingPathComponent("config.toml", isDirectory: false)
+        let onboardingDirectoryURL = try makeTemporaryDirectory()
+        let runtime = ZebraGBrainRuntimeOnboardingStore.SelectedRuntime(
+            runtime: "openclaw",
+            executablePath: "/tmp/openclaw"
+        )
+
+        let plan = ZebraClawvisorOnboardingCommand.launchPlan(
+            agent: .codex,
+            launchDirectory: cwd.path,
+            codexConfigURL: configURL,
+            onboardingDirectoryURL: onboardingDirectoryURL,
+            selectedRuntime: runtime
+        )
+
+        let setupPacketPath = try XCTUnwrap(plan.setupPacketPath)
+        let setupPacket = try String(contentsOfFile: setupPacketPath, encoding: .utf8)
+        XCTAssertEqual(plan.flowKind, .openClaw)
+        XCTAssertTrue(setupPacket.contains("Clawvisor email flow kind: openClaw"))
+        XCTAssertTrue(setupPacket.contains("GBrain runtime receipt: openclaw"))
+        XCTAssertTrue(setupPacket.contains("OpenClaw integration"))
+        XCTAssertTrue(plan.startupLine.contains("zebra-clawvisor-email-onboarding"))
+        XCTAssertTrue(plan.startupLine.contains(setupPacketPath))
+
+        let stateData = try Data(contentsOf: URL(fileURLWithPath: plan.statePath))
+        let state = try XCTUnwrap(JSONSerialization.jsonObject(with: stateData) as? [String: Any])
+        XCTAssertEqual(state["primaryAgent"] as? String, "codex")
+        XCTAssertEqual(state["selectedRuntime"] as? String, "openclaw")
+        XCTAssertEqual(state["flowKind"] as? String, "openClaw")
+        XCTAssertEqual(state["completedSections"] as? [String], [])
+
+        XCTAssertEqual(try octalPermissions(atPath: setupPacketPath), 0o600)
+        XCTAssertEqual(try octalPermissions(atPath: plan.statePath), 0o600)
+        XCTAssertEqual(
+            try octalPermissions(
+                atPath: onboardingDirectoryURL
+                    .appendingPathComponent("bin/zebra-clawvisor-email-onboarding")
+                    .path
+            ),
+            0o755
+        )
+    }
+
+    func testClawvisorCodexOnboardingReplacesExistingUntrustedFolderEntry() throws {
+        let cwd = try makeTemporaryDirectory()
+        let configURL = try makeTemporaryDirectory()
+            .appendingPathComponent("config.toml", isDirectory: false)
+        try """
+        model = "gpt-5"
+
+        [projects.\"\(cwd.path)\"]
+        trust_level = "untrusted"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        XCTAssertTrue(ZebraClawvisorOnboardingCommand.markCodexProjectTrusted(
+            cwd: cwd.path,
+            configURL: configURL
+        ))
+
+        let raw = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(raw.contains("[projects.\"\(cwd.path)\"]"))
+        XCTAssertTrue(raw.contains("trust_level = \"trusted\""))
+        XCTAssertFalse(raw.contains("trust_level = \"untrusted\""))
+    }
+
+    func testClawvisorAntigravityOnboardingLaunchCarriesPrompt() throws {
+        let cwd = try makeTemporaryDirectory()
+
+        let line = ZebraClawvisorOnboardingCommand.shellStartupLine(
+            agent: .antigravity,
+            launchDirectory: cwd.path
+        )
+
+        XCTAssertTrue(line.contains("cd '\(cwd.path)' && agy --prompt-interactive --add-dir '\(cwd.path)'"))
+        XCTAssertTrue(line.contains("using Antigravity"))
+        XCTAssertTrue(line.contains("CLAWVISOR_GMAIL_TASK_ID"))
+        XCTAssertFalse(line.contains("claude --append-system-prompt"))
+    }
+
+    func testClawvisorReadyPrimaryRequiresSavedInstalledAndConfiguredAgent() {
+        let preferences = ZebraAgentPreferences(primaryAgent: .codex)
+
+        XCTAssertEqual(
+            ZebraClawvisorOnboardingCommand.readyPrimaryAgent(
+                preferences: preferences,
+                candidates: [agentCandidate(id: .codex, installState: .installed, authState: .configPresent)]
+            ),
+            .codex
+        )
+        XCTAssertNil(ZebraClawvisorOnboardingCommand.readyPrimaryAgent(
+            preferences: ZebraAgentPreferences(primaryAgent: nil),
+            candidates: [agentCandidate(id: .codex, installState: .installed, authState: .configPresent)]
+        ))
+        XCTAssertNil(ZebraClawvisorOnboardingCommand.readyPrimaryAgent(
+            preferences: preferences,
+            candidates: [agentCandidate(id: .codex, installState: .missing, authState: .configPresent)]
+        ))
+        XCTAssertNil(ZebraClawvisorOnboardingCommand.readyPrimaryAgent(
+            preferences: preferences,
+            candidates: [agentCandidate(id: .codex, installState: .installed, authState: .unknown)]
+        ))
+    }
+
     func testOnboardingStartupCommandRunsScriptWithCwd() {
         let line = ZebraAgentOnboardingStartup.shellStartupLine(
             scriptPath: "/Applications/Zebra.app/Contents/Resources/zebra-agent-onboarding",
@@ -185,5 +398,30 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
         }
         return url.standardizedFileURL
+    }
+
+    private func agentCandidate(
+        id: ZebraAgentKind,
+        installState: ZebraAgentInstallState,
+        authState: ZebraAgentAuthState
+    ) -> ZebraAgentInstallCandidate {
+        ZebraAgentInstallCandidate(
+            id: id,
+            displayName: id.displayName,
+            binaryName: id.binaryName,
+            executablePath: installState == .installed ? "/usr/local/bin/\(id.binaryName)" : nil,
+            appBundlePath: nil,
+            version: nil,
+            installState: installState,
+            authState: authState,
+            terminalLaunchable: installState == .installed,
+            recommendedAction: installState == .installed ? .launch : .install
+        )
+    }
+
+    private func octalPermissions(atPath path: String) throws -> Int {
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+        return permissions.intValue & 0o777
     }
 }
