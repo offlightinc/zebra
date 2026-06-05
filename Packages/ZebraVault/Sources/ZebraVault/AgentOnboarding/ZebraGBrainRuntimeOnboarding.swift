@@ -179,6 +179,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     fi
 
     "$PYTHON_BIN" - "$STATE" "$COMMAND" "$@" <<'PY'
+    import contextlib
     import getpass
     import json
     import os
@@ -187,6 +188,10 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     import sys
     from datetime import datetime, timezone
     from pathlib import Path
+    try:
+        import fcntl
+    except Exception:
+        fcntl = None
 
     state_path = Path(sys.argv[1]).expanduser()
     command = sys.argv[2] or "run"
@@ -196,10 +201,12 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         language = "en"
 
     provider_choices = [
-        {"id": "openrouter", "label": "OpenRouter", "env": "OPENROUTER_API_KEY", "openclaw_provider": "openrouter", "openclaw_auth": "openrouter-api-key", "hermes_provider": "openrouter", "hermes_model": "google/gemini-3.5-flash", "hermes_base_url": "https://openrouter.ai/api/v1", "hermes_base_env": "OPENROUTER_BASE_URL", "hermes_api_mode": "chat_completions"},
-        {"id": "openai", "label": "OpenAI", "env": "OPENAI_API_KEY", "openclaw_provider": "openai", "openclaw_auth": "openai-api-key", "hermes_provider": "openai-api", "hermes_model": "gpt-5-mini", "hermes_base_url": "https://api.openai.com/v1", "hermes_base_env": "OPENAI_BASE_URL", "hermes_api_mode": "codex_responses"},
-        {"id": "anthropic", "label": "Anthropic", "env": "ANTHROPIC_API_KEY", "openclaw_provider": "anthropic", "openclaw_auth": "anthropic-api-key", "hermes_provider": "anthropic", "hermes_model": "claude-haiku-4-5-20251001", "hermes_base_url": "https://api.anthropic.com", "hermes_base_env": "ANTHROPIC_BASE_URL", "hermes_api_mode": "anthropic_messages"},
-        {"id": "google", "label": "Google Gemini", "env": "GOOGLE_API_KEY", "openclaw_provider": "google", "openclaw_auth": "google-api-key", "hermes_provider": "gemini", "hermes_model": "gemini-3.5-flash", "hermes_base_url": "https://generativelanguage.googleapis.com/v1beta", "hermes_base_env": "GEMINI_BASE_URL", "hermes_api_mode": "chat_completions"},
+        {"id": "openai-codex", "label": "OpenAI Codex account login", "env": "", "auth_type": "oauth", "openclaw_provider": "openai-codex", "openclaw_auth": "openai-codex", "hermes_provider": "openai-codex", "hermes_model": "gpt-5.4", "hermes_base_url": "https://chatgpt.com/backend-api/codex", "hermes_base_env": "HERMES_CODEX_BASE_URL", "hermes_api_mode": "codex_responses"},
+        {"id": "anthropic-claude-code", "label": "Anthropic Claude Code account login", "env": "", "auth_type": "oauth", "openclaw_provider": "claude-cli", "openclaw_auth": "anthropic-cli", "hermes_provider": "anthropic", "hermes_model": "claude-sonnet-4-6", "hermes_base_url": "https://api.anthropic.com", "hermes_base_env": "ANTHROPIC_BASE_URL", "hermes_api_mode": "anthropic_messages"},
+        {"id": "openrouter", "label": "OpenRouter", "env": "OPENROUTER_API_KEY", "auth_type": "api_key", "openclaw_provider": "openrouter", "openclaw_auth": "openrouter-api-key", "hermes_provider": "openrouter", "hermes_model": "google/gemini-3.5-flash", "hermes_base_url": "https://openrouter.ai/api/v1", "hermes_base_env": "OPENROUTER_BASE_URL", "hermes_api_mode": "chat_completions"},
+        {"id": "anthropic-api", "label": "Anthropic API key", "env": "ANTHROPIC_API_KEY", "auth_type": "api_key", "openclaw_provider": "anthropic", "openclaw_auth": "apiKey", "hermes_provider": "anthropic", "hermes_model": "claude-haiku-4-5-20251001", "hermes_base_url": "https://api.anthropic.com", "hermes_base_env": "ANTHROPIC_BASE_URL", "hermes_api_mode": "anthropic_messages"},
+        {"id": "google", "label": "Google Gemini", "env": "GOOGLE_API_KEY", "auth_type": "api_key", "openclaw_provider": "google", "openclaw_auth": "google-api-key", "hermes_provider": "gemini", "hermes_model": "gemini-3.5-flash", "hermes_base_url": "https://generativelanguage.googleapis.com/v1beta", "hermes_base_env": "GEMINI_BASE_URL", "hermes_api_mode": "chat_completions"},
+        {"id": "openai-api", "label": "OpenAI API key", "env": "OPENAI_API_KEY", "auth_type": "api_key", "openclaw_provider": "openai", "openclaw_auth": "openai-api-key", "hermes_provider": "openai-api", "hermes_model": "gpt-5-mini", "hermes_base_url": "https://api.openai.com/v1", "hermes_base_env": "OPENAI_BASE_URL", "hermes_api_mode": "codex_responses"},
     ]
 
     def now():
@@ -227,7 +234,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             handle.write("\\n")
         os.replace(tmp, state_path)
 
-    def run_process(argv, *, env=None, timeout=45):
+    def run_process(argv, *, env=None, timeout=45, input_text=None):
         try:
             completed = subprocess.run(
                 argv,
@@ -236,6 +243,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
                 stderr=subprocess.PIPE,
                 env=env,
                 timeout=timeout,
+                input=input_text,
             )
             return {
                 "ok": completed.returncode == 0,
@@ -246,9 +254,16 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         except Exception as exc:
             return {"ok": False, "code": -1, "stdout": "", "stderr": str(exc)}
 
+    def run_interactive_process(argv, *, env=None, timeout=600):
+        try:
+            completed = subprocess.run(argv, env=env, timeout=timeout)
+            return {"ok": completed.returncode == 0, "code": completed.returncode, "stdout": "", "stderr": ""}
+        except Exception as exc:
+            return {"ok": False, "code": -1, "stdout": "", "stderr": str(exc)}
+
     def credential_env(provider, credential):
         env = os.environ.copy()
-        env_name = credential.get("envName") or provider["env"]
+        env_name = credential.get("envName") or provider.get("env", "")
         if credential.get("value") and env_name:
             env[env_name] = credential["value"]
         if provider.get("hermes_base_env") and provider.get("hermes_base_url"):
@@ -361,14 +376,77 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         return output
 
     def hermes_credential_env_names(provider):
-        if provider.get("id") == "anthropic":
+        if provider.get("hermes_provider") == "anthropic":
             return ["ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
-        return [provider["env"]]
+        env_name = provider.get("env", "")
+        return [env_name] if env_name else []
 
     def hermes_prompt_env_name(provider):
-        if provider.get("id") == "anthropic":
+        if provider.get("hermes_provider") == "anthropic":
             return "ANTHROPIC_API_KEY"
-        return provider["env"]
+        return provider.get("env", "")
+
+    def agent_cli_state_path():
+        return state_path.parent / "agent-cli-state.json"
+
+    def agent_cli_events_path():
+        return state_path.parent / "agent-cli-events.jsonl"
+
+    def agent_readiness_source(agent, method):
+        events_path = agent_cli_events_path()
+        try:
+            lines = events_path.read_text(encoding="utf-8").splitlines()
+            for line in reversed(lines[-200:]):
+                event = json.loads(line)
+                if (
+                    event.get("event") == "agent_readiness_probe_succeeded"
+                    and event.get("agent") == agent
+                    and event.get("method") == method
+                ):
+                    return f"agent-cli:{agent}-auth-status"
+        except Exception:
+            pass
+        try:
+            state = json.loads(agent_cli_state_path().read_text(encoding="utf-8"))
+            if state.get("phase") == "complete" and state.get("selectedAgent") == agent:
+                return f"agent-cli:{agent}-complete"
+        except Exception:
+            pass
+        return ""
+
+    def codex_agent_readiness_source():
+        return agent_readiness_source("codex", "codex login status")
+
+    def claude_agent_readiness_source():
+        return agent_readiness_source("claude", "claude auth status --json")
+
+    def codex_cli_auth_path():
+        codex_home = os.environ.get("CODEX_HOME", "").strip()
+        if not codex_home:
+            codex_home = str(home / ".codex")
+        return Path(codex_home).expanduser() / "auth.json"
+
+    def hermes_auth_path():
+        hermes_home = os.environ.get("HERMES_HOME", "").strip()
+        if not hermes_home:
+            hermes_home = str(home / ".hermes")
+        return Path(hermes_home).expanduser() / "auth.json"
+
+    @contextlib.contextmanager
+    def hermes_auth_store_lock():
+        lock_path = hermes_auth_path().with_suffix(".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    try:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        pass
 
     def claude_code_credential_source():
         if sys.platform == "darwin" and os.environ.get("ZEBRA_GBRAIN_RUNTIME_SKIP_CLAUDE_KEYCHAIN") != "1":
@@ -396,6 +474,106 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         except Exception:
             pass
         return ""
+
+    def read_codex_cli_tokens():
+        try:
+            payload = json.loads(codex_cli_auth_path().read_text(encoding="utf-8"))
+            tokens = payload.get("tokens") if isinstance(payload, dict) else None
+            if not isinstance(tokens, dict):
+                return {}
+            access_token = tokens.get("access_token")
+            refresh_token = tokens.get("refresh_token")
+            if not isinstance(access_token, str) or not access_token.strip():
+                return {}
+            if not isinstance(refresh_token, str) or not refresh_token.strip():
+                return {}
+            return dict(tokens)
+        except Exception:
+            return {}
+
+    def import_codex_cli_tokens_to_hermes():
+        tokens = read_codex_cli_tokens()
+        if not tokens:
+            return {"ok": False, "code": 1, "stdout": "", "stderr": "codex_cli_credentials_unreadable"}
+        auth_path = hermes_auth_path()
+        try:
+            with hermes_auth_store_lock():
+                auth_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    if auth_path.exists():
+                        store = json.loads(auth_path.read_text(encoding="utf-8"))
+                        if not isinstance(store, dict):
+                            store = {}
+                    else:
+                        store = {}
+                except Exception as exc:
+                    return {"ok": False, "code": 1, "stdout": "", "stderr": f"hermes_auth_read_failed: {exc}"}
+                timestamp = now()
+                providers = store.setdefault("providers", {})
+                if not isinstance(providers, dict):
+                    providers = {}
+                    store["providers"] = providers
+                providers["openai-codex"] = {
+                    "tokens": tokens,
+                    "last_refresh": timestamp,
+                    "auth_mode": "chatgpt",
+                    "label": "Zebra Codex CLI import",
+                }
+                pool = store.setdefault("credential_pool", {})
+                if not isinstance(pool, dict):
+                    pool = {}
+                    store["credential_pool"] = pool
+                existing_entries = pool.get("openai-codex")
+                entries = existing_entries if isinstance(existing_entries, list) else []
+                next_entry = {
+                    "id": "zebra-codex",
+                    "label": "Zebra Codex CLI import",
+                    "auth_type": "oauth",
+                    "priority": 0,
+                    "source": "device_code",
+                    "access_token": tokens["access_token"],
+                    "refresh_token": tokens.get("refresh_token"),
+                    "base_url": "https://chatgpt.com/backend-api/codex",
+                    "last_refresh": timestamp,
+                    "last_status": None,
+                    "last_status_at": None,
+                    "last_error_code": None,
+                    "last_error_reason": None,
+                    "last_error_message": None,
+                    "last_error_reset_at": None,
+                }
+                replaced = False
+                for index, entry in enumerate(entries):
+                    if isinstance(entry, dict) and entry.get("source") == "device_code":
+                        entries[index] = next_entry
+                        replaced = True
+                        break
+                if not replaced:
+                    entries.insert(0, next_entry)
+                pool["openai-codex"] = entries
+                store["active_provider"] = "openai-codex"
+                store["version"] = store.get("version") or 1
+                store["updated_at"] = timestamp
+                tmp = auth_path.with_name(f".{auth_path.name}.zebra-tmp")
+                try:
+                    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        json.dump(store, handle, indent=2, sort_keys=True)
+                        handle.write("\\n")
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(tmp, auth_path)
+                    os.chmod(auth_path, 0o600)
+                    return {"ok": True, "code": 0, "stdout": "", "stderr": ""}
+                except Exception as exc:
+                    try:
+                        if tmp.exists():
+                            tmp.unlink()
+                    except Exception:
+                        pass
+                    return {"ok": False, "code": 1, "stdout": "", "stderr": f"hermes_auth_write_failed: {exc}"}
+        except Exception as exc:
+            return {"ok": False, "code": 1, "stdout": "", "stderr": f"hermes_auth_lock_failed: {exc}"}
 
     def write_env_file_value(path, key, value):
         if not key or not (key[0].isalpha() or key[0] == "_") or not all(ch.isalnum() or ch == "_" for ch in key):
@@ -611,26 +789,62 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             f"{name}の準備が完了しました。",
         ))
         print(message(
-            "Now choose the API provider gbrain will use.",
-            "이제 gbrain 실행에 사용할 API provider를 선택합니다.",
-            "次にgbrain実行に使用するAPI providerを選択します。",
+            "Now choose how gbrain should connect to an LLM.",
+            "이제 gbrain이 LLM에 연결할 방식을 선택합니다.",
+            "次にgbrainがLLMへ接続する方法を選択します。",
         ))
 
     def choose_provider():
         print()
+        codex_readiness_source = codex_agent_readiness_source()
+        claude_readiness_source = claude_agent_readiness_source()
+        default_provider_id = "anthropic-claude-code" if claude_readiness_source else "openai-codex"
+        if claude_readiness_source:
+            print(message(
+                "Claude Code login was verified in the agent CLI step, so Anthropic Claude Code account login is selected by default.",
+                "agent CLI 단계에서 Claude Code 로그인이 확인되어 Anthropic Claude Code 계정 연동을 기본값으로 사용합니다.",
+                "agent CLIステップでClaude Codeログインが確認されたため、Anthropic Claude Codeアカウント連携をデフォルトにします。",
+            ))
+            print()
+        elif codex_readiness_source:
+            print(message(
+                "Codex login was verified in the agent CLI step, so OpenAI account login is selected by default.",
+                "agent CLI 단계에서 Codex 로그인이 확인되어 OpenAI 계정 연동을 기본값으로 사용합니다.",
+                "agent CLIステップでCodexログインが確認されたため、OpenAIアカウント連携をデフォルトにします。",
+            ))
+            print()
         for index, provider in enumerate(provider_choices, start=1):
-            env = provider["env"]
-            has_env = bool(os.environ.get(env))
-            print(f"{index}. {provider['label']} ({env}{' set' if has_env else ''})")
+            env = provider.get("env", "")
+            if env:
+                has_env = bool(os.environ.get(env))
+                print(f"{index}. {provider['label']} ({env}{' set' if has_env else ''})")
+            else:
+                print(f"{index}. {provider['label']}")
         while True:
-            raw = ask(message("Select API provider", "API provider 선택", "API providerを選択"), "1").lower()
+            default_index = next(
+                (str(index) for index, provider in enumerate(provider_choices, start=1) if provider["id"] == default_provider_id),
+                "1",
+            )
+            raw = ask(message("Select LLM connection", "LLM 연결 방식 선택", "LLM接続方法を選択"), default_index).lower()
             for index, provider in enumerate(provider_choices, start=1):
                 if raw in {str(index), provider["id"]}:
                     return provider
-            print(message("Choose one provider number.", "provider 번호를 선택하세요.", "provider番号を選んでください。"))
+            print(message("Choose one option number.", "선택지 번호 중 하나를 입력하세요.", "選択肢番号を選んでください。"))
 
     def credential_for(provider, runtime):
-        env_name = provider["env"]
+        if provider.get("auth_type") == "oauth":
+            source = ""
+            if provider.get("id") == "openai-codex":
+                source = codex_agent_readiness_source()
+            elif provider.get("id") == "anthropic-claude-code":
+                source = claude_agent_readiness_source() or claude_code_credential_source()
+            return {
+                "value": "",
+                "source": source or f"{provider['id']}:oauth",
+                "envName": "",
+                "persistEnvName": "",
+            }
+        env_name = provider.get("env", "")
         if runtime == "hermes":
             for candidate_env_name in hermes_credential_env_names(provider):
                 if os.environ.get(candidate_env_name):
@@ -649,7 +863,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
                         "envName": candidate_env_name,
                         "persistEnvName": "",
                     }
-            if provider.get("id") == "anthropic":
+            if provider.get("hermes_provider") == "anthropic":
                 claude_source = claude_code_credential_source()
                 if claude_source:
                     return {
@@ -680,8 +894,55 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "persistEnvName": env_name if runtime == "hermes" else "",
         }
 
+    def run_hermes_oauth_setup(exe, provider, credential):
+        if provider.get("id") != "openai-codex":
+            return {"ok": True, "code": 0, "stdout": "", "stderr": ""}
+        env = credential_env(provider, credential)
+        def codex_status():
+            result = run_process([exe, "auth", "status", "openai-codex"], env=env, timeout=30)
+            text = (result.get("stdout", "") + "\\n" + result.get("stderr", "")).lower()
+            lines = [line.strip() for line in text.splitlines()]
+            return result, "openai-codex: logged in" in lines
+        status, logged_in = codex_status()
+        if status["ok"] and logged_in:
+            return status
+        if codex_agent_readiness_source() and codex_cli_auth_path().is_file():
+            imported = import_codex_cli_tokens_to_hermes()
+            if not imported["ok"]:
+                return imported
+            verified, logged_in = codex_status()
+            if verified["ok"] and logged_in:
+                return verified
+            return {
+                "ok": False,
+                "code": verified.get("code", 1),
+                "stdout": verified.get("stdout", ""),
+                "stderr": verified.get("stderr", "") or "openai_codex_import_not_verified",
+            }
+        print(message(
+            "OpenAI account login is required for Hermes. Continue the Hermes auth flow below.",
+            "Hermes에서 OpenAI 계정 연동이 필요합니다. 아래 Hermes 인증 절차를 계속 진행하세요.",
+            "HermesでOpenAIアカウント連携が必要です。以下のHermes認証手順を続けてください。",
+        ))
+        interactive = run_interactive_process([exe, "auth", "add", "openai-codex"], env=env, timeout=900)
+        if not interactive["ok"]:
+            return interactive
+        verified, logged_in = codex_status()
+        if verified["ok"] and logged_in:
+            return verified
+        return {
+            "ok": False,
+            "code": verified.get("code", 1),
+            "stdout": verified.get("stdout", ""),
+            "stderr": verified.get("stderr", "") or "openai_codex_auth_not_verified",
+        }
+
     def run_hermes_config(exe, provider, credential):
         env = credential_env(provider, credential)
+        if provider.get("auth_type") == "oauth":
+            auth_result = run_hermes_oauth_setup(exe, provider, credential)
+            if not auth_result["ok"]:
+                return auth_result
         persist_env_name = credential.get("persistEnvName") or ""
         if persist_env_name and credential["value"]:
             result = write_env_file_value(hermes_paths()["env"], persist_env_name, credential["value"])

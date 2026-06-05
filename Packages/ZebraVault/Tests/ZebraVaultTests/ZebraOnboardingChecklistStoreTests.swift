@@ -186,7 +186,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
     }
 
-    func testRuntimeHelperConfiguresHermesProviderModelAndBaseURLTogether() throws {
+    func testRuntimeHelperUsesOpenAICodexAccountLoginByDefault() throws {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
             throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
         }
@@ -209,6 +209,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
 
         XCTAssertNotNil(store.prepareLaunch())
+        try writeAgentReadinessState(
+            onboardingDirectory: stateURL.deletingLastPathComponent(),
+            agent: "codex",
+            method: "codex login status"
+        )
+        let codexDirectory = root.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexDirectory, withIntermediateDirectories: true)
+        try #"{"tokens":{"access_token":"test-codex-access-token","refresh_token":"test-codex-refresh-token"}}"#.write(
+            to: codexDirectory.appendingPathComponent("auth.json", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
         let helperURL = stateURL
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
@@ -216,11 +228,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
         let expectContent = """
         set timeout 20
-        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en OPENAI_API_KEY=test-openai-key $env(TEST_HELPER) run
+        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en OPENAI_API_KEY=ambient-openai-key $env(TEST_HELPER) run
         expect "Select runtime"
         send "1\\r"
-        expect "Select API provider"
-        send "2\\r"
+        expect "Select LLM connection"
+        send "\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -240,28 +252,133 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let logText = try String(contentsOf: log, encoding: .utf8)
-        XCTAssertTrue(logText.contains("config set model.provider openai-api"))
-        XCTAssertTrue(logText.contains("config set model.default gpt-5-mini"))
-        XCTAssertTrue(logText.contains("config set model.base_url https://api.openai.com/v1"))
+        XCTAssertTrue(logText.contains("auth status openai-codex"))
+        XCTAssertFalse(logText.contains("login --provider openai-codex"))
+        XCTAssertFalse(logText.contains("auth add openai-codex"))
+        XCTAssertTrue(logText.contains("config set model.provider openai-codex"))
+        XCTAssertTrue(logText.contains("config set model.default gpt-5.4"))
+        XCTAssertTrue(logText.contains("config set model.base_url https://chatgpt.com/backend-api/codex"))
         XCTAssertTrue(logText.contains("config set model.api_mode codex_responses"))
-        XCTAssertTrue(logText.contains("chat -q Reply with OK. Do not use tools. --provider openai-api --model gpt-5-mini"))
+        XCTAssertTrue(logText.contains("chat -q Reply with OK. Do not use tools. --provider openai-codex --model gpt-5.4"))
 
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
         )
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
-        XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai-api")
-        XCTAssertEqual(receipt["runtimeModel"] as? String, "gpt-5-mini")
-        XCTAssertEqual(receipt["keySource"] as? String, "env:OPENAI_API_KEY")
-        XCTAssertEqual(receipt["keyEnvName"] as? String, "OPENAI_API_KEY")
-        XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "OPENAI_API_KEY")
-        let envText = try String(
-            contentsOf: root
-                .appendingPathComponent(".hermes", isDirectory: true)
-                .appendingPathComponent(".env", isDirectory: false),
-            encoding: .utf8
+        XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
+        XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai-codex")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "gpt-5.4")
+        XCTAssertEqual(receipt["keySource"] as? String, "agent-cli:codex-auth-status")
+        XCTAssertEqual(receipt["keyEnvName"] as? String, "")
+        XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "")
+        let authStore = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(
+                    contentsOf: root
+                        .appendingPathComponent(".hermes", isDirectory: true)
+                        .appendingPathComponent("auth.json", isDirectory: false)
+                )
+            ) as? [String: Any]
         )
-        XCTAssertTrue(envText.contains("OPENAI_API_KEY=test-openai-key"))
+        let providers = try XCTUnwrap(authStore["providers"] as? [String: Any])
+        XCTAssertNotNil(providers["openai-codex"])
+        let credentialPool = try XCTUnwrap(authStore["credential_pool"] as? [String: Any])
+        let codexPool = try XCTUnwrap(credentialPool["openai-codex"] as? [[String: Any]])
+        XCTAssertEqual(codexPool.first?["source"] as? String, "device_code")
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: root
+                    .appendingPathComponent(".hermes", isDirectory: true)
+                    .appendingPathComponent(".env", isDirectory: false)
+                    .path
+            )
+        )
+    }
+
+    func testRuntimeHelperUsesClaudeCodeAccountLoginByDefault() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let log = root.appendingPathComponent("hermes.log", isDirectory: false)
+        _ = try installFakeHermesRuntime(directory: fakeBin, log: log)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"],
+            currentLocaleIdentifier: "en_US"
+        )
+
+        XCTAssertNotNil(store.prepareLaunch())
+        try writeAgentReadinessState(
+            onboardingDirectory: stateURL.deletingLastPathComponent(),
+            agent: "claude",
+            method: "claude auth status --json"
+        )
+        let helperURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
+        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_SKIP_CLAUDE_KEYCHAIN=1 ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
+        expect "Select runtime"
+        send "1\\r"
+        expect "Select LLM connection"
+        send "\\r"
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let logText = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertFalse(logText.contains("login --provider openai-codex"))
+        XCTAssertTrue(logText.contains("config set model.provider anthropic"))
+        XCTAssertTrue(logText.contains("config set model.default claude-sonnet-4-6"))
+        XCTAssertTrue(logText.contains("config set model.base_url https://api.anthropic.com"))
+        XCTAssertTrue(logText.contains("config set model.api_mode anthropic_messages"))
+        XCTAssertTrue(logText.contains("chat -q Reply with OK. Do not use tools. --provider anthropic --model claude-sonnet-4-6"))
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["provider"] as? String, "anthropic-claude-code")
+        XCTAssertEqual(receipt["runtimeProvider"] as? String, "anthropic")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "claude-sonnet-4-6")
+        XCTAssertEqual(receipt["keySource"] as? String, "agent-cli:claude-auth-status")
+        XCTAssertEqual(receipt["keyEnvName"] as? String, "")
+        XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "")
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: root
+                    .appendingPathComponent(".hermes", isDirectory: true)
+                    .appendingPathComponent(".env", isDirectory: false)
+                    .path
+            )
+        )
     }
 
     func testRuntimeHelperPromptsForOpenAIWhenAmbientKeyIsMissing() throws {
@@ -297,8 +414,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         spawn env PATH=$env(TEST_PATH) OPENAI_API_KEY= ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
         expect "Select runtime"
         send "1\\r"
-        expect "Select API provider"
-        send "2\\r"
+        expect "Select LLM connection"
+        send "6\\r"
         expect "Enter OpenAI API key"
         send "entered-openai-key\\r"
         expect eof
@@ -323,6 +440,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
         )
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["provider"] as? String, "openai-api")
+        XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai-api")
         XCTAssertEqual(receipt["keySource"] as? String, "entered:OPENAI_API_KEY")
         XCTAssertEqual(receipt["keyEnvName"] as? String, "OPENAI_API_KEY")
         XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "OPENAI_API_KEY")
@@ -368,8 +487,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         spawn env PATH=$env(TEST_PATH) ANTHROPIC_TOKEN=test-anthropic-token ANTHROPIC_API_KEY= CLAUDE_CODE_OAUTH_TOKEN= ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
         expect "Select runtime"
         send "1\\r"
-        expect "Select API provider"
-        send "3\\r"
+        expect "Select LLM connection"
+        send "4\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -445,8 +564,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         spawn env PATH=$env(TEST_PATH) ANTHROPIC_TOKEN= ANTHROPIC_API_KEY= CLAUDE_CODE_OAUTH_TOKEN= ZEBRA_GBRAIN_RUNTIME_SKIP_CLAUDE_KEYCHAIN=1 ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
         expect "Select runtime"
         send "1\\r"
-        expect "Select API provider"
-        send "3\\r"
+        expect "Select LLM connection"
+        send "2\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -469,7 +588,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
         )
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["provider"] as? String, "anthropic-claude-code")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "anthropic")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "claude-sonnet-4-6")
         XCTAssertEqual(receipt["keySource"] as? String, "claude-code-credentials-file")
         XCTAssertEqual(receipt["keyEnvName"] as? String, "")
         XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "")
@@ -515,8 +636,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en OPENAI_API_KEY=test-openai-key $env(TEST_HELPER) run
         expect "Select runtime"
         send "1\\r"
-        expect "Select API provider"
-        send "2\\r"
+        expect "Select LLM connection"
+        send "6\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -606,6 +727,33 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeAgentReadinessState(
+        onboardingDirectory: URL,
+        agent: String,
+        method: String
+    ) throws {
+        try FileManager.default.createDirectory(at: onboardingDirectory, withIntermediateDirectories: true)
+        let state: [String: Any] = [
+            "schemaVersion": 1,
+            "phase": "complete",
+            "selectedAgent": agent,
+        ]
+        let stateData = try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+        try stateData.write(
+            to: onboardingDirectory.appendingPathComponent("agent-cli-state.json", isDirectory: false),
+            options: .atomic
+        )
+        let event = """
+        {"ts":"2026-06-05T00:00:00Z","runId":"test","event":"agent_readiness_probe_succeeded","agent":"\(agent)","method":"\(method)","exitCode":0,"timedOut":false}
+
+        """
+        try event.write(
+            to: onboardingDirectory.appendingPathComponent("agent-cli-events.jsonl", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     private func writeCompletedGBrainState(
@@ -752,6 +900,20 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
           exit 0
         fi
         if [ "$1" = "config" ] && [ "$2" = "set" ]; then
+          exit 0
+        fi
+        if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+          if [ -n "${ZEBRA_GBRAIN_RUNTIME_HOME:-}" ] && [ -f "$ZEBRA_GBRAIN_RUNTIME_HOME/.hermes/auth.json" ] && grep -q '"openai-codex"' "$ZEBRA_GBRAIN_RUNTIME_HOME/.hermes/auth.json"; then
+            echo 'openai-codex: logged in'
+          else
+            echo 'openai-codex: logged out'
+          fi
+          exit 0
+        fi
+        if [ "$1" = "auth" ] && [ "$2" = "add" ]; then
+          exit 0
+        fi
+        if [ "$1" = "login" ]; then
           exit 0
         fi
         if [ "$1" = "chat" ]; then
