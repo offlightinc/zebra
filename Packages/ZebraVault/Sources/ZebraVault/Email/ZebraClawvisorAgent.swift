@@ -105,10 +105,10 @@ struct ZebraClawvisorAgentMenuRow: View {
                 .padding(.vertical, 1)
                 .background(
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.white.opacity(0.04))
+                        .fill(BVColor.bgInput)
                         .overlay(
                             RoundedRectangle(cornerRadius: 3)
-                                .stroke(Color.white.opacity(0.06))
+                                .stroke(BVColor.border)
                         )
                 )
             }

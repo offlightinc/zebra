@@ -268,28 +268,6 @@ fileprivate enum MarkdownPillAgentScanStatus: Equatable {
     case loaded
 }
 
-/// Mockup-faithful kbd chip — small monospace label inside a faint
-/// white-tinted rounded rect.
-fileprivate struct MarkdownPillKbd: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.system(size: 10.5, design: .monospaced))
-            .foregroundColor(MarkdownPillPalette.textMuted)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(Color.white.opacity(0.06))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 3)
-                            .stroke(Color.white.opacity(0.08))
-                    )
-            )
-    }
-}
-
 /// SwiftUI's native `.popover` on macOS auto-dismisses on outside clicks,
 /// but the custom overlay-based dropdowns used by the chat pill and the
 /// email connect picker don't. This modifier installs a local NSEvent
@@ -358,48 +336,42 @@ fileprivate struct AgentButtonAnchorKey: PreferenceKey {
     }
 }
 
-// Palette pulled from mockup MD_PALETTE (md-chat.jsx). Hex values are
-// matched exactly so the pill renders the same warm cream-on-dark tone
-// as the design prototype rather than a colder pure-white-on-dark.
+// Semantic palette for the markdown chat pill. Neutral surfaces route through
+// BVColor so the pill follows the active light/dark appearance; agent identity
+// and slash-skill hues remain fixed semantic accents.
 //
 // Module-internal (not file-private) so the split-out picker and selection
 // helpers in sibling files can share the exact same palette without
 // duplicating hex constants.
 enum MarkdownPillPalette {
-    static let pillBg = Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.92)
-    static let pillBgExpanded = Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.96)
-    /// Slightly more opaque variant for floating popovers (agent picker
-    /// dropdown). Matches md-app.jsx::dropdown's `rgba(20,21,24,0.98)`
-    /// — the dropdown sits over the markdown content and benefits from
-    /// the extra contrast vs. the pill itself.
-    static let popoverBg = Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255).opacity(0.98)
-    static let text = Color(red: 230.0 / 255, green: 228.0 / 255, blue: 221.0 / 255)
-    static let textMuted = Color(red: 154.0 / 255, green: 149.0 / 255, blue: 138.0 / 255)
-    static let textDim = Color(red: 108.0 / 255, green: 105.0 / 255, blue: 96.0 / 255)
-    static let border = Color.white.opacity(0.07)
-    static let borderStrong = Color.white.opacity(0.12)
+    static let pillBg = BVColor.bgFloating.opacity(0.94)
+    static let pillBgExpanded = BVColor.bgFloating.opacity(0.98)
+    static let popoverBg = BVColor.bgFloating.opacity(0.98)
+    static let text = BVColor.fg
+    static let textNSColor = NSColor.labelColor
+    static let textMuted = BVColor.fgMute
+    static let textDim = BVColor.fgFaint
+    static let border = BVColor.border
+    static let borderStrong = BVColor.borderStrong
     static let accent = Color(red: 123.0 / 255, green: 227.0 / 255, blue: 196.0 / 255)
-    static let agentChooserText = Color(red: 244.0 / 255, green: 244.0 / 255, blue: 244.0 / 255)
-    static let agentChooserMeta = Color(red: 111.0 / 255, green: 112.0 / 255, blue: 119.0 / 255)
-    static let agentChooserTag = Color(red: 109.0 / 255, green: 138.0 / 255, blue: 128.0 / 255)
+    static let agentChooserText = BVColor.fg
+    static let agentChooserMeta = BVColor.fgFaint
+    static let agentChooserTag = accent.opacity(0.72)
     static let agentChooserAccent = Color(red: 95.0 / 255, green: 192.0 / 255, blue: 163.0 / 255)
     static let agentChooserAccentBar = Color(red: 70.0 / 255, green: 169.0 / 255, blue: 140.0 / 255)
-    static let agentChooserRowHoverFill = Color.white.opacity(0.035)
-    static let agentChooserActiveFill = Color(red: 61.0 / 255, green: 141.0 / 255, blue: 118.0 / 255).opacity(0.10)
-    static let agentChooserActiveBorder = Color(red: 61.0 / 255, green: 141.0 / 255, blue: 118.0 / 255).opacity(0.45)
-    static let agentChooserPanelBorder = Color(red: 44.0 / 255, green: 44.0 / 255, blue: 51.0 / 255)
-    static let agentChooserPanelTop = Color(red: 27.0 / 255, green: 27.0 / 255, blue: 31.0 / 255)
-    static let agentChooserPanelBottom = Color(red: 22.0 / 255, green: 22.0 / 255, blue: 25.0 / 255)
-    static let agentChooserStarMuted = Color(red: 93.0 / 255, green: 94.0 / 255, blue: 102.0 / 255)
-    static let agentChooserStarHoverColor = Color(red: 154.0 / 255, green: 155.0 / 255, blue: 162.0 / 255)
-    static let agentChooserStarHoverFill = Color.white.opacity(0.06)
-    static let agentChooserStarHoverBorder = Color(red: 51.0 / 255, green: 52.0 / 255, blue: 59.0 / 255)
-    static let agentChooserTileBorder = Color(red: 52.0 / 255, green: 52.0 / 255, blue: 59.0 / 255)
-    // Pre-blended dim teal — equivalent to rgba(123,227,196,0.45) on dark pill bg.
-    // mockup's 0.25 reads too washed-out once layered on the semi-opaque pill;
-    // bumping saturation keeps the button visible while still clearly disabled.
-    static let sendDim = Color(red: 76.0 / 255, green: 130.0 / 255, blue: 115.0 / 255)
-    static let buttonSurface = Color.white.opacity(0.04)
+    static let agentChooserRowHoverFill = BVColor.bgHover
+    static let agentChooserActiveFill = agentChooserAccent.opacity(0.12)
+    static let agentChooserActiveBorder = agentChooserAccent.opacity(0.45)
+    static let agentChooserPanelBorder = BVColor.borderStrong
+    static let agentChooserPanelTop = BVColor.bgFloating
+    static let agentChooserPanelBottom = BVColor.bg
+    static let agentChooserStarMuted = BVColor.fgFaint
+    static let agentChooserStarHoverColor = BVColor.fgMute
+    static let agentChooserStarHoverFill = BVColor.bgHover
+    static let agentChooserStarHoverBorder = BVColor.borderStrong
+    static let agentChooserTileBorder = BVColor.borderStrong
+    static let sendForeground = BVColor.fgOnAccent
+    static let buttonSurface = BVColor.bgInput
     /// Warm yellow (mockup `::selection` + project-scope chip) used for
     /// selection chip + slash skill picker.
     static let selectionTint = Color(red: 232.0 / 255, green: 183.0 / 255, blue: 92.0 / 255)
@@ -783,7 +755,7 @@ public struct MarkdownChatPill: View {
                     .stroke(MarkdownPillPalette.borderStrong, lineWidth: 1)
             )
             .shadow(
-                color: Color.black.opacity(0.45),
+                color: BVColor.shadow,
                 radius: 18,
                 x: 0,
                 y: 18
@@ -1010,7 +982,7 @@ public struct MarkdownChatPill: View {
                 text: $text,
                 isFocused: $textFieldFocused,
                 font: NSFont.systemFont(ofSize: 14),
-                textColor: NSColor(MarkdownPillPalette.text),
+                textColor: MarkdownPillPalette.textNSColor,
                 caretColor: NSColor(MarkdownPillPalette.accent),
                 onContentHeightChange: { height in
                     updateInputHeight(measuredContentHeight: height, animated: true)
@@ -1193,7 +1165,7 @@ public struct MarkdownChatPill: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(MarkdownPillPalette.agentChooserPanelBorder, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.55), radius: 30, x: 0, y: 24)
+        .shadow(color: BVColor.shadowStrong, radius: 30, x: 0, y: 24)
         .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -1297,9 +1269,9 @@ public struct MarkdownChatPill: View {
         Button(action: submit) {
             Image(systemName: "arrow.right")
                 .font(.system(size: 14, weight: .bold))
-                .foregroundColor(Color(red: 20.0 / 255, green: 21.0 / 255, blue: 24.0 / 255))
+                .foregroundColor(enabled ? MarkdownPillPalette.sendForeground : MarkdownPillPalette.textDim)
                 .frame(width: 30, height: 30)
-                .background(enabled ? MarkdownPillPalette.accent : MarkdownPillPalette.sendDim)
+                .background(enabled ? MarkdownPillPalette.accent : MarkdownPillPalette.buttonSurface)
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)

@@ -19,9 +19,9 @@ struct MarkdownPillKbdLabel: View {
             .foregroundColor(MarkdownPillPalette.textMuted)
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
-            .background(Color.white.opacity(0.06))
+            .background(MarkdownPillPalette.buttonSurface)
             .overlay(
-                RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.08), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 3).stroke(MarkdownPillPalette.border, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 3))
     }

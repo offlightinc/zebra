@@ -482,7 +482,7 @@ public struct ZebraOnboardingChecklistCard: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .stroke(ZebraOnboardingChecklistPalette.panelBorder, lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.48), radius: 24, x: 0, y: 10)
+                .shadow(color: BVColor.shadow, radius: 24, x: 0, y: 10)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("ZebraOnboardingChecklistCard")
             }
@@ -698,7 +698,7 @@ private struct ZebraOnboardingProgressRing: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.white.opacity(0.10), lineWidth: 3)
+                .stroke(ZebraOnboardingChecklistPalette.progressTrack, lineWidth: 3)
             Circle()
                 .trim(from: 0, to: CGFloat(max(0, min(progress, 1))))
                 .stroke(
@@ -720,9 +720,10 @@ private struct ZebraOnboardingProgressRing: View {
 }
 
 private enum ZebraOnboardingChecklistPalette {
-    static let panel = Color(nsColor: NSColor(srgbRed: 0x27 / 255.0, green: 0x27 / 255.0, blue: 0x28 / 255.0, alpha: 1.0))
-    static let panelBorder = Color.white.opacity(0.11)
+    static let panel = BVColor.bgElev
+    static let panelBorder = BVColor.borderStrong
+    static let progressTrack = BVColor.borderStrong
     static let accent = Color(nsColor: NSColor(srgbRed: 0x5a / 255.0, green: 0xa3 / 255.0, blue: 0x7f / 255.0, alpha: 1.0))
-    static let accentSoft = Color(nsColor: NSColor(srgbRed: 0x5a / 255.0, green: 0xa3 / 255.0, blue: 0x7f / 255.0, alpha: 0.16))
-    static let startText = Color(nsColor: NSColor(srgbRed: 0x0e / 255.0, green: 0x1f / 255.0, blue: 0x15 / 255.0, alpha: 1.0))
+    static let accentSoft = accent.opacity(0.16)
+    static let startText = BVColor.fgOnAccent
 }

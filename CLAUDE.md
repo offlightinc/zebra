@@ -23,6 +23,15 @@
 - **`PRODUCT_NAME=Zebra` 를 xcodebuild 에 직접 넘기지 않는다.** 과거에 Swift package resource bundle 이름까지 `Zebra.bundle` 로 바뀌어 duplicate-output 빌드 실패가 났다. 검증된 방식은 upstream `cmux.app` 을 먼저 빌드하고, `Zebra.app` 으로 복사한 뒤 `Info.plist` 의 `CFBundleName`, `CFBundleDisplayName`, `CFBundleIdentifier` 를 패치하고 서명/노타라이즈하는 것이다.
 - **히스토리가 필요하면 `/Users/dan/brain-offlight/ops/zebra-notarized-dmg-release.md` 를 먼저 확인한다.** 이 파일은 Zebra release overlay 의 런북이고, `AGENTS.md` 는 그 원칙을 작업 중 자동으로 따르게 하는 가드레일이다.
 
+## Zebra UI color policy (필수)
+
+ZebraVault 신규 UI 는 라이트/다크 모드를 자연스럽게 따라야 한다.
+
+- **neutral chrome 색상은 semantic token 을 우선 사용한다.** 배경, elevated/floating surface, input fill, hover, text, muted text, border, shadow 는 `BVColor` 또는 그 의미를 유지하는 component palette alias 로만 참조한다. `Color(red:)`, `NSColor(srgbRed:)`, `Color.white.opacity(...)`, `Color.black.opacity(...)` 를 컴포넌트 본문에 직접 두지 않는다.
+- **로컬 palette 는 raw mockup 색을 보관하는 곳이 아니라 semantic alias 이다.** `MarkdownPillPalette`, checklist palette 같은 파일-local palette 는 `BVColor.bg`, `BVColor.bgElev`, `BVColor.bgFloating`, `BVColor.fg`, `BVColor.fgMute`, `BVColor.border`, `BVColor.shadow` 같은 token 을 이름 붙여 재사용하는 역할로 둔다.
+- **고정 hue 예외는 의미 색상에 한정한다.** brand/accent, status, priority, sync state, agent identity, on-accent foreground, 투명 hit-test fill 처럼 라이트/다크에 따라 hue 가 바뀌면 의미가 깨지는 색상만 raw/fixed color 를 허용한다.
+- **AppKit bridge 는 dynamic 색을 명시한다.** `NSTextView`, `NSView`, layer color 등 AppKit 에 넘기는 색은 SwiftUI `Color` 변환에만 기대지 말고 필요하면 dynamic `NSColor` 또는 token-backed accessor 를 둔다.
+
 ## Initial setup
 
 Run the setup script to initialize submodules and build GhosttyKit:

@@ -36,13 +36,13 @@ struct BrainSyncTooltipView: View {
         .fixedSize(horizontal: false, vertical: true)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color(nsColor: NSColor(srgbRed: 0x0a / 255.0, green: 0x0a / 255.0, blue: 0x0a / 255.0, alpha: 1.0)))
+                .fill(BVColor.bgFloating)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(BVColor.borderStrong, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 8)
+        .shadow(color: BVColor.shadow, radius: 12, x: 0, y: 8)
         .accessibilityIdentifier("BrainSyncTooltip")
     }
 

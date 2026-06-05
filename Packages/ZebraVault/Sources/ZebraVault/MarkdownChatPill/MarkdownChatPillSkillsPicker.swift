@@ -80,12 +80,9 @@ struct MarkdownChatPillSkillsPicker: View {
         }
         .padding(4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Picker is nested INSIDE the pill (see MarkdownChatPill.body),
-        // so a 3%-white wash on top of the pill's dark fill produces the
-        // subtle "lifted card" look the md-app.jsx mockup specifies.
-        // Don't redo the dark fill here — duplicating it gives a noisier
-        // double-stroked look against the pill's own border.
-        .background(Color.white.opacity(0.03))
+        // Picker is nested inside the pill, so use a token-backed inset
+        // surface instead of a raw dark-mode wash.
+        .background(MarkdownPillPalette.buttonSurface)
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(MarkdownPillPalette.border, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }

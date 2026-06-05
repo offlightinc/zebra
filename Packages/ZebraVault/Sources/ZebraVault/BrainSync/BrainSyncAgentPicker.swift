@@ -5,7 +5,7 @@ import SwiftUI
 /// 디자인 spec (`/Users/han/zebra_design/zebra_sync/`):
 /// - chip: pill (border-radius 999), padding 3 7 3 5, bg `BVColor.bg`,
 ///   border `BVColor.accent`, font 10.5px weight 500
-/// - dropdown (`.ag-list`): width 170, padding 4, gap 1, bg `#0c0c0c`
+/// - dropdown (`.ag-list`): width 170, padding 4, gap 1, floating surface
 /// - 3 rows: codex (⌥1) / claude (⌥2) / agy (⌥3)
 ///
 /// Selection 은 shared agent preference JSON 의 `surfaceOverrides.brainSync` 에 persist.
@@ -99,13 +99,13 @@ struct BrainSyncAgentPicker: View {
         .frame(width: 170, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color(nsColor: NSColor(srgbRed: 0x0c / 255.0, green: 0x0c / 255.0, blue: 0x0c / 255.0, alpha: 1.0)))
+                .fill(BVColor.bgFloating)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                .stroke(BVColor.borderStrong, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 6)
+        .shadow(color: BVColor.shadow, radius: 10, x: 0, y: 6)
         .transition(.opacity.combined(with: .offset(y: 4)))
     }
 
@@ -119,20 +119,20 @@ struct BrainSyncAgentPicker: View {
                         .foregroundColor(BVColor.fg)
                     Text(vendorLabel(for: agent))
                         .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(Color.white.opacity(0.42))
+                        .foregroundColor(BVColor.fgFaint)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Text(shortcutHint(for: agent))
                     .font(.system(size: 8.5, design: .monospaced))
-                    .foregroundColor(Color.white.opacity(0.45))
+                    .foregroundColor(BVColor.fgFaint)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
                     .background(
                         RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(Color(nsColor: NSColor(srgbRed: 0x18 / 255.0, green: 0x18 / 255.0, blue: 0x18 / 255.0, alpha: 1.0)))
+                            .fill(BVColor.bgInput)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                                    .stroke(BVColor.border, lineWidth: 1)
                             )
                     )
             }
@@ -176,7 +176,7 @@ private struct BrainSyncAgentRowButtonStyle: ButtonStyle {
         configuration.label
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(configuration.isPressed ? Color.white.opacity(0.08) : Color.clear)
+                    .fill(configuration.isPressed ? BVColor.bgHover : Color.clear)
             )
             .onHover { isHover in
                 // SwiftUI ButtonStyle 안에서는 직접 hover 처리 어려움 — 별도

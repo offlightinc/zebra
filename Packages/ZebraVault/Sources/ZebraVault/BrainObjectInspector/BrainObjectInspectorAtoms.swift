@@ -14,6 +14,10 @@ enum BVColor {
         light: rgb(0xff, 0xff, 0xff),
         dark: rgb(0x26, 0x26, 0x26)
     )
+    static let bgFloating = adaptiveColor(
+        light: rgb(0xff, 0xff, 0xff),
+        dark: rgb(0x14, 0x15, 0x18)
+    )
     static let bgInput = adaptiveColor(
         light: NSColor.black.withAlphaComponent(0.035),
         dark: NSColor.white.withAlphaComponent(0.035)
@@ -38,6 +42,7 @@ enum BVColor {
         light: NSColor.black.withAlphaComponent(0.22),
         dark: NSColor.white.withAlphaComponent(0.22)
     )
+    static let fgOnAccent = Color(nsColor: rgb(0x0e, 0x1f, 0x15))
     static let border = adaptiveColor(
         light: NSColor.black.withAlphaComponent(0.08),
         dark: NSColor.white.withAlphaComponent(0.07)
@@ -45,6 +50,14 @@ enum BVColor {
     static let borderStrong = adaptiveColor(
         light: NSColor.black.withAlphaComponent(0.14),
         dark: NSColor.white.withAlphaComponent(0.12)
+    )
+    static let shadow = adaptiveColor(
+        light: NSColor.black.withAlphaComponent(0.16),
+        dark: NSColor.black.withAlphaComponent(0.50)
+    )
+    static let shadowStrong = adaptiveColor(
+        light: NSColor.black.withAlphaComponent(0.20),
+        dark: NSColor.black.withAlphaComponent(0.55)
     )
     static let accent = adaptiveColor(
         light: NSColor(srgbRed: 0, green: 136 / 255.0, blue: 1.0, alpha: 1.0),

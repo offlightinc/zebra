@@ -197,7 +197,7 @@ public struct VerticalTabsSidebarEmailContent: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(MarkdownPillPalette.borderStrong, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.55), radius: 30, x: 0, y: 24)
+        .shadow(color: BVColor.shadowStrong, radius: 30, x: 0, y: 24)
         .fixedSize(horizontal: false, vertical: true)
     }
 
