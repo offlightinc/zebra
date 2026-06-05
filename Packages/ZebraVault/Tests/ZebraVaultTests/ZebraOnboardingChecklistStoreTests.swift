@@ -252,6 +252,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai-api")
         XCTAssertEqual(receipt["runtimeModel"] as? String, "gpt-5-mini")
+        XCTAssertEqual(receipt["keySource"] as? String, "env:OPENAI_API_KEY")
+        XCTAssertEqual(receipt["keyEnvName"] as? String, "OPENAI_API_KEY")
+        XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "OPENAI_API_KEY")
         let envText = try String(
             contentsOf: root
                 .appendingPathComponent(".hermes", isDirectory: true)
@@ -259,6 +262,217 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertTrue(envText.contains("OPENAI_API_KEY=test-openai-key"))
+    }
+
+    func testRuntimeHelperPromptsForOpenAIWhenAmbientKeyIsMissing() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let log = root.appendingPathComponent("hermes.log", isDirectory: false)
+        _ = try installFakeHermesRuntime(directory: fakeBin, log: log)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"],
+            currentLocaleIdentifier: "en_US"
+        )
+
+        XCTAssertNotNil(store.prepareLaunch())
+        let helperURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
+        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) OPENAI_API_KEY= ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
+        expect "Select runtime"
+        send "1\\r"
+        expect "Select API provider"
+        send "2\\r"
+        expect "Enter OpenAI API key"
+        send "entered-openai-key\\r"
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["keySource"] as? String, "entered:OPENAI_API_KEY")
+        XCTAssertEqual(receipt["keyEnvName"] as? String, "OPENAI_API_KEY")
+        XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "OPENAI_API_KEY")
+        let envText = try String(
+            contentsOf: root
+                .appendingPathComponent(".hermes", isDirectory: true)
+                .appendingPathComponent(".env", isDirectory: false),
+            encoding: .utf8
+        )
+        XCTAssertTrue(envText.contains("OPENAI_API_KEY=entered-openai-key"))
+    }
+
+    func testRuntimeHelperUsesHermesAnthropicTokenSource() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let log = root.appendingPathComponent("hermes.log", isDirectory: false)
+        _ = try installFakeHermesRuntime(directory: fakeBin, log: log)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"],
+            currentLocaleIdentifier: "en_US"
+        )
+
+        XCTAssertNotNil(store.prepareLaunch())
+        let helperURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
+        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) ANTHROPIC_TOKEN=test-anthropic-token ANTHROPIC_API_KEY= CLAUDE_CODE_OAUTH_TOKEN= ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
+        expect "Select runtime"
+        send "1\\r"
+        expect "Select API provider"
+        send "3\\r"
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["runtimeProvider"] as? String, "anthropic")
+        XCTAssertEqual(receipt["keySource"] as? String, "env:ANTHROPIC_TOKEN")
+        XCTAssertEqual(receipt["keyEnvName"] as? String, "ANTHROPIC_TOKEN")
+        XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "ANTHROPIC_TOKEN")
+    }
+
+    func testRuntimeHelperUsesClaudeCodeCredentialsForHermesAnthropic() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let log = root.appendingPathComponent("hermes.log", isDirectory: false)
+        _ = try installFakeHermesRuntime(directory: fakeBin, log: log)
+        let claudeDirectory = root.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDirectory, withIntermediateDirectories: true)
+        let credentials = [
+            "claudeAiOauth": [
+                "accessToken": "test-claude-code-access-token",
+                "refreshToken": "test-refresh-token",
+                "expiresAt": 4_102_444_800_000,
+            ],
+        ]
+        let credentialsData = try JSONSerialization.data(withJSONObject: credentials, options: [.prettyPrinted, .sortedKeys])
+        try credentialsData.write(
+            to: claudeDirectory.appendingPathComponent(".credentials.json", isDirectory: false),
+            options: .atomic
+        )
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"],
+            currentLocaleIdentifier: "en_US"
+        )
+
+        XCTAssertNotNil(store.prepareLaunch())
+        let helperURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
+        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) ANTHROPIC_TOKEN= ANTHROPIC_API_KEY= CLAUDE_CODE_OAUTH_TOKEN= ZEBRA_GBRAIN_RUNTIME_SKIP_CLAUDE_KEYCHAIN=1 ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
+        expect "Select runtime"
+        send "1\\r"
+        expect "Select API provider"
+        send "3\\r"
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["runtimeProvider"] as? String, "anthropic")
+        XCTAssertEqual(receipt["keySource"] as? String, "claude-code-credentials-file")
+        XCTAssertEqual(receipt["keyEnvName"] as? String, "")
+        XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "")
     }
 
     func testRuntimeHelperRejectsHermesWarningOnlyVerification() throws {

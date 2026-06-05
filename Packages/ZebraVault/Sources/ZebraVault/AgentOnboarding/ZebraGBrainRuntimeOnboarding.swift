@@ -248,8 +248,9 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     def credential_env(provider, credential):
         env = os.environ.copy()
-        if credential.get("value"):
-            env[provider["env"]] = credential["value"]
+        env_name = credential.get("envName") or provider["env"]
+        if credential.get("value") and env_name:
+            env[env_name] = credential["value"]
         if provider.get("hermes_base_env") and provider.get("hermes_base_url"):
             env[provider["hermes_base_env"]] = provider["hermes_base_url"]
         return env
@@ -358,6 +359,43 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         except Exception:
             pass
         return output
+
+    def hermes_credential_env_names(provider):
+        if provider.get("id") == "anthropic":
+            return ["ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
+        return [provider["env"]]
+
+    def hermes_prompt_env_name(provider):
+        if provider.get("id") == "anthropic":
+            return "ANTHROPIC_API_KEY"
+        return provider["env"]
+
+    def claude_code_credential_source():
+        if sys.platform == "darwin" and os.environ.get("ZEBRA_GBRAIN_RUNTIME_SKIP_CLAUDE_KEYCHAIN") != "1":
+            result = run_process([
+                "security",
+                "find-generic-password",
+                "-s",
+                "Claude Code-credentials",
+                "-w",
+            ], timeout=5)
+            if result["ok"] and result["stdout"]:
+                try:
+                    payload = json.loads(result["stdout"])
+                    oauth = payload.get("claudeAiOauth") if isinstance(payload, dict) else None
+                    if isinstance(oauth, dict) and oauth.get("accessToken"):
+                        return "claude-code-keychain"
+                except Exception:
+                    pass
+        credentials_path = home / ".claude" / ".credentials.json"
+        try:
+            payload = json.loads(credentials_path.read_text(encoding="utf-8"))
+            oauth = payload.get("claudeAiOauth") if isinstance(payload, dict) else None
+            if isinstance(oauth, dict) and oauth.get("accessToken"):
+                return "claude-code-credentials-file"
+        except Exception:
+            pass
+        return ""
 
     def write_env_file_value(path, key, value):
         if not key or not (key[0].isalpha() or key[0] == "_") or not all(ch.isalnum() or ch == "_" for ch in key):
@@ -593,11 +631,41 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     def credential_for(provider, runtime):
         env_name = provider["env"]
-        if os.environ.get(env_name):
-            return {"value": os.environ[env_name], "source": f"env:{env_name}"}
-        hermes_env = read_env_file_vars(hermes_paths()["env"])
-        if runtime == "hermes" and hermes_env.get(env_name):
-            return {"value": hermes_env[env_name], "source": f"hermes-env:{env_name}"}
+        if runtime == "hermes":
+            for candidate_env_name in hermes_credential_env_names(provider):
+                if os.environ.get(candidate_env_name):
+                    return {
+                        "value": os.environ[candidate_env_name],
+                        "source": f"env:{candidate_env_name}",
+                        "envName": candidate_env_name,
+                        "persistEnvName": candidate_env_name,
+                    }
+            hermes_env = read_env_file_vars(hermes_paths()["env"])
+            for candidate_env_name in hermes_credential_env_names(provider):
+                if hermes_env.get(candidate_env_name):
+                    return {
+                        "value": hermes_env[candidate_env_name],
+                        "source": f"hermes-env:{candidate_env_name}",
+                        "envName": candidate_env_name,
+                        "persistEnvName": "",
+                    }
+            if provider.get("id") == "anthropic":
+                claude_source = claude_code_credential_source()
+                if claude_source:
+                    return {
+                        "value": "",
+                        "source": claude_source,
+                        "envName": "",
+                        "persistEnvName": "",
+                    }
+            env_name = hermes_prompt_env_name(provider)
+        elif os.environ.get(env_name):
+            return {
+                "value": os.environ[env_name],
+                "source": f"env:{env_name}",
+                "envName": env_name,
+                "persistEnvName": "",
+            }
         value = getpass.getpass(message(
             f"Enter {provider['label']} API key (input hidden): ",
             f"{provider['label']} API key 입력 (입력값 숨김): ",
@@ -605,13 +673,18 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         )).strip()
         if not value:
             raise RuntimeError("api_key_missing")
-        return {"value": value, "source": f"entered:{env_name}"}
+        return {
+            "value": value,
+            "source": f"entered:{env_name}",
+            "envName": env_name,
+            "persistEnvName": env_name if runtime == "hermes" else "",
+        }
 
     def run_hermes_config(exe, provider, credential):
-        env_name = provider["env"]
         env = credential_env(provider, credential)
-        if credential["value"]:
-            result = write_env_file_value(hermes_paths()["env"], env_name, credential["value"])
+        persist_env_name = credential.get("persistEnvName") or ""
+        if persist_env_name and credential["value"]:
+            result = write_env_file_value(hermes_paths()["env"], persist_env_name, credential["value"])
             if not result["ok"]:
                 return result
         for key, value in [
@@ -773,6 +846,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "runtimeProvider": provider_id_for_runtime(provider, runtime),
             "runtimeModel": provider.get("hermes_model") if runtime == "hermes" else "",
             "keySource": credential["source"],
+            "keyEnvName": credential.get("envName") or "",
+            "keyPersistedEnvName": credential.get("persistEnvName") or "",
             "configPaths": config_paths,
             "verifiedAt": now(),
             "checks": {
