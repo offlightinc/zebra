@@ -84,6 +84,32 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(store.completedStepIDs.contains(.gbrainRuntime))
     }
 
+    @MainActor
+    func testRuntimeReceiptWithoutRuntimeConfigCheckDoesNotCompleteRuntimeStep() throws {
+        let root = try makeTemporaryDirectory()
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        let runtimeStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try writeCompletedRuntimeState(
+            stateURL: runtimeStateURL,
+            runtime: "hermes",
+            executablePath: executable.path,
+            runtimeConfigVerified: false
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainRuntimeOnboardingStateURL: runtimeStateURL,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+
+        XCTAssertFalse(store.completedStepIDs.contains(.gbrainRuntime))
+    }
+
     func testRuntimeHelperStatusRuns() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root
@@ -235,6 +261,74 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(envText.contains("OPENAI_API_KEY=test-openai-key"))
     }
 
+    func testRuntimeHelperRejectsHermesWarningOnlyVerification() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let log = root.appendingPathComponent("hermes.log", isDirectory: false)
+        _ = try installFakeHermesRuntime(
+            directory: fakeBin,
+            log: log,
+            chatBody: """
+              echo 'warning only' >&2
+              exit 0
+            """
+        )
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"],
+            currentLocaleIdentifier: "en_US"
+        )
+
+        XCTAssertNotNil(store.prepareLaunch())
+        let helperURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
+        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en OPENAI_API_KEY=test-openai-key $env(TEST_HELPER) run
+        expect "Select runtime"
+        send "1\\r"
+        expect "Select API provider"
+        send "2\\r"
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertNotEqual(result.status, 0)
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["complete"] as? Bool, false)
+        XCTAssertEqual(receipt["reasons"] as? [String], ["llm_call_verification_failed"])
+    }
+
     @MainActor
     func testCompletedGBrainReceiptDoesNotRunLiveProbeFromChecklist() async throws {
         let root = try makeTemporaryDirectory()
@@ -269,7 +363,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         stateURL: URL,
         runtime: String,
         executablePath: String,
-        llmCallVerified: Bool = true
+        llmCallVerified: Bool = true,
+        runtimeConfigVerified: Bool = true
     ) throws {
         let state: [String: Any] = [
             "schemaVersion": 1,
@@ -285,7 +380,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 "checks": [
                     "executable": true,
                     "credentials": true,
-                    "runtimeConfigCommand": true,
+                    "runtimeConfigCommand": runtimeConfigVerified,
                     "llmCall": llmCallVerified,
                 ],
                 "reasons": [],
@@ -425,7 +520,14 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         return script
     }
 
-    private func installFakeHermesRuntime(directory: URL, log: URL) throws -> URL {
+    private func installFakeHermesRuntime(
+        directory: URL,
+        log: URL,
+        chatBody: String = """
+          echo 'OK'
+          exit 0
+        """
+    ) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let script = directory.appendingPathComponent("hermes", isDirectory: false)
         let scriptContent = """
@@ -439,8 +541,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
           exit 0
         fi
         if [ "$1" = "chat" ]; then
-          echo 'OK'
-          exit 0
+        \(chatBody)
         fi
         exit 1
         """

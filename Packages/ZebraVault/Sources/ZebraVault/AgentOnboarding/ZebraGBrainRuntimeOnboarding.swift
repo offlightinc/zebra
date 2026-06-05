@@ -82,6 +82,12 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         guard nonEmpty(receipt.keySource) != nil else {
             return CompletionResult(isComplete: false, reasons: ["credential_source_missing"])
         }
+        guard receipt.checks?["credentials"] == true else {
+            return CompletionResult(isComplete: false, reasons: ["credentials_unverified"])
+        }
+        guard receipt.checks?["runtimeConfigCommand"] == true else {
+            return CompletionResult(isComplete: false, reasons: ["runtime_config_unverified"])
+        }
         guard receipt.checks?["llmCall"] == true else {
             return CompletionResult(isComplete: false, reasons: ["llm_call_unverified"])
         }
@@ -184,7 +190,6 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     state_path = Path(sys.argv[1]).expanduser()
     command = sys.argv[2] or "run"
-    args = sys.argv[3:]
     home = Path(os.environ.get("ZEBRA_GBRAIN_RUNTIME_HOME") or str(Path.home())).expanduser()
     language = (os.environ.get("ZEBRA_ONBOARDING_LANGUAGE") or "en").split("-")[0].lower()
     if language not in {"en", "ja", "ko"}:
@@ -479,13 +484,6 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         value = tty_input(f"{prompt}{suffix}: ").strip()
         return value or default
 
-    def ask_yes(prompt, default=True):
-        marker = "Y/n" if default else "y/N"
-        value = tty_input(f"{prompt} [{marker}]: ").strip().lower()
-        if not value:
-            return default
-        return value in {"y", "yes"}
-
     def choose_runtime(detection):
         options = runtime_options(detection)
         print()
@@ -693,8 +691,10 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         )
         if not result["ok"]:
             return result
-        if not (result["stdout"] or result["stderr"]):
+        if not result["stdout"]:
             return {"ok": False, "code": 1, "stdout": result["stdout"], "stderr": "empty_llm_response"}
+        if "ok" not in result["stdout"].lower():
+            return {"ok": False, "code": 1, "stdout": result["stdout"], "stderr": "unexpected_llm_response"}
         return result
 
     def verify_openclaw_llm_call(exe, provider, credential):
