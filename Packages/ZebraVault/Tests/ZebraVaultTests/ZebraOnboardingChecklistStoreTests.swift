@@ -295,6 +295,412 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
     }
 
+    func testRuntimeHelperUsesOpenClawOpenAIAuthLoginInsteadOfNonInteractiveCodexOnboard() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let log = root.appendingPathComponent("openclaw.log", isDirectory: false)
+        _ = try installFakeOpenClawRuntime(directory: fakeBin, log: log)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"],
+            currentLocaleIdentifier: "en_US"
+        )
+
+        XCTAssertNotNil(store.prepareLaunch())
+        let helperURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
+        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
+        expect "Select runtime"
+        send "1\\r"
+        expect "Select LLM connection"
+        send "\\r"
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let logText = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
+        XCTAssertFalse(logText.contains("onboard --non-interactive"))
+        XCTAssertFalse(logText.contains("--auth-choice openai-codex"))
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
+        XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai")
+        XCTAssertEqual(receipt["keySource"] as? String, "openai-codex:oauth")
+    }
+
+    func testRuntimeHelperSkipsOpenClawOpenAILoginWhenProfileAlreadyUsable() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let log = root.appendingPathComponent("openclaw.log", isDirectory: false)
+        _ = try installFakeOpenClawRuntime(directory: fakeBin, log: log)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"],
+            currentLocaleIdentifier: "en_US"
+        )
+
+        XCTAssertNotNil(store.prepareLaunch())
+        let helperURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
+        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) FAKE_OPENCLAW_AUTH_READY=openai ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
+        expect "Select runtime"
+        send "1\\r"
+        expect "Select LLM connection"
+        send "\\r"
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let logText = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(logText.contains("models status --json --probe-provider openai"))
+        XCTAssertFalse(logText.contains("models auth login --provider openai"))
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
+        XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai")
+        XCTAssertEqual(receipt["keySource"] as? String, "openai-codex:oauth")
+    }
+
+    func testRuntimeHelperWaitsBrieflyWhenOpenClawAuthLoginHangsAfterProfileBecomesUsable() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let log = root.appendingPathComponent("openclaw.log", isDirectory: false)
+        _ = try installFakeOpenClawRuntime(directory: fakeBin, log: log)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"],
+            currentLocaleIdentifier: "en_US"
+        )
+
+        XCTAssertNotNil(store.prepareLaunch())
+        let helperURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
+        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) FAKE_OPENCLAW_LOGIN_HANGS_AFTER_READY=openai ZEBRA_GBRAIN_RUNTIME_INTERACTIVE_GRACE_SECONDS=0.1 ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
+        expect "Select runtime"
+        send "1\\r"
+        expect "Select LLM connection"
+        send "\\r"
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let logText = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
+        XCTAssertTrue(logText.contains("models status --json --probe-provider openai"))
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
+        XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai")
+        XCTAssertEqual(receipt["keySource"] as? String, "openai-codex:oauth")
+    }
+
+    func testRuntimeHelperDoesNotTreatOpenAIAPIKeyEnvAsOpenClawCodexLogin() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let log = root.appendingPathComponent("openclaw.log", isDirectory: false)
+        _ = try installFakeOpenClawRuntime(directory: fakeBin, log: log)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"],
+            currentLocaleIdentifier: "en_US"
+        )
+
+        XCTAssertNotNil(store.prepareLaunch())
+        let helperURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
+        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) OPENAI_API_KEY=ambient-openai-key CODEX_API_KEY=ambient-codex-key ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
+        expect "Select runtime"
+        send "1\\r"
+        expect "Select LLM connection"
+        send "\\r"
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let logText = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
+        XCTAssertFalse(logText.contains("env OPENAI_API_KEY"))
+        XCTAssertFalse(logText.contains("env CODEX_API_KEY"))
+    }
+
+    func testRuntimeHelperUsesOpenClawClaudeAuthLoginInsteadOfNonInteractiveAnthropicCliOnboard() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let openClawLog = root.appendingPathComponent("openclaw.log", isDirectory: false)
+        let claudeLog = root.appendingPathComponent("claude.log", isDirectory: false)
+        _ = try installFakeOpenClawRuntime(directory: fakeBin, log: openClawLog)
+        _ = try installFakeClaudeRuntime(directory: fakeBin, log: claudeLog, loggedIn: true)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"],
+            currentLocaleIdentifier: "en_US"
+        )
+
+        XCTAssertNotNil(store.prepareLaunch())
+        try writeAgentReadinessState(
+            onboardingDirectory: stateURL.deletingLastPathComponent(),
+            agent: "claude",
+            method: "claude auth status --json"
+        )
+        let helperURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
+        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
+        expect "Select runtime"
+        send "1\\r"
+        expect "Select LLM connection"
+        send "\\r"
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let openClawLogText = try String(contentsOf: openClawLog, encoding: .utf8)
+        XCTAssertTrue(openClawLogText.contains("models auth login --provider anthropic --method cli --set-default"))
+        XCTAssertFalse(openClawLogText.contains("onboard --non-interactive"))
+        XCTAssertFalse(openClawLogText.contains("--auth-choice anthropic-cli"))
+        let claudeLogText = try String(contentsOf: claudeLog, encoding: .utf8)
+        XCTAssertTrue(claudeLogText.contains("auth status --json"))
+        XCTAssertFalse(claudeLogText.contains("auth login"))
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["provider"] as? String, "anthropic-claude-code")
+        XCTAssertEqual(receipt["runtimeProvider"] as? String, "claude-cli")
+        XCTAssertEqual(receipt["keySource"] as? String, "agent-cli:claude-auth-status")
+    }
+
+    func testRuntimeHelperSkipsOpenClawClaudeLoginWhenProfileAlreadyUsable() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        let openClawLog = root.appendingPathComponent("openclaw.log", isDirectory: false)
+        _ = try installFakeOpenClawRuntime(directory: fakeBin, log: openClawLog)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"],
+            currentLocaleIdentifier: "en_US"
+        )
+
+        XCTAssertNotNil(store.prepareLaunch())
+        try writeAgentReadinessState(
+            onboardingDirectory: stateURL.deletingLastPathComponent(),
+            agent: "claude",
+            method: "claude auth status --json"
+        )
+        let helperURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
+        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) FAKE_OPENCLAW_AUTH_READY=claude-cli ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
+        expect "Select runtime"
+        send "1\\r"
+        expect "Select LLM connection"
+        send "\\r"
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let openClawLogText = try String(contentsOf: openClawLog, encoding: .utf8)
+        XCTAssertTrue(openClawLogText.contains("models status --json --probe-provider claude-cli"))
+        XCTAssertFalse(openClawLogText.contains("models auth login --provider anthropic"))
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["provider"] as? String, "anthropic-claude-code")
+        XCTAssertEqual(receipt["runtimeProvider"] as? String, "claude-cli")
+        XCTAssertEqual(receipt["keySource"] as? String, "agent-cli:claude-auth-status")
+    }
+
     func testRuntimeHelperUsesClaudeCodeAccountLoginByDefault() throws {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
             throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
@@ -876,6 +1282,92 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
           exit 0
         fi
         exit 0
+        """
+        try scriptContent.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    private func installFakeOpenClawRuntime(directory: URL, log: URL) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let script = directory.appendingPathComponent("openclaw", isDirectory: false)
+        let scriptContent = """
+        #!/bin/sh
+        printf '%s\\n' "$*" >> '\(shellSingleQuoted(log.path))'
+        if [ "$1" = "--version" ]; then
+          echo 'OpenClaw test'
+          exit 0
+        fi
+        if [ "$1" = "onboard" ] && [ "$2" = "--help" ]; then
+          echo '--skip-daemon --skip-ui --skip-skills --skip-health --skip-bootstrap --skip-channels --skip-search'
+          exit 0
+        fi
+        if [ "$1" = "models" ] && [ "$2" = "auth" ] && [ "$3" = "login" ]; then
+          if [ -n "${OPENAI_API_KEY:-}" ]; then
+            printf '%s\\n' "env OPENAI_API_KEY" >> '\(shellSingleQuoted(log.path))'
+          fi
+          if [ -n "${CODEX_API_KEY:-}" ]; then
+            printf '%s\\n' "env CODEX_API_KEY" >> '\(shellSingleQuoted(log.path))'
+          fi
+          if ! test -t 0; then
+            echo 'models auth login requires an interactive TTY' >&2
+            exit 9
+          fi
+          if [ "${FAKE_OPENCLAW_LOGIN_HANGS_AFTER_READY:-}" = "openai" ]; then
+            : > "${ZEBRA_GBRAIN_RUNTIME_HOME:-.}/.fake-openclaw-openai-ready"
+            sleep 60
+            exit 0
+          fi
+          exit 0
+        fi
+        if [ "$1" = "models" ] && [ "$2" = "status" ]; then
+          if [ -n "${OPENAI_API_KEY:-}" ]; then
+            printf '%s\\n' "env OPENAI_API_KEY" >> '\(shellSingleQuoted(log.path))'
+          fi
+          if [ -n "${CODEX_API_KEY:-}" ]; then
+            printf '%s\\n' "env CODEX_API_KEY" >> '\(shellSingleQuoted(log.path))'
+          fi
+          openai_ready_file="${ZEBRA_GBRAIN_RUNTIME_HOME:-}/.fake-openclaw-openai-ready"
+          if [ "${FAKE_OPENCLAW_AUTH_READY:-}" = "openai" ] || { [ -n "${ZEBRA_GBRAIN_RUNTIME_HOME:-}" ] && [ -f "$openai_ready_file" ]; }; then
+            echo '{"auth":{"providersWithOAuth":["openai (1)"],"oauth":{"profiles":[{"provider":"openai","status":"ok","type":"oauth"}],"providers":[{"provider":"openai","status":"ok"}]},"runtimeAuthRoutes":[{"provider":"openai","runtime":"codex","authProvider":"openai","status":"usable"}],"probes":{"results":[{"provider":"openai","status":"ok"},{"provider":"claude-cli","status":"ok"}]}}}'
+            exit 0
+          fi
+          if [ "${FAKE_OPENCLAW_AUTH_READY:-}" = "claude-cli" ]; then
+            echo '{"auth":{"runtimeAuthRoutes":[{"provider":"claude-cli","runtime":"claude-cli","authProvider":"anthropic","status":"usable"}],"probes":{"results":[{"provider":"openai","status":"ok"},{"provider":"claude-cli","status":"ok"}]}}}'
+            exit 0
+          fi
+          if [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ]; then
+            echo '{"auth":{"runtimeAuthRoutes":[{"provider":"openai","runtime":"codex","authProvider":"openai","status":"usable","effective":{"kind":"env"}}],"probes":{"results":[{"provider":"openai","status":"ok"},{"provider":"claude-cli","status":"ok"}]}}}'
+            exit 0
+          fi
+          echo '{"auth":{"probes":{"results":[{"provider":"openai","status":"ok"},{"provider":"claude-cli","status":"ok"}]}}}'
+          exit 0
+        fi
+        if [ "$1" = "onboard" ]; then
+          exit 0
+        fi
+        exit 1
+        """
+        try scriptContent.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    private func installFakeClaudeRuntime(directory: URL, log: URL, loggedIn: Bool) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let script = directory.appendingPathComponent("claude", isDirectory: false)
+        let loggedInJson = loggedIn ? "true" : "false"
+        let scriptContent = """
+        #!/bin/sh
+        printf '%s\\n' "$*" >> '\(shellSingleQuoted(log.path))'
+        if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+          echo '{"loggedIn":\(loggedInJson),"authMethod":"claude.ai","apiProvider":"firstParty"}'
+          exit 0
+        fi
+        if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
+          exit 0
+        fi
+        exit 1
         """
         try scriptContent.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)

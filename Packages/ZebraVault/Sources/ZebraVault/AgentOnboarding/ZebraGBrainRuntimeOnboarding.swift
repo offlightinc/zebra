@@ -186,6 +186,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     import shutil
     import subprocess
     import sys
+    import time
     from datetime import datetime, timezone
     from pathlib import Path
     try:
@@ -201,7 +202,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         language = "en"
 
     provider_choices = [
-        {"id": "openai-codex", "label": "OpenAI Codex account login", "env": "", "auth_type": "oauth", "openclaw_provider": "openai-codex", "openclaw_auth": "openai-codex", "hermes_provider": "openai-codex", "hermes_model": "gpt-5.4", "hermes_base_url": "https://chatgpt.com/backend-api/codex", "hermes_base_env": "HERMES_CODEX_BASE_URL", "hermes_api_mode": "codex_responses"},
+        {"id": "openai-codex", "label": "OpenAI Codex account login", "env": "", "auth_type": "oauth", "openclaw_provider": "openai", "openclaw_auth": "openai", "hermes_provider": "openai-codex", "hermes_model": "gpt-5.4", "hermes_base_url": "https://chatgpt.com/backend-api/codex", "hermes_base_env": "HERMES_CODEX_BASE_URL", "hermes_api_mode": "codex_responses"},
         {"id": "anthropic-claude-code", "label": "Anthropic Claude Code account login", "env": "", "auth_type": "oauth", "openclaw_provider": "claude-cli", "openclaw_auth": "anthropic-cli", "hermes_provider": "anthropic", "hermes_model": "claude-sonnet-4-6", "hermes_base_url": "https://api.anthropic.com", "hermes_base_env": "ANTHROPIC_BASE_URL", "hermes_api_mode": "anthropic_messages"},
         {"id": "openrouter", "label": "OpenRouter", "env": "OPENROUTER_API_KEY", "auth_type": "api_key", "openclaw_provider": "openrouter", "openclaw_auth": "openrouter-api-key", "hermes_provider": "openrouter", "hermes_model": "google/gemini-3.5-flash", "hermes_base_url": "https://openrouter.ai/api/v1", "hermes_base_env": "OPENROUTER_BASE_URL", "hermes_api_mode": "chat_completions"},
         {"id": "anthropic-api", "label": "Anthropic API key", "env": "ANTHROPIC_API_KEY", "auth_type": "api_key", "openclaw_provider": "anthropic", "openclaw_auth": "apiKey", "hermes_provider": "anthropic", "hermes_model": "claude-haiku-4-5-20251001", "hermes_base_url": "https://api.anthropic.com", "hermes_base_env": "ANTHROPIC_BASE_URL", "hermes_api_mode": "anthropic_messages"},
@@ -256,8 +257,69 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     def run_interactive_process(argv, *, env=None, timeout=600):
         try:
-            completed = subprocess.run(argv, env=env, timeout=timeout)
+            with open("/dev/tty", "rb", buffering=0) as tty_in, open("/dev/tty", "wb", buffering=0) as tty_out:
+                completed = subprocess.run(
+                    argv,
+                    stdin=tty_in,
+                    stdout=tty_out,
+                    stderr=tty_out,
+                    env=env,
+                    timeout=timeout,
+                )
             return {"ok": completed.returncode == 0, "code": completed.returncode, "stdout": "", "stderr": ""}
+        except Exception as exc:
+            return {"ok": False, "code": -1, "stdout": "", "stderr": str(exc)}
+
+    def interactive_process_done_grace_seconds():
+        raw = os.environ.get("ZEBRA_GBRAIN_RUNTIME_INTERACTIVE_GRACE_SECONDS", "15")
+        try:
+            value = float(raw)
+        except Exception:
+            return 15.0
+        if value < 0:
+            return 0.0
+        return min(value, 60.0)
+
+    def run_interactive_process_until(argv, is_done, *, env=None, timeout=600):
+        try:
+            with open("/dev/tty", "rb", buffering=0) as tty_in, open("/dev/tty", "wb", buffering=0) as tty_out:
+                process = subprocess.Popen(
+                    argv,
+                    stdin=tty_in,
+                    stdout=tty_out,
+                    stderr=tty_out,
+                    env=env,
+                )
+                deadline = time.monotonic() + timeout
+                while True:
+                    code = process.poll()
+                    if is_done():
+                        if code is None:
+                            grace_deadline = time.monotonic() + interactive_process_done_grace_seconds()
+                            while time.monotonic() < grace_deadline:
+                                time.sleep(0.25)
+                                code = process.poll()
+                                if code is not None:
+                                    break
+                        if code is None:
+                            process.terminate()
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait(timeout=5)
+                        return {"ok": True, "code": 0, "stdout": "", "stderr": ""}
+                    if code is not None:
+                        return {"ok": code == 0, "code": code, "stdout": "", "stderr": ""}
+                    if time.monotonic() >= deadline:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=5)
+                        return {"ok": False, "code": -1, "stdout": "", "stderr": "interactive_process_timeout"}
+                    time.sleep(0.5)
         except Exception as exc:
             return {"ok": False, "code": -1, "stdout": "", "stderr": str(exc)}
 
@@ -801,9 +863,9 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         default_provider_id = "anthropic-claude-code" if claude_readiness_source else "openai-codex"
         if claude_readiness_source:
             print(message(
-                "Claude Code login was verified in the agent CLI step, so Anthropic Claude Code account login is selected by default.",
-                "agent CLI 단계에서 Claude Code 로그인이 확인되어 Anthropic Claude Code 계정 연동을 기본값으로 사용합니다.",
-                "agent CLIステップでClaude Codeログインが確認されたため、Anthropic Claude Codeアカウント連携をデフォルトにします。",
+                "Default: Anthropic Claude Code account login",
+                "기본값: Anthropic Claude Code 계정 연동",
+                "デフォルト: Anthropic Claude Codeアカウント連携",
             ))
             print()
         elif codex_readiness_source:
@@ -972,6 +1034,152 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "--skip-search",
         ] if flag in text}
 
+    def claude_cli_auth_status(env):
+        result = run_process(["claude", "auth", "status", "--json"], env=env, timeout=30)
+        if not result["ok"]:
+            return result, False
+        try:
+            payload = load_json_object(result["stdout"] + "\\n" + result["stderr"])
+            return result, bool(payload.get("loggedIn"))
+        except Exception:
+            return result, False
+
+    def openclaw_auth_route_matches(route, provider_id):
+        values = {
+            str(route.get("provider") or ""),
+            str(route.get("runtime") or ""),
+            str(route.get("authProvider") or ""),
+        }
+        if provider_id == "claude-cli":
+            return "claude-cli" in values or ("anthropic" in values and str(route.get("runtime") or "") == "claude-cli")
+        return provider_id in values
+
+    def openclaw_openai_oauth_env_fallback_keys():
+        return ["CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_ORGANIZATION"]
+
+    def openclaw_env(provider, credential):
+        env = credential_env(provider, credential)
+        if provider.get("id") == "openai-codex":
+            for key in openclaw_openai_oauth_env_fallback_keys():
+                env.pop(key, None)
+        return env
+
+    def openclaw_oauth_profile_present(payload, provider_id):
+        if provider_id != "openai":
+            return True
+        auth = payload.get("auth") or {}
+        oauth = auth.get("oauth") or {}
+        for profile in oauth.get("profiles") or []:
+            if profile.get("provider") == "openai" and profile.get("status") not in {"missing", "expired"}:
+                return True
+        for provider in oauth.get("providers") or []:
+            if provider.get("provider") == "openai" and provider.get("status") not in {"missing", "expired"}:
+                return True
+        for label in auth.get("providersWithOAuth") or []:
+            if str(label).startswith("openai "):
+                return True
+        return False
+
+    def openclaw_auth_profile_usable(exe, provider_id, credential):
+        env = credential_env_by_provider_id(provider_id, credential)
+        if provider_id == "openai":
+            for key in openclaw_openai_oauth_env_fallback_keys():
+                env.pop(key, None)
+        result = run_process(
+            [
+                exe,
+                "models",
+                "status",
+                "--json",
+                "--probe-provider",
+                provider_id,
+            ],
+            env=env,
+            timeout=60,
+        )
+        if not result["ok"]:
+            return False
+        try:
+            payload = load_json_object(result["stdout"] + "\\n" + result["stderr"])
+            if not openclaw_oauth_profile_present(payload, provider_id):
+                return False
+            routes = ((payload.get("auth") or {}).get("runtimeAuthRoutes") or [])
+            for route in routes:
+                if openclaw_auth_route_matches(route, provider_id) and route.get("status") == "usable":
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def credential_env_by_provider_id(provider_id, credential):
+        provider = next(
+            (candidate for candidate in provider_choices if candidate["openclaw_provider"] == provider_id),
+            None,
+        )
+        return credential_env(provider, credential) if provider else os.environ.copy()
+
+    def run_openclaw_anthropic_cli_setup(exe, provider, credential):
+        env = credential_env(provider, credential)
+        provider_id = provider_id_for_runtime(provider, "openclaw")
+        if openclaw_auth_profile_usable(exe, provider_id, credential):
+            print(message(
+                "Existing Claude CLI auth profile is already registered in OpenClaw. Continuing without another registration.",
+                "OpenClaw에 기존 Claude CLI auth profile이 확인되어 재등록 없이 계속합니다.",
+                "OpenClawに既存のClaude CLI auth profileが確認されたため、再登録せずに続行します。",
+            ))
+            return {"ok": True, "code": 0, "stdout": "", "stderr": ""}
+        status, logged_in = claude_cli_auth_status(env)
+        if not logged_in:
+            print(message(
+                "Claude CLI login is required. Continue the Claude login flow below.",
+                "Claude CLI 로그인이 필요합니다. 아래 Claude 로그인 절차를 계속 진행하세요.",
+                "Claude CLIログインが必要です。以下のClaudeログイン手順を続けてください。",
+            ))
+            login = run_interactive_process(["claude", "auth", "login"], env=env, timeout=900)
+            if not login["ok"]:
+                return login
+            status, logged_in = claude_cli_auth_status(env)
+            if not logged_in:
+                return {
+                    "ok": False,
+                    "code": status.get("code", 1),
+                    "stdout": status.get("stdout", ""),
+                    "stderr": status.get("stderr", "") or "claude_cli_auth_not_verified",
+                }
+        print(message(
+            "Registering Claude CLI auth profile in OpenClaw...",
+            "OpenClaw에 Claude CLI auth profile을 등록합니다...",
+            "OpenClawにClaude CLI auth profileを登録します...",
+        ))
+        return run_interactive_process_until(
+            [exe, "models", "auth", "login", "--provider", "anthropic", "--method", "cli", "--set-default"],
+            lambda: openclaw_auth_profile_usable(exe, provider_id, credential),
+            env=env,
+            timeout=900,
+        )
+
+    def run_openclaw_openai_codex_setup(exe, provider, credential):
+        env = openclaw_env(provider, credential)
+        provider_id = provider_id_for_runtime(provider, "openclaw")
+        if openclaw_auth_profile_usable(exe, provider_id, credential):
+            print(message(
+                "Existing ChatGPT/Codex account login is already registered in OpenClaw. Continuing without another login.",
+                "OpenClaw에 기존 ChatGPT/Codex 계정 연동이 확인되어 재로그인 없이 계속합니다.",
+                "OpenClawに既存のChatGPT/Codexアカウント連携が確認されたため、再ログインせずに続行します。",
+            ))
+            return {"ok": True, "code": 0, "stdout": "", "stderr": ""}
+        print(message(
+            "Registering ChatGPT/Codex account login in OpenClaw...",
+            "OpenClaw에 ChatGPT/Codex 계정 연동을 등록합니다...",
+            "OpenClawにChatGPT/Codexアカウント連携を登録します...",
+        ))
+        return run_interactive_process_until(
+            [exe, "models", "auth", "login", "--provider", "openai", "--method", "oauth", "--set-default"],
+            lambda: openclaw_auth_profile_usable(exe, provider_id, credential),
+            env=env,
+            timeout=900,
+        )
+
     def run_openclaw_onboard(exe, provider, credential):
         env = credential_env(provider, credential)
         argv = [
@@ -1002,6 +1210,13 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         if result["ok"]:
             return result
         return result
+
+    def run_openclaw_config(exe, provider, credential):
+        if provider.get("id") == "anthropic-claude-code":
+            return run_openclaw_anthropic_cli_setup(exe, provider, credential)
+        if provider.get("id") == "openai-codex":
+            return run_openclaw_openai_codex_setup(exe, provider, credential)
+        return run_openclaw_onboard(exe, provider, credential)
 
     def verify_hermes_llm_call(exe, provider, credential):
         provider_id = provider_id_for_runtime(provider, "hermes")
@@ -1049,7 +1264,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
                 "--probe-max-tokens",
                 "4",
             ],
-            env=credential_env(provider, credential),
+            env=openclaw_env(provider, credential),
             timeout=180,
         )
         if not result["ok"]:
@@ -1139,17 +1354,59 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "Zebraオンボーディングに戻ってgbrainのインストールを続けてください。",
         ))
 
+    def print_provider_selection_notice(runtime, provider):
+        print()
+        if runtime == "hermes":
+            if provider.get("id") == "anthropic-claude-code":
+                print(message(
+                    "Hermes condition: Max + extra credits required.",
+                    "Hermes 조건: Max + extra credits 필요.",
+                    "Hermes条件: Max + extra credits 必須。",
+                ))
+            elif provider.get("id") == "openai-codex":
+                print(message(
+                    "Hermes will use OpenAI Codex account login.",
+                    "Hermes에 OpenAI Codex 계정 연동을 설정합니다.",
+                    "HermesにOpenAI Codexアカウント連携を設定します。",
+                ))
+            else:
+                print(message(
+                    f"Hermes will use {provider['label']}.",
+                    f"Hermes에 {provider['label']} 연결 정보를 설정합니다.",
+                    f"Hermesに{provider['label']}の接続情報を設定します。",
+                ))
+            return
+        if provider.get("id") == "anthropic-claude-code":
+            print(message(
+                "OpenClaw condition: Claude CLI login required.",
+                "OpenClaw 조건: Claude CLI 로그인 필요.",
+                "OpenClaw条件: Claude CLIログイン必須。",
+            ))
+        elif provider.get("id") == "openai-codex":
+            print(message(
+                "OpenClaw will register ChatGPT/Codex account login.",
+                "OpenClaw에 ChatGPT/Codex 계정 연동을 등록합니다.",
+                "OpenClawにChatGPT/Codexアカウント連携を登録します。",
+            ))
+        else:
+            print(message(
+                f"OpenClaw will use {provider['label']}.",
+                f"OpenClaw에 {provider['label']} 연결 정보를 설정합니다.",
+                f"OpenClawに{provider['label']}の接続情報を設定します。",
+            ))
+
     def run_onboarding():
         detection = detect_all()
         runtime = choose_runtime(detection)
         executable = ensure_runtime_installed(runtime, detection)
         print_provider_intro(runtime)
         provider = choose_provider()
+        print_provider_selection_notice(runtime, provider)
         credential = credential_for(provider, runtime)
         if runtime == "hermes":
             command_result = run_hermes_config(executable["path"], provider, credential)
         else:
-            command_result = run_openclaw_onboard(executable["path"], provider, credential)
+            command_result = run_openclaw_config(executable["path"], provider, credential)
         if not command_result["ok"]:
             print_command_failure(command_result, credential)
             raise RuntimeError(f"{runtime}_config_failed")
