@@ -39,6 +39,8 @@ enum TaskFrontmatterParser {
         }()
 
         let dueDate = parseDate(kv["due"]?.trimmedUnquoted)
+        let createdDate = parseDate(kv["created"]?.trimmedUnquoted)
+        let updatedDate = parseDate(kv["updated"]?.trimmedUnquoted)
 
         let goalRaw = kv["goal"]?.trimmedUnquoted
         let goalSlug: String? = {
@@ -78,6 +80,8 @@ enum TaskFrontmatterParser {
             priority: priority,
             ownerSlug: ownerSlug,
             dueDate: dueDate,
+            createdDate: createdDate,
+            updatedDate: updatedDate,
             goalSlug: goalSlug,
             relatedProjects: relatedProjects,
             tags: tags

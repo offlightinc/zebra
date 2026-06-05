@@ -19,6 +19,8 @@ struct TaskListView: View {
             collapseAllToolbar(tasks: tasksSnapshot)
             TaskListToolbar(
                 groupBy: viewModel.groupBy,
+                sort: viewModel.sort,
+                sortDirection: viewModel.sortDirection,
                 myOwnerFilter: viewModel.myOwnerFilter,
                 existingFilterFields: Set(viewModel.filters.map(\.field)),
                 availableOwners: availableOwners,
@@ -29,6 +31,7 @@ struct TaskListView: View {
                         ?? TaskFilter(field: field, op: .is, values: [])
                 },
                 onPickGroupBy: { viewModel.groupBy = $0 },
+                onPickSort: { viewModel.pickSort($0) },
                 onPickField: { field in
                     if !viewModel.filters.contains(where: { $0.field == field }) {
                         viewModel.filters.append(TaskFilter(field: field, op: .is, values: []))
@@ -69,8 +72,8 @@ struct TaskListView: View {
     // 중 펼친 게 한 개라도 있을 때". 그룹이 0개 (no tasks / no grouping=all 만)
     // 인 경우는 비활성화하지만 자리는 유지 → 첫 줄이 점프 안 함.
     private func collapseAllToolbar(tasks: [TaskItem]) -> some View {
-        let filtered = viewModel.visibleTasks(from: tasks)
-        let groups = TaskListViewModel.groupTasks(filtered, by: viewModel.groupBy)
+        let displayTasks = viewModel.displayTasks(from: tasks)
+        let groups = TaskListViewModel.groupTasks(displayTasks, by: viewModel.groupBy)
         let allCollapsed = !groups.isEmpty && groups.allSatisfy { viewModel.collapsedSections.contains($0.key.raw) }
         let canCollapse = store.rootPath != nil && !groups.isEmpty && !allCollapsed
         return HStack(spacing: 0) {
@@ -114,7 +117,7 @@ struct TaskListView: View {
             placeholder(String(localized: "task.list.empty.error", defaultValue: "Failed to load: \(error)"))
         } else if tasks.isEmpty {
             placeholder(String(localized: "task.list.empty.noTasks", defaultValue: "No tasks in vault"))
-        } else if viewModel.visibleTasks(from: tasks).isEmpty {
+        } else if viewModel.displayTasks(from: tasks).isEmpty {
             placeholder(String(localized: "task.list.empty.noMatches", defaultValue: "No matching tasks"))
         } else {
             listScrollView(tasks: tasks)
@@ -159,8 +162,8 @@ struct TaskListView: View {
     }
 
     private func listScrollView(tasks: [TaskItem]) -> some View {
-        let filtered = viewModel.visibleTasks(from: tasks)
-        let groups = TaskListViewModel.groupTasks(filtered, by: viewModel.groupBy)
+        let displayTasks = viewModel.displayTasks(from: tasks)
+        let groups = TaskListViewModel.groupTasks(displayTasks, by: viewModel.groupBy)
         return ScrollView {
             LazyVStack(spacing: 0, pinnedViews: []) {
                 ForEach(groups) { group in

@@ -66,6 +66,8 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
         let myFilter = TaskFilter(field: .owner, op: .is, values: ["여한우리", "홍남호"])
         let state = VerticalTabsSidebarViewStatePersistence.TaskState(
             groupBy: .owner,
+            sort: .updated,
+            sortDirection: .ascending,
             filters: [
                 TaskFilter(field: .status, op: .is, values: ["todo"]),
                 TaskFilter(field: .owner, op: .isNot, values: ["여한우리"]),
@@ -78,6 +80,8 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
         let restored = VerticalTabsSidebarViewStatePersistence.loadTaskState(rootPath: root, defaults: defaults)
 
         XCTAssertEqual(restored.resolvedGroupBy, .owner)
+        XCTAssertEqual(restored.resolvedSort, .updated)
+        XCTAssertEqual(restored.resolvedSortDirection, .ascending)
         XCTAssertEqual(restored.resolvedFilters, state.resolvedFilters)
         XCTAssertEqual(Set(restored.collapsedSections), ["todo", "done"])
         XCTAssertEqual(restored.resolvedMyOwnerFilter, myFilter)
@@ -97,6 +101,34 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
         let restored = VerticalTabsSidebarViewStatePersistence.loadTaskState(rootPath: root, defaults: defaults)
 
         XCTAssertNil(restored.resolvedMyOwnerFilter)
+    }
+
+    func testUnknownTaskSortFallsBackToTitle() throws {
+        let state = VerticalTabsSidebarViewStatePersistence.TaskState(
+            groupBy: TaskGroupBy.status.rawValue,
+            sort: "future-sort",
+            sortDirection: nil,
+            filters: [],
+            collapsedSections: [],
+            myOwnerFilter: nil
+        )
+
+        XCTAssertEqual(state.resolvedSort, .title)
+        XCTAssertEqual(state.resolvedSortDirection, .ascending)
+    }
+
+    func testUnknownTaskSortDirectionFallsBackToSortDefault() throws {
+        let state = VerticalTabsSidebarViewStatePersistence.TaskState(
+            groupBy: TaskGroupBy.status.rawValue,
+            sort: TaskSort.updated.rawValue,
+            sortDirection: "sideways",
+            filters: [],
+            collapsedSections: [],
+            myOwnerFilter: nil
+        )
+
+        XCTAssertEqual(state.resolvedSort, .updated)
+        XCTAssertEqual(state.resolvedSortDirection, .descending)
     }
 
     func testDocumentStateIsScopedByRootPath() throws {

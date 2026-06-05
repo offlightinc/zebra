@@ -21,6 +21,47 @@ enum TaskGroupBy: String, CaseIterable, Hashable, Sendable {
     }
 }
 
+enum TaskSort: String, CaseIterable, Hashable, Sendable {
+    case title
+    case due
+    case created
+    case updated
+
+    var label: String {
+        switch self {
+        case .title:   return String(localized: "task.sort.title", defaultValue: "Title")
+        case .due:     return String(localized: "task.sort.due", defaultValue: "Due")
+        case .created: return String(localized: "task.sort.created", defaultValue: "Created")
+        case .updated: return String(localized: "task.sort.updated", defaultValue: "Updated")
+        }
+    }
+
+    var defaultDirection: TaskSortDirection {
+        switch self {
+        case .title, .due:
+            return .ascending
+        case .created, .updated:
+            return .descending
+        }
+    }
+}
+
+enum TaskSortDirection: String, Hashable, Sendable {
+    case ascending
+    case descending
+
+    var symbol: String {
+        switch self {
+        case .ascending:  return "↑"
+        case .descending: return "↓"
+        }
+    }
+
+    var toggled: TaskSortDirection {
+        self == .ascending ? .descending : .ascending
+    }
+}
+
 enum TaskFilterField: String, CaseIterable, Hashable, Sendable {
     case status, priority, owner
 
@@ -72,6 +113,12 @@ final class TaskListViewModel: ObservableObject {
     @Published var groupBy: TaskGroupBy = .status {
         didSet { persistState() }
     }
+    @Published var sort: TaskSort = .title {
+        didSet { persistState() }
+    }
+    @Published var sortDirection: TaskSortDirection = TaskSort.title.defaultDirection {
+        didSet { persistState() }
+    }
     @Published var filters: [TaskFilter] = [] {
         didSet { persistState() }
     }
@@ -95,6 +142,8 @@ final class TaskListViewModel: ObservableObject {
         let restored = VerticalTabsSidebarViewStatePersistence.loadTaskState(rootPath: rootPath)
         isRestoringState = true
         groupBy = restored.resolvedGroupBy
+        sort = restored.resolvedSort
+        sortDirection = restored.resolvedSortDirection
         filters = restored.resolvedFilters
         collapsedSections = Set(restored.collapsedSections)
         myOwnerFilter = restored.resolvedMyOwnerFilter
@@ -121,12 +170,27 @@ final class TaskListViewModel: ObservableObject {
         return Self.applyFilters(tasks, allFilters)
     }
 
+    func displayTasks(from tasks: [TaskItem]) -> [TaskItem] {
+        Self.sortTasks(visibleTasks(from: tasks), by: sort, direction: sortDirection)
+    }
+
+    func pickSort(_ selected: TaskSort) {
+        if sort == selected {
+            sortDirection = sortDirection.toggled
+        } else {
+            sort = selected
+            sortDirection = selected.defaultDirection
+        }
+    }
+
     private func persistState() {
         guard !isRestoringState,
               let rootPath = persistenceRootPath else { return }
         VerticalTabsSidebarViewStatePersistence.saveTaskState(
             VerticalTabsSidebarViewStatePersistence.TaskState(
                 groupBy: groupBy,
+                sort: sort,
+                sortDirection: sortDirection,
                 filters: filters,
                 collapsedSections: collapsedSections,
                 myOwnerFilter: myOwnerFilter
@@ -158,6 +222,66 @@ final class TaskListViewModel: ObservableObject {
         case .owner:
             return task.ownerSlug ?? "__unassigned__"
         }
+    }
+
+    static func sortTasks(
+        _ tasks: [TaskItem],
+        by sort: TaskSort,
+        direction: TaskSortDirection
+    ) -> [TaskItem] {
+        tasks.sorted { lhs, rhs in
+            switch sort {
+            case .title:
+                return compareTitle(lhs, rhs, direction: direction)
+            case .due:
+                if let result = compareDate(lhs.dueDate, rhs.dueDate, direction: direction) {
+                    return result
+                }
+                return compareTitle(lhs, rhs, direction: .ascending)
+            case .created:
+                if let result = compareDate(lhs.createdDate, rhs.createdDate, direction: direction) {
+                    return result
+                }
+                return compareTitle(lhs, rhs, direction: .ascending)
+            case .updated:
+                if let result = compareDate(lhs.updatedDate, rhs.updatedDate, direction: direction) {
+                    return result
+                }
+                return compareTitle(lhs, rhs, direction: .ascending)
+            }
+        }
+    }
+
+    private static func compareDate(
+        _ lhs: Date?,
+        _ rhs: Date?,
+        direction: TaskSortDirection
+    ) -> Bool? {
+        switch (lhs, rhs) {
+        case let (l?, r?):
+            if l == r { return nil }
+            return direction == .ascending ? l < r : l > r
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    private static func compareTitle(
+        _ lhs: TaskItem,
+        _ rhs: TaskItem,
+        direction: TaskSortDirection
+    ) -> Bool {
+        let comparison = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+        if comparison != .orderedSame {
+            return direction == .ascending
+                ? comparison == .orderedAscending
+                : comparison == .orderedDescending
+        }
+        return lhs.absolutePath < rhs.absolutePath
     }
 
     /// Groups tasks for display. `.project` is multi-group (a single task with

@@ -9,6 +9,8 @@ public struct TaskItem: VaultSubdirEntry {
     public let priority: BrainPriority?
     public let ownerSlug: String?
     public let dueDate: Date?
+    public let createdDate: Date?
+    public let updatedDate: Date?
     public let goalSlug: String?
     public let relatedProjects: [String]
     public let tags: [String]
@@ -30,6 +32,8 @@ public struct TaskItem: VaultSubdirEntry {
             priority: priority ?? self.priority,
             ownerSlug: ownerSlug,
             dueDate: dueDate ?? self.dueDate,
+            createdDate: createdDate,
+            updatedDate: updatedDate,
             goalSlug: goalSlug,
             relatedProjects: relatedProjects,
             tags: tags

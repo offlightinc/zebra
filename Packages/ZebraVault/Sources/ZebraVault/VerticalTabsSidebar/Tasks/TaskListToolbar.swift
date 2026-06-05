@@ -7,9 +7,11 @@ enum TaskFilterPopoverStep: Equatable {
     case value(TaskFilterField)
 }
 
-/// Top toolbar: `+ Filter` (left) + `Group: …` + `내 것` toggle (right).
+/// Top toolbar: `+ Filter` + `Sort` (left) + `Group: …` + `내 것` toggle (right).
 struct TaskListToolbar: View {
     let groupBy: TaskGroupBy
+    let sort: TaskSort
+    let sortDirection: TaskSortDirection
     let myOwnerFilter: TaskFilter?
     let existingFilterFields: Set<TaskFilterField>
     let availableOwners: [String]
@@ -17,24 +19,26 @@ struct TaskListToolbar: View {
     @Binding var showMyOwnerMenu: Bool
     let currentFilter: (TaskFilterField) -> TaskFilter
     let onPickGroupBy: (TaskGroupBy) -> Void
+    let onPickSort: (TaskSort) -> Void
     let onPickField: (TaskFilterField) -> Void
     let onChangeFilterValues: (TaskFilter) -> Void
     let onChangeMyOwnerFilter: (TaskFilter?) -> Void
     let onCloseFilter: () -> Void
 
     @State private var showGroupByMenu = false
+    @State private var showSortMenu = false
     @State private var filterHover = false
+    @State private var sortHover = false
     @State private var groupHover = false
     @State private var myHover = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 0) {
             filterButton
+            sortButton
+            groupButton
             Spacer(minLength: 0)
-            HStack(spacing: 0) {
-                groupButton
-                myToggleButton
-            }
+            myToggleButton
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(BVColor.bg)
@@ -95,6 +99,36 @@ struct TaskListToolbar: View {
         }
     }
 
+    private var sortButton: some View {
+        Button(action: { showSortMenu = true }) {
+            HStack(spacing: 5) {
+                Text(String(localized: "task.toolbar.sort", defaultValue: "Sort"))
+                    .font(.system(size: 11.5))
+                    .foregroundColor(BVColor.fgMute)
+                Text(sort.label)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(BVColor.fg)
+                    .lineLimit(1)
+                SortDirectionGlyph(direction: sortDirection)
+                    .foregroundColor(BVColor.fgMute)
+                    .frame(width: 7, height: 12)
+            }
+            .padding(.horizontal, 7).padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(sortHover ? BVColor.bgHover : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { sortHover = $0 }
+        .panelPopover(isPresented: $showSortMenu, alignment: .leading) {
+            TaskSortPicker(current: sort, direction: sortDirection) { opt in
+                onPickSort(opt)
+            }
+        }
+    }
+
     private var myToggleButton: some View {
         Button(action: { showMyOwnerMenu = true }) {
             Group {
@@ -142,6 +176,8 @@ struct TaskListToolbar: View {
                 Text(groupBy.label)
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundColor(BVColor.fg)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 // 가로:세로 약 1.8:1 비율의 납작한 down-triangle. macOS SF Pro의
                 // "▾" U+25BE는 정사각에 가까워 HTML 디자인의 납작한 비율과 다르다.
                 FlatDownCarat()
@@ -155,6 +191,7 @@ struct TaskListToolbar: View {
                     .fill(groupHover ? BVColor.bgHover : Color.clear)
             )
             .contentShape(Rectangle())
+            .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.plain)
         .onHover { groupHover = $0 }
@@ -201,6 +238,36 @@ struct TaskListToolbar: View {
             )
             .id(field)
         }
+    }
+}
+
+private struct SortDirectionGlyph: Shape {
+    let direction: TaskSortDirection
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let centerX = rect.midX
+        let shaftTop = rect.minY + 2
+        let shaftBottom = rect.maxY - 2
+        let headHalfWidth: CGFloat = 1.7
+        let headHeight: CGFloat = 2.2
+
+        switch direction {
+        case .ascending:
+            path.move(to: CGPoint(x: centerX, y: shaftBottom))
+            path.addLine(to: CGPoint(x: centerX, y: shaftTop))
+            path.move(to: CGPoint(x: centerX - headHalfWidth, y: shaftTop + headHeight))
+            path.addLine(to: CGPoint(x: centerX, y: shaftTop))
+            path.addLine(to: CGPoint(x: centerX + headHalfWidth, y: shaftTop + headHeight))
+        case .descending:
+            path.move(to: CGPoint(x: centerX, y: shaftTop))
+            path.addLine(to: CGPoint(x: centerX, y: shaftBottom))
+            path.move(to: CGPoint(x: centerX - headHalfWidth, y: shaftBottom - headHeight))
+            path.addLine(to: CGPoint(x: centerX, y: shaftBottom))
+            path.addLine(to: CGPoint(x: centerX + headHalfWidth, y: shaftBottom - headHeight))
+        }
+
+        return path.strokedPath(.init(lineWidth: 1, lineCap: .round, lineJoin: .round))
     }
 }
 
