@@ -6,6 +6,7 @@ import Darwin
 
 public enum ZebraOnboardingChecklistStepID: String, CaseIterable, Identifiable, Sendable {
     case agent
+    case gbrainRuntime
     case gbrain
     case adapter
     case email
@@ -34,15 +35,17 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     private static let steps: [StepDefinition] = [
         StepDefinition(id: .agent, number: 1),
-        StepDefinition(id: .gbrain, number: 2),
-        StepDefinition(id: .adapter, number: 3),
-        StepDefinition(id: .email, number: 4),
-        StepDefinition(id: .ingest, number: 5),
-        StepDefinition(id: .goals, number: 6),
+        StepDefinition(id: .gbrainRuntime, number: 2),
+        StepDefinition(id: .gbrain, number: 3),
+        StepDefinition(id: .adapter, number: 4),
+        StepDefinition(id: .email, number: 5),
+        StepDefinition(id: .ingest, number: 6),
+        StepDefinition(id: .goals, number: 7),
     ]
 
     private let fileManager: FileManager
     private let homeDirectoryPath: String
+    private let gbrainRuntimeOnboardingStore: ZebraGBrainRuntimeOnboardingStore
     private let gbrainOnboardingStore: ZebraGBrainOnboardingStore
     private var selectedVaultPath: String?
     private var emailConnected = false
@@ -54,6 +57,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 #if DEBUG
     private static let developmentCompletedStepIDsDefaultsKey = "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
     private static let developmentManuallyCompletableStepIDs: Set<ZebraOnboardingChecklistStepID> = [
+        .gbrainRuntime,
         .gbrain,
         .adapter,
         .email,
@@ -78,10 +82,16 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     public init(
         fileManager: FileManager = .default,
         homeDirectoryPath: String = NSHomeDirectory(),
+        gbrainRuntimeOnboardingStateURL: URL = ZebraGBrainRuntimeOnboardingStore.defaultStateURL(),
         gbrainOnboardingStateURL: URL = ZebraGBrainOnboardingStore.defaultStateURL()
     ) {
         self.fileManager = fileManager
         self.homeDirectoryPath = Self.standardizedPath(homeDirectoryPath)
+        self.gbrainRuntimeOnboardingStore = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: gbrainRuntimeOnboardingStateURL,
+            fileManager: fileManager,
+            homeDirectoryPath: homeDirectoryPath
+        )
         self.gbrainOnboardingStore = ZebraGBrainOnboardingStore(
             stateURL: gbrainOnboardingStateURL,
             fileManager: fileManager,
@@ -211,10 +221,12 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     public func refreshDetectedCompletion() {
         completionRefreshGeneration += 1
         let generation = completionRefreshGeneration
+        let cachedGBrainRuntimeCompletion = gbrainRuntimeOnboardingStore.cachedCompletionResult()
         let cachedGBrainCompletion = gbrainOnboardingStore.cachedCompletionResult(
             selectedVaultPath: selectedVaultPath
         )
         applyDetectedCompletion(
+            gbrainRuntimeCompleted: cachedGBrainRuntimeCompletion.isComplete,
             gbrainCompleted: cachedGBrainCompletion.isComplete
         )
         guard shouldRefreshGBrainCompletionInBackground(cachedGBrainCompletion) else { return }
@@ -246,15 +258,24 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                 self.refreshDetectedCompletion()
                 return
             }
-            self.applyDetectedCompletion(gbrainCompleted: completed)
+            self.applyDetectedCompletion(
+                gbrainRuntimeCompleted: self.gbrainRuntimeOnboardingStore.cachedCompletionResult().isComplete,
+                gbrainCompleted: completed
+            )
         }
     }
 
-    private func applyDetectedCompletion(gbrainCompleted: Bool) {
+    private func applyDetectedCompletion(
+        gbrainRuntimeCompleted: Bool,
+        gbrainCompleted: Bool
+    ) {
         var completed = Set<ZebraOnboardingChecklistStepID>()
 
         if !ZebraAgentOnboardingStartup.shouldRunAutomaticWelcome() {
             completed.insert(.agent)
+        }
+        if gbrainRuntimeCompleted {
+            completed.insert(.gbrainRuntime)
         }
         if gbrainCompleted {
             completed.insert(.gbrain)
@@ -285,6 +306,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         let directoryPaths = Set([
             ZebraAgentOnboardingStartup.defaultStateURL().deletingLastPathComponent().path,
             ZebraAgentPreferenceStore.defaultPreferencesURL().deletingLastPathComponent().path,
+            ZebraGBrainRuntimeOnboardingStore.defaultStateURL().deletingLastPathComponent().path,
             ZebraGBrainOnboardingStore.defaultStateURL().deletingLastPathComponent().path,
         ])
 
@@ -410,6 +432,8 @@ public enum ZebraOnboardingChecklistCommand {
                 cwd: cwd,
                 languageCode: language.code
             )
+        case .gbrainRuntime:
+            return ZebraGBrainRuntimeOnboardingStore().prepareLaunch()?.startupLine
         case .gbrain:
             let agent = MarkdownPillAgent.defaultAgent()
             guard let launch = ZebraGBrainOnboardingStore().prepareLaunch(
@@ -587,6 +611,11 @@ public struct ZebraOnboardingChecklistCard: View {
             return String(
                 localized: "brain.onboarding.checklist.step.agent",
                 defaultValue: "Scan agent CLIs and choose the primary agent"
+            )
+        case .gbrainRuntime:
+            return String(
+                localized: "brain.onboarding.checklist.step.gbrainRuntime",
+                defaultValue: "Prepare OpenClaw or Hermes"
             )
         case .gbrain:
             return String(

@@ -273,7 +273,7 @@ struct ZebraSidebarBody: View {
             return MarkdownPillAgent.defaultAgent()
         case .email:
             return ZebraClawvisorAgent.default.markdownPillAgent
-        case .gbrain:
+        case .gbrainRuntime, .gbrain:
             return nil
         }
     }
