@@ -234,6 +234,20 @@ public enum MarkdownChatPillCommand {
         return "\(invocation(agent: agent, cwd: cwd, trustEligible: trustEligible, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation))\r"
     }
 
+    public static func shellStartupLineForGBrainSetup(
+        agent: MarkdownPillAgent,
+        cwdShellExpression: String,
+        userPrompt: String,
+        allowTrustedAutomation: Bool = true,
+        allowApprovalAutomation: Bool = true
+    ) -> String {
+        let contextPrefix = MarkdownChatPillContextPrefix.build(
+            markdownFilePath: nil,
+            surface: .fallback(typeLabel: "onboarding")
+        )
+        return "\(invocation(agent: agent, cwdShellExpression: cwdShellExpression, trustCwd: nil, trustEligible: false, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation))\r"
+    }
+
     public static func worktreeFrontmatterPath(_ markdownContent: String?) -> String? {
         guard let markdownContent,
               let block = FrontmatterUtils.extractFrontmatterBlock(from: markdownContent) else {
@@ -306,6 +320,30 @@ public enum MarkdownChatPillCommand {
         allowTrustedAutomation: Bool = true,
         allowApprovalAutomation: Bool = true
     ) -> String {
+        invocation(
+            agent: agent,
+            cwdShellExpression: shellQuote(cwd),
+            trustCwd: cwd,
+            trustEligible: trustEligible,
+            contextPrefix: contextPrefix,
+            prompt: prompt,
+            mode: mode,
+            allowTrustedAutomation: allowTrustedAutomation,
+            allowApprovalAutomation: allowApprovalAutomation
+        )
+    }
+
+    private static func invocation(
+        agent: MarkdownPillAgent,
+        cwdShellExpression: String,
+        trustCwd: String?,
+        trustEligible: Bool,
+        contextPrefix: String,
+        prompt: String,
+        mode: InvocationMode = .standard,
+        allowTrustedAutomation: Bool = true,
+        allowApprovalAutomation: Bool = true
+    ) -> String {
         let promptArgument = singleLineShellArgument(prompt)
         // Visible context = surface advisory + gbrain advisory + blank line + user prompt
         // (서로 다른 두 메시지 줄이라 빈 줄로 끊어둔다). 단일 따옴표 안의 embedded newline 은
@@ -315,12 +353,12 @@ public enum MarkdownChatPillCommand {
         switch agent {
         case .codex:
             var parts = [
-                "cd \(shellQuote(cwd)) && codex",
-                "-C \(shellQuote(cwd))"
+                "cd \(cwdShellExpression) && codex",
+                "-C \(cwdShellExpression)"
             ]
             // trust 우회는 (a) surface 가 file-bound 이고 (b) cwd 가 안전한
             // 사용자-소유 디렉터리일 때만. `/` 나 home 직속을 silent trusted 처리 금지.
-            if trustEligible, let trustCwd = safeTrustCwd(cwd) {
+            if trustEligible, let cwd = trustCwd, let trustCwd = safeTrustCwd(cwd) {
                 let trustOverride = "projects.\"\(trustCwd)\".trust_level=\"trusted\""
                 parts.append("-c \(shellQuote(trustOverride))")
             }
@@ -335,9 +373,9 @@ public enum MarkdownChatPillCommand {
             return parts.joined(separator: " ")
         case .claude:
             let permissionMode = mode == .gbrainSetup && allowTrustedAutomation ? " --permission-mode auto" : ""
-            return "cd \(shellQuote(cwd)) && claude\(permissionMode) --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
+            return "cd \(cwdShellExpression) && claude\(permissionMode) --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
         case .antigravity:
-            return "cd \(shellQuote(cwd)) && agy --prompt-interactive --add-dir \(shellQuote(cwd)) \(shellQuote(visibleContextPrompt))"
+            return "cd \(cwdShellExpression) && agy --prompt-interactive --add-dir \(cwdShellExpression) \(shellQuote(visibleContextPrompt))"
         }
     }
 

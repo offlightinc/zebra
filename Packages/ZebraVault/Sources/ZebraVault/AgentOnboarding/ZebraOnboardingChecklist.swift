@@ -134,22 +134,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     }
 
     public func prefetchGBrainDocsIfNeeded() {
-        guard !completedStepIDs.contains(.gbrain),
-              !didStartGBrainDocsPrefetch,
-              gbrainDocsPrefetchTask == nil else {
-            return
-        }
         didStartGBrainDocsPrefetch = true
-        let store = gbrainOnboardingStore
-        let task = Task.detached(priority: .utility) {
-            store.prefetchDocsSnapshotIfNeeded()
-        }
-        gbrainDocsPrefetchTask = task
-        Task { @MainActor [weak self, task] in
-            _ = await task.value
-            guard let self else { return }
-            self.gbrainDocsPrefetchTask = nil
-        }
     }
 
     public var snapshots: [ZebraOnboardingChecklistStepSnapshot] {
@@ -291,6 +276,10 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 #endif
 
         if let runningStepID, completed.contains(runningStepID) {
+            self.runningStepID = nil
+        }
+        if runningStepID == .gbrain,
+           gbrainOnboardingStore.hasSourceRepoPrepareAbortMarker() {
             self.runningStepID = nil
         }
         if completedStepIDs != completed {
@@ -435,14 +424,15 @@ public enum ZebraOnboardingChecklistCommand {
         case .gbrainRuntime:
             return ZebraGBrainRuntimeOnboardingStore().prepareLaunch()?.startupLine
         case .gbrain:
-            let agent = MarkdownPillAgent.defaultAgent()
+            guard let runtime = ZebraGBrainRuntimeOnboardingStore().selectedRuntimeForGBrainSetup() else {
+                return nil
+            }
             guard let launch = ZebraGBrainOnboardingStore().prepareLaunch(
-                selectedVaultPath: selectedVaultPath,
-                selectedAgent: agent
+                selectedVaultPath: selectedVaultPath
             ) else {
                 return nil
             }
-            return gbrainSetupAgentStartupLine(launch: launch, agent: agent)
+            return gbrainSetupRuntimeStartupLine(launch: launch, runtime: runtime)
         case .adapter:
             return agentStartupLine(
                 cwd: cwd,
@@ -470,27 +460,35 @@ public enum ZebraOnboardingChecklistCommand {
         }
     }
 
-    private static func gbrainSetupAgentStartupLine(
+    static func gbrainSetupRuntimeStartupLine(
         launch: ZebraGBrainOnboardingStore.LaunchContext,
-        agent: MarkdownPillAgent
+        runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime
     ) -> String {
-        let cwd = launch.launchDirectory
         let prompt = launch.startupPrompt
-        if launch.allowLaunchDirectoryTrust {
-            _ = MarkdownChatPillCommand.prepareLaunchEnvironment(
-                agent: agent,
-                markdownFilePath: nil,
-                launchDirectory: cwd
-            )
+        let prepareSourceRepoPrefix = [
+            "zebra-gbrain-onboarding prepare-source-repo",
+            "eval \"$(zebra-gbrain-onboarding active-source-env)\"",
+        ].joined(separator: " && ") + " && "
+        let startupLine = gbrainSetupSelectedRuntimeCommand(runtime: runtime, prompt: prompt)
+        return "\(launch.shellEnvironmentPrefix)\(prepareSourceRepoPrefix)\(startupLine)"
+    }
+
+    private static func gbrainSetupSelectedRuntimeCommand(
+        runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime,
+        prompt: String
+    ) -> String {
+        let executable = ZebraAgentLaunchCommand.shellQuote(runtime.executablePath)
+        let quotedPrompt = ZebraAgentLaunchCommand.shellQuote(prompt)
+        switch runtime.runtime {
+        case "openclaw":
+            let agentID = "zebra-gbrain-setup"
+            let sessionKey = "agent:\(agentID):zebra-gbrain-setup"
+            return "zebra-gbrain-onboarding prepare-openclaw-agent --executable \(executable) && cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && \(executable) tui --local --session \(ZebraAgentLaunchCommand.shellQuote(sessionKey)) --message \(quotedPrompt)\r"
+        case "hermes":
+            return "cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && \(executable) chat --source zebra-gbrain-onboarding --query \(quotedPrompt)\r"
+        default:
+            return "echo 'Unsupported OpenClaw/Hermes runtime for GBrain setup: \(runtime.runtime)' >&2 && exit 1\r"
         }
-        let startupLine = MarkdownChatPillCommand.shellStartupLineForGBrainSetup(
-            agent: agent,
-            cwd: cwd,
-            userPrompt: prompt,
-            allowTrustedAutomation: launch.allowTrustedAutomation,
-            allowLaunchDirectoryTrust: launch.allowLaunchDirectoryTrust
-        )
-        return "\(launch.shellEnvironmentPrefix)\(startupLine)"
     }
 
     private static func agentStartupLine(

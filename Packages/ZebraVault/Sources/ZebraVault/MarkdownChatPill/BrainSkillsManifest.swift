@@ -15,13 +15,17 @@ enum BrainSkillsManifest {
         var id: String { name }
     }
 
-    /// Default engine location. `~/.gbrain/config.json` only holds the
-    /// database path, not the engine path, so there's nothing to read for
-    /// engine resolution today. If users start putting gbrain elsewhere we
-    /// can add an env var (`GBRAIN_HOME`) or an app preference here.
+    /// Default engine location. GBrain setup records the user-confirmed
+    /// source repo; `~/gbrain` remains only the fallback recommendation.
     private static var defaultManifestURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("gbrain", isDirectory: true)
+        let sourceRepoURL: URL
+        if let sourceRepoPath = ZebraGBrainOnboardingStore().activeSourceRepoPathFromCachedState() {
+            sourceRepoURL = URL(fileURLWithPath: sourceRepoPath, isDirectory: true)
+        } else {
+            sourceRepoURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("gbrain", isDirectory: true)
+        }
+        return sourceRepoURL
             .appendingPathComponent("skills", isDirectory: true)
             .appendingPathComponent("manifest.json", isDirectory: false)
     }

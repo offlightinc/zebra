@@ -58,6 +58,134 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(store.completedStepIDs.contains(.gbrain))
     }
 
+    func testSelectedRuntimeForGBrainSetupReadsCompletedReceipt() throws {
+        let root = try makeTemporaryDirectory()
+        let executable = try installFakeRuntime(root: root, name: "openclaw")
+        let runtimeStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        try writeCompletedRuntimeState(
+            stateURL: runtimeStateURL,
+            runtime: "openclaw",
+            executablePath: executable.path
+        )
+
+        let runtime = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: runtimeStateURL,
+            homeDirectoryPath: root.path
+        ).selectedRuntimeForGBrainSetup()
+
+        XCTAssertEqual(runtime?.runtime, "openclaw")
+        XCTAssertEqual(runtime?.executablePath, executable.path)
+    }
+
+    func testGBrainStartupLinePreparesSourceRepoBeforeRuntimeLaunch() throws {
+        let launch = ZebraGBrainOnboardingStore.LaunchContext(
+            launchDirectory: "/tmp/zebra-gbrain-work",
+            startupPrompt: "setup prompt",
+            setupPacketPath: "/tmp/zebra-gbrain-packet.md",
+            shellEnvironmentPrefix: "export ZEBRA_GBRAIN_STATE='/tmp/state.json' && ",
+            allowTrustedAutomation: true,
+            allowLaunchDirectoryTrust: false
+        )
+        let runtime = ZebraGBrainRuntimeOnboardingStore.SelectedRuntime(
+            runtime: "hermes",
+            executablePath: "/tmp/hermes"
+        )
+
+        let line = ZebraOnboardingChecklistCommand.gbrainSetupRuntimeStartupLine(
+            launch: launch,
+            runtime: runtime
+        )
+
+        XCTAssertTrue(line.contains("zebra-gbrain-onboarding prepare-source-repo"), line)
+        XCTAssertTrue(line.contains("eval \"$(zebra-gbrain-onboarding active-source-env)\""), line)
+        XCTAssertTrue(line.contains("cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/hermes' chat"), line)
+        XCTAssertTrue(line.contains("--source zebra-gbrain-onboarding"), line)
+        XCTAssertTrue(line.contains("--query 'setup prompt'"), line)
+        XCTAssertFalse(line.contains(" codex"), line)
+        let prepareRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-source-repo"))
+        let envRange = try XCTUnwrap(line.range(of: "eval \"$(zebra-gbrain-onboarding active-source-env)\""))
+        let launchRange = try XCTUnwrap(line.range(of: "cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/hermes' chat"))
+        XCTAssertLessThan(prepareRange.lowerBound, envRange.lowerBound)
+        XCTAssertLessThan(envRange.lowerBound, launchRange.lowerBound)
+    }
+
+    func testGBrainStartupLineUsesOpenClawRuntimeWhenSelected() throws {
+        let launch = ZebraGBrainOnboardingStore.LaunchContext(
+            launchDirectory: "/tmp/zebra-gbrain-work",
+            startupPrompt: "setup prompt",
+            setupPacketPath: "/tmp/zebra-gbrain-packet.md",
+            shellEnvironmentPrefix: "export ZEBRA_GBRAIN_STATE='/tmp/state.json' && ",
+            allowTrustedAutomation: true,
+            allowLaunchDirectoryTrust: false
+        )
+        let runtime = ZebraGBrainRuntimeOnboardingStore.SelectedRuntime(
+            runtime: "openclaw",
+            executablePath: "/tmp/openclaw"
+        )
+
+        let line = ZebraOnboardingChecklistCommand.gbrainSetupRuntimeStartupLine(
+            launch: launch,
+            runtime: runtime
+        )
+
+        XCTAssertTrue(
+            line.contains("zebra-gbrain-onboarding prepare-openclaw-agent --executable '/tmp/openclaw'"),
+            line
+        )
+        XCTAssertTrue(line.contains("cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/openclaw' tui"), line)
+        XCTAssertTrue(line.contains("--session 'agent:zebra-gbrain-setup:zebra-gbrain-setup'"), line)
+        XCTAssertTrue(line.contains("--local"), line)
+        XCTAssertTrue(line.contains("--message 'setup prompt'"), line)
+        XCTAssertFalse(line.contains("agents list --json"), line)
+        XCTAssertFalse(line.contains("agents add"), line)
+        XCTAssertFalse(line.contains("--session zebra-gbrain-setup"), line)
+        XCTAssertFalse(line.contains(" codex"), line)
+        let prepareRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-source-repo"))
+        let envRange = try XCTUnwrap(line.range(of: "eval \"$(zebra-gbrain-onboarding active-source-env)\""))
+        let agentRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-openclaw-agent"))
+        let launchRange = try XCTUnwrap(line.range(of: "cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/openclaw' tui"))
+        XCTAssertLessThan(prepareRange.lowerBound, envRange.lowerBound)
+        XCTAssertLessThan(envRange.lowerBound, agentRange.lowerBound)
+        XCTAssertLessThan(agentRange.lowerBound, launchRange.lowerBound)
+    }
+
+    @MainActor
+    func testGBrainPrepareAbortShowsStartAgain() throws {
+        let root = try makeTemporaryDirectory()
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        let runtimeStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try writeCompletedRuntimeState(
+            stateURL: runtimeStateURL,
+            runtime: "hermes",
+            executablePath: executable.path
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainRuntimeOnboardingStateURL: runtimeStateURL,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+        store.beginLaunch(stepID: .gbrain)
+
+        XCTAssertEqual(store.runningStepID, .gbrain)
+        XCTAssertEqual(store.snapshots.first { $0.id == .gbrain }?.isRunning, true)
+        XCTAssertEqual(store.snapshots.first { $0.id == .gbrain }?.showsStart, false)
+
+        try writeGBrainPrepareAbortState(stateURL: gbrainStateURL)
+        store.refreshDetectedCompletion()
+
+        XCTAssertNil(store.runningStepID)
+        XCTAssertEqual(store.snapshots.first { $0.id == .gbrain }?.isRunning, false)
+        XCTAssertEqual(store.snapshots.first { $0.id == .gbrain }?.showsStart, true)
+    }
+
     @MainActor
     func testRuntimeReceiptWithoutLLMCallCheckDoesNotCompleteRuntimeStep() throws {
         let root = try makeTemporaryDirectory()
@@ -1125,6 +1253,22 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                     "llmCall": llmCallVerified,
                 ],
                 "reasons": [],
+            ],
+        ]
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeGBrainPrepareAbortState(stateURL: URL) throws {
+        let state: [String: Any] = [
+            "schemaVersion": 1,
+            "progress": [
+                "lastFailure": "source_repo_prepare_aborted",
+                "updatedAt": "2026-06-08T00:00:00Z",
             ],
         ]
         try FileManager.default.createDirectory(

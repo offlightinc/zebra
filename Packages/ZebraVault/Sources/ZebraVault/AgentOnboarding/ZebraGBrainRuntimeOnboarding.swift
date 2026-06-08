@@ -6,6 +6,16 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         public let startupLine: String
     }
 
+    public struct SelectedRuntime: Equatable {
+        public let runtime: String
+        public let executablePath: String
+
+        public init(runtime: String, executablePath: String) {
+            self.runtime = runtime
+            self.executablePath = executablePath
+        }
+    }
+
     public struct CompletionResult: Equatable {
         public let isComplete: Bool
         public let reasons: [String]
@@ -92,6 +102,18 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             return CompletionResult(isComplete: false, reasons: ["llm_call_unverified"])
         }
         return CompletionResult(isComplete: true, reasons: [])
+    }
+
+    public func selectedRuntimeForGBrainSetup() -> SelectedRuntime? {
+        guard cachedCompletionResult().isComplete,
+              let receipt = loadState()?.receipt,
+              let runtime = nonEmpty(receipt.runtime),
+              Self.supportedRuntimeIDs.contains(runtime),
+              let executablePath = nonEmpty(receipt.executablePath),
+              fileManager.isExecutableFile(atPath: executablePath) else {
+            return nil
+        }
+        return SelectedRuntime(runtime: runtime, executablePath: executablePath)
     }
 
     public func prepareLaunch() -> LaunchContext? {

@@ -15,6 +15,25 @@ public struct ZebraGBrainOnboardingStore {
         let reasons: [String]
     }
 
+    public struct ActiveGBrainBinding: Codable, Equatable {
+        public let sourceRepoPath: String
+        public let sourceRepoStatus: String
+        public let gbrainHomePath: String
+        public let confirmedAt: String
+
+        public init(
+            sourceRepoPath: String,
+            sourceRepoStatus: String,
+            gbrainHomePath: String,
+            confirmedAt: String
+        ) {
+            self.sourceRepoPath = sourceRepoPath
+            self.sourceRepoStatus = sourceRepoStatus
+            self.gbrainHomePath = gbrainHomePath
+            self.confirmedAt = confirmedAt
+        }
+    }
+
     private struct State: Codable {
         var schemaVersion: Int
         var currentRunId: String?
@@ -23,6 +42,7 @@ public struct ZebraGBrainOnboardingStore {
         var docsSnapshotPath: String?
         var docsManifest: DocsManifest?
         var selectedAgent: String?
+        var activeGBrainBinding: ActiveGBrainBinding?
         var sectionRoles: [String: SectionRoleRecord]?
         var progress: Progress?
         var receipt: Receipt?
@@ -36,6 +56,7 @@ public struct ZebraGBrainOnboardingStore {
                 docsSnapshotPath: nil,
                 docsManifest: nil,
                 selectedAgent: nil,
+                activeGBrainBinding: nil,
                 sectionRoles: nil,
                 progress: nil,
                 receipt: nil
@@ -181,13 +202,6 @@ public struct ZebraGBrainOnboardingStore {
         var manifest: DocsManifest
     }
 
-    private struct DocsSnapshotRecord: Codable {
-        var commit: String
-        var path: String
-        var manifest: DocsManifest
-        var storedAt: String
-    }
-
     private struct LiveVerificationResult {
         var complete: Bool
         var reasons: [String]
@@ -221,8 +235,6 @@ public struct ZebraGBrainOnboardingStore {
         "user_created_repo",
         "user_confirmed_home",
     ]
-    private static let launchPrefetchWaitSeconds: TimeInterval = 0.6
-    private static let docsPrefetchCoordinator = GBrainDocsPrefetchCoordinator()
 
     private let stateURL: URL
     private let fileManager: FileManager
@@ -279,30 +291,30 @@ public struct ZebraGBrainOnboardingStore {
         cachedCompletionResult(selectedVaultPath: selectedVaultPath).isComplete
     }
 
+    public func activeSourceRepoPathFromCachedState() -> String? {
+        guard let sourceRepoPath = loadState()?.activeGBrainBinding?.sourceRepoPath else {
+            return nil
+        }
+        let standardized = Self.standardizedPath((sourceRepoPath as NSString).expandingTildeInPath)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: standardized, isDirectory: &isDirectory),
+              isDirectory.boolValue,
+              fileManager.fileExists(atPath: URL(fileURLWithPath: standardized, isDirectory: true).appendingPathComponent("package.json").path),
+              fileManager.fileExists(atPath: URL(fileURLWithPath: standardized, isDirectory: true).appendingPathComponent("INSTALL_FOR_AGENTS.md").path),
+              fileManager.fileExists(atPath: URL(fileURLWithPath: standardized, isDirectory: true).appendingPathComponent("skills", isDirectory: true).path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+        return standardized
+    }
+
     @discardableResult
     public func prefetchDocsSnapshotIfNeeded() -> Bool {
-        guard explicitDocsRepoURL() == nil,
-              environment["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED"] != "1" else {
-            return false
-        }
-        return Self.docsPrefetchCoordinator.prefetchIfNeeded(store: self)
+        false
     }
 
-    fileprivate var docsPrefetchKey: String {
-        stateURL.path
-    }
-
-    fileprivate func hasCachedDocsSnapshot() -> Bool {
-        cachedDocsSnapshot() != nil
-    }
-
-    fileprivate func fetchAndCacheRemoteDocsSnapshot() -> Bool {
-        let hasUsableCache = cachedDocsSnapshot() != nil
-        guard let snapshot = prepareRemoteDocsSnapshot() else {
-            return hasUsableCache
-        }
-        writeDocsSnapshotCache(snapshot)
-        return true
+    func hasSourceRepoPrepareAbortMarker() -> Bool {
+        loadState()?.progress?.lastFailure == "source_repo_prepare_aborted"
     }
 
     func completionResult(selectedVaultPath: String?) -> CompletionResult {
@@ -526,12 +538,12 @@ public struct ZebraGBrainOnboardingStore {
 
     public func prepareLaunch(
         selectedVaultPath: String?,
-        selectedAgent: MarkdownPillAgent
+        selectedAgent: MarkdownPillAgent? = nil
     ) -> LaunchContext? {
         guard let helperPath = installHelperScript() else { return nil }
         let selectedVault = standardizedExistingDirectoryPath(selectedVaultPath)
-        let launchDirectory = selectedVault ?? onboardingWorkDirectoryPath()
-        let allowTrustedAutomation = selectedVault != nil
+        let launchDirectory = onboardingWorkDirectoryPath()
+        let allowTrustedAutomation = true
         let docsSnapshot = prepareDocsSnapshot()
         let runId = "gbrain-\(UUID().uuidString)"
         var state = loadState() ?? State.empty()
@@ -542,7 +554,7 @@ public struct ZebraGBrainOnboardingStore {
         state.docsFetchedAt = Self.isoTimestamp()
         state.docsSnapshotPath = docsSnapshot?.path ?? state.docsSnapshotPath
         state.docsManifest = docsSnapshot?.manifest ?? state.docsManifest
-        state.selectedAgent = selectedAgent.rawValue
+        state.selectedAgent = selectedAgent?.rawValue
         let currentDocsFingerprint = Self.docsManifestFingerprint(state.docsManifest)
         let resolvedTargetKey = selectedVault.map(Self.targetKey(for:))
             ?? previousProgress?.resolvedTargetKey
@@ -594,19 +606,20 @@ public struct ZebraGBrainOnboardingStore {
         guard let setupPacketURL = writeSetupPacket(setupPacket, runId: runId) else { return nil }
 
         let helperDirectory = helperPath.deletingLastPathComponent().path
-        let environmentPrefix = [
+        let environmentPrefixParts = [
             "export ZEBRA_GBRAIN_STATE=\(ZebraAgentLaunchCommand.shellQuote(stateURL.path))",
             "export ZEBRA_GBRAIN_HOME=\(ZebraAgentLaunchCommand.shellQuote(homeDirectoryPath))",
             "export ZEBRA_ONBOARDING_LANGUAGE=\(ZebraAgentLaunchCommand.shellQuote(onboardingLanguage.code))",
             "export PATH=\(ZebraAgentLaunchCommand.shellQuote(helperDirectory)):\"$PATH\"",
-        ].joined(separator: " && ") + " && "
+        ]
+        let environmentPrefix = environmentPrefixParts.joined(separator: " && ") + " && "
         return LaunchContext(
             launchDirectory: launchDirectory,
             startupPrompt: bootstrapPrompt(setupPacketPath: setupPacketURL.path),
             setupPacketPath: setupPacketURL.path,
             shellEnvironmentPrefix: environmentPrefix,
             allowTrustedAutomation: allowTrustedAutomation,
-            allowLaunchDirectoryTrust: true
+            allowLaunchDirectoryTrust: false
         )
     }
 
@@ -654,6 +667,7 @@ public struct ZebraGBrainOnboardingStore {
         let decisionContext = decisionPromptContext(state: state)
         let targetResolutionGuard = targetResolutionGuardContext(state: state)
         let embeddingProviderDecisionOptions = onboardingLanguage.embeddingProviderDecisionOptions
+        let activeBindingContext = activeGBrainBindingContext()
         let statusContext = """
         Current Zebra verification status:
         complete: \(completionResult.isComplete ? "true" : "false")
@@ -667,7 +681,7 @@ public struct ZebraGBrainOnboardingStore {
 
         \(onboardingLanguage.promptPolicy)
 
-        Use the provided latest GBrain docs snapshot as your source of truth when it is available.
+        Use the local GBrain docs snapshot recorded in Zebra state as your source of truth when it is available.
         Use `INSTALL_FOR_AGENTS.md` as the completion standard.
         Follow its original `##` section order. Do not silently replace it with the setup skill's repo-discovery flow.
 
@@ -682,6 +696,8 @@ public struct ZebraGBrainOnboardingStore {
         Launch directory:
         \(launchDirectory)
 
+        \(activeBindingContext)
+
         \(targetContext)
 
         Zebra helper command:
@@ -694,6 +710,10 @@ public struct ZebraGBrainOnboardingStore {
         - Zebra hard gates override INSTALL_FOR_AGENTS.md command order.
         - `waitingForUser` is a Zebra block reason, not an INSTALL_FOR_AGENTS.md section.
         - Continue to follow INSTALL_FOR_AGENTS.md `##` section order, but respect the current `waitingForUser` block reason first.
+        - The Zebra launch wrapper has already run `zebra-gbrain-onboarding prepare-source-repo` before starting this agent. Read the current state file before Step 1/2/3 work and use its `activeGBrainBinding.sourceRepoPath`.
+        - Run GBrain installation from the active GBrain source repo with repo-local `bun install`. Do not use `bun install -g github:garrytan/gbrain` as Zebra's default install path.
+        - OpenClaw/Hermes commands for this setup run must execute with cwd equal to the active GBrain source repo.
+        - Keep the GBrain config/DB boundary separate from the source repo; use `GBRAIN_HOME` or `GBRAIN_DATABASE_URL` from the launch environment.
         - In Step 3, do not run `gbrain init`, `gbrain init --pglite`, or Supabase setup until the user has explicitly chosen topology.
         - Do not run `gbrain init --pglite --no-embedding`, accept deferred embeddings, or otherwise disable embeddings until the user explicitly chooses that path.
         - Do not install/start autopilot, recurring jobs, or run a foreground dream only to satisfy `cycle_freshness`. A lone `cycle_freshness` doctor failure means the source has not completed a full cycle yet; it is not a Step 3/4 blocker.
@@ -729,22 +749,20 @@ public struct ZebraGBrainOnboardingStore {
         """
     }
 
+    private func activeGBrainBindingContext() -> String {
+        return """
+        Active GBrain binding:
+        The launch wrapper prompts for or confirms the GBrain source repo path, clones/reuses it, writes `activeGBrainBinding` to the state file, and exports `ZEBRA_GBRAIN_SOURCE_REPO` before this agent starts.
+        Treat that source repo path as the cwd for GBrain install work and OpenClaw/Hermes setup commands. It is not the user's markdown brain repo target.
+        Read local `INSTALL_FOR_AGENTS.md` from that repo, then run the repo-local install flow from there.
+        """
+    }
+
     private func prepareDocsSnapshot() -> DocsSnapshot? {
         if let repoURL = explicitDocsRepoURL() {
             return prepareLocalDocsSnapshot(repoURL: repoURL)
         }
-        if let cachedSnapshot = cachedDocsSnapshot() {
-            return cachedSnapshot
-        }
-        if environment["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED"] != "1",
-           Self.docsPrefetchCoordinator.waitForRunningPrefetch(
-            stateURL: stateURL,
-            timeout: Self.launchPrefetchWaitSeconds
-           ),
-           let cachedSnapshot = cachedDocsSnapshot() {
-            return cachedSnapshot
-        }
-        return resolveFallbackDocsRepoURL().flatMap(prepareLocalDocsSnapshot(repoURL:))
+        return nil
     }
 
     private var docsPaths: [String] {
@@ -803,204 +821,11 @@ public struct ZebraGBrainOnboardingStore {
         )
     }
 
-    private func prepareRemoteDocsSnapshot() -> DocsSnapshot? {
-        guard let ref = remoteDocsRef() else { return nil }
-        let rawBase = environment["ZEBRA_GBRAIN_DOCS_RAW_BASE"]
-            ?? "https://raw.githubusercontent.com/garrytan/gbrain"
-        let snapshotDirectory = stateURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("gbrain-docs", isDirectory: true)
-            .appendingPathComponent(ref, isDirectory: true)
-
-        var files: [DocsFile] = []
-        var installForAgents = ""
-        let remoteURLs = docsPaths.compactMap { relativePath -> (path: String, url: URL)? in
-            guard let url = URL(string: "\(rawBase)/\(ref)/\(relativePath)") else { return nil }
-            return (relativePath, url)
-        }
-        let remoteContents = fetchRemoteTexts(urlsByPath: remoteURLs)
-        for relativePath in docsPaths {
-            guard let content = remoteContents[relativePath] else {
-                continue
-            }
-            let destinationURL = snapshotDirectory.appendingPathComponent(relativePath, isDirectory: false)
-            do {
-                try fileManager.createDirectory(
-                    at: destinationURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try content.write(to: destinationURL, atomically: true, encoding: .utf8)
-                files.append(DocsFile(path: relativePath, hash: Self.stableHash(content)))
-                if relativePath == "INSTALL_FOR_AGENTS.md" {
-                    installForAgents = content
-                }
-            } catch {
-                continue
-            }
-        }
-
-        guard !installForAgents.isEmpty else { return nil }
-        let manifest = DocsManifest(
-            generatedAt: Self.isoTimestamp(),
-            sourceRepoPath: rawBase,
-            sourceKind: "remote",
-            sourceRef: ref,
-            files: files,
-            installForAgentsSections: Self.installForAgentsSections(from: installForAgents)
-        )
-        return DocsSnapshot(
-            commit: ref,
-            path: snapshotDirectory.path,
-            manifest: manifest
-        )
-    }
-
     private func explicitDocsRepoURL() -> URL? {
         if let gbrainDocsRepoURL {
             return gbrainDocsRepoURL
         }
         return environment["ZEBRA_GBRAIN_DOCS_REPO"].map(URL.init(fileURLWithPath:))
-    }
-
-    private func resolveFallbackDocsRepoURL() -> URL? {
-        let candidates: [URL?] = [
-            URL(fileURLWithPath: homeDirectoryPath).appendingPathComponent("gbrain", isDirectory: true),
-        ]
-
-        for candidate in candidates {
-            guard let candidate else { continue }
-            let standardizedURL = URL(fileURLWithPath: Self.standardizedPath(candidate.path), isDirectory: true)
-            let installForAgentsURL = standardizedURL.appendingPathComponent("INSTALL_FOR_AGENTS.md", isDirectory: false)
-            if fileManager.fileExists(atPath: installForAgentsURL.path) {
-                return standardizedURL
-            }
-        }
-        return nil
-    }
-
-    private func cachedDocsSnapshot() -> DocsSnapshot? {
-        if let record = readDocsSnapshotCache(),
-           isValidDocsSnapshot(path: record.path, manifest: record.manifest) {
-            return DocsSnapshot(
-                commit: record.commit,
-                path: record.path,
-                manifest: record.manifest
-            )
-        }
-
-        guard let state = loadState(),
-              let path = state.docsSnapshotPath,
-              let manifest = state.docsManifest,
-              isValidDocsSnapshot(path: path, manifest: manifest) else {
-            return nil
-        }
-        return DocsSnapshot(
-            commit: state.docsCommit ?? manifest.sourceRef ?? "cached",
-            path: path,
-            manifest: manifest
-        )
-    }
-
-    private func readDocsSnapshotCache() -> DocsSnapshotRecord? {
-        guard let data = try? Data(contentsOf: docsSnapshotRecordURL()) else { return nil }
-        return try? JSONDecoder().decode(DocsSnapshotRecord.self, from: data)
-    }
-
-    private func writeDocsSnapshotCache(_ snapshot: DocsSnapshot) {
-        let record = DocsSnapshotRecord(
-            commit: snapshot.commit,
-            path: snapshot.path,
-            manifest: snapshot.manifest,
-            storedAt: Self.isoTimestamp()
-        )
-        do {
-            try fileManager.createDirectory(
-                at: docsSnapshotRecordURL().deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(record)
-            try data.write(to: docsSnapshotRecordURL(), options: .atomic)
-        } catch {
-            return
-        }
-    }
-
-    private func docsSnapshotRecordURL() -> URL {
-        stateURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("gbrain-docs", isDirectory: true)
-            .appendingPathComponent("latest-snapshot.json", isDirectory: false)
-    }
-
-    private func isValidDocsSnapshot(path: String, manifest: DocsManifest) -> Bool {
-        guard !manifest.files.isEmpty else { return false }
-        guard manifest.files.contains(where: { $0.path == "INSTALL_FOR_AGENTS.md" }),
-              !manifest.installForAgentsSections.isEmpty else {
-            return false
-        }
-        let snapshotURL = URL(fileURLWithPath: path, isDirectory: true)
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: snapshotURL.path, isDirectory: &isDirectory),
-              isDirectory.boolValue else {
-            return false
-        }
-        return manifest.files.allSatisfy { file in
-            let filePath = snapshotURL
-                .appendingPathComponent(file.path, isDirectory: false)
-                .path
-            return fileManager.fileExists(atPath: filePath)
-        }
-    }
-
-    private func remoteDocsRef() -> String? {
-        if let ref = nonEmpty(environment["ZEBRA_GBRAIN_DOCS_REF"]) {
-            return ref
-        }
-        return "main"
-    }
-
-    private func fetchRemoteTexts(urlsByPath: [(path: String, url: URL)]) -> [String: String] {
-        guard !urlsByPath.isEmpty else { return [:] }
-        let group = DispatchGroup()
-        let lock = NSLock()
-        var output: [String: String] = [:]
-        var tasks: [URLSessionDataTask] = []
-
-        for entry in urlsByPath {
-            group.enter()
-            let task = URLSession.shared.dataTask(with: remoteTextRequest(url: entry.url)) { data, response, _ in
-                defer { group.leave() }
-                guard let http = response as? HTTPURLResponse,
-                      (200..<300).contains(http.statusCode),
-                      let data,
-                      let text = String(data: data, encoding: .utf8) else {
-                    return
-                }
-                lock.lock()
-                output[entry.path] = text
-                lock.unlock()
-            }
-            tasks.append(task)
-        }
-
-        tasks.forEach { $0.resume() }
-        if group.wait(timeout: .now() + 10) == .timedOut {
-            tasks.forEach { $0.cancel() }
-        }
-        lock.lock()
-        let result = output
-        lock.unlock()
-        return result
-    }
-
-    private func remoteTextRequest(url: URL) -> URLRequest {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 8
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("zebra-gbrain-onboarding", forHTTPHeaderField: "User-Agent")
-        return request
     }
 
     private func gitCommitHash(in repoURL: URL) -> String? {
@@ -1061,7 +886,7 @@ public struct ZebraGBrainOnboardingStore {
               let manifest = state.docsManifest else {
             return """
             GBrain docs snapshot:
-            unavailable. Locate the latest GBrain repository docs before making installation decisions.
+            pending. The launch wrapper prepares the local GBrain source repo before this agent starts; read `docsSnapshotPath` from the current state file and use local `INSTALL_FOR_AGENTS.md` from that snapshot/source repo before making installation decisions.
             """
         }
         let files = manifest.files
@@ -1455,7 +1280,22 @@ public struct ZebraGBrainOnboardingStore {
            fileManager.isExecutableFile(atPath: path) {
             return path
         }
+        if let repoLocal = repoLocalGBrainExecutablePath(),
+           fileManager.isExecutableFile(atPath: repoLocal) {
+            return repoLocal
+        }
         return findExecutableOnPATH(named: "gbrain")
+    }
+
+    private func repoLocalGBrainExecutablePath() -> String? {
+        guard let sourceRepoPath = loadState()?.activeGBrainBinding?.sourceRepoPath else {
+            return nil
+        }
+        return URL(fileURLWithPath: sourceRepoPath, isDirectory: true)
+            .appendingPathComponent("node_modules", isDirectory: true)
+            .appendingPathComponent(".bin", isDirectory: true)
+            .appendingPathComponent("gbrain", isDirectory: false)
+            .path
     }
 
     private func runProcess(
@@ -1619,6 +1459,11 @@ public struct ZebraGBrainOnboardingStore {
         if output["BUN_INSTALL"] == nil {
             output["BUN_INSTALL"] = (homeDirectoryPath as NSString).appendingPathComponent(".bun")
         }
+        if let binding = loadState()?.activeGBrainBinding {
+            if output["GBRAIN_HOME"] == nil {
+                output["GBRAIN_HOME"] = binding.gbrainHomePath
+            }
+        }
         return output
     }
 
@@ -1690,7 +1535,14 @@ public struct ZebraGBrainOnboardingStore {
     #!/bin/sh
     set -eu
 
-    STATE="${ZEBRA_GBRAIN_STATE:-$HOME/Library/Application Support/zebra/onboarding/gbrain-setup-state.json}"
+    if [ -n "${ZEBRA_GBRAIN_STATE:-}" ]; then
+      STATE="$ZEBRA_GBRAIN_STATE"
+    elif [ -n "${HOME:-}" ]; then
+      STATE="$HOME/Library/Application Support/zebra/onboarding/gbrain-setup-state.json"
+    else
+      echo "ZEBRA_GBRAIN_STATE or HOME is required for zebra-gbrain-onboarding" >&2
+      exit 1
+    fi
     COMMAND="${1:-}"
     if [ -n "$COMMAND" ]; then
       shift
@@ -1700,6 +1552,334 @@ public struct ZebraGBrainOnboardingStore {
     if [ -z "$PYTHON_BIN" ]; then
       echo "python3 is required for zebra-gbrain-onboarding" >&2
       exit 1
+    fi
+
+    zebra_has_path_arg() {
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --path|--path=*)
+            return 0
+            ;;
+        esac
+        shift
+      done
+      return 1
+    }
+
+    if [ "$COMMAND" = "prepare-source-repo" ] && [ -z "${ZEBRA_GBRAIN_SOURCE_REPO:-}" ] && ! zebra_has_path_arg "$@"; then
+      LANGUAGE_CODE="$(printf '%s' "${ZEBRA_ONBOARDING_LANGUAGE:-en}" | tr '[:upper:]' '[:lower:]')"
+      case "$LANGUAGE_CODE" in
+        ko|ko-*)
+          PROMPT_UNAVAILABLE="GBrain source repo path를 입력할 수 있는 terminal stdin이 없습니다."
+          NEED_SOURCE="Zebra가 Step 3을 실행하기 전에 local GBrain source repo가 필요합니다."
+          HOME_MISSING="HOME을 확인할 수 없어 ~/gbrain 추천 경로를 만들 수 없습니다. custom path를 입력하세요."
+          VALID_HOME_1="valid GBrain source repo를 찾았습니다:"
+          VALID_HOME_2="이 repo를 Step 3 source repo로 사용할까요?"
+          MISSING_HOME_1="valid GBrain source repo가 없습니다:"
+          MISSING_HOME_2="이 경로에 GBrain repo를 clone할까요?"
+          INVALID_REPO_SUFFIX="는 GBrain source repo가 아닙니다."
+          INVALID_EXISTING_NOTE="이 경로는 이미 존재하므로 Zebra가 자동으로 삭제하거나 덮어쓰지 않습니다."
+          CHOOSE_LABEL="선택하세요:"
+          OPTION_RETRY_SAME_PATH="[1] 이 path를 비우거나 백업한 뒤 같은 path 재확인"
+          OPTION_OTHER_PATH="[2] 다른 path 선택"
+          OPTION_SUBDIR_CLONE_PREFIX="[1] "
+          OPTION_SUBDIR_CLONE_SUFFIX=" 에 clone"
+          OPTION_CUSTOM_RETRY="[2] 이 path를 비우거나 백업한 뒤 같은 path 재확인"
+          OPTION_CUSTOM_OTHER="[3] 다른 path 선택"
+          OPTION_ABORT="[q] 중단"
+          CHOICE_PROMPT="> "
+          CUSTOM_REQUIRED="다른 GBrain source repo path가 필요합니다. 절대 경로를 입력하세요. 예: /path/to/gbrain-source 또는 ~/gbrain-source"
+          CUSTOM_PROMPT="GBrain source repo custom path: "
+          CUSTOM_PATH_FORMAT_ERROR="custom path는 / 또는 ~로 시작해야 합니다. 예: /path/to/gbrain-source 또는 ~/gbrain-source"
+          INVALID_SUBDIR="선택한 하위 디렉토리도 사용할 수 없습니다:"
+          YES_NO_PROMPT=" [Y/n]: "
+          UNAVAILABLE_MESSAGE="GBrain source repo path를 입력할 수 있는 terminal stdin이 없습니다."
+          EMPTY_CUSTOM_PATH="custom path가 비어 있습니다."
+          ABORTED_MESSAGE="GBrain source repo 준비를 중단했습니다."
+          ;;
+        *)
+          PROMPT_UNAVAILABLE="No terminal stdin is available for the GBrain source repo path prompt."
+          NEED_SOURCE="Zebra needs the local GBrain source repo before Step 3 can run."
+          HOME_MISSING="HOME is unavailable, so Zebra cannot recommend ~/gbrain. Enter a custom path."
+          VALID_HOME_1="Found a valid GBrain source repo at:"
+          VALID_HOME_2="Use this repo for Step 3?"
+          MISSING_HOME_1="No valid GBrain source repo was found at:"
+          MISSING_HOME_2="Clone the GBrain repo into this path?"
+          INVALID_REPO_SUFFIX=" is not a GBrain source repo."
+          INVALID_EXISTING_NOTE="This path already exists, so Zebra will not delete or overwrite it automatically."
+          CHOOSE_LABEL="Choose:"
+          OPTION_RETRY_SAME_PATH="[1] Retry this same path after you clear or back it up"
+          OPTION_OTHER_PATH="[2] Choose another path"
+          OPTION_SUBDIR_CLONE_PREFIX="[1] Clone into "
+          OPTION_SUBDIR_CLONE_SUFFIX=""
+          OPTION_CUSTOM_RETRY="[2] Retry this same path after you clear or back it up"
+          OPTION_CUSTOM_OTHER="[3] Choose another path"
+          OPTION_ABORT="[q] Abort"
+          CHOICE_PROMPT="> "
+          CUSTOM_REQUIRED="A different GBrain source repo path is required. Enter an absolute path, for example /path/to/gbrain-source or ~/gbrain-source."
+          CUSTOM_PROMPT="Custom GBrain source repo path: "
+          CUSTOM_PATH_FORMAT_ERROR="Custom path must start with / or ~, for example /path/to/gbrain-source or ~/gbrain-source."
+          INVALID_SUBDIR="The selected subdirectory is also unavailable:"
+          YES_NO_PROMPT=" [Y/n]: "
+          UNAVAILABLE_MESSAGE="No terminal stdin is available for the GBrain source repo path prompt."
+          EMPTY_CUSTOM_PATH="Custom path is empty."
+          ABORTED_MESSAGE="GBrain source repo preparation was aborted."
+          ;;
+      esac
+      if [ ! -t 0 ]; then
+        echo "$UNAVAILABLE_MESSAGE" >&2
+        exit 1
+      fi
+
+      zebra_expand_path() {
+        "$PYTHON_BIN" -c 'import os, sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$1"
+      }
+
+      zebra_trim_input() {
+        "$PYTHON_BIN" -c 'import sys; print(sys.argv[1].strip())' "$1"
+      }
+
+      zebra_custom_path_has_valid_format() {
+        case "$1" in
+          /*)
+            return 0
+            ;;
+          "~"|"~/"*)
+            return 0
+            ;;
+        esac
+        return 1
+      }
+
+      zebra_classify_source_repo() {
+        CHECK_PATH="$(zebra_expand_path "$1")"
+        if [ ! -e "$CHECK_PATH" ]; then
+          echo "missing"
+          return
+        fi
+        if [ -d "$CHECK_PATH" ] && [ -z "$(find "$CHECK_PATH" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+          echo "empty"
+          return
+        fi
+        if [ -d "$CHECK_PATH" ] && [ -f "$CHECK_PATH/package.json" ] && [ -f "$CHECK_PATH/INSTALL_FOR_AGENTS.md" ] && [ -d "$CHECK_PATH/skills" ]; then
+          echo "valid"
+          return
+        fi
+        echo "occupied_invalid"
+      }
+
+      zebra_read_reply() {
+        "$PYTHON_BIN" -c 'import sys
+    try:
+        import readline  # noqa: F401
+    except Exception:
+        pass
+    sys.stderr.write(sys.argv[1])
+    sys.stderr.flush()
+    try:
+        value = input()
+    except (EOFError, KeyboardInterrupt, UnicodeDecodeError):
+        sys.exit(1)
+    print(value)
+    ' "$1" || {
+          echo "$UNAVAILABLE_MESSAGE" >&2
+          exit 1
+        }
+      }
+
+      zebra_record_prepare_aborted() {
+        "$PYTHON_BIN" - "$STATE" <<'PY_ABORT' || true
+    import json
+    import os
+    import sys
+    from datetime import datetime, timezone
+
+    state_path = sys.argv[1]
+    try:
+        with open(state_path, "r", encoding="utf-8") as handle:
+            state = json.load(handle)
+    except Exception:
+        state = {"schemaVersion": 1}
+    state["schemaVersion"] = 1
+    progress = state.setdefault("progress", {})
+    progress["lastFailure"] = "source_repo_prepare_aborted"
+    progress["updatedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+    tmp = state_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2, sort_keys=True)
+        handle.write("\\n")
+    os.replace(tmp, state_path)
+    PY_ABORT
+      }
+
+      zebra_abort() {
+        zebra_record_prepare_aborted
+        echo "$ABORTED_MESSAGE" >&2
+        exit 1
+      }
+
+      zebra_choose_custom_source() {
+        while :; do
+          CUSTOM_INPUT="$(zebra_trim_input "$(zebra_read_reply "$CUSTOM_PROMPT")")"
+          if [ -z "$CUSTOM_INPUT" ]; then
+            echo "$EMPTY_CUSTOM_PATH" >&2
+            continue
+          fi
+          case "$(printf '%s' "$CUSTOM_INPUT" | tr '[:upper:]' '[:lower:]')" in
+            q|quit|abort)
+              zebra_abort
+              ;;
+          esac
+          if ! zebra_custom_path_has_valid_format "$CUSTOM_INPUT"; then
+            echo "$CUSTOM_PATH_FORMAT_ERROR" >&2
+            continue
+          fi
+          CUSTOM_PATH="$(zebra_expand_path "$CUSTOM_INPUT")"
+          CUSTOM_STATUS="$(zebra_classify_source_repo "$CUSTOM_PATH")"
+          case "$CUSTOM_STATUS" in
+            missing|empty|valid)
+              SELECTED_SOURCE="$CUSTOM_PATH"
+              return
+              ;;
+            occupied_invalid)
+              while :; do
+                SUBDIR_PATH="$(zebra_expand_path "$CUSTOM_PATH/gbrain")"
+                printf '\\n%s%s\\n%s\\n\\n%s\\n%s%s%s\\n%s\\n%s\\n%s\\n' \
+                  "$CUSTOM_PATH" "$INVALID_REPO_SUFFIX" \
+                  "$INVALID_EXISTING_NOTE" \
+                  "$CHOOSE_LABEL" \
+                  "$OPTION_SUBDIR_CLONE_PREFIX" "$SUBDIR_PATH" "$OPTION_SUBDIR_CLONE_SUFFIX" \
+                  "$OPTION_CUSTOM_RETRY" \
+                  "$OPTION_CUSTOM_OTHER" \
+                  "$OPTION_ABORT" >&2
+                CUSTOM_CHOICE="$(zebra_read_reply "$CHOICE_PROMPT")"
+                case "$(printf '%s' "$CUSTOM_CHOICE" | tr '[:upper:]' '[:lower:]')" in
+                  1)
+                    SUBDIR_STATUS="$(zebra_classify_source_repo "$SUBDIR_PATH")"
+                    case "$SUBDIR_STATUS" in
+                      missing|empty|valid)
+                        SELECTED_SOURCE="$SUBDIR_PATH"
+                        return
+                        ;;
+                      *)
+                        printf '%s\\n%s\\n' "$INVALID_SUBDIR" "$SUBDIR_PATH" >&2
+                        ;;
+                    esac
+                    ;;
+                  2)
+                    CUSTOM_STATUS="$(zebra_classify_source_repo "$CUSTOM_PATH")"
+                    case "$CUSTOM_STATUS" in
+                      missing|empty|valid)
+                        SELECTED_SOURCE="$CUSTOM_PATH"
+                        return
+                        ;;
+                    esac
+                    ;;
+                  3)
+                    break
+                    ;;
+                  q|quit|abort)
+                    zebra_abort
+                    ;;
+                esac
+              done
+              ;;
+          esac
+        done
+      }
+
+      zebra_choose_from_home() {
+        if [ -n "${ZEBRA_GBRAIN_SOURCE_REPO_DEFAULT:-}" ]; then
+          RECOMMENDED_SOURCE="$(zebra_expand_path "$ZEBRA_GBRAIN_SOURCE_REPO_DEFAULT")"
+        elif [ -n "${HOME:-}" ]; then
+          RECOMMENDED_SOURCE="$(zebra_expand_path "$HOME/gbrain")"
+        else
+          printf '\\n%s\\n%s\\n' "$NEED_SOURCE" "$HOME_MISSING" >&2
+          zebra_choose_custom_source
+          return
+        fi
+
+        while :; do
+          RECOMMENDED_STATUS="$(zebra_classify_source_repo "$RECOMMENDED_SOURCE")"
+          case "$RECOMMENDED_STATUS" in
+            valid)
+              printf '\\n%s\\n%s\\n%s' "$VALID_HOME_1" "$RECOMMENDED_SOURCE" "$VALID_HOME_2" >&2
+              HOME_REPLY="$(zebra_read_reply "$YES_NO_PROMPT")"
+              case "$(printf '%s' "$HOME_REPLY" | tr '[:upper:]' '[:lower:]')" in
+                ""|y|yes)
+                  SELECTED_SOURCE="$RECOMMENDED_SOURCE"
+                  return
+                  ;;
+                n|no|c|custom)
+                  printf '\\n%s\\n' "$CUSTOM_REQUIRED" >&2
+                  zebra_choose_custom_source
+                  return
+                  ;;
+                q|quit|abort)
+                  zebra_abort
+                  ;;
+              esac
+              ;;
+            missing|empty)
+              printf '\\n%s\\n%s\\n%s' "$MISSING_HOME_1" "$RECOMMENDED_SOURCE" "$MISSING_HOME_2" >&2
+              HOME_REPLY="$(zebra_read_reply "$YES_NO_PROMPT")"
+              case "$(printf '%s' "$HOME_REPLY" | tr '[:upper:]' '[:lower:]')" in
+                ""|y|yes)
+                  SELECTED_SOURCE="$RECOMMENDED_SOURCE"
+                  return
+                  ;;
+                n|no|c|custom)
+                  printf '\\n%s\\n' "$CUSTOM_REQUIRED" >&2
+                  zebra_choose_custom_source
+                  return
+                  ;;
+                q|quit|abort)
+                  zebra_abort
+                  ;;
+              esac
+              ;;
+            occupied_invalid)
+              while :; do
+                printf '\\n%s%s\\n%s\\n\\n%s\\n%s\\n%s\\n%s\\n' \
+                  "$RECOMMENDED_SOURCE" "$INVALID_REPO_SUFFIX" \
+                  "$INVALID_EXISTING_NOTE" \
+                  "$CHOOSE_LABEL" \
+                  "$OPTION_RETRY_SAME_PATH" \
+                  "$OPTION_OTHER_PATH" \
+                  "$OPTION_ABORT" >&2
+                HOME_CHOICE="$(zebra_read_reply "$CHOICE_PROMPT")"
+                case "$(printf '%s' "$HOME_CHOICE" | tr '[:upper:]' '[:lower:]')" in
+                  1)
+                    RECOMMENDED_STATUS="$(zebra_classify_source_repo "$RECOMMENDED_SOURCE")"
+                    case "$RECOMMENDED_STATUS" in
+                      missing|empty|valid)
+                        SELECTED_SOURCE="$RECOMMENDED_SOURCE"
+                        return
+                        ;;
+                    esac
+                    ;;
+                  2)
+                    zebra_choose_custom_source
+                    return
+                    ;;
+                  q|quit|abort)
+                    zebra_abort
+                    ;;
+                esac
+              done
+              ;;
+          esac
+        done
+      }
+
+      SELECTED_SOURCE=""
+      zebra_choose_from_home
+      if [ -z "$SELECTED_SOURCE" ]; then
+        echo "$UNAVAILABLE_MESSAGE" >&2
+        exit 1
+      fi
+      set -- --path "$SELECTED_SOURCE" "$@"
     fi
 
     "$PYTHON_BIN" - "$STATE" "$COMMAND" "$@" <<'PY'
@@ -1758,7 +1938,11 @@ public struct ZebraGBrainOnboardingStore {
             item = argv[i]
             if item.startswith("--"):
                 key = item[2:].replace("-", "_")
-                if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                if "=" in key:
+                    key, value = key.split("=", 1)
+                    out[key] = value
+                    i += 1
+                elif i + 1 < len(argv) and not argv[i + 1].startswith("--"):
                     out[key] = argv[i + 1]
                     i += 2
                 else:
@@ -1770,10 +1954,300 @@ public struct ZebraGBrainOnboardingStore {
         out["_positional"] = positional
         return out
 
+    def gbrain_home_directory():
+        return os.path.abspath(os.path.expanduser(os.environ.get("ZEBRA_GBRAIN_HOME") or "~"))
+
+    def default_source_repo_path():
+        return os.path.abspath(os.path.expanduser(os.environ.get("ZEBRA_GBRAIN_SOURCE_REPO_DEFAULT") or "~/gbrain"))
+
+    def source_remote():
+        return os.environ.get("ZEBRA_GBRAIN_SOURCE_REMOTE") or "https://github.com/garrytan/gbrain.git"
+
+    def is_empty_directory(path):
+        try:
+            return os.path.isdir(path) and len(os.listdir(path)) == 0
+        except Exception:
+            return False
+
+    def is_valid_gbrain_source_repo(path):
+        return (
+            os.path.isdir(path)
+            and os.path.isfile(os.path.join(path, "package.json"))
+            and os.path.isfile(os.path.join(path, "INSTALL_FOR_AGENTS.md"))
+            and os.path.isdir(os.path.join(path, "skills"))
+        )
+
+    def classify_source_repo(path):
+        if not os.path.exists(path):
+            return "missing"
+        if is_empty_directory(path):
+            return "empty"
+        if is_valid_gbrain_source_repo(path):
+            return "valid"
+        return "occupied_invalid"
+
+    def existing_active_source_repo_path():
+        binding = (load_state().get("activeGBrainBinding") or {})
+        path = binding.get("sourceRepoPath")
+        if path and is_valid_gbrain_source_repo(os.path.abspath(os.path.expanduser(path))):
+            return os.path.abspath(os.path.expanduser(path))
+        return None
+
+    def selected_source_repo_path(flags):
+        explicit = flags.get("path") or os.environ.get("ZEBRA_GBRAIN_SOURCE_REPO")
+        if explicit:
+            return os.path.abspath(os.path.expanduser(explicit))
+        raise RuntimeError("source_repo_path_missing")
+
+    def clone_source_repo(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        result = subprocess.run(
+            ["git", "clone", source_remote(), path],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=1200,
+        )
+        if result.returncode != 0:
+            if result.stdout:
+                print(result.stdout)
+            if result.stderr:
+                print(result.stderr, file=sys.stderr)
+            raise RuntimeError("gbrain_source_repo_clone_failed")
+
+    def docs_paths():
+        return [
+            "INSTALL_FOR_AGENTS.md",
+            "README.md",
+            "AGENTS.md",
+            "docs/GBRAIN_VERIFY.md",
+            "skills/setup/SKILL.md",
+        ]
+
+    def git_commit(path):
+        try:
+            result = subprocess.run(
+                ["git", "-C", path, "rev-parse", "HEAD"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+        except Exception:
+            return "local"
+        if result.returncode != 0:
+            return "local"
+        return (result.stdout or "").strip() or "local"
+
+    def install_for_agents_sections(markdown):
+        sections = []
+        current_title = None
+        current_lines = []
+
+        def finish():
+            if current_title is None:
+                return
+            body = "\\n".join(current_lines)
+            sections.append({"title": current_title, "hash": stable_hash(body)})
+
+        for line in markdown.splitlines():
+            if line.startswith("## "):
+                finish()
+                current_title = line[3:].strip()
+                current_lines = [line]
+            elif current_title is not None:
+                current_lines.append(line)
+        finish()
+        return sections
+
+    def docs_manifest_fingerprint(manifest):
+        if not manifest:
+            return None
+        files = "|".join(sorted(
+            f"{entry.get('path') or ''}={entry.get('hash') or ''}"
+            for entry in manifest.get("files") or []
+        ))
+        sections = "|".join(
+            f"{entry.get('title') or ''}={entry.get('hash') or ''}"
+            for entry in manifest.get("installForAgentsSections") or []
+        )
+        return stable_hash(f"{manifest.get('sourceRef') or ''}|{files}|{sections}")
+
+    def first_install_section_title(manifest):
+        sections = manifest.get("installForAgentsSections") or []
+        if sections:
+            return sections[0].get("title") or "Step 1: Install GBrain"
+        return "Step 1: Install GBrain"
+
+    def reset_progress_for_docs_change(state, manifest, source_repo_path):
+        progress = state.setdefault("progress", {})
+        progress["launchDirectory"] = source_repo_path
+        progress["completedSections"] = []
+        progress["nextSection"] = first_install_section_title(manifest)
+        progress["updatedAt"] = now()
+        progress.pop("waitingForUser", None)
+        progress.pop("lastFailure", None)
+        state["sectionRoles"] = {}
+
+    def write_local_docs_snapshot(state, source_repo_path):
+        previous_fingerprint = docs_manifest_fingerprint(state.get("docsManifest"))
+        commit = git_commit(source_repo_path)
+        snapshot_dir = os.path.join(os.path.dirname(state_path), "gbrain-docs", commit)
+        files = []
+        install_for_agents = ""
+        for relative_path in docs_paths():
+            src = os.path.join(source_repo_path, relative_path)
+            if not os.path.isfile(src):
+                continue
+            dest = os.path.join(snapshot_dir, relative_path)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(src, dest)
+            try:
+                with open(src, "r", encoding="utf-8") as handle:
+                    content = handle.read()
+            except Exception:
+                content = ""
+            files.append({"path": relative_path, "hash": stable_hash(content)})
+            if relative_path == "INSTALL_FOR_AGENTS.md":
+                install_for_agents = content
+        if not files:
+            return None
+        manifest = {
+            "generatedAt": now(),
+            "sourceRepoPath": source_repo_path,
+            "sourceKind": "local",
+            "sourceRef": commit,
+            "files": files,
+            "installForAgentsSections": install_for_agents_sections(install_for_agents),
+        }
+        state["docsCommit"] = commit
+        state["docsFetchedAt"] = now()
+        state["docsSnapshotPath"] = snapshot_dir
+        state["docsManifest"] = manifest
+        if docs_manifest_fingerprint(manifest) != previous_fingerprint:
+            reset_progress_for_docs_change(state, manifest, source_repo_path)
+        return {"commit": commit, "path": snapshot_dir, "manifest": manifest}
+
+    def persist_active_binding(path, status):
+        state = load_state()
+        binding = {
+            "sourceRepoPath": path,
+            "sourceRepoStatus": status,
+            "gbrainHomePath": gbrain_home_directory(),
+            "confirmedAt": now(),
+        }
+        state["schemaVersion"] = 1
+        state["activeGBrainBinding"] = binding
+        write_local_docs_snapshot(state, path)
+        save_state(state)
+        return binding
+
+    def prepare_source_repo():
+        flags = parse_flags(args)
+        path = selected_source_repo_path(flags)
+        status = classify_source_repo(path)
+        if status in {"missing", "empty"}:
+            clone_source_repo(path)
+            prepared_status = "cloned"
+        elif status == "valid":
+            prepared_status = "reused"
+        else:
+            raise RuntimeError("gbrain_source_repo_occupied_invalid")
+        if not is_valid_gbrain_source_repo(path):
+            raise RuntimeError("gbrain_source_repo_invalid")
+        binding = persist_active_binding(os.path.abspath(path), prepared_status)
+        print(json.dumps({"ok": True, "activeGBrainBinding": binding}, sort_keys=True))
+
+    def active_source_repo_path():
+        path = existing_active_source_repo_path()
+        if not path:
+            print("active GBrain source repo binding is missing or invalid", file=sys.stderr)
+            sys.exit(1)
+        print(path)
+
+    def shell_quote(value):
+        return "'" + str(value).replace("'", "'\\''") + "'"
+
+    def active_source_env():
+        state = load_state()
+        binding = state.get("activeGBrainBinding") or {}
+        path = existing_active_source_repo_path()
+        if not path:
+            print("active GBrain source repo binding is missing or invalid", file=sys.stderr)
+            sys.exit(1)
+        print(f"export ZEBRA_GBRAIN_SOURCE_REPO={shell_quote(path)}")
+        print('if [ -z "${GBRAIN_DATABASE_URL:-}" ] && [ -n "${DATABASE_URL:-}" ]; then export GBRAIN_DATABASE_URL="$DATABASE_URL"; fi')
+        print(f'if [ -z "${{GBRAIN_DATABASE_URL:-}}" ]; then export GBRAIN_HOME={shell_quote(binding.get("gbrainHomePath") or gbrain_home_directory())}; fi')
+
+    def prepare_openclaw_agent():
+        flags = parse_flags(args)
+        executable = flags.get("executable") or shutil.which("openclaw")
+        if not executable:
+            raise RuntimeError("openclaw_executable_missing")
+        source_repo = existing_active_source_repo_path()
+        if not source_repo:
+            raise RuntimeError("active_source_repo_missing")
+        agent_id = flags.get("agent_id") or "zebra-gbrain-setup"
+        expected_workspace = os.path.realpath(os.path.abspath(os.path.expanduser(source_repo)))
+        list_result = subprocess.run(
+            [executable, "agents", "list", "--json"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+        if list_result.returncode != 0:
+            if list_result.stderr:
+                print(list_result.stderr, file=sys.stderr)
+            raise RuntimeError("openclaw_agents_list_failed")
+        try:
+            agents = json.loads(list_result.stdout or "[]")
+        except Exception:
+            raise RuntimeError("openclaw_agents_list_invalid_json")
+        existing = next((agent for agent in agents if agent.get("id") == agent_id), None)
+        if existing:
+            workspace = os.path.realpath(os.path.abspath(os.path.expanduser(str(existing.get("workspace") or ""))))
+            if workspace != expected_workspace:
+                raise RuntimeError(f"openclaw_agent_workspace_mismatch:{workspace}")
+            print(json.dumps({
+                "ok": True,
+                "status": "ready",
+                "agentId": agent_id,
+                "workspace": source_repo,
+            }, sort_keys=True))
+            return
+        add_result = subprocess.run(
+            [executable, "agents", "add", agent_id, "--workspace", source_repo, "--non-interactive"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=60,
+        )
+        if add_result.returncode != 0:
+            if add_result.stderr:
+                print(add_result.stderr, file=sys.stderr)
+            raise RuntimeError("openclaw_agent_add_failed")
+        print(json.dumps({
+            "ok": True,
+            "status": "created",
+            "agentId": agent_id,
+            "workspace": source_repo,
+        }, sort_keys=True))
+
     def target_key(path):
         return "vault:" + os.path.abspath(os.path.expanduser(path))
 
     def gbrain_executable():
+        state = load_state()
+        binding = state.get("activeGBrainBinding") or {}
+        source_repo = binding.get("sourceRepoPath")
+        if source_repo:
+            for candidate in [
+                os.path.join(os.path.abspath(os.path.expanduser(source_repo)), "node_modules", ".bin", "gbrain"),
+                os.path.join(os.path.abspath(os.path.expanduser(source_repo)), "bin", "gbrain"),
+            ]:
+                if os.access(candidate, os.X_OK):
+                    return candidate
         found = shutil.which("gbrain")
         if found:
             return found
@@ -2809,54 +3283,33 @@ public struct ZebraGBrainOnboardingStore {
         print(json.dumps({"complete": complete, "reasons": reasons}, sort_keys=True))
         sys.exit(0 if complete else 1)
 
-    if command == "report":
+    if command == "prepare-source-repo":
+        try:
+            prepare_source_repo()
+        except Exception as exc:
+            print(json.dumps({"ok": False, "reason": str(exc)}, sort_keys=True))
+            sys.exit(1)
+    elif command == "active-source-repo-path":
+        active_source_repo_path()
+    elif command == "active-source-env":
+        active_source_env()
+    elif command == "prepare-openclaw-agent":
+        try:
+            prepare_openclaw_agent()
+        except Exception as exc:
+            print(json.dumps({"ok": False, "reason": str(exc)}, sort_keys=True))
+            sys.exit(1)
+    elif command == "report":
         report()
     elif command == "status":
         status()
     elif command == "verify":
         verify()
     else:
-        print("usage: zebra-gbrain-onboarding <report|status|verify> [options]", file=sys.stderr)
+        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|prepare-openclaw-agent|report|status|verify> [options]", file=sys.stderr)
         sys.exit(2)
     PY
     """
-}
-
-private final class GBrainDocsPrefetchCoordinator {
-    private let lock = NSLock()
-    private var startedKeys: Set<String> = []
-    private var runningGroupsByKey: [String: DispatchGroup] = [:]
-
-    func prefetchIfNeeded(store: ZebraGBrainOnboardingStore) -> Bool {
-        let key = store.docsPrefetchKey
-        let group = DispatchGroup()
-
-        lock.lock()
-        if runningGroupsByKey[key] != nil || startedKeys.contains(key) {
-            lock.unlock()
-            return store.hasCachedDocsSnapshot()
-        }
-        startedKeys.insert(key)
-        group.enter()
-        runningGroupsByKey[key] = group
-        lock.unlock()
-
-        let result = store.fetchAndCacheRemoteDocsSnapshot()
-
-        lock.lock()
-        runningGroupsByKey[key] = nil
-        lock.unlock()
-        group.leave()
-        return result
-    }
-
-    func waitForRunningPrefetch(stateURL: URL, timeout: TimeInterval) -> Bool {
-        lock.lock()
-        let group = runningGroupsByKey[stateURL.path]
-        lock.unlock()
-        guard let group else { return false }
-        return group.wait(timeout: .now() + timeout) == .success
-    }
 }
 
 private extension String {
