@@ -84,10 +84,12 @@ public final class BrainSyncService: ObservableObject {
 
     @Published public private(set) var state: SyncState?
     @Published public private(set) var isSyncing: Bool = false
+    @Published public private(set) var nextAutomaticSyncAt: Date?
 
     public var vaultRoot: String? { boundVault }
+    public static let automaticRetryInterval: TimeInterval = 15 * 60
 
-    private static let interval: TimeInterval = 15 * 60
+    private static let interval: TimeInterval = automaticRetryInterval
     private static let timerQueueLabel = "com.zebra.brainsync.timer"
     private static let runQueueLabel = "com.zebra.brainsync.run"
 
@@ -136,6 +138,7 @@ public final class BrainSyncService: ObservableObject {
         started = false
         timerSource?.cancel()
         timerSource = nil
+        nextAutomaticSyncAt = nil
         if let observer = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             wakeObserver = nil
@@ -195,7 +198,7 @@ public final class BrainSyncService: ObservableObject {
         isSyncing = true
         let startedAt = Date()
         let task = Task.detached(priority: .utility) { [weak self] in
-            let outcome = await Self.run(vaultRoot: vault)
+            let outcome = Self.run(vaultRoot: vault)
             // fail loop 인 vault 면 sync 가 1초 안에 끝나서 사용자가 transient
             // syncing 표시를 인지 못 함. 최소 0.45s 보장 — click 의 시각 feedback.
             let elapsed = Date().timeIntervalSince(startedAt)
@@ -203,7 +206,7 @@ public final class BrainSyncService: ObservableObject {
             if elapsed < minimum {
                 try? await Task.sleep(nanoseconds: UInt64((minimum - elapsed) * 1_000_000_000))
             }
-            await MainActor.run {
+            await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.applyOutcome(outcome, vaultRoot: vault)
                 self.isSyncing = false
@@ -218,11 +221,17 @@ public final class BrainSyncService: ObservableObject {
     private func scheduleTimer() {
         let source = DispatchSource.makeTimerSource(queue: timerQueue)
         source.schedule(deadline: .now() + Self.interval, repeating: Self.interval, leeway: .seconds(30))
+        nextAutomaticSyncAt = Date().addingTimeInterval(Self.interval)
         source.setEventHandler { [weak self] in
-            Task { @MainActor in self?.triggerSync(source: .automatic) }
+            Task { @MainActor in self?.triggerScheduledSync() }
         }
         source.resume()
         timerSource = source
+    }
+
+    private func triggerScheduledSync() {
+        nextAutomaticSyncAt = Date().addingTimeInterval(Self.interval)
+        triggerSync(source: .automatic)
     }
 
     private func registerWakeObserver() {
@@ -409,7 +418,7 @@ public final class BrainSyncService: ObservableObject {
         return nil
     }
 
-    private static func run(vaultRoot: String) async -> SyncOutcome {
+    nonisolated private static func run(vaultRoot: String) -> SyncOutcome {
         guard let scriptURL = bundledScriptURL() else {
             return .failure(Failure(reason: .hookFailed, detail: "zebra-brain-sync script missing from app bundle"))
         }
@@ -467,11 +476,11 @@ public final class BrainSyncService: ObservableObject {
         return .failure(classifyFailure(stderr: stderr, stdout: stdout))
     }
 
-    private static func bundledScriptURL() -> URL? {
+    nonisolated private static func bundledScriptURL() -> URL? {
         Bundle.main.url(forResource: "zebra-brain-sync", withExtension: nil)
     }
 
-    private static func parseCommit(stdout: String) -> String {
+    nonisolated private static func parseCommit(stdout: String) -> String {
         // 스크립트가 `committed <sha>` 같은 라인 emit 시 거기서 추출. 없으면 빈 string.
         let lines = stdout.split(separator: "\n")
         for line in lines.reversed() {
@@ -485,9 +494,12 @@ public final class BrainSyncService: ObservableObject {
 
     // MARK: - Failure classification
 
-    static func classifyFailure(stderr: String, stdout: String) -> Failure {
-        // Source A — 스크립트가 `[REASON:<id>]` 태그를 emit 했으면 우선.
-        if let failure = parseReasonTag(stderr: stderr) {
+    nonisolated static func classifyFailure(stderr: String, stdout: String) -> Failure {
+        // Source A — 스크립트가 명확한 `[REASON:<id>]` 태그를 emit 했으면 우선.
+        // Legacy `[REASON:unknown]` wrappers are soft signals so git/network
+        // diagnostics in stdout/stderr can still be classified below.
+        let taggedFailure = parseReasonTag(stderr: stderr)
+        if let failure = taggedFailure, failure.reason != .unknown || failure.rawReasonId != nil {
             return failure
         }
         // Source B — git stderr 패턴 매칭, **specific → general** 우선순위.
@@ -501,10 +513,7 @@ public final class BrainSyncService: ObservableObject {
         // string + GitHub 의 표준 troubleshooting 페이지. 상세 = docs/upstream/git
         // 변경 시 갱신 필요.
         let haystack = (stderr + "\n" + stdout).lowercased()
-        let lastStderrLine = stderr
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .last
-            .map(String.init) ?? ""
+        let detail = diagnosticDetail(stderr: stderr, stdout: stdout, fallback: taggedFailure?.detail)
 
         // 1. conflict — 가장 구체. merge/rebase 도중 충돌이 stderr 에 명시.
         if haystack.contains("conflict (content)")
@@ -512,7 +521,7 @@ public final class BrainSyncService: ObservableObject {
             || haystack.contains("conflict (rename")
             || haystack.contains("automatic merge failed")
             || haystack.contains("conflict marker") {
-            return Failure(reason: .conflict, detail: lastStderrLine)
+            return Failure(reason: .conflict, detail: detail)
         }
         // 2. permissionDenied — 권한 issue 명시. `pushRejected` 의 "rejected" 와
         //    같이 나오는 경우가 흔해서 (`! [remote rejected] permission denied`)
@@ -528,7 +537,7 @@ public final class BrainSyncService: ObservableObject {
             || haystack.hasSuffix(" 403")
             || haystack.contains(" 404 ")
             || haystack.hasSuffix(" 404") {
-            return Failure(reason: .permissionDenied, detail: lastStderrLine)
+            return Failure(reason: .permissionDenied, detail: detail)
         }
         // 3. authExpired — 인증 issue 명시. `pushRejected` 보다 위에 (push 가
         //    auth fail 로도 reject 됨).
@@ -537,7 +546,7 @@ public final class BrainSyncService: ObservableObject {
             || haystack.contains("permission denied (publickey)")
             || haystack.contains(" 401 ")
             || haystack.hasSuffix(" 401") {
-            return Failure(reason: .authExpired, detail: lastStderrLine)
+            return Failure(reason: .authExpired, detail: detail)
         }
         // 4. pushRejected — push 의 일반 거절 (non-fast-forward). 권한/인증 둘 다
         //    못 잡은 reject 만 여기. "rejected" 단어 단독은 ambiguous 라 안 보고
@@ -545,7 +554,7 @@ public final class BrainSyncService: ObservableObject {
         if haystack.contains("non-fast-forward")
             || haystack.contains("fetch first")
             || haystack.contains("failed to push some refs") {
-            return Failure(reason: .pushRejected, detail: lastStderrLine)
+            return Failure(reason: .pushRejected, detail: detail)
         }
         // 5. offline — 네트워크 자체 못 닿음.
         if haystack.contains("could not resolve host")
@@ -553,11 +562,11 @@ public final class BrainSyncService: ObservableObject {
             || haystack.contains("network is unreachable")
             || haystack.contains("operation timed out")
             || haystack.contains("connection timed out") {
-            return Failure(reason: .offline, detail: lastStderrLine)
+            return Failure(reason: .offline, detail: detail)
         }
         // 6. diskFull — 시스템 자원.
         if haystack.contains("no space left on device") || haystack.contains("enospc") {
-            return Failure(reason: .diskFull, detail: lastStderrLine)
+            return Failure(reason: .diskFull, detail: detail)
         }
         // 7. rateLimit — server-side throttle.
         if haystack.contains("api rate limit")
@@ -565,16 +574,56 @@ public final class BrainSyncService: ObservableObject {
             || haystack.contains(" 429 ")
             || haystack.hasSuffix(" 429")
             || haystack.contains("retry-after:") {
-            return Failure(reason: .rateLimit, detail: lastStderrLine)
+            return Failure(reason: .rateLimit, detail: detail)
         }
         if haystack.contains("brain sync already running")
             || haystack.contains("brain sync lock exists") {
-            return Failure(reason: .alreadyRunning, detail: lastStderrLine)
+            return Failure(reason: .alreadyRunning, detail: detail)
         }
-        return Failure(reason: .unknown, detail: lastStderrLine)
+        return Failure(reason: .unknown, detail: detail)
     }
 
-    private static func parseReasonTag(stderr: String) -> Failure? {
+    nonisolated private static func diagnosticDetail(stderr: String, stdout: String, fallback: String?) -> String {
+        let fallback = fallback?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let lines = (stderr + "\n" + stdout)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let preferred = lines.reversed().first { line in
+            let lower = line.lowercased()
+            guard !isWrapperDiagnosticLine(lower) else { return false }
+            return lower.hasPrefix("fatal:")
+                || lower.hasPrefix("error:")
+                || lower.hasPrefix("remote:")
+                || lower.hasPrefix("ssh:")
+                || lower.contains("conflict")
+                || lower.contains("permission denied")
+                || lower.contains("could not resolve host")
+                || lower.contains("network is unreachable")
+                || lower.contains("operation timed out")
+                || lower.contains("connection timed out")
+                || lower.contains("rate limit")
+                || lower.contains("non-fast-forward")
+                || lower.contains("fetch first")
+                || lower.contains("rejected")
+                || lower.contains("no space left on device")
+                || lower.contains("enospc")
+                || lower.contains("brain sync")
+        }
+        if let preferred {
+            return preferred
+        }
+
+        return lines.reversed().first { !isWrapperDiagnosticLine($0.lowercased()) } ?? fallback
+    }
+
+    nonisolated private static func isWrapperDiagnosticLine(_ lowercasedLine: String) -> Bool {
+        lowercasedLine.hasPrefix("[reason:unknown]")
+            || lowercasedLine.hasPrefix("[zebra-brain-sync]")
+    }
+
+    nonisolated private static func parseReasonTag(stderr: String) -> Failure? {
         for raw in stderr.split(separator: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
             guard line.hasPrefix("[REASON:") else { continue }
@@ -592,7 +641,7 @@ public final class BrainSyncService: ObservableObject {
 
     // MARK: - Log
 
-    private static func logDirectory() -> URL {
+    nonisolated private static func logDirectory() -> URL {
         let library = FileManager.default
             .urls(for: .libraryDirectory, in: .userDomainMask)
             .first
@@ -602,11 +651,11 @@ public final class BrainSyncService: ObservableObject {
             .appendingPathComponent("zebra", isDirectory: true)
     }
 
-    private static func logURL() -> URL {
+    nonisolated private static func logURL() -> URL {
         logDirectory().appendingPathComponent("brainsync.log", isDirectory: false)
     }
 
-    private static func appendLog(vaultRoot: String, exit: Int32, stdout: String, stderr: String) {
+    nonisolated private static func appendLog(vaultRoot: String, exit: Int32, stdout: String, stderr: String) {
         try? FileManager.default.createDirectory(at: logDirectory(), withIntermediateDirectories: true)
         let ts = ISO8601DateFormatter().string(from: Date())
         var body = "[\(ts)] zebra-brain-sync --repo \(vaultRoot) exit=\(exit)\n"

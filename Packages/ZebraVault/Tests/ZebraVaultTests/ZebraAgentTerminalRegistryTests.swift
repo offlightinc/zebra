@@ -42,7 +42,7 @@ final class ZebraAgentTerminalRegistryTests: XCTestCase {
         registry.mark(
             panelId: emailPanelId,
             source: .emailThread("thread-1"),
-            agent: .gemini,
+            agent: .antigravity,
             createdAt: Date(timeIntervalSince1970: 30)
         )
         registry.mark(
@@ -64,7 +64,7 @@ final class ZebraAgentTerminalRegistryTests: XCTestCase {
                 for: .emailThread("thread-1"),
                 panelIds: [oldMarkdownPanelId, newMarkdownPanelId, emailPanelId]
             ),
-            .gemini
+            .antigravity
         )
     }
 

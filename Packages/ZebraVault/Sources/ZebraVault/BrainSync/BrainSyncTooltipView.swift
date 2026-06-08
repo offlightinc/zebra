@@ -1,106 +1,157 @@
 import SwiftUI
 
-/// `BrainSyncIndicatorView` 가 hover 시 띄우는 popover 내용. 디자인 spec
-/// (`/Users/han/zebra_design/zebra_sync/`) 의 `.ss-tip` 컴포넌트.
-///
-/// 3 분기:
-/// - synced: row "[Last synced] [3m ago]" + passive status hint
-/// - failed: row "[{한글 reason}] [14m ago]" + detail + agent picker when wired
-///
-/// Failure 의 agent picker chip 자체는 별도 view (`BrainSyncAgentPicker`).
+/// Brain sync status popover. The action region is case-aware:
+/// retryable failures show the automatic retry timer plus "지금 동기화";
+/// action-required failures show only "Resolve with AI".
 struct BrainSyncTooltipView: View {
     @ObservedObject var service: BrainSyncService
-    /// Failure reason 일 때 agent 선택 callback. nil 이면 picker 안 보이고
-    /// 그냥 generic hint 만 표시 (= terminal launch 의존성 없을 때의 fallback).
     var onFailureAgentSelect: ((MarkdownPillAgent, Date, BrainSyncService.Failure) -> Void)?
 
-    @State private var preferredAgent: MarkdownPillAgent = BrainSyncAgentPreference.current
+    private static let popoverWidth: CGFloat = 240
+    private static let cornerRadius: CGFloat = 6
+
+    @State private var now = Date()
+    @State private var ticker: Timer?
 
     var body: some View {
         VStack(alignment: .center, spacing: 0) {
-            statusRow
-            if let detail = failureDetail {
-                detailRow(detail)
-            }
-            if failedState != nil, onFailureAgentSelect != nil {
-                failurePicker
-            } else {
-                hintRow
-            }
+            header
+            Divider()
+                .background(BrainSyncResolvePopoverPalette.divider)
+                .padding(.vertical, 6)
+            actionRegion
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        // 디자인 spec line 154: detail row max-width 240, white-space normal.
-        // width 고정 240 → 내부 Text 자동 wrap. height 는 content.
-        .frame(width: 240, alignment: .center)
+        .frame(width: Self.popoverWidth, alignment: .center)
         .fixedSize(horizontal: false, vertical: true)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(BVColor.bgFloating)
-        )
+        .background(popoverBackground)
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
                 .stroke(BVColor.borderStrong, lineWidth: 1)
         )
         .shadow(color: BVColor.shadow, radius: 12, x: 0, y: 8)
         .accessibilityIdentifier("BrainSyncTooltip")
+        .onAppear(perform: startTicker)
+        .onDisappear(perform: stopTicker)
     }
 
-    // MARK: - Rows
+    private var popoverBackground: some View {
+        RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+            .fill(.ultraThinMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+                    .fill(BVColor.bgFloating)
+            )
+    }
 
-    @ViewBuilder
-    private var statusRow: some View {
-        HStack(spacing: 14) {
-            Text(reasonLabel)
-                .font(.system(size: 11.5, weight: reasonWeight))
-                .foregroundColor(reasonColor)
-            Text(timestampLabel)
-                .font(.system(size: 11.5))
-                .monospacedDigit()
-                .foregroundColor(BVColor.fg)
+    private var header: some View {
+        VStack(spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                Text(titleText)
+                    .font(.system(size: 11.5, weight: titleWeight))
+                    .foregroundColor(titleColor)
+                    .lineLimit(1)
+                Text(timestampLabel)
+                    .font(.system(size: 11.5))
+                    .monospacedDigit()
+                    .foregroundColor(BrainSyncResolvePopoverPalette.secondaryText)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            Text(detailText)
+                .font(.system(size: 10.5))
+                .foregroundColor(BrainSyncResolvePopoverPalette.secondaryText)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
-    private func detailRow(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 10.5))
-            .foregroundColor(BVColor.fgMute)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 240)
-            .padding(.top, 2)
-    }
-
-    /// Passive hint row. Only the conflict picker below owns an explicit
-    /// action; generic failure hints describe the next step but do not pretend
-    /// to open logs, auth flows, or repo pickers that do not exist yet.
     @ViewBuilder
-    private var hintRow: some View {
-        Divider()
-            .background(BVColor.border)
-            .padding(.top, 6)
-        Text(hintText)
-            .font(.system(size: 10.5))
-            .foregroundColor(BVColor.fgFaint)
-            .multilineTextAlignment(.center)
-            .padding(.top, 6)
-    }
-
-    /// failure reason 일 때 hint 자리에 표시되는 agent picker (chip + dropdown).
-    /// `onFailureAgentSelect` 가 nil 이면 안 그림 (= 호출자가 terminal
-    /// flow 를 아직 wire-up 안 한 케이스).
-    @ViewBuilder
-    private var failurePicker: some View {
-        Divider()
-            .background(BVColor.border)
-            .padding(.top, 6)
-        BrainSyncAgentPicker(
-            preferredAgent: $preferredAgent,
-            onSelect: { agent in
-                guard let failedState else { return }
-                BrainSyncAgentPreference.set(agent)
-                onFailureAgentSelect?(agent, failedState.at, failedState.failure)
+    private var actionRegion: some View {
+        if let failedState {
+            if failedState.failure.reason.allowsAutomaticRetry {
+                autoRetryRegion
+            } else {
+                resolveRegion(failedState)
             }
-        )
+        } else {
+            syncNowButton
+        }
+    }
+
+    private var autoRetryRegion: some View {
+        VStack(spacing: 8) {
+            VStack(spacing: 6) {
+                HStack(alignment: .center, spacing: 10) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 11, weight: .medium))
+                        Text(String(localized: "brainSync.retry.timerLabel", defaultValue: "자동 동기화까지"))
+                            .font(.system(size: 10.5, weight: .medium))
+                    }
+                    .foregroundColor(BrainSyncResolvePopoverPalette.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Text(countdownLabel)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundColor(BrainSyncResolvePopoverPalette.primaryText)
+                }
+
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(BrainSyncResolvePopoverPalette.progressTrack)
+                        Capsule()
+                            .fill(BrainSyncResolvePopoverPalette.accent)
+                            .frame(width: proxy.size.width * progressFraction)
+                    }
+                }
+                .frame(height: 5)
+            }
+
+            syncNowButton
+        }
+    }
+
+    private func resolveRegion(_ failedState: (at: Date, failure: BrainSyncService.Failure)) -> some View {
+        Button(action: {
+            onFailureAgentSelect?(MarkdownPillAgent.defaultAgent(), failedState.at, failedState.failure)
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundColor(BrainSyncResolvePopoverPalette.accent)
+                Text(String(localized: "brainSync.action.resolveWithAI", defaultValue: "Resolve with AI"))
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(BrainSyncResolvePillButtonStyle())
+        .disabled(onFailureAgentSelect == nil)
+    }
+
+    private var syncNowButton: some View {
+        Button(action: { service.triggerSync() }) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .opacity(0.65)
+                Text(syncNowTitle)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(BrainSyncResolvePillButtonStyle())
+        .disabled(service.isSyncing)
+    }
+
+    private var syncNowTitle: String {
+        if service.isSyncing {
+            return String(localized: "brainSync.action.syncingNow", defaultValue: "동기화 중...")
+        }
+        return String(localized: "brainSync.action.syncNow", defaultValue: "지금 동기화")
     }
 
     private var failedState: (at: Date, failure: BrainSyncService.Failure)? {
@@ -110,53 +161,37 @@ struct BrainSyncTooltipView: View {
         return nil
     }
 
-    // MARK: - Content derivation
-
-    private var reasonLabel: String {
-        switch service.state {
-        case .synced?:
-            return String(localized: "brainSync.tooltip.lastSynced", defaultValue: "Last synced")
-        case .failed(_, let failure)?:
-            return failure.reason.humanLabel
-        case nil:
-            return String(localized: "brainSync.tooltip.pending", defaultValue: "Sync pending")
+    private var titleText: String {
+        guard let failedState else {
+            if service.isSyncing {
+                return String(localized: "brainSync.label.syncing", defaultValue: "Syncing...")
+            }
+            return String(localized: "brainSync.label.synced", defaultValue: "Synced")
         }
+        if failedState.failure.reason.allowsAutomaticRetry {
+            return String(localized: "brainSync.popover.autoTitle", defaultValue: "동기화 실패")
+        }
+        return failedState.failure.reason.humanLabel
     }
 
-    private var reasonWeight: Font.Weight {
-        switch service.state {
-        case .failed?:
-            return .medium
-        default:
-            return .regular
-        }
+    private var titleColor: Color {
+        failedState == nil
+            ? BrainSyncResolvePopoverPalette.primaryText
+            : BrainSyncResolvePopoverPalette.failureTitle
     }
 
-    private var reasonColor: Color {
-        switch service.state {
-        case .failed?:
-            return BVColor.syncRedLabel
-        default:
-            return BVColor.fgFaint
-        }
+    private var titleWeight: Font.Weight {
+        failedState == nil ? .regular : .medium
     }
 
-    private var failureDetail: String? {
-        if let failure = failedState?.failure, !failure.detail.isEmpty {
-            return failure.detail
-        }
-        return nil
-    }
-
-    private var hintText: String {
-        switch service.state {
-        case .synced?:
+    private var detailText: String {
+        guard let failedState else {
+            if service.isSyncing {
+                return String(localized: "brainSync.popover.syncingDetail", defaultValue: "동기화를 실행하고 있어요")
+            }
             return String(localized: "brainSync.hint.synced", defaultValue: "sync is up to date")
-        case .failed(_, let failure)?:
-            return failure.reason.hintText
-        case nil:
-            return String(localized: "brainSync.hint.pending", defaultValue: "waiting for first sync")
         }
+        return failedState.failure.shortDisplayDetail
     }
 
     private var timestampLabel: String {
@@ -166,12 +201,40 @@ struct BrainSyncTooltipView: View {
         case .failed(let at, _)?: date = at
         case nil: date = nil
         }
-        guard let date else { return "—" }
-        return Self.format(timeAgo: date)
+        guard let date else { return "--" }
+        return Self.format(timeAgo: date, now: now)
     }
 
-    /// `Xm ago` / `Xh ago` / `yesterday` / absolute date. 디자인 spec 에 따른
-    /// compact format. tabular-num 은 SwiftUI 의 `monospacedDigit()` 으로.
+    private var countdownLabel: String {
+        let remaining = max(0, (service.nextAutomaticSyncAt ?? now).timeIntervalSince(now))
+        let minutes = Int(remaining) / 60
+        let seconds = Int(remaining) % 60
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    private var progressFraction: CGFloat {
+        guard let next = service.nextAutomaticSyncAt else { return 0 }
+        let remaining = max(0, next.timeIntervalSince(now))
+        let elapsed = max(0, BrainSyncService.automaticRetryInterval - remaining)
+        return min(1, max(0, CGFloat(elapsed / BrainSyncService.automaticRetryInterval)))
+    }
+
+    private func startTicker() {
+        stopTicker()
+        now = Date()
+        let timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            now = Date()
+        }
+        RunLoop.current.add(timer, forMode: .common)
+        ticker = timer
+    }
+
+    private func stopTicker() {
+        ticker?.invalidate()
+        ticker = nil
+    }
+
+    /// `Xm ago` / `Xh ago` / `yesterday` / absolute date.
     static func format(timeAgo date: Date, now: Date = Date()) -> String {
         let seconds = max(0, now.timeIntervalSince(date))
         if seconds < 60 {
@@ -199,32 +262,59 @@ struct BrainSyncTooltipView: View {
     }
 }
 
-extension BrainSyncService.FailureReason {
-    /// Tooltip's passive next-step hint.
-    var hintText: String {
-        switch self {
-        case .authExpired:
-            return String(localized: "brainSync.hint.reauth", defaultValue: "reauthenticate, then retry")
+private struct BrainSyncResolvePillButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundColor(BrainSyncResolvePopoverPalette.primaryText)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(
+                Capsule()
+                    .fill(configuration.isPressed ? BrainSyncResolvePopoverPalette.buttonPressed : Color.clear)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(BrainSyncResolvePopoverPalette.buttonBorder, lineWidth: 1)
+            )
+            .contentShape(Capsule())
+            .offset(y: configuration.isPressed ? 0.5 : 0)
+    }
+}
+
+private enum BrainSyncResolvePopoverPalette {
+    static let divider = BVColor.border
+    static let failureTitle = BVColor.syncRedLabel
+    static let secondaryText = BVColor.fgMute
+    static let primaryText = BVColor.fg
+    static let accent = BVColor.accent
+    static let buttonBorder = BVColor.borderStrong
+    static let buttonPressed = BVColor.bgHover
+    static let progressTrack = BVColor.borderStrong
+}
+
+private extension BrainSyncService.Failure {
+    var shortDisplayDetail: String {
+        switch reason {
         case .offline:
-            return String(localized: "brainSync.hint.offline", defaultValue: "queued · retry in 30s")
-        case .pushRejected:
-            return String(localized: "brainSync.hint.pullAndRetry", defaultValue: "pull remote changes, then retry")
-        case .permissionDenied:
-            return String(localized: "brainSync.hint.requestAccess", defaultValue: "check repository access")
-        case .diskFull:
-            return String(localized: "brainSync.hint.diskUsage", defaultValue: "free disk space, then retry")
-        case .hookFailed:
-            return String(localized: "brainSync.hint.viewLog", defaultValue: "check the sync log")
+            return String(localized: "brainSync.detail.offline", defaultValue: "네트워크 연결이 끊겼어요")
         case .rateLimit:
-            return String(localized: "brainSync.hint.rateLimit", defaultValue: "rate limited · auto retry")
-        case .conflict:
-            return String(localized: "brainSync.hint.resolve", defaultValue: "resolve with an agent in terminal")
-        case .notGbrainRepo:
-            return String(localized: "brainSync.hint.chooseGbrainRepo", defaultValue: "choose a GBrain repo")
+            return String(localized: "brainSync.detail.rateLimit", defaultValue: "잠시 후 다시 시도할게요")
         case .alreadyRunning:
-            return String(localized: "brainSync.hint.alreadyRunning", defaultValue: "wait for the current sync, then retry")
-        case .unknown:
-            return String(localized: "brainSync.hint.retry", defaultValue: "retry from the sync indicator")
+            return String(localized: "brainSync.detail.alreadyRunning", defaultValue: "다른 동기화가 진행 중이에요")
+        default:
+            return Self.compact(detail)
         }
+    }
+
+    private static func compact(_ detail: String) -> String {
+        let line = detail
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? ""
+        guard line.count > 72 else { return line }
+        let end = line.index(line.startIndex, offsetBy: 69)
+        return String(line[..<end]) + "..."
     }
 }

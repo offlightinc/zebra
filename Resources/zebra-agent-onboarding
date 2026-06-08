@@ -359,8 +359,7 @@ ensure_preferences_base() {
   else
     {
       printf '{\n'
-      printf '  "schemaVersion": %s,\n' "$PREFERENCE_SCHEMA_VERSION"
-      printf '  "surfaceOverrides": {}\n'
+      printf '  "schemaVersion": %s\n' "$PREFERENCE_SCHEMA_VERSION"
       printf '}\n'
     } > "$tmp"
   fi
@@ -368,13 +367,11 @@ ensure_preferences_base() {
     && ! plutil -insert schemaVersion -integer "$PREFERENCE_SCHEMA_VERSION" "$tmp" >/dev/null 2>&1; then
     {
       printf '{\n'
-      printf '  "schemaVersion": %s,\n' "$PREFERENCE_SCHEMA_VERSION"
-      printf '  "surfaceOverrides": {}\n'
+      printf '  "schemaVersion": %s\n' "$PREFERENCE_SCHEMA_VERSION"
       printf '}\n'
     } > "$tmp"
   fi
-  plutil -type surfaceOverrides "$tmp" >/dev/null 2>&1 \
-    || plutil -insert surfaceOverrides -dictionary "$tmp" >/dev/null
+  plutil -remove surfaceOverrides "$tmp" >/dev/null 2>&1 || true
 }
 
 set_primary_preference() {

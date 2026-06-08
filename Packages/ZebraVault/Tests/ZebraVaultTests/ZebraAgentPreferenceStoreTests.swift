@@ -17,10 +17,9 @@ final class ZebraAgentPreferenceStoreTests: XCTestCase {
             to: fileURL
         )
 
-        let preferences = makeStore(fileURL: fileURL).load(migratingLegacyDefaults: false)
+        let preferences = makeStore(fileURL: fileURL).load()
 
         XCTAssertEqual(preferences.primaryAgent, .antigravity)
-        XCTAssertEqual(preferences.surfaceOverrides[.brainSync], .claude)
     }
 
     func testInvalidRawValuesAreIgnored() throws {
@@ -38,10 +37,9 @@ final class ZebraAgentPreferenceStoreTests: XCTestCase {
             to: fileURL
         )
 
-        let preferences = makeStore(fileURL: fileURL).load(migratingLegacyDefaults: false)
+        let preferences = makeStore(fileURL: fileURL).load()
 
         XCTAssertNil(preferences.primaryAgent)
-        XCTAssertEqual(preferences.surfaceOverrides, [:])
     }
 
     func testWritePrimaryAgentPersistsJSON() throws {
@@ -50,52 +48,9 @@ final class ZebraAgentPreferenceStoreTests: XCTestCase {
 
         try store.setPrimaryAgent(.codex, updatedBy: "test")
 
-        let preferences = store.load(migratingLegacyDefaults: false)
+        let preferences = store.load()
         XCTAssertEqual(preferences.primaryAgent, .codex)
         XCTAssertEqual(preferences.updatedBy, "test")
-    }
-
-    func testLegacyBrainSyncUserDefaultsMigratesIntoSurfaceOverride() throws {
-        let fileURL = try makeTemporaryPreferencesURL()
-        let defaults = try makeDefaults()
-        defaults.set("claude", forKey: ZebraAgentPreferenceStore.legacyBrainSyncUserDefaultsKey)
-
-        let store = makeStore(fileURL: fileURL, legacyDefaults: defaults)
-        let preferences = store.load()
-
-        XCTAssertEqual(preferences.surfaceOverrides[.brainSync], .claude)
-        XCTAssertNil(defaults.string(forKey: ZebraAgentPreferenceStore.legacyBrainSyncUserDefaultsKey))
-        XCTAssertEqual(store.load(migratingLegacyDefaults: false).surfaceOverrides[.brainSync], .claude)
-    }
-
-    func testLegacyBrainSyncMigrationKeepsUserDefaultsWhenJSONSaveFails() throws {
-        let parentFileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ZebraAgentPreferenceStoreTests-parent-\(UUID().uuidString)", isDirectory: false)
-        try Data("not a directory".utf8).write(to: parentFileURL)
-        addTeardownBlock {
-            try? FileManager.default.removeItem(at: parentFileURL)
-        }
-
-        let defaults = try makeDefaults()
-        defaults.set("claude", forKey: ZebraAgentPreferenceStore.legacyBrainSyncUserDefaultsKey)
-        let store = makeStore(
-            fileURL: parentFileURL.appendingPathComponent("preferences.json", isDirectory: false),
-            legacyDefaults: defaults
-        )
-
-        let preferences = store.load()
-
-        XCTAssertEqual(preferences.surfaceOverrides[.brainSync], .claude)
-        XCTAssertEqual(defaults.string(forKey: ZebraAgentPreferenceStore.legacyBrainSyncUserDefaultsKey), "claude")
-    }
-
-    func testBrainSyncResolutionUsesOverrideBeforePrimaryAgent() {
-        let preferences = ZebraAgentPreferences(
-            primaryAgent: .codex,
-            surfaceOverrides: [.brainSync: .claude]
-        )
-
-        XCTAssertEqual(preferences.resolvedAgent(for: .brainSync), .claude)
     }
 
     func testMarkdownPillDefaultAgentUsesPrimaryAgentPreference() throws {
@@ -104,6 +59,26 @@ final class ZebraAgentPreferenceStoreTests: XCTestCase {
         try store.setPrimaryAgent(.antigravity, updatedBy: "test")
 
         XCTAssertEqual(MarkdownPillAgent.defaultAgent(preferenceStore: store), .antigravity)
+    }
+
+    func testMarkdownPillDefaultAgentIgnoresLegacyBrainSyncOverride() throws {
+        let fileURL = try makeTemporaryPreferencesURL()
+        try writeJSON(
+            """
+            {
+              "schemaVersion": 1,
+              "primaryAgent": "codex",
+              "surfaceOverrides": {
+                "brainSync": "claude"
+              }
+            }
+            """,
+            to: fileURL
+        )
+
+        let store = makeStore(fileURL: fileURL)
+
+        XCTAssertEqual(MarkdownPillAgent.defaultAgent(preferenceStore: store), .codex)
     }
 
     func testMarkdownPillDefaultAgentFallsBackToCodexWithoutPrimaryAgent() throws {
@@ -191,13 +166,9 @@ final class ZebraAgentPreferenceStoreTests: XCTestCase {
         ))
     }
 
-    private func makeStore(
-        fileURL: URL,
-        legacyDefaults: UserDefaults? = nil
-    ) -> ZebraAgentPreferenceStore {
+    private func makeStore(fileURL: URL) -> ZebraAgentPreferenceStore {
         ZebraAgentPreferenceStore(
             fileURL: fileURL,
-            legacyDefaults: legacyDefaults,
             now: { Date(timeIntervalSince1970: 1_800_000_000) }
         )
     }
@@ -226,16 +197,6 @@ final class ZebraAgentPreferenceStoreTests: XCTestCase {
             .appendingPathComponent("zebra", isDirectory: true)
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("agent-cli-state.json", isDirectory: false)
-    }
-
-    private func makeDefaults() throws -> UserDefaults {
-        let name = "ZebraAgentPreferenceStoreTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
-        defaults.removePersistentDomain(forName: name)
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: name)
-        }
-        return defaults
     }
 
     private func writeJSON(_ json: String, to url: URL) throws {

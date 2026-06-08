@@ -9,13 +9,13 @@ import SwiftUI
 ///
 /// Conflict 케이스의 시각 차이는 **dot/label 색이 아니라 tooltip 내용** (별도 view).
 ///
-/// 클릭 = 즉시 `BrainSyncService.triggerSync()` 호출 (= 사용자 수동 retry).
-/// in-flight 중에는 disabled — 서비스 자체가 idempotent 라 안전망까지 둠.
+/// 클릭 = synced/pending 일 때 즉시 `BrainSyncService.triggerSync()` 호출.
+/// failed 상태의 복구/재시도 action 은 popover 안의 case-aware 버튼이 소유한다.
 public struct BrainSyncIndicatorView: View {
     @ObservedObject public var service: BrainSyncService
-    /// Failure reason 일 때 picker 에서 agent 선택 / indicator click 시 호출.
-    /// nil 이면 generic retry 로 fall back. cmux app module 의 caller 가 terminal
-    /// split + agent CLI 실행을 wire up.
+    /// Action-required failure 에서 Resolve with AI 를 누르면 호출.
+    /// Brain sync 는 별도 agent picker 를 갖지 않고 primary agent 를 사용한다.
+    /// cmux app module 의 caller 가 terminal split + agent CLI 실행을 wire up.
     public var onFailureAgentSelect: ((MarkdownPillAgent, Date, BrainSyncService.Failure) -> Void)?
 
     // Two hover detectors so that the tooltip area itself can keep the
@@ -133,13 +133,8 @@ public struct BrainSyncIndicatorView: View {
         #if DEBUG
         NSLog("[BrainSync] indicator clicked. isSyncing=\(service.isSyncing) state=\(String(describing: service.state))")
         #endif
-        // Failure reason 일 때 click = BrainSync override/default agent 로 즉시
-        // agent terminal. synced/pending 일 때는 sync retry.
-        if case let .failed(failedAt, failure)? = service.state, let onFailureAgentSelect {
-            onFailureAgentSelect(BrainSyncAgentPreference.current, failedAt, failure)
-            return
-        }
         guard !service.isSyncing else { return }
+        if case .failed? = service.state { return }
         service.triggerSync()
     }
 

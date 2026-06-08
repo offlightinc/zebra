@@ -102,9 +102,9 @@ struct ZebraSidebarBody: View {
         )
     }
 
-    /// Sync failure reason 일 때 사용자가 agent picker 에서 agent 를 선택하면 호출.
-    /// 현재 focused workspace 의 새 terminal surface 를 띄우고 그 안에서 선택된
-    /// agent CLI 를 실행. agent 의 첫 prompt 에는 `BrainSyncFailureContextPrefix`
+    /// Sync failure reason 일 때 사용자가 Resolve with AI 를 누르면 호출.
+    /// Brain sync 는 전용 agent picker 를 갖지 않고 primary agent CLI 를 실행한다.
+    /// agent 의 첫 prompt 에는 `BrainSyncFailureContextPrefix`
     /// 가 인자로 들어가 reason/detail, git 상태, 최근 sync 로그, reason별
     /// recovery guidance 가 모두 주입된 상태. 사용자는 그 다음부터 agent 와
     /// 자연어로 대화하며 해결.

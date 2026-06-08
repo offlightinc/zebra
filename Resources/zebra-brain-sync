@@ -4,9 +4,11 @@
 # Generic per-vault git sync. Phases:
 #   lock -> fetch -> validate -> commit -> pull --rebase -> push -> gbrain ping
 #
-# Emitted on stderr first line of every fail: `[REASON:<id>] <message>` where
-# <id> ∈ authExpired|offline|pushRejected|permissionDenied|diskFull|hookFailed|rateLimit|conflict|notGbrainRepo|alreadyRunning|unknown.
+# Script-owned failures emit stderr reason tags: `[REASON:<id>] <message>` where
+# <id> ∈ authExpired|offline|pushRejected|permissionDenied|diskFull|hookFailed|rateLimit|conflict|notGbrainRepo|alreadyRunning.
 # Zebra's `BrainSyncService` parses the tag to classify the FailureReason.
+# External git command failures leave original stdout/stderr intact; Zebra
+# classifies those failures from the captured command output.
 #
 # Originates from the brain-offlight `local-offlight-brain-sync`,
 # generic-fied here (no brand-bound repo basename / remote URL / gbrain CLI
@@ -490,10 +492,9 @@ log "phase: fetch"
 if [[ "$DRY_RUN" == "1" ]]; then
   log "dry run: would run git fetch $remote $branch"
 else
-  # git fetch failure (network / auth / 403 / etc) — emit stderr 그대로 + reason 분류는
-  # zebra 측 패턴 매칭에 위임. (stderr 가 길어 reason 태그 안 박음. 사용 사례 적음.)
-  if ! git fetch "$remote" "$branch" 2>&1; then
-    fail "unknown" "git fetch failed (see stderr above for cause)"
+  # Let git emit its original stdout/stderr; Zebra classifies the non-zero exit.
+  if ! git fetch "$remote" "$branch"; then
+    exit 1
   fi
 fi
 
@@ -555,20 +556,19 @@ else
 fi
 
 log "phase: pull --rebase"
-if ! git pull --rebase "$remote" "$branch" 2>&1; then
+if ! git pull --rebase "$remote" "$branch"; then
   # pull --rebase 실패 = 대개 conflict. git status --porcelain 로 UU 마커 확인.
   if git status --porcelain 2>/dev/null | grep -q '^UU'; then
     fail "conflict" "git pull --rebase produced conflicts; resolve in working tree"
   fi
-  fail "unknown" "git pull --rebase failed (see stderr above for cause)"
+  exit 1
 fi
 
 ahead_count="$(git rev-list --count "$remote/$branch"..HEAD 2>/dev/null || printf '0')"
 if [[ "$ahead_count" =~ ^[0-9]+$ ]] && [[ "$ahead_count" -gt 0 ]]; then
   log "phase: push ($ahead_count commit(s) ahead)"
-  if ! git push "$remote" "$branch" 2>&1; then
-    # push stderr 의 reason 분류는 zebra 측 패턴 매칭에 위임.
-    fail "unknown" "git push failed (see stderr above for cause)"
+  if ! git push "$remote" "$branch"; then
+    exit 1
   fi
   pushed=1
 else
