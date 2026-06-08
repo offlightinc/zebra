@@ -570,11 +570,11 @@ struct TagFlow: View {
 struct BrainInspectorFlowLayout: Layout {
     var spacing: CGFloat = 4
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxW = proposal.width ?? .infinity
+        let maxW = constrainedWidth(from: proposal.width)
         var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0, w: CGFloat = 0
         for sv in subviews {
-            let sz = sv.sizeThatFits(.unspecified)
-            if x + sz.width > maxW {
+            let sz = measuredSize(for: sv, maxWidth: maxW)
+            if let maxW, x > 0, x + sz.width > maxW {
                 w = max(w, x - spacing)
                 x = 0
                 y += rowH + spacing
@@ -584,14 +584,17 @@ struct BrainInspectorFlowLayout: Layout {
             rowH = max(rowH, sz.height)
         }
         w = max(w, x - spacing)
+        if let maxW {
+            w = min(w, maxW)
+        }
         return CGSize(width: w, height: y + rowH)
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let maxW = bounds.width
+        let maxW = max(0, bounds.width)
         var x: CGFloat = bounds.minX, y: CGFloat = bounds.minY, rowH: CGFloat = 0
         for sv in subviews {
-            let sz = sv.sizeThatFits(.unspecified)
-            if x - bounds.minX + sz.width > maxW {
+            let sz = measuredSize(for: sv, maxWidth: maxW)
+            if x > bounds.minX, x - bounds.minX + sz.width > maxW {
                 x = bounds.minX
                 y += rowH + spacing
                 rowH = 0
@@ -600,6 +603,27 @@ struct BrainInspectorFlowLayout: Layout {
             x += sz.width + spacing
             rowH = max(rowH, sz.height)
         }
+    }
+
+    private func constrainedWidth(from proposedWidth: CGFloat?) -> CGFloat? {
+        guard let proposedWidth, proposedWidth.isFinite, proposedWidth > 0 else {
+            return nil
+        }
+        return proposedWidth
+    }
+
+    private func measuredSize(for subview: LayoutSubview, maxWidth: CGFloat?) -> CGSize {
+        let ideal = subview.sizeThatFits(.unspecified)
+        guard let maxWidth else {
+            return ideal
+        }
+
+        let proposedWidth = min(ideal.width, maxWidth)
+        let proposed = subview.sizeThatFits(ProposedViewSize(width: proposedWidth, height: nil))
+        return CGSize(
+            width: min(max(proposed.width, 0), maxWidth),
+            height: max(proposed.height, ideal.height)
+        )
     }
 }
 
@@ -1254,15 +1278,42 @@ enum PanelPopoverAlignment {
     case center, leading, trailing
 }
 
+enum PanelPopoverPlacement {
+    case below, above
+}
+
 extension View {
     /// Drop-in replacement for `.popover(isPresented:arrowEdge:)` that
     /// uses a borderless NSPanel instead of NSPopover.
     func panelPopover<Content: View>(
         isPresented: Binding<Bool>,
         alignment: PanelPopoverAlignment = .center,
+        placement: PanelPopoverPlacement = .below,
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
-        background(PanelPopoverPresenter(isPresented: isPresented, alignment: alignment, content: content))
+        background(PanelPopoverPresenter(
+            isPresented: isPresented,
+            alignment: alignment,
+            placement: placement,
+            content: content
+        ))
+    }
+
+    /// Hover-only preview panel. Unlike `panelPopover`, this panel never
+    /// becomes key and ignores mouse events, so it cannot steal focus from the
+    /// editor/terminal or consume selection clicks on the hovered value.
+    func hoverPreviewPanel<Content: View>(
+        isPresented: Binding<Bool>,
+        alignment: PanelPopoverAlignment = .center,
+        placement: PanelPopoverPlacement = .above,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        background(HoverPreviewPanelPresenter(
+            isPresented: isPresented,
+            alignment: alignment,
+            placement: placement,
+            content: content
+        ))
     }
 }
 
@@ -1275,9 +1326,15 @@ private final class PickerPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
+private final class HoverPreviewPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+private struct HoverPreviewPanelPresenter<Content: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
     let alignment: PanelPopoverAlignment
+    let placement: PanelPopoverPlacement
     let content: () -> Content
 
     func makeNSView(context: Context) -> NSView {
@@ -1285,12 +1342,201 @@ private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
         view.translatesAutoresizingMaskIntoConstraints = false
         context.coordinator.anchorView = view
         context.coordinator.alignment = alignment
+        context.coordinator.placement = placement
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.anchorView = nsView
         context.coordinator.alignment = alignment
+        context.coordinator.placement = placement
+        context.coordinator.update(content: content(), isPresented: isPresented)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.dismiss()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        weak var anchorView: NSView?
+        var alignment: PanelPopoverAlignment = .center
+        var placement: PanelPopoverPlacement = .above
+
+        private var panel: HoverPreviewPanel?
+        private var hostingController: NSHostingController<AnyView>?
+        private var trackingObservers: [NSObjectProtocol] = []
+
+        func update(content: Content, isPresented presented: Bool) {
+            if presented {
+                present(content: AnyView(content))
+            } else {
+                dismiss()
+            }
+        }
+
+        func present(content: AnyView) {
+            guard let anchorView, let anchorWindow = anchorView.window else { return }
+
+            if let hosting = hostingController {
+                hosting.rootView = content
+                hosting.view.layoutSubtreeIfNeeded()
+                resizeAndReposition()
+                return
+            }
+
+            let hosting = NSHostingController(rootView: content)
+            hosting.view.wantsLayer = true
+            hosting.view.layoutSubtreeIfNeeded()
+            hostingController = hosting
+
+            let panel = HoverPreviewPanel(
+                contentRect: NSRect(origin: .zero, size: hosting.view.fittingSize),
+                styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered,
+                defer: false
+            )
+            panel.isFloatingPanel = true
+            panel.hidesOnDeactivate = true
+            panel.becomesKeyOnlyIfNeeded = true
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = true
+            panel.level = .popUpMenu
+            panel.animationBehavior = .none
+            panel.ignoresMouseEvents = true
+            panel.contentViewController = hosting
+            self.panel = panel
+
+            positionPanel(anchoredTo: anchorView, in: anchorWindow)
+            panel.orderFront(nil)
+            installAnchorTracking(for: anchorView, window: anchorWindow)
+        }
+
+        func dismiss() {
+            guard panel != nil else { return }
+            removeAnchorTracking()
+            panel?.orderOut(nil)
+            panel = nil
+            hostingController = nil
+        }
+
+        private func resizeAndReposition() {
+            guard let hosting = hostingController, let panel else { return }
+            let size = hosting.view.fittingSize
+            var frame = panel.frame
+            frame.size = size
+            panel.setFrame(frame, display: true)
+            if let anchorView, let anchorWindow = anchorView.window {
+                positionPanel(anchoredTo: anchorView, in: anchorWindow)
+            }
+        }
+
+        private func positionPanel(anchoredTo anchor: NSView, in anchorWindow: NSWindow) {
+            guard let panel, let hosting = hostingController else { return }
+            let size = hosting.view.fittingSize
+            let anchorRectInWindow = anchor.convert(anchor.bounds, to: nil)
+            let anchorRectInScreen = anchorWindow.convertToScreen(anchorRectInWindow)
+
+            let xOrigin: CGFloat
+            switch alignment {
+            case .center:   xOrigin = anchorRectInScreen.midX - size.width / 2
+            case .leading:  xOrigin = anchorRectInScreen.minX
+            case .trailing: xOrigin = anchorRectInScreen.maxX - size.width
+            }
+
+            var origin = NSPoint(x: xOrigin, y: preferredY(
+                for: placement,
+                anchorRect: anchorRectInScreen,
+                panelHeight: size.height
+            ))
+
+            let anchorMid = NSPoint(x: anchorRectInScreen.midX, y: anchorRectInScreen.midY)
+            let screen = NSScreen.screens.first { $0.frame.contains(anchorMid) }
+                ?? anchorWindow.screen
+                ?? NSScreen.main
+            if let visible = screen?.visibleFrame {
+                origin.x = max(visible.minX + 4, min(origin.x, visible.maxX - size.width - 4))
+                switch placement {
+                case .below:
+                    if origin.y < visible.minY + 4 {
+                        origin.y = preferredY(for: .above, anchorRect: anchorRectInScreen, panelHeight: size.height)
+                    }
+                case .above:
+                    if origin.y + size.height > visible.maxY - 4 {
+                        origin.y = preferredY(for: .below, anchorRect: anchorRectInScreen, panelHeight: size.height)
+                    }
+                }
+                origin.y = max(visible.minY + 4, min(origin.y, visible.maxY - size.height - 4))
+            }
+            panel.setFrameOrigin(origin)
+        }
+
+        private func preferredY(
+            for placement: PanelPopoverPlacement,
+            anchorRect: NSRect,
+            panelHeight: CGFloat
+        ) -> CGFloat {
+            switch placement {
+            case .below:
+                return anchorRect.minY - panelHeight - 6
+            case .above:
+                return anchorRect.maxY + 6
+            }
+        }
+
+        private func installAnchorTracking(for anchor: NSView, window: NSWindow) {
+            removeAnchorTracking()
+            let center = NotificationCenter.default
+            trackingObservers = [
+                center.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: .main) { [weak self] _ in
+                    self?.resizeAndReposition()
+                },
+                center.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
+                    self?.resizeAndReposition()
+                },
+                center.addObserver(forName: NSView.frameDidChangeNotification, object: anchor, queue: .main) { [weak self] _ in
+                    self?.resizeAndReposition()
+                },
+                center.addObserver(forName: NSView.boundsDidChangeNotification, object: anchor, queue: .main) { [weak self] _ in
+                    self?.resizeAndReposition()
+                }
+            ]
+        }
+
+        private func removeAnchorTracking() {
+            let center = NotificationCenter.default
+            for observer in trackingObservers {
+                center.removeObserver(observer)
+            }
+            trackingObservers.removeAll()
+        }
+    }
+}
+
+private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
+    @Binding var isPresented: Bool
+    let alignment: PanelPopoverAlignment
+    let placement: PanelPopoverPlacement
+    let content: () -> Content
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        context.coordinator.anchorView = view
+        context.coordinator.alignment = alignment
+        context.coordinator.placement = placement
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.anchorView = nsView
+        context.coordinator.alignment = alignment
+        context.coordinator.placement = placement
         context.coordinator.update(content: content(), isPresented: isPresented)
     }
 
@@ -1307,6 +1553,7 @@ private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
         @Binding var isPresented: Bool
         weak var anchorView: NSView?
         var alignment: PanelPopoverAlignment = .center
+        var placement: PanelPopoverPlacement = .below
 
         private var panel: PickerPanel?
         private var hostingController: NSHostingController<AnyView>?
@@ -1408,10 +1655,11 @@ private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
             case .leading:  xOrigin = anchorRectInScreen.minX
             case .trailing: xOrigin = anchorRectInScreen.maxX - size.width
             }
-            var origin = NSPoint(
-                x: xOrigin,
-                y: anchorRectInScreen.minY - size.height - 6
-            )
+            var origin = NSPoint(x: xOrigin, y: preferredY(
+                for: placement,
+                anchorRect: anchorRectInScreen,
+                panelHeight: size.height
+            ))
 
             // Find the screen that actually contains the anchor's midpoint
             // (not the anchor window's "dominant" screen, which can be on
@@ -1422,12 +1670,32 @@ private struct PanelPopoverPresenter<Content: View>: NSViewRepresentable {
                 ?? NSScreen.main
             if let visible = screen?.visibleFrame {
                 origin.x = max(visible.minX + 4, min(origin.x, visible.maxX - size.width - 4))
-                if origin.y < visible.minY + 4 {
-                    origin.y = anchorRectInScreen.maxY + 6
+                switch placement {
+                case .below:
+                    if origin.y < visible.minY + 4 {
+                        origin.y = preferredY(for: .above, anchorRect: anchorRectInScreen, panelHeight: size.height)
+                    }
+                case .above:
+                    if origin.y + size.height > visible.maxY - 4 {
+                        origin.y = preferredY(for: .below, anchorRect: anchorRectInScreen, panelHeight: size.height)
+                    }
                 }
                 origin.y = max(visible.minY + 4, min(origin.y, visible.maxY - size.height - 4))
             }
             panel.setFrameOrigin(origin)
+        }
+
+        private func preferredY(
+            for placement: PanelPopoverPlacement,
+            anchorRect: NSRect,
+            panelHeight: CGFloat
+        ) -> CGFloat {
+            switch placement {
+            case .below:
+                return anchorRect.minY - panelHeight - 6
+            case .above:
+                return anchorRect.maxY + 6
+            }
         }
 
         // MARK: Event monitors

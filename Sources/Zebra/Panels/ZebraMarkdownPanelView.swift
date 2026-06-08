@@ -158,6 +158,7 @@ struct ZebraMarkdownPanelView<
                 }
             )
             .frame(width: CGFloat(resolvedInspectorWidth))
+            .clipped()
         }
     }
 

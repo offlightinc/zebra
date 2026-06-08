@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Router
@@ -409,12 +410,7 @@ private struct FrontmatterValueView: View {
         case .null:
             EmptyValue()
         case .scalar(let value):
-            Text(value)
-                .font(.system(size: 11.5, design: .monospaced))
-                .foregroundColor(BVColor.fg)
-                .lineLimit(3)
-                .truncationMode(.tail)
-                .textSelection(.enabled)
+            FrontmatterTruncatedText(text: value, lineLimit: 3)
         case .array(let values):
             let items = values.map(Self.flatString)
             if items.isEmpty {
@@ -427,12 +423,8 @@ private struct FrontmatterValueView: View {
                 }
             }
         case .map:
-            Text(Self.flatString(value))
-                .font(.system(size: 11.5, design: .monospaced))
-                .foregroundColor(BVColor.fg)
-                .lineLimit(3)
-                .truncationMode(.tail)
-                .textSelection(.enabled)
+            let text = Self.flatString(value)
+            FrontmatterTruncatedText(text: text, lineLimit: 3)
         }
     }
 
@@ -452,11 +444,38 @@ private struct FrontmatterValueView: View {
 
 private struct FrontmatterChip: View {
     public let text: String
+    @State private var isHovering = false
+    @State private var renderedSize: CGSize = .zero
+
+    private static let horizontalPadding: CGFloat = 10
+    private static let font = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
+
+    private var isTruncated: Bool {
+        FrontmatterHoverMetrics.isSingleLineTruncated(
+            text: text,
+            availableWidth: renderedSize.width,
+            horizontalPadding: Self.horizontalPadding,
+            font: Self.font
+        )
+    }
+
+    private var isPopoverPresented: Binding<Bool> {
+        Binding(
+            get: { isHovering && isTruncated },
+            set: { presented in
+                if !presented {
+                    isHovering = false
+                }
+            }
+        )
+    }
 
     public var body: some View {
         Text(text)
             .font(.system(size: 10.5, design: .monospaced))
             .foregroundColor(BVColor.fgMute)
+            .lineLimit(1)
+            .truncationMode(.tail)
             .padding(.horizontal, 5)
             .frame(height: 18)
             .background(
@@ -464,6 +483,180 @@ private struct FrontmatterChip: View {
                     .fill(BVColor.bgInput)
                     .overlay(RoundedRectangle(cornerRadius: 3).stroke(BVColor.border))
             )
+            .contentShape(Rectangle())
+            .onMeasuredSizeChange { size in
+                renderedSize = size
+                let truncated = FrontmatterHoverMetrics.isSingleLineTruncated(
+                    text: text,
+                    availableWidth: size.width,
+                    horizontalPadding: Self.horizontalPadding,
+                    font: Self.font
+                )
+                if !truncated {
+                    isHovering = false
+                }
+            }
+            .onHover { hovering in
+                isHovering = hovering && isTruncated
+            }
+            .hoverPreviewPanel(isPresented: isPopoverPresented, alignment: .leading, placement: .above) {
+                FrontmatterValueHoverPopover(
+                    text: text,
+                    width: FrontmatterHoverMetrics.popoverWidth(for: text, font: Self.font)
+                )
+            }
+    }
+}
+
+private struct FrontmatterTruncatedText: View {
+    let text: String
+    let lineLimit: Int
+    @State private var isHovering = false
+    @State private var renderedSize: CGSize = .zero
+
+    private static let font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+
+    private var isTruncated: Bool {
+        FrontmatterHoverMetrics.isMultilineTruncated(
+            text: text,
+            availableWidth: renderedSize.width,
+            lineLimit: lineLimit,
+            font: Self.font
+        )
+    }
+
+    private var isPopoverPresented: Binding<Bool> {
+        Binding(
+            get: { isHovering && isTruncated },
+            set: { presented in
+                if !presented {
+                    isHovering = false
+                }
+            }
+        )
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11.5, design: .monospaced))
+            .foregroundColor(BVColor.fg)
+            .lineLimit(lineLimit)
+            .truncationMode(.tail)
+            .textSelection(.enabled)
+            .contentShape(Rectangle())
+            .onMeasuredSizeChange { size in
+                renderedSize = size
+                let truncated = FrontmatterHoverMetrics.isMultilineTruncated(
+                    text: text,
+                    availableWidth: size.width,
+                    lineLimit: lineLimit,
+                    font: Self.font
+                )
+                if !truncated {
+                    isHovering = false
+                }
+            }
+            .onHover { hovering in
+                isHovering = hovering && isTruncated
+            }
+            .hoverPreviewPanel(isPresented: isPopoverPresented, alignment: .leading, placement: .above) {
+                FrontmatterValueHoverPopover(
+                    text: text,
+                    width: FrontmatterHoverMetrics.popoverWidth(for: text, font: Self.font)
+                )
+            }
+    }
+}
+
+private struct FrontmatterValueHoverPopover: View {
+    let text: String
+    let width: CGFloat
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10.5, design: .monospaced))
+            .foregroundColor(BVColor.fg)
+            .lineLimit(width >= FrontmatterHoverMetrics.maxPopoverWidth ? 3 : 1)
+            .truncationMode(.tail)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(width: width, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(BVColor.bgFloating)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(BVColor.borderStrong, lineWidth: 1)
+                    )
+            )
+            .shadow(color: BVColor.shadow, radius: 10, x: 0, y: 6)
+    }
+}
+
+private enum FrontmatterHoverMetrics {
+    static let minPopoverWidth: CGFloat = 72
+    static let maxPopoverWidth: CGFloat = 520
+
+    static func popoverWidth(for text: String, font: NSFont) -> CGFloat {
+        min(max(ceil(singleLineWidth(text, font: font) + 16), minPopoverWidth), maxPopoverWidth)
+    }
+
+    static func isSingleLineTruncated(
+        text: String,
+        availableWidth: CGFloat,
+        horizontalPadding: CGFloat,
+        font: NSFont
+    ) -> Bool {
+        guard availableWidth.isFinite, availableWidth > horizontalPadding else {
+            return false
+        }
+
+        let availableTextWidth = max(0, availableWidth - horizontalPadding)
+        return singleLineWidth(text, font: font) > availableTextWidth + 1
+    }
+
+    static func isMultilineTruncated(
+        text: String,
+        availableWidth: CGFloat,
+        lineLimit: Int,
+        font: NSFont
+    ) -> Bool {
+        guard availableWidth.isFinite, availableWidth > 0, lineLimit > 0 else {
+            return false
+        }
+
+        let boundingRect = (text as NSString).boundingRect(
+            with: CGSize(width: availableWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font]
+        )
+        let lineHeight = ceil(font.ascender - font.descender + font.leading)
+        return ceil(boundingRect.height) > lineHeight * CGFloat(lineLimit) + 1
+    }
+
+    private static func singleLineWidth(_ text: String, font: NSFont) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+}
+
+private struct FrontmatterMeasuredSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
+    }
+}
+
+private extension View {
+    func onMeasuredSizeChange(_ onChange: @escaping (CGSize) -> Void) -> some View {
+        background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: FrontmatterMeasuredSizeKey.self, value: proxy.size)
+            }
+        )
+        .onPreferenceChange(FrontmatterMeasuredSizeKey.self, perform: onChange)
     }
 }
 
@@ -498,11 +691,7 @@ public struct UnknownInspectorView: View {
                             VStack(alignment: .leading, spacing: 0) {
                                 ForEach(Array(unknown.frontmatter.enumerated()), id: \.offset) { _, kv in
                                     PropertyRow(label: kv.key, icon: "doc.text") {
-                                        Text(kv.value)
-                                            .font(.system(size: 11.5, design: .monospaced))
-                                            .foregroundColor(BVColor.fg)
-                                            .lineLimit(2)
-                                            .truncationMode(.tail)
+                                        FrontmatterTruncatedText(text: kv.value, lineLimit: 2)
                                     }
                                 }
                             }
