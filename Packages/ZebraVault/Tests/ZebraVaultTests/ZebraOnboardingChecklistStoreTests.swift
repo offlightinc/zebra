@@ -84,6 +84,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             launchDirectory: "/tmp/zebra-gbrain-work",
             startupPrompt: "setup prompt",
             setupPacketPath: "/tmp/zebra-gbrain-packet.md",
+            runId: "gbrain-test-run",
             shellEnvironmentPrefix: "export ZEBRA_GBRAIN_STATE='/tmp/state.json' && ",
             allowTrustedAutomation: true,
             allowLaunchDirectoryTrust: false
@@ -100,15 +101,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         XCTAssertTrue(line.contains("zebra-gbrain-onboarding prepare-source-repo"), line)
         XCTAssertTrue(line.contains("eval \"$(zebra-gbrain-onboarding active-source-env)\""), line)
+        XCTAssertTrue(line.contains("zebra-gbrain-onboarding write-setup-packet --path '/tmp/zebra-gbrain-packet.md'"), line)
         XCTAssertTrue(line.contains("cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/hermes' chat"), line)
         XCTAssertTrue(line.contains("--source zebra-gbrain-onboarding"), line)
         XCTAssertTrue(line.contains("--query 'setup prompt'"), line)
         XCTAssertFalse(line.contains(" codex"), line)
         let prepareRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-source-repo"))
         let envRange = try XCTUnwrap(line.range(of: "eval \"$(zebra-gbrain-onboarding active-source-env)\""))
+        let packetRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-setup-packet"))
         let launchRange = try XCTUnwrap(line.range(of: "cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/hermes' chat"))
         XCTAssertLessThan(prepareRange.lowerBound, envRange.lowerBound)
-        XCTAssertLessThan(envRange.lowerBound, launchRange.lowerBound)
+        XCTAssertLessThan(envRange.lowerBound, packetRange.lowerBound)
+        XCTAssertLessThan(packetRange.lowerBound, launchRange.lowerBound)
     }
 
     func testGBrainStartupLineUsesOpenClawRuntimeWhenSelected() throws {
@@ -116,6 +120,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             launchDirectory: "/tmp/zebra-gbrain-work",
             startupPrompt: "setup prompt",
             setupPacketPath: "/tmp/zebra-gbrain-packet.md",
+            runId: "gbrain-ABCDEF12-3456-7890",
             shellEnvironmentPrefix: "export ZEBRA_GBRAIN_STATE='/tmp/state.json' && ",
             allowTrustedAutomation: true,
             allowLaunchDirectoryTrust: false
@@ -131,11 +136,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
 
         XCTAssertTrue(
-            line.contains("zebra-gbrain-onboarding prepare-openclaw-agent --executable '/tmp/openclaw'"),
+            line.contains("zebra-gbrain-onboarding prepare-openclaw-agent --executable '/tmp/openclaw' --agent-id 'zebra-gbrain-setup-12-3456-7890'"),
             line
         )
         XCTAssertTrue(line.contains("cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/openclaw' tui"), line)
-        XCTAssertTrue(line.contains("--session 'agent:zebra-gbrain-setup:zebra-gbrain-setup'"), line)
+        XCTAssertTrue(line.contains("--session 'agent:zebra-gbrain-setup-12-3456-7890:gbrain-ABCDEF12-3456-7890'"), line)
         XCTAssertTrue(line.contains("--local"), line)
         XCTAssertTrue(line.contains("--message 'setup prompt'"), line)
         XCTAssertFalse(line.contains("agents list --json"), line)
@@ -144,10 +149,12 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(line.contains(" codex"), line)
         let prepareRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-source-repo"))
         let envRange = try XCTUnwrap(line.range(of: "eval \"$(zebra-gbrain-onboarding active-source-env)\""))
+        let packetRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-setup-packet"))
         let agentRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-openclaw-agent"))
         let launchRange = try XCTUnwrap(line.range(of: "cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/openclaw' tui"))
         XCTAssertLessThan(prepareRange.lowerBound, envRange.lowerBound)
-        XCTAssertLessThan(envRange.lowerBound, agentRange.lowerBound)
+        XCTAssertLessThan(envRange.lowerBound, packetRange.lowerBound)
+        XCTAssertLessThan(packetRange.lowerBound, agentRange.lowerBound)
         XCTAssertLessThan(agentRange.lowerBound, launchRange.lowerBound)
     }
 

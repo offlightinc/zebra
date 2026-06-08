@@ -533,6 +533,235 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent("node_modules").path))
     }
 
+    func testWriteSetupPacketUsesPreparedRecommendedHomeRepoAndRequiresGlobalLocalInstall() throws {
+        let root = try makeTemporaryDirectory()
+        let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let prepareResult = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: ["prepare-source-repo", "--path", sourceRepo.path]
+        )
+        let packetResult = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: ["write-setup-packet", "--path", launch.setupPacketPath]
+        )
+
+        XCTAssertEqual(prepareResult.exitCode, 0, "stdout:\n\(prepareResult.stdout)\nstderr:\n\(prepareResult.stderr)")
+        XCTAssertEqual(packetResult.exitCode, 0, "stdout:\n\(packetResult.stdout)\nstderr:\n\(packetResult.stderr)")
+        let packet = try setupPacketContent(launch)
+        XCTAssertTrue(packet.contains("sourceRepoPath: \(sourceRepo.path)"), packet)
+        XCTAssertTrue(packet.contains("sourceRepoIsRecommended: true"), packet)
+        XCTAssertTrue(packet.contains("installMode: recommended_home_global"), packet)
+        XCTAssertTrue(packet.contains("`bun install`, then `bun install -g .`"), packet)
+        XCTAssertFalse(packet.contains("github:garrytan/gbrain"), packet)
+        XCTAssertTrue(packet.contains("===== BEGIN ZEBRA RUNTIME UPDATE (AUTHORITATIVE) ====="), packet)
+        XCTAssertTrue(packet.contains("For source repo, install mode, docs snapshot, next section, and waitingForUser, this block overrides older matching context below."), packet)
+        XCTAssertTrue(packet.contains("When Step 3 is the current section, before `gbrain init`, ask only for the topology decision."), packet)
+        XCTAssertTrue(packet.contains("Record the user's Step 2 embedding decision"), packet)
+        XCTAssertTrue(packet.contains("Before Step 4 import/embed/sync"), packet)
+        XCTAssertTrue(packet.contains("After the user chooses search mode"), packet)
+        XCTAssertTrue(packet.contains("If report rejects a section because the role is unknown"), packet)
+        XCTAssertTrue(packet.contains("User decision rule:"), packet)
+        let updateRange = try XCTUnwrap(packet.range(of: "===== BEGIN ZEBRA RUNTIME UPDATE (AUTHORITATIVE) ====="))
+        let fullPacketRange = try XCTUnwrap(packet.range(of: "You are Zebra's GBrain setup agent."))
+        XCTAssertLessThan(updateRange.lowerBound, fullPacketRange.lowerBound)
+    }
+
+    func testWriteSetupPacketKeepsCustomRepoLocalInstallOnly() throws {
+        let root = try makeTemporaryDirectory()
+        let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "custom-gbrain")
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let prepareResult = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: ["prepare-source-repo", "--path", sourceRepo.path]
+        )
+        let packetResult = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: ["write-setup-packet", "--path", launch.setupPacketPath]
+        )
+
+        XCTAssertEqual(prepareResult.exitCode, 0, "stdout:\n\(prepareResult.stdout)\nstderr:\n\(prepareResult.stderr)")
+        XCTAssertEqual(packetResult.exitCode, 0, "stdout:\n\(packetResult.stdout)\nstderr:\n\(packetResult.stderr)")
+        let packet = try setupPacketContent(launch)
+        XCTAssertTrue(packet.contains("sourceRepoPath: \(sourceRepo.path)"), packet)
+        XCTAssertTrue(packet.contains("sourceRepoIsRecommended: false"), packet)
+        XCTAssertTrue(packet.contains("installMode: custom_source_repo_local"), packet)
+        XCTAssertTrue(packet.contains("repo-local `bun install`"), packet)
+        let updateStart = try XCTUnwrap(packet.range(of: "===== BEGIN ZEBRA RUNTIME UPDATE (AUTHORITATIVE) ====="))
+        let updateEnd = try XCTUnwrap(packet.range(of: "===== END ZEBRA RUNTIME UPDATE ====="))
+        let updateBlock = String(packet[updateStart.lowerBound..<updateEnd.upperBound])
+        XCTAssertFalse(updateBlock.contains("`bun install`, then `bun install -g .`"), packet)
+    }
+
+    func testInstalledGBrainWrapperRunsSourceRepoCliTsWhenNoBuiltBinaryExists() throws {
+        let root = try makeTemporaryDirectory()
+        let sourceRepo = try writeFakeGBrainSourceRepo(root: root)
+        try FileManager.default.createDirectory(
+            at: sourceRepo.appendingPathComponent("src", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo "gbrain source cli"
+          exit 0
+        fi
+        exit 64
+        """
+        .write(to: sourceRepo.appendingPathComponent("src/cli.ts", isDirectory: false), atomically: true, encoding: .utf8)
+        let fakeBunBin = root.appendingPathComponent("fake-bun-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeBunBin, withIntermediateDirectories: true)
+        let bun = fakeBunBin.appendingPathComponent("bun", isDirectory: false)
+        try """
+        #!/bin/sh
+        exec /bin/sh "$@"
+        """
+        .write(to: bun, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bun.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let prepareResult = try runHelper(
+            stateURL: stateURL,
+            path: fakeBunBin.path,
+            arguments: ["prepare-source-repo", "--path", sourceRepo.path]
+        )
+        let wrapper = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("gbrain", isDirectory: false)
+        let versionResult = try runExecutable(
+            wrapper,
+            environment: [
+                "PATH": "\(fakeBunBin.path):/usr/bin:/bin",
+                "ZEBRA_GBRAIN_STATE": stateURL.path,
+            ],
+            arguments: ["--version"]
+        )
+
+        XCTAssertEqual(prepareResult.exitCode, 0, "stdout:\n\(prepareResult.stdout)\nstderr:\n\(prepareResult.stderr)")
+        XCTAssertEqual(versionResult.exitCode, 0, "stdout:\n\(versionResult.stdout)\nstderr:\n\(versionResult.stderr)")
+        XCTAssertEqual(versionResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "gbrain source cli")
+    }
+
+    func testRecommendedHomeInstallReportRequiresGlobalGBrainNotWrapperFallback() throws {
+        let root = try makeTemporaryDirectory()
+        let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
+        try FileManager.default.createDirectory(
+            at: sourceRepo.appendingPathComponent("src", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo "gbrain source cli"
+          exit 0
+        fi
+        exit 64
+        """
+        .write(to: sourceRepo.appendingPathComponent("src/cli.ts", isDirectory: false), atomically: true, encoding: .utf8)
+        let fakeBunBin = root.appendingPathComponent("fake-bun-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeBunBin, withIntermediateDirectories: true)
+        let bun = fakeBunBin.appendingPathComponent("bun", isDirectory: false)
+        try """
+        #!/bin/sh
+        exec /bin/sh "$@"
+        """
+        .write(to: bun, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bun.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let prepareResult = try runHelper(
+            stateURL: stateURL,
+            path: fakeBunBin.path,
+            arguments: ["prepare-source-repo", "--path", sourceRepo.path]
+        )
+        let wrapper = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("gbrain", isDirectory: false)
+        let wrapperVersion = try runExecutable(
+            wrapper,
+            environment: [
+                "PATH": "\(fakeBunBin.path):/usr/bin:/bin",
+                "ZEBRA_GBRAIN_STATE": stateURL.path,
+            ],
+            arguments: ["--version"]
+        )
+        let reportWithoutGlobal = try runHelper(
+            stateURL: stateURL,
+            path: fakeBunBin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 1: Install GBrain",
+            ]
+        )
+        let globalBin = root.appendingPathComponent("global-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: globalBin, withIntermediateDirectories: true)
+        let globalGBrain = globalBin.appendingPathComponent("gbrain", isDirectory: false)
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo "gbrain global"
+          exit 0
+        fi
+        exit 64
+        """
+        .write(to: globalGBrain, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: globalGBrain.path)
+        let reportWithGlobal = try runHelper(
+            stateURL: stateURL,
+            path: "\(globalBin.path):\(fakeBunBin.path)",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 1: Install GBrain",
+            ]
+        )
+
+        XCTAssertEqual(prepareResult.exitCode, 0, "stdout:\n\(prepareResult.stdout)\nstderr:\n\(prepareResult.stderr)")
+        XCTAssertEqual(wrapperVersion.exitCode, 0, "stdout:\n\(wrapperVersion.stdout)\nstderr:\n\(wrapperVersion.stderr)")
+        XCTAssertNotEqual(reportWithoutGlobal.exitCode, 0, "stdout:\n\(reportWithoutGlobal.stdout)\nstderr:\n\(reportWithoutGlobal.stderr)")
+        XCTAssertTrue(reportWithoutGlobal.stdout.contains("gbrain_version_failed"), reportWithoutGlobal.stdout)
+        XCTAssertEqual(reportWithGlobal.exitCode, 0, "stdout:\n\(reportWithGlobal.stdout)\nstderr:\n\(reportWithGlobal.stderr)")
+    }
+
     func testPrepareOpenClawAgentCreatesMissingAgentForActiveSourceRepo() throws {
         let root = try makeTemporaryDirectory()
         let sourceRepo = try writeFakeGBrainSourceRepo(root: root)
@@ -2328,6 +2557,28 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
     }
 
+    private func runExecutable(
+        _ executable: URL,
+        environment: [String: String],
+        arguments: [String]
+    ) throws -> HelperRunResult {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.environment = environment
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        return HelperRunResult(
+            exitCode: process.terminationStatus,
+            stdout: String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+            stderr: String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        )
+    }
+
     private func runHelperWithTerminal(
         stateURL: URL,
         homePath: String,
@@ -2595,7 +2846,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         localPath: String,
         searchMode: String? = "balanced"
     ) throws -> URL {
-        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        let bin = root.appendingPathComponent("fake-gbrain-bin", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let script = bin.appendingPathComponent("gbrain", isDirectory: false)
         try writeFakeGBrainScript(script, sourceId: sourceId, localPath: localPath, searchMode: searchMode, shebang: "#!/bin/sh")
@@ -2603,7 +2854,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
     }
 
     private func installFakeGBrainWithTransientSources(root: URL) throws -> URL {
-        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        let bin = root.appendingPathComponent("fake-gbrain-bin", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let script = bin.appendingPathComponent("gbrain", isDirectory: false)
         try """
@@ -2628,7 +2879,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
     }
 
     private func installFakeGBrainWithTransientDoctor(root: URL, localPath: String) throws -> URL {
-        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        let bin = root.appendingPathComponent("fake-gbrain-bin", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let script = bin.appendingPathComponent("gbrain", isDirectory: false)
         try """
@@ -2657,7 +2908,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
     }
 
     private func installFakeGBrainWithOnlyCycleFreshnessFailure(root: URL, localPath: String) throws -> URL {
-        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        let bin = root.appendingPathComponent("fake-gbrain-bin", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let script = bin.appendingPathComponent("gbrain", isDirectory: false)
         try """

@@ -468,12 +468,18 @@ public enum ZebraOnboardingChecklistCommand {
         let prepareSourceRepoPrefix = [
             "zebra-gbrain-onboarding prepare-source-repo",
             "eval \"$(zebra-gbrain-onboarding active-source-env)\"",
+            "zebra-gbrain-onboarding write-setup-packet --path \(ZebraAgentLaunchCommand.shellQuote(launch.setupPacketPath))",
         ].joined(separator: " && ") + " && "
-        let startupLine = gbrainSetupSelectedRuntimeCommand(runtime: runtime, prompt: prompt)
+        let startupLine = gbrainSetupSelectedRuntimeCommand(
+            launch: launch,
+            runtime: runtime,
+            prompt: prompt
+        )
         return "\(launch.shellEnvironmentPrefix)\(prepareSourceRepoPrefix)\(startupLine)"
     }
 
     private static func gbrainSetupSelectedRuntimeCommand(
+        launch: ZebraGBrainOnboardingStore.LaunchContext,
         runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime,
         prompt: String
     ) -> String {
@@ -481,14 +487,27 @@ public enum ZebraOnboardingChecklistCommand {
         let quotedPrompt = ZebraAgentLaunchCommand.shellQuote(prompt)
         switch runtime.runtime {
         case "openclaw":
-            let agentID = "zebra-gbrain-setup"
-            let sessionKey = "agent:\(agentID):zebra-gbrain-setup"
-            return "zebra-gbrain-onboarding prepare-openclaw-agent --executable \(executable) && cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && \(executable) tui --local --session \(ZebraAgentLaunchCommand.shellQuote(sessionKey)) --message \(quotedPrompt)\r"
+            let agentID = openClawAgentID(runId: launch.runId)
+            let sessionKey = "agent:\(agentID):\(launch.runId)"
+            return "zebra-gbrain-onboarding prepare-openclaw-agent --executable \(executable) --agent-id \(ZebraAgentLaunchCommand.shellQuote(agentID)) && cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && \(executable) tui --local --session \(ZebraAgentLaunchCommand.shellQuote(sessionKey)) --message \(quotedPrompt)\r"
         case "hermes":
             return "cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && \(executable) chat --source zebra-gbrain-onboarding --query \(quotedPrompt)\r"
         default:
             return "echo 'Unsupported OpenClaw/Hermes runtime for GBrain setup: \(runtime.runtime)' >&2 && exit 1\r"
         }
+    }
+
+    private static func openClawAgentID(runId: String) -> String {
+        let safeRunId = runId
+            .lowercased()
+            .map { character -> Character in
+                if character.isLetter || character.isNumber || character == "-" {
+                    return character
+                }
+                return "-"
+            }
+        let suffix = String(String(safeRunId).suffix(12)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return "zebra-gbrain-setup-\(suffix.isEmpty ? "run" : suffix)"
     }
 
     private static func agentStartupLine(

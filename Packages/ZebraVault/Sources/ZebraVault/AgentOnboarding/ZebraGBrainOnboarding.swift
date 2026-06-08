@@ -5,6 +5,7 @@ public struct ZebraGBrainOnboardingStore {
         public let launchDirectory: String
         public let startupPrompt: String
         public let setupPacketPath: String
+        public let runId: String
         public let shellEnvironmentPrefix: String
         public let allowTrustedAutomation: Bool
         public let allowLaunchDirectoryTrust: Bool
@@ -617,6 +618,7 @@ public struct ZebraGBrainOnboardingStore {
             launchDirectory: launchDirectory,
             startupPrompt: bootstrapPrompt(setupPacketPath: setupPacketURL.path),
             setupPacketPath: setupPacketURL.path,
+            runId: runId,
             shellEnvironmentPrefix: environmentPrefix,
             allowTrustedAutomation: allowTrustedAutomation,
             allowLaunchDirectoryTrust: false
@@ -711,7 +713,11 @@ public struct ZebraGBrainOnboardingStore {
         - `waitingForUser` is a Zebra block reason, not an INSTALL_FOR_AGENTS.md section.
         - Continue to follow INSTALL_FOR_AGENTS.md `##` section order, but respect the current `waitingForUser` block reason first.
         - The Zebra launch wrapper has already run `zebra-gbrain-onboarding prepare-source-repo` before starting this agent. Read the current state file before Step 1/2/3 work and use its `activeGBrainBinding.sourceRepoPath`.
-        - Run GBrain installation from the active GBrain source repo with repo-local `bun install`. Do not use `bun install -g github:garrytan/gbrain` as Zebra's default install path.
+        - Run GBrain installation from the active GBrain source repo.
+        - If the active GBrain source repo is Zebra's recommended `~/gbrain` path, Step 1 install is `bun install`, then `bun install -g .`, then `gbrain --version`, all from that local source repo.
+        - If the active GBrain source repo is not Zebra's recommended `~/gbrain` path, Step 1 install is repo-local `bun install`; use Zebra's PATH-provided `gbrain` wrapper or `bun src/cli.ts` unless the user explicitly chooses global exposure for that custom repo.
+        - If global CLI exposure is required, install from the active local source repo with `bun install -g .`.
+        - Do not run `bun upgrade` during Zebra onboarding.
         - OpenClaw/Hermes commands for this setup run must execute with cwd equal to the active GBrain source repo.
         - Keep the GBrain config/DB boundary separate from the source repo; use `GBRAIN_HOME` or `GBRAIN_DATABASE_URL` from the launch environment.
         - In Step 3, do not run `gbrain init`, `gbrain init --pglite`, or Supabase setup until the user has explicitly chosen topology.
@@ -754,7 +760,7 @@ public struct ZebraGBrainOnboardingStore {
         Active GBrain binding:
         The launch wrapper prompts for or confirms the GBrain source repo path, clones/reuses it, writes `activeGBrainBinding` to the state file, and exports `ZEBRA_GBRAIN_SOURCE_REPO` before this agent starts.
         Treat that source repo path as the cwd for GBrain install work and OpenClaw/Hermes setup commands. It is not the user's markdown brain repo target.
-        Read local `INSTALL_FOR_AGENTS.md` from that repo, then run the repo-local install flow from there.
+        Read local `INSTALL_FOR_AGENTS.md` from that repo, then run the install flow from there according to the Zebra hard gates and runtime update block.
         """
     }
 
@@ -1386,10 +1392,13 @@ public struct ZebraGBrainOnboardingStore {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
         let url = directory.appendingPathComponent("zebra-gbrain-onboarding", isDirectory: false)
+        let gbrainWrapperURL = directory.appendingPathComponent("gbrain", isDirectory: false)
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             try Self.helperScript.write(to: url, atomically: true, encoding: .utf8)
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            try Self.gbrainWrapperScript.write(to: gbrainWrapperURL, atomically: true, encoding: .utf8)
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gbrainWrapperURL.path)
             return url
         } catch {
             return nil
@@ -1547,6 +1556,7 @@ public struct ZebraGBrainOnboardingStore {
     if [ -n "$COMMAND" ]; then
       shift
     fi
+    export ZEBRA_GBRAIN_HELPER_PATH="$0"
 
     PYTHON_BIN="$(command -v python3 || true)"
     if [ -z "$PYTHON_BIN" ]; then
@@ -1958,7 +1968,13 @@ public struct ZebraGBrainOnboardingStore {
         return os.path.abspath(os.path.expanduser(os.environ.get("ZEBRA_GBRAIN_HOME") or "~"))
 
     def default_source_repo_path():
-        return os.path.abspath(os.path.expanduser(os.environ.get("ZEBRA_GBRAIN_SOURCE_REPO_DEFAULT") or "~/gbrain"))
+        explicit = os.environ.get("ZEBRA_GBRAIN_SOURCE_REPO_DEFAULT")
+        if explicit:
+            return os.path.abspath(os.path.expanduser(explicit))
+        return os.path.join(gbrain_home_directory(), "gbrain")
+
+    def is_recommended_source_repo_path(path):
+        return os.path.realpath(os.path.abspath(os.path.expanduser(path))) == os.path.realpath(default_source_repo_path())
 
     def source_remote():
         return os.environ.get("ZEBRA_GBRAIN_SOURCE_REMOTE") or "https://github.com/garrytan/gbrain.git"
@@ -2134,6 +2150,7 @@ public struct ZebraGBrainOnboardingStore {
             "sourceRepoPath": path,
             "sourceRepoStatus": status,
             "gbrainHomePath": gbrain_home_directory(),
+            "sourceRepoIsRecommended": is_recommended_source_repo_path(path),
             "confirmedAt": now(),
         }
         state["schemaVersion"] = 1
@@ -2168,6 +2185,52 @@ public struct ZebraGBrainOnboardingStore {
     def shell_quote(value):
         return "'" + str(value).replace("'", "'\\''") + "'"
 
+    def helper_directory():
+        helper_path = os.environ.get("ZEBRA_GBRAIN_HELPER_PATH")
+        if helper_path:
+            return os.path.dirname(os.path.abspath(helper_path))
+        return os.path.dirname(state_path)
+
+    def gbrain_wrapper_path():
+        return os.path.join(helper_directory(), "gbrain")
+
+    def path_gbrain_executable():
+        wrapper = os.path.realpath(gbrain_wrapper_path())
+        for directory in os.environ.get("PATH", "").split(os.pathsep):
+            candidate = os.path.join(directory or ".", "gbrain")
+            if os.access(candidate, os.X_OK) and os.path.realpath(candidate) != wrapper:
+                return candidate
+        return None
+
+    def recommended_source_repo_active(state):
+        binding = state.get("activeGBrainBinding") or {}
+        source_repo = binding.get("sourceRepoPath")
+        return bool(binding.get("sourceRepoIsRecommended")) or (
+            source_repo and is_recommended_source_repo_path(source_repo)
+        )
+
+    def source_repo_local_gbrain_paths(state):
+        binding = state.get("activeGBrainBinding") or {}
+        source_repo = binding.get("sourceRepoPath")
+        if not source_repo:
+            return set()
+        source_repo = os.path.abspath(os.path.expanduser(source_repo))
+        return {
+            os.path.abspath(os.path.join(source_repo, "node_modules", ".bin", "gbrain")),
+            os.path.abspath(os.path.join(source_repo, "bin", "gbrain")),
+        }
+
+    def global_gbrain_executable(state):
+        wrapper = os.path.realpath(gbrain_wrapper_path())
+        source_local = source_repo_local_gbrain_paths(state)
+        for directory in os.environ.get("PATH", "").split(os.pathsep):
+            candidate = os.path.abspath(os.path.join(directory or ".", "gbrain"))
+            if candidate in source_local:
+                continue
+            if os.access(candidate, os.X_OK) and os.path.realpath(candidate) != wrapper:
+                return candidate
+        return None
+
     def active_source_env():
         state = load_state()
         binding = state.get("activeGBrainBinding") or {}
@@ -2176,8 +2239,132 @@ public struct ZebraGBrainOnboardingStore {
             print("active GBrain source repo binding is missing or invalid", file=sys.stderr)
             sys.exit(1)
         print(f"export ZEBRA_GBRAIN_SOURCE_REPO={shell_quote(path)}")
+        print(f"export ZEBRA_GBRAIN_SOURCE_REPO_IS_RECOMMENDED={shell_quote('1' if is_recommended_source_repo_path(path) else '0')}")
+        print("export PATH=" + shell_quote(helper_directory()) + ':"$PATH"')
         print('if [ -z "${GBRAIN_DATABASE_URL:-}" ] && [ -n "${DATABASE_URL:-}" ]; then export GBRAIN_DATABASE_URL="$DATABASE_URL"; fi')
         print(f'if [ -z "${{GBRAIN_DATABASE_URL:-}}" ]; then export GBRAIN_HOME={shell_quote(binding.get("gbrainHomePath") or gbrain_home_directory())}; fi')
+
+    def docs_prompt_context(state):
+        snapshot_path = state.get("docsSnapshotPath")
+        manifest = state.get("docsManifest") or {}
+        files = manifest.get("files") or []
+        if not snapshot_path or not files:
+            return "GBrain docs snapshot:\\npending. Read INSTALL_FOR_AGENTS.md from activeGBrainBinding.sourceRepoPath before making installation decisions."
+        file_lines = "\\n".join(
+            f"- {entry.get('path') or 'unknown'} [hash: {entry.get('hash') or 'unknown'}]"
+            for entry in files
+        )
+        return f"GBrain docs snapshot:\\npath: {snapshot_path}\\ncommit: {state.get('docsCommit') or 'unknown'}\\nfiles:\\n{file_lines or '- none'}"
+
+    def section_prompt_context(state):
+        sections = ((state.get("docsManifest") or {}).get("installForAgentsSections") or [])
+        if not sections:
+            return "INSTALL_FOR_AGENTS.md section manifest:\\nunavailable. Read local INSTALL_FOR_AGENTS.md from activeGBrainBinding.sourceRepoPath."
+        lines = "\\n".join(
+            f"- {entry.get('title') or 'unknown'} [hash: {entry.get('hash') or 'unknown'}]"
+            for entry in sections
+        )
+        return f"INSTALL_FOR_AGENTS.md `##` section manifest:\\n{lines}"
+
+    def waiting_display(progress):
+        waiting = progress.get("waitingForUser") if progress else None
+        if isinstance(waiting, dict):
+            reason = waiting.get("reason")
+            note = waiting.get("note")
+            if reason == "user_input_required" and note:
+                return note
+            return reason or note or waiting.get("section")
+        if isinstance(waiting, str):
+            return waiting
+        return "none"
+
+    RUNTIME_UPDATE_BEGIN = "===== BEGIN ZEBRA RUNTIME UPDATE (AUTHORITATIVE) ====="
+    RUNTIME_UPDATE_END = "===== END ZEBRA RUNTIME UPDATE ====="
+
+    def runtime_update_text(state):
+        progress = state.get("progress") or {}
+        binding = state.get("activeGBrainBinding") or {}
+        source_repo = binding.get("sourceRepoPath") or "unknown"
+        recommended = bool(binding.get("sourceRepoIsRecommended")) or (
+            source_repo != "unknown" and is_recommended_source_repo_path(source_repo)
+        )
+        install_mode = (
+            "recommended_home_global"
+            if recommended else
+            "custom_source_repo_local"
+        )
+        recommended_install_rule = (
+            "- Because the active source repo is Zebra's recommended `~/gbrain` path, Step 1 must run `bun install`, then `bun install -g .` from that local source repo, then verify `gbrain --version`."
+            if recommended else
+            "- Because the active source repo is not Zebra's recommended `~/gbrain` path, Step 1 must run repo-local `bun install` from that source repo. Use the Zebra-provided `gbrain` PATH wrapper or `bun src/cli.ts` for verification unless the user explicitly chooses global exposure."
+        )
+        complete = bool((state.get("receipt") or {}).get("globalReadiness", {}).get("complete"))
+        lines = [
+            RUNTIME_UPDATE_BEGIN,
+            "This block was written immediately before OpenClaw/Hermes started.",
+            "For source repo, install mode, docs snapshot, next section, and waitingForUser, this block overrides older matching context below.",
+            "Keep all other hard gates, target-resolution rules, embedding-decision rules, search-mode rules, mapped-role recovery, and verification rules from the full setup packet below.",
+            "",
+            "Runtime Zebra verification status:",
+            f"complete: {'true' if complete else 'false'}",
+            f"reasons: {progress.get('lastFailure') or 'none'}",
+            f"next section: {progress.get('nextSection') or 'unknown'}",
+            f"waitingForUser: {waiting_display(progress)}",
+            "",
+            docs_prompt_context(state),
+            "",
+            section_prompt_context(state),
+            "",
+            "Active GBrain binding:",
+            f"sourceRepoPath: {source_repo}",
+            f"sourceRepoStatus: {binding.get('sourceRepoStatus') or 'unknown'}",
+            f"sourceRepoIsRecommended: {'true' if recommended else 'false'}",
+            f"installMode: {install_mode}",
+            f"gbrainHomePath: {binding.get('gbrainHomePath') or gbrain_home_directory()}",
+            "",
+            "Zebra hard gates:",
+            "- Zebra hard gates override INSTALL_FOR_AGENTS.md command order.",
+            "- The Zebra launch wrapper has already run `zebra-gbrain-onboarding prepare-source-repo` before starting this agent. Read the current state file before Step 1/2/3 work and use its `activeGBrainBinding.sourceRepoPath`.",
+            "- OpenClaw/Hermes commands for this setup run must execute with cwd equal to the active GBrain source repo.",
+            "- Run GBrain installation from the active GBrain source repo.",
+            recommended_install_rule,
+            "- If global CLI exposure is required, install from the active local source repo with `bun install -g .`.",
+            "- Do not run `bun upgrade` during Zebra onboarding.",
+            "",
+            RUNTIME_UPDATE_END,
+        ]
+        return "\\n".join(lines)
+
+    def strip_runtime_update(text):
+        start = text.find(RUNTIME_UPDATE_BEGIN)
+        if start < 0:
+            return text
+        end = text.find(RUNTIME_UPDATE_END, start)
+        if end < 0:
+            return text
+        after = text.find("\\n", end)
+        if after < 0:
+            after = len(text) - 1
+        return (text[:start] + text[after + 1:]).lstrip("\\n")
+
+    def write_setup_packet():
+        flags = parse_flags(args)
+        path = flags.get("path")
+        if not path:
+            raise RuntimeError("setup_packet_path_missing")
+        path = os.path.abspath(os.path.expanduser(path))
+        if not os.path.exists(path):
+            raise RuntimeError("setup_packet_missing")
+        state = load_state()
+        with open(path, "r", encoding="utf-8") as handle:
+            existing = handle.read()
+        base_packet = strip_runtime_update(existing)
+        content = runtime_update_text(state) + "\\n\\n" + base_packet.lstrip("\\n")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.chmod(path, 0o600)
+        print(json.dumps({"ok": True, "setupPacketPath": path}, sort_keys=True))
 
     def prepare_openclaw_agent():
         flags = parse_flags(args)
@@ -2248,12 +2435,15 @@ public struct ZebraGBrainOnboardingStore {
             ]:
                 if os.access(candidate, os.X_OK):
                     return candidate
-        found = shutil.which("gbrain")
+        found = path_gbrain_executable()
         if found:
             return found
         for candidate in glob.glob(os.path.expanduser("~/.gbrain-profiles/*/gbrain-*")):
             if os.access(candidate, os.X_OK):
                 return candidate
+        wrapper = gbrain_wrapper_path()
+        if os.access(wrapper, os.X_OK):
+            return wrapper
         return None
 
     def run_json(argv, cwd=None, timeout=30):
@@ -2830,7 +3020,8 @@ public struct ZebraGBrainOnboardingStore {
         return reasons
 
     def gbrain_version_ok():
-        executable = gbrain_executable()
+        state = load_state()
+        executable = global_gbrain_executable(state) if recommended_source_repo_active(state) else gbrain_executable()
         if not executable:
             return False
         try:
@@ -3293,6 +3484,12 @@ public struct ZebraGBrainOnboardingStore {
         active_source_repo_path()
     elif command == "active-source-env":
         active_source_env()
+    elif command == "write-setup-packet":
+        try:
+            write_setup_packet()
+        except Exception as exc:
+            print(json.dumps({"ok": False, "reason": str(exc)}, sort_keys=True))
+            sys.exit(1)
     elif command == "prepare-openclaw-agent":
         try:
             prepare_openclaw_agent()
@@ -3306,9 +3503,65 @@ public struct ZebraGBrainOnboardingStore {
     elif command == "verify":
         verify()
     else:
-        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|prepare-openclaw-agent|report|status|verify> [options]", file=sys.stderr)
+        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-setup-packet|prepare-openclaw-agent|report|status|verify> [options]", file=sys.stderr)
         sys.exit(2)
     PY
+    """
+
+    private static let gbrainWrapperScript = """
+    #!/bin/sh
+    set -eu
+
+    if [ -n "${ZEBRA_GBRAIN_STATE:-}" ]; then
+      STATE="$ZEBRA_GBRAIN_STATE"
+    elif [ -n "${HOME:-}" ]; then
+      STATE="$HOME/Library/Application Support/zebra/onboarding/gbrain-setup-state.json"
+    else
+      echo "ZEBRA_GBRAIN_STATE or HOME is required for gbrain wrapper" >&2
+      exit 1
+    fi
+
+    SOURCE_REPO="${ZEBRA_GBRAIN_SOURCE_REPO:-}"
+    if [ -z "$SOURCE_REPO" ]; then
+      PYTHON_BIN="$(command -v python3 || true)"
+      if [ -n "$PYTHON_BIN" ]; then
+        SOURCE_REPO="$("$PYTHON_BIN" -c 'import json, os, sys; state = json.load(open(sys.argv[1], "r", encoding="utf-8")) if os.path.exists(sys.argv[1]) else {}; path = (state.get("activeGBrainBinding") or {}).get("sourceRepoPath"); print(os.path.abspath(os.path.expanduser(path)) if path else "")' "$STATE" || true)"
+      fi
+    fi
+
+    if [ -n "$SOURCE_REPO" ]; then
+      SOURCE_REPO="$(cd "$SOURCE_REPO" 2>/dev/null && pwd -P || printf '%s' "$SOURCE_REPO")"
+      if [ -x "$SOURCE_REPO/node_modules/.bin/gbrain" ]; then
+        exec "$SOURCE_REPO/node_modules/.bin/gbrain" "$@"
+      fi
+      if [ -x "$SOURCE_REPO/bin/gbrain" ]; then
+        exec "$SOURCE_REPO/bin/gbrain" "$@"
+      fi
+      if [ -f "$SOURCE_REPO/src/cli.ts" ]; then
+        exec bun "$SOURCE_REPO/src/cli.ts" "$@"
+      fi
+    fi
+
+    SELF_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+    OLD_IFS="$IFS"
+    IFS=:
+    for dir in $PATH; do
+      IFS="$OLD_IFS"
+      [ -z "$dir" ] && dir=.
+      resolved_dir="$(cd "$dir" 2>/dev/null && pwd -P || true)"
+      if [ "$resolved_dir" = "$SELF_DIR" ]; then
+        IFS=:
+        continue
+      fi
+      if [ -x "$dir/gbrain" ]; then
+        exec "$dir/gbrain" "$@"
+      fi
+      IFS=:
+    done
+    IFS="$OLD_IFS"
+
+    echo "gbrain executable is unavailable; run bun install from the active GBrain source repo first" >&2
+    exit 127
     """
 }
 
