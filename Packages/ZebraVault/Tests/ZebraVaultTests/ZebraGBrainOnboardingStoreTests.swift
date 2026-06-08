@@ -399,6 +399,26 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(progress["nextSection"] as? String, "Step 1: Install GBrain")
     }
 
+    func testPrepareLaunchBootstrapPromptIsSingleLineForTerminalStartup() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["ko"],
+            preferredLanguages: ["ko-KR"]
+        )
+
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        XCTAssertFalse(launch.startupPrompt.contains("\n"), launch.startupPrompt)
+        XCTAssertFalse(launch.startupPrompt.contains("\r"), launch.startupPrompt)
+        XCTAssertTrue(launch.startupPrompt.contains("Zebra GBrain setup"), launch.startupPrompt)
+        XCTAssertTrue(launch.startupPrompt.contains("setup packet"), launch.startupPrompt)
+        XCTAssertTrue(launch.startupPrompt.contains(launch.setupPacketPath), launch.startupPrompt)
+    }
+
     func testPrepareLaunchUsesKoreanAppLanguagePolicyInBootstrapAndPacket() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root.appendingPathComponent("state.json")
@@ -611,6 +631,65 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let updateEnd = try XCTUnwrap(packet.range(of: "===== END ZEBRA RUNTIME UPDATE ====="))
         let updateBlock = String(packet[updateStart.lowerBound..<updateEnd.upperBound])
         XCTAssertFalse(updateBlock.contains("`bun install`, then `bun install -g .`"), packet)
+    }
+
+    func testWriteRuntimeLauncherMovesOpenClawPromptIntoLauncherScript() throws {
+        let root = try makeTemporaryDirectory()
+        let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["ko"],
+            preferredLanguages: ["ko-KR"]
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let prepareResult = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: ["prepare-source-repo", "--path", sourceRepo.path]
+        )
+        let packetResult = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: ["write-setup-packet", "--path", launch.setupPacketPath]
+        )
+        let launcherResult = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            languageCode: "ko",
+            arguments: [
+                "write-runtime-launcher",
+                "--runtime", "openclaw",
+                "--executable", "/tmp/openclaw",
+                "--setup-packet", launch.setupPacketPath,
+                "--run-id", launch.runId,
+                "--agent-id", "zebra-gbrain-setup-test",
+                "--session", "agent:zebra-gbrain-setup-test:\(launch.runId)",
+            ]
+        )
+
+        XCTAssertEqual(prepareResult.exitCode, 0, "stdout:\n\(prepareResult.stdout)\nstderr:\n\(prepareResult.stderr)")
+        XCTAssertEqual(packetResult.exitCode, 0, "stdout:\n\(packetResult.stdout)\nstderr:\n\(packetResult.stderr)")
+        XCTAssertEqual(launcherResult.exitCode, 0, "stdout:\n\(launcherResult.stdout)\nstderr:\n\(launcherResult.stderr)")
+        XCTAssertFalse(launcherResult.stdout.contains("Zebra GBrain setup"), launcherResult.stdout)
+        let prefix = "export ZEBRA_GBRAIN_RUNTIME_LAUNCHER='"
+        XCTAssertTrue(launcherResult.stdout.hasPrefix(prefix), launcherResult.stdout)
+        let launcherPath = String(
+            launcherResult.stdout
+                .dropFirst(prefix.count)
+                .split(separator: "'", maxSplits: 1)
+                .first ?? ""
+        )
+        let script = try String(contentsOfFile: launcherPath, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("zebra-gbrain-onboarding prepare-openclaw-agent --executable '/tmp/openclaw' --agent-id 'zebra-gbrain-setup-test'"), script)
+        XCTAssertTrue(script.contains("cd \"$ZEBRA_GBRAIN_SOURCE_REPO\""), script)
+        XCTAssertTrue(script.contains("exec '/tmp/openclaw' tui --local --session 'agent:zebra-gbrain-setup-test:\(launch.runId)' --message '"), script)
+        XCTAssertTrue(script.contains("Zebra GBrain setup"), script)
+        XCTAssertTrue(script.contains("setup packet"), script)
+        XCTAssertTrue(script.contains(launch.setupPacketPath), script)
     }
 
     func testInstalledGBrainWrapperRunsSourceRepoCliTsWhenNoBuiltBinaryExists() throws {

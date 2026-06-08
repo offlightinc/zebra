@@ -464,7 +464,6 @@ public enum ZebraOnboardingChecklistCommand {
         launch: ZebraGBrainOnboardingStore.LaunchContext,
         runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime
     ) -> String {
-        let prompt = launch.startupPrompt
         let prepareSourceRepoPrefix = [
             "zebra-gbrain-onboarding prepare-source-repo",
             "eval \"$(zebra-gbrain-onboarding active-source-env)\"",
@@ -472,26 +471,25 @@ public enum ZebraOnboardingChecklistCommand {
         ].joined(separator: " && ") + " && "
         let startupLine = gbrainSetupSelectedRuntimeCommand(
             launch: launch,
-            runtime: runtime,
-            prompt: prompt
+            runtime: runtime
         )
         return "\(launch.shellEnvironmentPrefix)\(prepareSourceRepoPrefix)\(startupLine)"
     }
 
     private static func gbrainSetupSelectedRuntimeCommand(
         launch: ZebraGBrainOnboardingStore.LaunchContext,
-        runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime,
-        prompt: String
+        runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime
     ) -> String {
         let executable = ZebraAgentLaunchCommand.shellQuote(runtime.executablePath)
-        let quotedPrompt = ZebraAgentLaunchCommand.shellQuote(prompt)
+        let setupPacket = ZebraAgentLaunchCommand.shellQuote(launch.setupPacketPath)
+        let runId = ZebraAgentLaunchCommand.shellQuote(launch.runId)
         switch runtime.runtime {
         case "openclaw":
             let agentID = openClawAgentID(runId: launch.runId)
             let sessionKey = "agent:\(agentID):\(launch.runId)"
-            return "zebra-gbrain-onboarding prepare-openclaw-agent --executable \(executable) --agent-id \(ZebraAgentLaunchCommand.shellQuote(agentID)) && cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && \(executable) tui --local --session \(ZebraAgentLaunchCommand.shellQuote(sessionKey)) --message \(quotedPrompt)\r"
+            return "eval \"$(zebra-gbrain-onboarding write-runtime-launcher --runtime 'openclaw' --executable \(executable) --setup-packet \(setupPacket) --run-id \(runId) --agent-id \(ZebraAgentLaunchCommand.shellQuote(agentID)) --session \(ZebraAgentLaunchCommand.shellQuote(sessionKey)))\" && \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\"\r"
         case "hermes":
-            return "cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && \(executable) chat --source zebra-gbrain-onboarding --query \(quotedPrompt)\r"
+            return "eval \"$(zebra-gbrain-onboarding write-runtime-launcher --runtime 'hermes' --executable \(executable) --setup-packet \(setupPacket) --run-id \(runId))\" && \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\"\r"
         default:
             return "echo 'Unsupported OpenClaw/Hermes runtime for GBrain setup: \(runtime.runtime)' >&2 && exit 1\r"
         }

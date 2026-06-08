@@ -102,17 +102,23 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(line.contains("zebra-gbrain-onboarding prepare-source-repo"), line)
         XCTAssertTrue(line.contains("eval \"$(zebra-gbrain-onboarding active-source-env)\""), line)
         XCTAssertTrue(line.contains("zebra-gbrain-onboarding write-setup-packet --path '/tmp/zebra-gbrain-packet.md'"), line)
-        XCTAssertTrue(line.contains("cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/hermes' chat"), line)
-        XCTAssertTrue(line.contains("--source zebra-gbrain-onboarding"), line)
-        XCTAssertTrue(line.contains("--query 'setup prompt'"), line)
+        XCTAssertTrue(line.contains("zebra-gbrain-onboarding write-runtime-launcher --runtime 'hermes'"), line)
+        XCTAssertTrue(line.contains("--executable '/tmp/hermes'"), line)
+        XCTAssertTrue(line.contains("--setup-packet '/tmp/zebra-gbrain-packet.md'"), line)
+        XCTAssertTrue(line.contains("&& \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""), line)
+        XCTAssertFalse(line.contains("cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/hermes' chat"), line)
+        XCTAssertFalse(line.contains("--query 'setup prompt'"), line)
+        XCTAssertFalse(line.contains("setup prompt"), line)
         XCTAssertFalse(line.contains(" codex"), line)
         let prepareRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-source-repo"))
         let envRange = try XCTUnwrap(line.range(of: "eval \"$(zebra-gbrain-onboarding active-source-env)\""))
         let packetRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-setup-packet"))
-        let launchRange = try XCTUnwrap(line.range(of: "cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/hermes' chat"))
+        let launcherRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-runtime-launcher"))
+        let launchRange = try XCTUnwrap(line.range(of: "\"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""))
         XCTAssertLessThan(prepareRange.lowerBound, envRange.lowerBound)
         XCTAssertLessThan(envRange.lowerBound, packetRange.lowerBound)
-        XCTAssertLessThan(packetRange.lowerBound, launchRange.lowerBound)
+        XCTAssertLessThan(packetRange.lowerBound, launcherRange.lowerBound)
+        XCTAssertLessThan(launcherRange.lowerBound, launchRange.lowerBound)
     }
 
     func testGBrainStartupLineUsesOpenClawRuntimeWhenSelected() throws {
@@ -136,13 +142,16 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
 
         XCTAssertTrue(
-            line.contains("zebra-gbrain-onboarding prepare-openclaw-agent --executable '/tmp/openclaw' --agent-id 'zebra-gbrain-setup-12-3456-7890'"),
+            line.contains("zebra-gbrain-onboarding write-runtime-launcher --runtime 'openclaw' --executable '/tmp/openclaw'"),
             line
         )
-        XCTAssertTrue(line.contains("cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/openclaw' tui"), line)
+        XCTAssertTrue(line.contains("--agent-id 'zebra-gbrain-setup-12-3456-7890'"), line)
         XCTAssertTrue(line.contains("--session 'agent:zebra-gbrain-setup-12-3456-7890:gbrain-ABCDEF12-3456-7890'"), line)
-        XCTAssertTrue(line.contains("--local"), line)
-        XCTAssertTrue(line.contains("--message 'setup prompt'"), line)
+        XCTAssertTrue(line.contains("&& \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""), line)
+        XCTAssertFalse(line.contains("cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/openclaw' tui"), line)
+        XCTAssertFalse(line.contains("--local"), line)
+        XCTAssertFalse(line.contains("--message 'setup prompt'"), line)
+        XCTAssertFalse(line.contains("setup prompt"), line)
         XCTAssertFalse(line.contains("agents list --json"), line)
         XCTAssertFalse(line.contains("agents add"), line)
         XCTAssertFalse(line.contains("--session zebra-gbrain-setup"), line)
@@ -150,12 +159,42 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let prepareRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-source-repo"))
         let envRange = try XCTUnwrap(line.range(of: "eval \"$(zebra-gbrain-onboarding active-source-env)\""))
         let packetRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-setup-packet"))
-        let agentRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-openclaw-agent"))
-        let launchRange = try XCTUnwrap(line.range(of: "cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/openclaw' tui"))
+        let launcherRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-runtime-launcher"))
+        let launchRange = try XCTUnwrap(line.range(of: "\"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""))
         XCTAssertLessThan(prepareRange.lowerBound, envRange.lowerBound)
         XCTAssertLessThan(envRange.lowerBound, packetRange.lowerBound)
-        XCTAssertLessThan(packetRange.lowerBound, agentRange.lowerBound)
-        XCTAssertLessThan(agentRange.lowerBound, launchRange.lowerBound)
+        XCTAssertLessThan(packetRange.lowerBound, launcherRange.lowerBound)
+        XCTAssertLessThan(launcherRange.lowerBound, launchRange.lowerBound)
+    }
+
+    func testGBrainStartupLineDoesNotInjectRuntimePromptIntoTerminal() throws {
+        let launch = ZebraGBrainOnboardingStore.LaunchContext(
+            launchDirectory: "/tmp/zebra-gbrain-work",
+            startupPrompt: "line one\n\nline two\r\nline three\rline four",
+            setupPacketPath: "/tmp/zebra-gbrain-packet.md",
+            runId: "gbrain-test-run",
+            shellEnvironmentPrefix: "export ZEBRA_GBRAIN_STATE='/tmp/state.json' && ",
+            allowTrustedAutomation: true,
+            allowLaunchDirectoryTrust: false
+        )
+        let runtime = ZebraGBrainRuntimeOnboardingStore.SelectedRuntime(
+            runtime: "openclaw",
+            executablePath: "/tmp/openclaw"
+        )
+
+        let line = ZebraOnboardingChecklistCommand.gbrainSetupRuntimeStartupLine(
+            launch: launch,
+            runtime: runtime
+        )
+
+        XCTAssertTrue(line.hasSuffix("\r"), line)
+        let commandBeforeReturn = String(line.dropLast())
+        XCTAssertFalse(commandBeforeReturn.contains("\n"), line)
+        XCTAssertFalse(commandBeforeReturn.contains("\r"), line)
+        XCTAssertFalse(line.contains("line one"), line)
+        XCTAssertFalse(line.contains("line two"), line)
+        XCTAssertFalse(line.contains("--message"), line)
+        XCTAssertTrue(line.contains("zebra-gbrain-onboarding write-runtime-launcher"), line)
     }
 
     @MainActor

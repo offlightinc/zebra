@@ -626,15 +626,12 @@ public struct ZebraGBrainOnboardingStore {
     }
 
     private func bootstrapPrompt(setupPacketPath: String) -> String {
-        """
-        \(onboardingLanguage.firstVisibleGBrainSetupInstruction)
-
-        Do not run tools or read files before printing that line.
-        After printing it, read the complete setup packet at:
-        \(setupPacketPath)
-
-        Then follow the setup packet exactly. The setup packet is authoritative for this GBrain setup run.
-        """
+        [
+            onboardingLanguage.firstVisibleGBrainSetupInstruction,
+            "Do not run tools or read files before printing that line.",
+            "After printing it, read the complete setup packet at: \(setupPacketPath)",
+            "Then follow the setup packet exactly. The setup packet is authoritative for this GBrain setup run.",
+        ].joined(separator: " ")
     }
 
     private func startupPrompt(
@@ -2366,6 +2363,84 @@ public struct ZebraGBrainOnboardingStore {
         os.chmod(path, 0o600)
         print(json.dumps({"ok": True, "setupPacketPath": path}, sort_keys=True))
 
+    def terminal_argument_prompt(prompt):
+        return " ".join(
+            line.strip()
+            for line in prompt.replace("\\r", "\\n").split("\\n")
+            if line.strip()
+        )
+
+    def bootstrap_prompt(setup_packet_path):
+        language = (os.environ.get("ZEBRA_ONBOARDING_LANGUAGE") or "en").lower()
+        if language == "ko" or language.startswith("ko-"):
+            first_visible = "Your first visible response must be a brief Korean sentence telling the user that Zebra GBrain setup is starting, you are reading the setup packet now, and they should wait. Preserve `Zebra GBrain setup` and `setup packet` exactly."
+        elif language == "ja" or language.startswith("ja-"):
+            first_visible = "Your first visible response must be a brief Japanese sentence telling the user that Zebra GBrain setup is starting, you are reading the setup packet now, and they should wait. Preserve `Zebra GBrain setup` and `setup packet` exactly."
+        else:
+            first_visible = "Your first visible response must be exactly:\\nZebra GBrain setup is starting. I am reading the setup packet now. Please wait."
+        return terminal_argument_prompt("\\n".join([
+            first_visible,
+            "Do not run tools or read files before printing that line.",
+            f"After printing it, read the complete setup packet at: {setup_packet_path}",
+            "Then follow the setup packet exactly. The setup packet is authoritative for this GBrain setup run.",
+        ]))
+
+    def launcher_script_path(run_id):
+        safe = "".join(
+            character if character.isalnum() or character in "-_" else "-"
+            for character in str(run_id or "gbrain-setup")
+        ).strip("-_") or "gbrain-setup"
+        directory = os.path.join(os.path.dirname(state_path), "gbrain-runtime-launchers")
+        return os.path.join(directory, safe + ".sh")
+
+    def write_runtime_launcher():
+        flags = parse_flags(args)
+        runtime = flags.get("runtime")
+        executable = flags.get("executable")
+        setup_packet = flags.get("setup_packet")
+        run_id = flags.get("run_id") or (load_state().get("currentRunId") or "gbrain-setup")
+        if not runtime:
+            raise RuntimeError("runtime_missing")
+        if not executable:
+            raise RuntimeError("runtime_executable_missing")
+        if not setup_packet:
+            raise RuntimeError("setup_packet_path_missing")
+        setup_packet = os.path.abspath(os.path.expanduser(setup_packet))
+        if not os.path.exists(setup_packet):
+            raise RuntimeError("setup_packet_missing")
+        source_repo = existing_active_source_repo_path()
+        if not source_repo:
+            raise RuntimeError("active_source_repo_missing")
+        prompt = bootstrap_prompt(setup_packet)
+        path = launcher_script_path(run_id)
+        lines = [
+            "#!/bin/sh",
+            "set -eu",
+            'if [ -z "${ZEBRA_GBRAIN_SOURCE_REPO:-}" ]; then',
+            '  eval "$(zebra-gbrain-onboarding active-source-env)"',
+            "fi",
+        ]
+        if runtime == "openclaw":
+            agent_id = flags.get("agent_id") or "zebra-gbrain-setup"
+            session = flags.get("session") or f"agent:{agent_id}:{run_id}"
+            lines.extend([
+                f"zebra-gbrain-onboarding prepare-openclaw-agent --executable {shell_quote(executable)} --agent-id {shell_quote(agent_id)}",
+                'cd "$ZEBRA_GBRAIN_SOURCE_REPO"',
+                f"exec {shell_quote(executable)} tui --local --session {shell_quote(session)} --message {shell_quote(prompt)}",
+            ])
+        elif runtime == "hermes":
+            lines.extend([
+                'cd "$ZEBRA_GBRAIN_SOURCE_REPO"',
+                f"exec {shell_quote(executable)} chat --source zebra-gbrain-onboarding --query {shell_quote(prompt)}",
+            ])
+        else:
+            raise RuntimeError(f"unsupported_runtime:{runtime}")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\\n".join(lines) + "\\n")
+        os.chmod(path, 0o700)
+        print(f"export ZEBRA_GBRAIN_RUNTIME_LAUNCHER={shell_quote(path)}")
+
     def prepare_openclaw_agent():
         flags = parse_flags(args)
         executable = flags.get("executable") or shutil.which("openclaw")
@@ -3490,6 +3565,12 @@ public struct ZebraGBrainOnboardingStore {
         except Exception as exc:
             print(json.dumps({"ok": False, "reason": str(exc)}, sort_keys=True))
             sys.exit(1)
+    elif command == "write-runtime-launcher":
+        try:
+            write_runtime_launcher()
+        except Exception as exc:
+            print(json.dumps({"ok": False, "reason": str(exc)}, sort_keys=True))
+            sys.exit(1)
     elif command == "prepare-openclaw-agent":
         try:
             prepare_openclaw_agent()
@@ -3503,7 +3584,7 @@ public struct ZebraGBrainOnboardingStore {
     elif command == "verify":
         verify()
     else:
-        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-setup-packet|prepare-openclaw-agent|report|status|verify> [options]", file=sys.stderr)
+        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-setup-packet|write-runtime-launcher|prepare-openclaw-agent|report|status|verify> [options]", file=sys.stderr)
         sys.exit(2)
     PY
     """
