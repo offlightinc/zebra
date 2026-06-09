@@ -155,8 +155,11 @@ public struct ZebraGBrainOnboardingStore {
         var doctorStatus: ProbeResult?
         var sourcesCurrentResult: SourceProbeResult?
         var searchProbeResult: ProbeResult?
+        var sourceVerification: SourceVerification?
         var verifiedAt: String?
         var complete: Bool?
+        var status: String?
+        var warnings: [String]?
         var targetResolution: TargetResolution?
         var reasons: [String]?
     }
@@ -176,6 +179,18 @@ public struct ZebraGBrainOnboardingStore {
         var ok: Bool?
         var sourceId: String?
         var localPath: String?
+        var status: String?
+        var reason: String?
+        var sourcePreviouslyVerified: Bool?
+    }
+
+    private struct SourceVerification: Codable, Equatable {
+        var sourceId: String?
+        var targetPath: String?
+        var verifiedAt: String?
+        var method: String?
+        var gbrainExecutablePath: String?
+        var gbrainVersion: String?
     }
 
     private struct DocsManifest: Codable {
@@ -226,9 +241,12 @@ public struct ZebraGBrainOnboardingStore {
         case verified
         case mismatch
         case transientFailure(reason: String)
+        case error(reason: String)
     }
 
     private static let pgliteBusyReason = "pglite_busy"
+    private static let pgliteWasmRuntimeErrorReason = "pglite_wasm_runtime_error"
+    private static let sourceProbeRuntimeErrorReason = "source_probe_runtime_error"
 
     private static let allowedTargetResolutionMethods: Set<String> = [
         "selected_vault",
@@ -1108,11 +1126,20 @@ public struct ZebraGBrainOnboardingStore {
             vaultPath: vaultPath,
             sourceId: sourceId
         )
+        let sourcePreviouslyVerified = sourceVerificationMatches(
+            target.sourceVerification,
+            vaultPath: vaultPath,
+            sourceId: sourceId
+        )
 
         if case .mismatch = sourceProbe.status {
             reasons.append("source_not_registered")
         }
         if case .transientFailure(let reason) = sourceProbe.status,
+           !reasons.contains(reason) {
+            reasons.append(reason)
+        }
+        if case .error(let reason) = sourceProbe.status,
            !reasons.contains(reason) {
             reasons.append(reason)
         }
@@ -1123,7 +1150,26 @@ public struct ZebraGBrainOnboardingStore {
         } else {
             hasTransientProbeFailure = doctorTransientFailure
         }
-        let complete = reasons.isEmpty && doctorOk && sourceProbe.status == .verified
+        var warnings: [String] = []
+        if doctorOk,
+           sourcePreviouslyVerified,
+           case .transientFailure(let reason) = sourceProbe.status,
+           reasons.allSatisfy({ $0 == reason }) {
+            warnings.append(reason)
+            reasons.removeAll { $0 == reason }
+        }
+        if doctorOk,
+           sourcePreviouslyVerified,
+           case .error(let reason) = sourceProbe.status,
+           reasons.allSatisfy({ $0 == reason }) {
+            warnings.append(reason)
+            reasons.removeAll { $0 == reason }
+        }
+
+        let verified = reasons.isEmpty && doctorOk && sourceProbe.status == .verified
+        let verifiedWithWarnings = reasons.isEmpty && doctorOk && !warnings.isEmpty
+        let complete = verified || verifiedWithWarnings
+        let now = Self.isoTimestamp()
         updatedTarget.gbrainExecutablePath = executable
         updatedTarget.doctorStatus = ProbeResult(
             ok: doctorOk,
@@ -1132,11 +1178,26 @@ public struct ZebraGBrainOnboardingStore {
         updatedTarget.sourcesCurrentResult = SourceProbeResult(
             ok: sourceProbe.status == .verified,
             sourceId: sourceProbe.currentSourceId ?? sourceId,
-            localPath: sourceProbe.listedLocalPath
+            localPath: sourceProbe.listedLocalPath,
+            status: Self.sourceProbeStatusLabel(sourceProbe.status),
+            reason: Self.sourceProbeStatusReason(sourceProbe.status),
+            sourcePreviouslyVerified: sourceProbe.status == .verified ? nil : sourcePreviouslyVerified
         )
+        if sourceProbe.status == .verified {
+            updatedTarget.sourceVerification = SourceVerification(
+                sourceId: sourceId,
+                targetPath: vaultPath,
+                verifiedAt: now,
+                method: "sources_current_and_list",
+                gbrainExecutablePath: executable,
+                gbrainVersion: nil
+            )
+        }
         updatedTarget.searchProbeResult = ProbeResult(ok: complete, status: complete ? "not_run" : "blocked")
-        updatedTarget.verifiedAt = Self.isoTimestamp()
+        updatedTarget.verifiedAt = now
         updatedTarget.complete = complete
+        updatedTarget.status = verifiedWithWarnings ? "verified_with_warnings" : (complete ? "verified" : "failed")
+        updatedTarget.warnings = warnings
         updatedTarget.reasons = reasons
 
         return LiveVerificationResult(
@@ -1147,7 +1208,7 @@ public struct ZebraGBrainOnboardingStore {
                 gbrainExecutablePath: executable,
                 wrapperPath: target.wrapperPath,
                 doctorOk: doctorOk,
-                verifiedAt: Self.isoTimestamp()
+                verifiedAt: now
             ),
             target: updatedTarget,
             hasTransientProbeFailure: hasTransientProbeFailure
@@ -1166,7 +1227,10 @@ public struct ZebraGBrainOnboardingStore {
             if let reason = Self.transientGBrainProbeReason(current) {
                 return (.transientFailure(reason: reason), nil, nil)
             }
-            return (.mismatch, nil, nil)
+            if Self.sourceMissingProbeFailure(current) {
+                return (.mismatch, nil, nil)
+            }
+            return (.error(reason: Self.gbrainProbeFailureReason(current)), nil, nil)
         }
         let currentSourceId = currentObject["source_id"] as? String
         guard currentSourceId == sourceId else {
@@ -1180,7 +1244,10 @@ public struct ZebraGBrainOnboardingStore {
             if let reason = Self.transientGBrainProbeReason(list) {
                 return (.transientFailure(reason: reason), currentSourceId, nil)
             }
-            return (.mismatch, currentSourceId, nil)
+            if Self.sourceMissingProbeFailure(list) {
+                return (.mismatch, currentSourceId, nil)
+            }
+            return (.error(reason: Self.gbrainProbeFailureReason(list)), currentSourceId, nil)
         }
         let listedLocalPath = Self.sourceLocalPath(sourceId: sourceId, fromSourcesListJSON: list.stdout)
         guard listedLocalPath.map(Self.standardizedPath) == vaultPath else {
@@ -1237,6 +1304,62 @@ public struct ZebraGBrainOnboardingStore {
         return nil
     }
 
+    private static func gbrainProbeFailureReason(_ result: ProcessRunResult) -> String {
+        if let transientReason = transientGBrainProbeReason(result) {
+            return transientReason
+        }
+        let output = "\(result.stderr)\n\(result.stdout)".lowercased()
+        if output.contains("pglite failed to initialize its wasm runtime")
+            || (output.contains("aborted()") && output.contains("pglite")) {
+            return pgliteWasmRuntimeErrorReason
+        }
+        return sourceProbeRuntimeErrorReason
+    }
+
+    private static func sourceMissingProbeFailure(_ result: ProcessRunResult) -> Bool {
+        let output = "\(result.stderr)\n\(result.stdout)".lowercased()
+        return output.contains("source_not_registered")
+            || output.contains("source not registered")
+            || output.contains("source not found")
+            || output.contains("no current source")
+            || output.contains("no source")
+    }
+
+    private static func sourceProbeStatusLabel(_ status: SourceProbeStatus) -> String {
+        switch status {
+        case .verified:
+            return "verified"
+        case .mismatch:
+            return "mismatch"
+        case .transientFailure:
+            return "transient"
+        case .error:
+            return "error"
+        }
+    }
+
+    private static func sourceProbeStatusReason(_ status: SourceProbeStatus) -> String? {
+        switch status {
+        case .verified, .mismatch:
+            return nil
+        case .transientFailure(let reason), .error(let reason):
+            return reason
+        }
+    }
+
+    private func sourceVerificationMatches(
+        _ verification: SourceVerification?,
+        vaultPath: String,
+        sourceId: String
+    ) -> Bool {
+        guard verification?.method == "sources_current_and_list",
+              verification?.sourceId == sourceId,
+              let targetPath = verification?.targetPath else {
+            return false
+        }
+        return Self.standardizedPath(targetPath) == vaultPath
+    }
+
     private static func containsOnlyTransientProbeReasons(_ reasons: [String]) -> Bool {
         reasons.allSatisfy { $0 == pgliteBusyReason }
     }
@@ -1262,6 +1385,8 @@ public struct ZebraGBrainOnboardingStore {
         var nextTarget = live.target
         existingTarget?.verifiedAt = nil
         nextTarget.verifiedAt = nil
+        existingTarget?.sourceVerification?.verifiedAt = nil
+        nextTarget.sourceVerification?.verifiedAt = nil
 
         return existingReadiness == nextReadiness && existingTarget == nextTarget
     }
@@ -1896,6 +2021,7 @@ public struct ZebraGBrainOnboardingStore {
     import shutil
     import subprocess
     import sys
+    import time
     from datetime import datetime, timezone
 
     state_path = sys.argv[1]
@@ -2541,6 +2667,8 @@ public struct ZebraGBrainOnboardingStore {
             return False, {}, str(exc)
 
     PGLITE_BUSY_REASON = "pglite_busy"
+    PGLITE_WASM_RUNTIME_ERROR_REASON = "pglite_wasm_runtime_error"
+    SOURCE_PROBE_RUNTIME_ERROR_REASON = "source_probe_runtime_error"
     CYCLE_FRESHNESS_CHECK_NAME = "cycle_freshness"
 
     def transient_probe_reason(message):
@@ -2553,6 +2681,27 @@ public struct ZebraGBrainOnboardingStore {
         ):
             return PGLITE_BUSY_REASON
         return None
+
+    def source_missing_probe_failure(message):
+        text = (message or "").lower()
+        return (
+            "source_not_registered" in text
+            or "source not registered" in text
+            or "source not found" in text
+            or "no current source" in text
+            or "no source" in text
+        )
+
+    def probe_failure_reason(message):
+        reason = transient_probe_reason(message)
+        if reason:
+            return reason
+        text = (message or "").lower()
+        if "pglite failed to initialize its wasm runtime" in text:
+            return PGLITE_WASM_RUNTIME_ERROR_REASON
+        if "aborted()" in text and "pglite" in text:
+            return PGLITE_WASM_RUNTIME_ERROR_REASON
+        return SOURCE_PROBE_RUNTIME_ERROR_REASON
 
     def transient_probe_failure(message):
         return transient_probe_reason(message) is not None
@@ -2607,7 +2756,9 @@ public struct ZebraGBrainOnboardingStore {
             reason = transient_probe_reason(current_error)
             if reason:
                 return "transient", None, None, reason
-            return "mismatch", None, None, None
+            if source_missing_probe_failure(current_error):
+                return "mismatch", None, None, None
+            return "error", None, None, probe_failure_reason(current_error)
         current_source_id = current_payload.get("source_id")
         if current_source_id != source_id:
             return "mismatch", current_source_id, None, None
@@ -2621,7 +2772,9 @@ public struct ZebraGBrainOnboardingStore {
             reason = transient_probe_reason(list_error)
             if reason:
                 return "transient", current_source_id, None, reason
-            return "mismatch", current_source_id, None, None
+            if source_missing_probe_failure(list_error):
+                return "mismatch", current_source_id, None, None
+            return "error", current_source_id, None, probe_failure_reason(list_error)
         listed_local_path = source_list_local_path(list_payload, source_id)
         if not listed_local_path or os.path.abspath(os.path.expanduser(listed_local_path)) != os.path.abspath(target_path):
             return "mismatch", current_source_id, listed_local_path, None
@@ -2921,12 +3074,12 @@ public struct ZebraGBrainOnboardingStore {
         return decision.get("decision") in allowed_embedding_decisions
 
     def record_verified_source_id(state, flags):
-        source_id = flags.get("source_id")
-        if not source_id:
-            return None
         key, target_path, _, target_entry = resolved_target(state)
         if not key or not target_path or not target_entry:
             return "brain_repo_target_unresolved"
+        source_id = flags.get("source_id") or target_entry.get("sourceId")
+        if not source_id:
+            return "source_not_registered"
         receipt = state.setdefault("receipt", {})
         targets = receipt.setdefault("targets", {})
         target_entry = targets.setdefault(key, target_entry)
@@ -2935,6 +3088,15 @@ public struct ZebraGBrainOnboardingStore {
         profile_id = flags.get("profile_id")
         if profile_id:
             target_entry["profileId"] = profile_id
+        executable = gbrain_executable()
+        target_entry["sourceVerification"] = {
+            "sourceId": source_id,
+            "targetPath": target_path,
+            "verifiedAt": now(),
+            "method": "sources_current_and_list",
+            "gbrainExecutablePath": executable,
+            "gbrainVersion": gbrain_version_string(executable),
+        }
         if not receipt.get("primaryTargetKey"):
             receipt["primaryTargetKey"] = key
         return None
@@ -3112,6 +3274,23 @@ public struct ZebraGBrainOnboardingStore {
         except Exception:
             return False
 
+    def gbrain_version_string(executable):
+        if not executable:
+            return None
+        try:
+            result = subprocess.run(
+                [executable, "--version"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return (result.stdout or result.stderr or "").strip() or None
+        except Exception:
+            return None
+        return None
+
     def doctor_ok(state):
         executable = gbrain_executable()
         if not executable:
@@ -3172,7 +3351,9 @@ public struct ZebraGBrainOnboardingStore {
         status, _, _, transient_reason = source_probe_status(executable, target_path, source_id)
         if status == "verified":
             return None
-        return transient_reason or "source_not_registered"
+        if status == "mismatch":
+            return "source_not_registered"
+        return transient_reason or SOURCE_PROBE_RUNTIME_ERROR_REASON
 
     def search_mode_configured(state):
         executable = gbrain_executable()
@@ -3417,6 +3598,125 @@ public struct ZebraGBrainOnboardingStore {
     def status():
         print(json.dumps(load_state(), indent=2, sort_keys=True))
 
+    def source_verification_matches(target_entry, target, source_id):
+        verification = (target_entry or {}).get("sourceVerification") or {}
+        if verification.get("method") != "sources_current_and_list":
+            return False
+        if verification.get("sourceId") != source_id:
+            return False
+        verified_path = verification.get("targetPath")
+        if not verified_path or not target:
+            return False
+        return os.path.abspath(os.path.expanduser(verified_path)) == os.path.abspath(os.path.expanduser(target))
+
+    def gbrain_config_dir():
+        home_override = os.environ.get("GBRAIN_HOME")
+        if home_override and home_override.strip():
+            return os.path.join(os.path.abspath(os.path.expanduser(home_override)), ".gbrain")
+        home = os.environ.get("HOME") or os.path.expanduser("~")
+        return os.path.join(os.path.abspath(os.path.expanduser(home)), ".gbrain")
+
+    def gbrain_config_path():
+        return os.path.join(gbrain_config_dir(), "config.json")
+
+    def gbrain_config_file():
+        try:
+            with open(gbrain_config_path(), "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def target_uses_local_pglite():
+        cfg = gbrain_config_file()
+        if not cfg:
+            return False
+        if cfg.get("remote_mcp"):
+            return False
+        if os.environ.get("GBRAIN_DATABASE_URL") or os.environ.get("DATABASE_URL"):
+            return False
+        if cfg.get("database_url"):
+            return False
+        engine = cfg.get("engine")
+        return engine == "pglite" or (not engine and bool(cfg.get("database_path")))
+
+    def autopilot_lock_running():
+        lock_path = os.path.join(gbrain_config_dir(), "autopilot.lock")
+        try:
+            with open(lock_path, "r", encoding="utf-8") as handle:
+                pid = int((handle.read() or "").strip())
+            os.kill(pid, 0)
+            return True
+        except Exception:
+            return False
+
+    def autopilot_plist_path():
+        home = os.environ.get("HOME") or os.path.expanduser("~")
+        return os.path.join(os.path.abspath(os.path.expanduser(home)), "Library", "LaunchAgents", "com.gbrain.autopilot.plist")
+
+    def quiesce_autopilot_for_verify(executable, target):
+        payload = {
+            "pausedForVerify": False,
+            "wasRunning": False,
+            "restored": None,
+        }
+        warnings = []
+        if not executable or not target or not os.path.isdir(target):
+            return payload, warnings
+        if not target_uses_local_pglite():
+            return payload, warnings
+        plist_path = autopilot_plist_path()
+        installed = os.path.isfile(plist_path)
+        was_running = installed and autopilot_lock_running()
+        payload["wasRunning"] = was_running
+        if not was_running:
+            return payload, warnings
+        try:
+            result = subprocess.run(
+                ["launchctl", "unload", plist_path],
+                cwd=target,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                payload["pausedForVerify"] = True
+            else:
+                warnings.append("autopilot_stop_failed")
+        except Exception:
+            warnings.append("autopilot_stop_failed")
+        if payload.get("pausedForVerify"):
+            deadline = time.time() + 10
+            while autopilot_lock_running() and time.time() < deadline:
+                time.sleep(0.2)
+        return payload, warnings
+
+    def restore_autopilot_after_verify(executable, target, payload):
+        warnings = []
+        if not payload.get("wasRunning"):
+            return warnings
+        if not payload.get("pausedForVerify"):
+            payload["restored"] = False
+            return warnings
+        plist_path = autopilot_plist_path()
+        try:
+            result = subprocess.run(
+                ["launchctl", "load", plist_path],
+                cwd=target,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=45,
+            )
+            payload["restored"] = result.returncode == 0
+            if result.returncode != 0:
+                warnings.append("autopilot_restart_failed")
+        except Exception:
+            payload["restored"] = False
+            warnings.append("autopilot_restart_failed")
+        return warnings
+
     def verify():
         flags = parse_flags(args)
         target = flags.get("target")
@@ -3424,6 +3724,7 @@ public struct ZebraGBrainOnboardingStore {
         method = flags.get("method")
         profile_id = flags.get("profile_id")
         reasons = []
+        warnings = []
         if not target:
             reasons.append("target_not_resolved")
         else:
@@ -3442,9 +3743,24 @@ public struct ZebraGBrainOnboardingStore {
         if not executable:
             reasons.append("missing_gbrain_executable")
 
+        autopilot = {
+            "pausedForVerify": False,
+            "wasRunning": False,
+            "restored": None,
+        }
         doctor_ok = False
         doctor_transient = False
+        source_probe = "transient"
+        current_ok = False
+        current_source_id = None
+        list_ok = False
+        listed_local_path = None
+        source_probe_reason = None
+        source_probe_reasons = []
+
         if executable:
+            autopilot, autopilot_warnings = quiesce_autopilot_for_verify(executable, target)
+            warnings.extend(autopilot_warnings)
             try:
                 result = subprocess.run(
                     [executable, "doctor", "--json"],
@@ -3469,20 +3785,18 @@ public struct ZebraGBrainOnboardingStore {
                 elif not doctor_transient:
                     reasons.append("doctor_failed")
 
-        source_probe = "transient"
-        current_ok = False
-        current_source_id = None
-        list_ok = False
-        listed_local_path = None
-        source_transient_reason = None
-        if executable and target and os.path.isdir(target) and source_id:
-            source_probe, current_source_id, listed_local_path, source_transient_reason = source_probe_status(executable, target, source_id)
-            current_ok = source_probe == "verified"
-            list_ok = source_probe == "verified"
-            if source_probe == "mismatch":
-                reasons.append("source_not_registered")
-            elif source_transient_reason and source_transient_reason not in reasons:
-                reasons.append(source_transient_reason)
+            if target and os.path.isdir(target) and source_id:
+                source_probe, current_source_id, listed_local_path, source_probe_reason = source_probe_status(executable, target, source_id)
+                current_ok = source_probe == "verified"
+                list_ok = source_probe == "verified"
+                if source_probe == "mismatch":
+                    source_probe_reasons.append("source_not_registered")
+                elif source_probe_reason:
+                    source_probe_reasons.append(source_probe_reason)
+                for reason in source_probe_reasons:
+                    if reason not in reasons:
+                        reasons.append(reason)
+            warnings.extend(restore_autopilot_after_verify(executable, target, autopilot))
 
         state = load_state()
         receipt = state.setdefault("receipt", {})
@@ -3490,6 +3804,27 @@ public struct ZebraGBrainOnboardingStore {
         existing_target = (receipt.get("targets") or {}).get(key) if key else None
         transient_source_probe = source_probe == "transient" and executable and target and os.path.isdir(target) and source_id
         transient_probe = doctor_transient or transient_source_probe
+        source_previously_verified = bool(
+            existing_target
+            and source_verification_matches(existing_target, target, source_id)
+        )
+        source_probe_warning_pass = (
+            doctor_ok
+            and bool(executable)
+            and bool(target)
+            and os.path.isdir(target)
+            and bool(source_id)
+            and source_previously_verified
+            and source_probe in {"transient", "error"}
+            and source_probe != "mismatch"
+            and all(reason in source_probe_reasons for reason in reasons)
+            and len(source_probe_reasons) > 0
+        )
+        if source_probe_warning_pass:
+            for reason in source_probe_reasons:
+                if reason not in warnings:
+                    warnings.append(reason)
+            reasons = [reason for reason in reasons if reason not in source_probe_reasons]
         preserve_complete = (
             transient_probe
             and all(reason == PGLITE_BUSY_REASON for reason in reasons)
@@ -3497,9 +3832,25 @@ public struct ZebraGBrainOnboardingStore {
             and bool((existing_target or {}).get("complete"))
             and bool(executable)
         )
-        complete = preserve_complete or (len(reasons) == 0 and doctor_ok and source_probe == "verified")
+        verified = len(reasons) == 0 and doctor_ok and source_probe == "verified"
+        verified_with_warnings = len(reasons) == 0 and doctor_ok and len(warnings) > 0
+        complete = preserve_complete or verified or verified_with_warnings
+        status_value = "verified_with_warnings" if verified_with_warnings or preserve_complete else ("verified" if complete else "failed")
         if preserve_complete:
-            print(json.dumps({"complete": True, "reasons": []}, sort_keys=True))
+            print(json.dumps({
+                "complete": True,
+                "status": status_value,
+                "reasons": [],
+                "warnings": warnings or [PGLITE_BUSY_REASON],
+                "doctorOk": doctor_ok,
+                "sourceProbe": {
+                    "ok": source_probe == "verified",
+                    "status": source_probe,
+                    "reason": source_probe_reason,
+                    "sourcePreviouslyVerified": source_previously_verified,
+                },
+                "autopilot": autopilot,
+            }, sort_keys=True))
             save_state(state)
             sys.exit(0)
         receipt["globalReadiness"] = {
@@ -3510,7 +3861,8 @@ public struct ZebraGBrainOnboardingStore {
         }
         if key:
             targets = receipt.setdefault("targets", {})
-            targets[key] = {
+            target_payload = dict(existing_target or {})
+            target_payload.update({
                 "vaultPath": target,
                 "sourceId": source_id,
                 "profileId": profile_id,
@@ -3523,16 +3875,31 @@ public struct ZebraGBrainOnboardingStore {
                     "ok": current_ok and list_ok,
                     "sourceId": current_source_id or source_id,
                     "localPath": listed_local_path,
+                    "status": source_probe,
+                    "reason": source_probe_reason,
+                    "sourcePreviouslyVerified": source_previously_verified if source_probe != "verified" else None,
                 },
                 "searchProbeResult": {"ok": complete},
                 "verifiedAt": now(),
                 "complete": complete,
+                "status": status_value,
+                "warnings": warnings,
                 "targetResolution": {
                     "method": method,
                     "confirmedAt": now(),
                 },
                 "reasons": reasons,
-            }
+            })
+            if source_probe == "verified":
+                target_payload["sourceVerification"] = {
+                    "sourceId": source_id,
+                    "targetPath": target,
+                    "verifiedAt": now(),
+                    "method": "sources_current_and_list",
+                    "gbrainExecutablePath": executable,
+                    "gbrainVersion": gbrain_version_string(executable),
+                }
+            targets[key] = target_payload
             progress = state.setdefault("progress", {})
             progress["resolvedTargetKey"] = key
             progress["targetResolution"] = {
@@ -3547,7 +3914,20 @@ public struct ZebraGBrainOnboardingStore {
         else:
             state.setdefault("progress", {}).pop("lastFailure", None)
         save_state(state)
-        print(json.dumps({"complete": complete, "reasons": reasons}, sort_keys=True))
+        print(json.dumps({
+            "complete": complete,
+            "status": status_value,
+            "reasons": reasons,
+            "warnings": warnings,
+            "doctorOk": doctor_ok,
+            "sourceProbe": {
+                "ok": source_probe == "verified",
+                "status": source_probe,
+                "reason": source_probe_reason,
+                "sourcePreviouslyVerified": source_previously_verified,
+            },
+            "autopilot": autopilot,
+        }, sort_keys=True))
         sys.exit(0 if complete else 1)
 
     if command == "prepare-source-repo":

@@ -150,11 +150,11 @@ enum ZebraOnboardingLanguage: String, Equatable {
     func brainRepoTargetFollowUp(recommendedPath: String) -> String {
         switch self {
         case .en:
-            return "If the user chooses 1, ask for yes/no confirmation before creating \(recommendedPath). If the user chooses 2, ask for the full existing repo path. If the user chooses 3, ask for the full path to create."
+            return "If the user chooses 1, create \(recommendedPath) without asking for another yes/no confirmation. If the user chooses 2, ask for the full existing repo path. If the user chooses 3, ask for the full path to create, then create it without asking for another yes/no confirmation."
         case .ja:
-            return "ユーザーが1を選んだら、\(recommendedPath)を作成する前にyes/no confirmationを求めます。2を選んだら既存repoのfull pathを聞きます。3を選んだら作成するfull pathを聞きます。"
+            return "ユーザーが1を選んだら、追加のyes/no confirmationを求めずに\(recommendedPath)を作成します。2を選んだら既存repoのfull pathを聞きます。3を選んだら作成するfull pathを聞き、その後は追加のyes/no confirmationを求めずに作成します。"
         case .ko:
-            return "사용자가 1을 선택하면 \(recommendedPath)를 만들기 전에 yes/no confirmation을 요청합니다. 2를 선택하면 기존 repo의 full path를 묻습니다. 3을 선택하면 만들 full path를 묻습니다."
+            return "사용자가 1을 선택하면 추가 yes/no confirmation 없이 \(recommendedPath)를 만듭니다. 2를 선택하면 기존 repo의 full path를 묻습니다. 3을 선택하면 만들 full path를 묻고, 그 뒤에는 추가 yes/no confirmation 없이 만듭니다."
         }
     }
 
