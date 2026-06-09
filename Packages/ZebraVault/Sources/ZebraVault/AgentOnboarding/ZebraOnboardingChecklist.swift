@@ -673,6 +673,8 @@ public struct ZebraOnboardingChecklistCard: View {
 }
 
 private struct ZebraOnboardingChecklistRow: View {
+    private static let actionRowMinimumHeight: CGFloat = 34
+
     let snapshot: ZebraOnboardingChecklistStepSnapshot
     let title: String
     let onStart: () -> Void
@@ -719,6 +721,7 @@ private struct ZebraOnboardingChecklistRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .frame(minHeight: rowMinimumHeight, alignment: .leading)
         .contentShape(Rectangle())
         .background(rowBackground)
         .onHover { hovering = $0 }
@@ -778,6 +781,10 @@ private struct ZebraOnboardingChecklistRow: View {
     private var emptyCheckbox: some View {
         RoundedRectangle(cornerRadius: 3, style: .continuous)
             .stroke(BVColor.fgGhost, lineWidth: 1.3)
+    }
+
+    private var rowMinimumHeight: CGFloat? {
+        snapshot.isActive || snapshot.isRunning ? Self.actionRowMinimumHeight : nil
     }
 
     private var developmentToggleHelp: String {
