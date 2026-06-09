@@ -880,23 +880,6 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     def choose_provider():
         print()
-        codex_readiness_source = codex_agent_readiness_source()
-        claude_readiness_source = claude_agent_readiness_source()
-        default_provider_id = "anthropic-claude-code" if claude_readiness_source else "openai-codex"
-        if claude_readiness_source:
-            print(message(
-                "Default: Anthropic Claude Code account login",
-                "기본값: Anthropic Claude Code 계정 연동",
-                "デフォルト: Anthropic Claude Codeアカウント連携",
-            ))
-            print()
-        elif codex_readiness_source:
-            print(message(
-                "Codex login was verified in the agent CLI step, so OpenAI account login is selected by default.",
-                "agent CLI 단계에서 Codex 로그인이 확인되어 OpenAI 계정 연동을 기본값으로 사용합니다.",
-                "agent CLIステップでCodexログインが確認されたため、OpenAIアカウント連携をデフォルトにします。",
-            ))
-            print()
         for index, provider in enumerate(provider_choices, start=1):
             env = provider.get("env", "")
             if env:
@@ -905,11 +888,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             else:
                 print(f"{index}. {provider['label']}")
         while True:
-            default_index = next(
-                (str(index) for index, provider in enumerate(provider_choices, start=1) if provider["id"] == default_provider_id),
-                "1",
-            )
-            raw = ask(message("Select LLM connection", "LLM 연결 방식 선택", "LLM接続方法を選択"), default_index).lower()
+            raw = ask(message("Select LLM connection", "LLM 연결 방식 선택", "LLM接続方法を選択")).lower()
             for index, provider in enumerate(provider_choices, start=1):
                 if raw in {str(index), provider["id"]}:
                     return provider

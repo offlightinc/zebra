@@ -360,7 +360,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
     }
 
-    func testRuntimeHelperUsesOpenAICodexAccountLoginByDefault() throws {
+    func testRuntimeHelperUsesOpenAICodexAccountLoginSelection() throws {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
             throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
         }
@@ -406,7 +406,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         expect "Select runtime"
         send "1\\r"
         expect "Select LLM connection"
-        send "\\r"
+        send "1\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -503,7 +503,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         expect "Select runtime"
         send "1\\r"
         expect "Select LLM connection"
-        send "\\r"
+        send "1\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -570,7 +570,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         expect "Select runtime"
         send "1\\r"
         expect "Select LLM connection"
-        send "\\r"
+        send "1\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -636,7 +636,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         expect "Select runtime"
         send "1\\r"
         expect "Select LLM connection"
-        send "\\r"
+        send "1\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -702,7 +702,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         expect "Select runtime"
         send "1\\r"
         expect "Select LLM connection"
-        send "\\r"
+        send "1\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -768,7 +768,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         expect "Select runtime"
         send "1\\r"
         expect "Select LLM connection"
-        send "\\r"
+        send "2\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -843,7 +843,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         expect "Select runtime"
         send "1\\r"
         expect "Select LLM connection"
-        send "\\r"
+        send "2\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -875,7 +875,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(receipt["keySource"] as? String, "agent-cli:claude-auth-status")
     }
 
-    func testRuntimeHelperUsesClaudeCodeAccountLoginByDefault() throws {
+    func testRuntimeHelperAllowsClaudeCodeAccountLoginSelection() throws {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
             throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
         }
@@ -914,7 +914,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         expect "Select runtime"
         send "1\\r"
         expect "Select LLM connection"
-        send "\\r"
+        send "2\\r"
         expect eof
         set result [wait]
         exit [lindex $result 3]
