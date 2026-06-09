@@ -28,10 +28,28 @@ public struct ZebraOnboardingChecklistStepSnapshot: Identifiable, Equatable {
 
 @MainActor
 public final class ZebraOnboardingChecklistStore: ObservableObject {
+    private struct StepCompletionResult {
+        let isComplete: Bool
+        let reasons: [String]
+    }
+
     private struct StepDefinition {
         let id: ZebraOnboardingChecklistStepID
         let number: Int
     }
+
+#if os(macOS)
+    private struct WatchedCompletionFile {
+        let url: URL
+        let stepID: ZebraOnboardingChecklistStepID
+    }
+
+    private struct CompletionFileSignature: Equatable {
+        let exists: Bool
+        let modificationTime: TimeInterval?
+        let size: UInt64?
+    }
+#endif
 
     private static let steps: [StepDefinition] = [
         StepDefinition(id: .agent, number: 1),
@@ -48,6 +66,12 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private let gbrainRuntimeOnboardingStore: ZebraGBrainRuntimeOnboardingStore
     private let gbrainOnboardingStore: ZebraGBrainOnboardingStore
     private let gbrainAdapterOnboardingStore: ZebraGBrainAdapterOnboardingStore
+    private let agentOnboardingStateURL: URL
+    private let agentPreferenceURL: URL
+    private let agentEventsURL: URL
+    private let gbrainRuntimeOnboardingStateURL: URL
+    private let gbrainOnboardingStateURL: URL
+    private let gbrainAdapterOnboardingStateURL: URL
     private var selectedVaultPath: String?
     private var emailConnected = false
     private var launchGeneration = 0
@@ -69,6 +93,9 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 #endif
 #if os(macOS)
     private var completionWatchSources: [DispatchSourceFileSystemObject] = []
+    private var isCompletionWatching = false
+    private var watchedCompletionFileSignatures: [String: CompletionFileSignature] = [:]
+    private var pendingCompletionRefreshStepIDs: Set<ZebraOnboardingChecklistStepID> = []
     private let completionWatchQueue = DispatchQueue(
         label: "com.cmux.zebra.onboarding-checklist-watcher",
         qos: .utility
@@ -83,12 +110,22 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     public init(
         fileManager: FileManager = .default,
         homeDirectoryPath: String = NSHomeDirectory(),
+        agentOnboardingStateURL: URL = ZebraAgentOnboardingStartup.defaultStateURL(),
+        agentPreferenceURL: URL = ZebraAgentPreferenceStore.defaultPreferencesURL(),
         gbrainRuntimeOnboardingStateURL: URL = ZebraGBrainRuntimeOnboardingStore.defaultStateURL(),
         gbrainOnboardingStateURL: URL = ZebraGBrainOnboardingStore.defaultStateURL(),
         gbrainAdapterOnboardingStateURL: URL = ZebraGBrainAdapterOnboardingStore.defaultStateURL()
     ) {
         self.fileManager = fileManager
         self.homeDirectoryPath = Self.standardizedPath(homeDirectoryPath)
+        self.agentOnboardingStateURL = agentOnboardingStateURL
+        self.agentPreferenceURL = agentPreferenceURL
+        self.agentEventsURL = agentOnboardingStateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("agent-cli-events.jsonl", isDirectory: false)
+        self.gbrainRuntimeOnboardingStateURL = gbrainRuntimeOnboardingStateURL
+        self.gbrainOnboardingStateURL = gbrainOnboardingStateURL
+        self.gbrainAdapterOnboardingStateURL = gbrainAdapterOnboardingStateURL
         self.gbrainRuntimeOnboardingStore = ZebraGBrainRuntimeOnboardingStore(
             stateURL: gbrainRuntimeOnboardingStateURL,
             fileManager: fileManager,
@@ -107,9 +144,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         )
 #if DEBUG
         self.developmentCompletedStepIDs = Self.loadDevelopmentCompletedStepIDs()
-#endif
-#if os(macOS)
-        startCompletionFileWatching()
 #endif
         refreshDetectedCompletion()
         prefetchGBrainDocsIfNeeded()
@@ -189,7 +223,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                       self.launchGeneration == generation,
                       self.runningStepID == stepID else { return }
                 self.runningStepID = nil
-                self.refreshDetectedCompletion()
+                self.refreshDetectedCompletion(for: stepID)
             }
         }
     }
@@ -214,20 +248,49 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     public func refreshDetectedCompletion() {
         completionRefreshGeneration += 1
         let generation = completionRefreshGeneration
-        let cachedGBrainRuntimeCompletion = gbrainRuntimeOnboardingStore.cachedCompletionResult()
-        let cachedGBrainCompletion = gbrainOnboardingStore.cachedCompletionResult(
+        let runtimeCompletion = runtimeCompletionResult()
+        let cachedGBrainCompletion = gbrainCompletionResultFromCachedReceipt(
             selectedVaultPath: selectedVaultPath
         )
-        let cachedGBrainAdapterCompletion = gbrainAdapterOnboardingStore.cachedCompletionResult(
+        let adapterCompletion = adapterCompletionResult(
             selectedVaultPath: selectedVaultPath
         )
-        applyDetectedCompletion(
-            gbrainRuntimeCompleted: cachedGBrainRuntimeCompletion.isComplete,
+        applyAllDetectedCompletion(
+            agentCompleted: agentCompletionResult().isComplete,
+            gbrainRuntimeCompletion: runtimeCompletion,
             gbrainCompleted: cachedGBrainCompletion.isComplete,
-            gbrainAdapterCompleted: cachedGBrainAdapterCompletion.isComplete
+            gbrainAdapterCompleted: adapterCompletion.isComplete,
+            emailCompleted: emailCompletionResult().isComplete
         )
         guard shouldRefreshGBrainCompletionInBackground(cachedGBrainCompletion) else { return }
         refreshGBrainCompletionInBackground(generation: generation)
+    }
+
+    public func refreshDetectedCompletion(for stepID: ZebraOnboardingChecklistStepID) {
+        switch stepID {
+        case .agent:
+            applyDetectedCompletion(for: .agent, result: agentCompletionResult())
+        case .gbrainRuntime:
+            applyDetectedCompletion(for: .gbrainRuntime, result: runtimeCompletionResult())
+        case .gbrain:
+            let cached = gbrainCompletionResultFromCachedReceipt(selectedVaultPath: selectedVaultPath)
+            applyDetectedCompletion(
+                for: .gbrain,
+                result: StepCompletionResult(isComplete: cached.isComplete, reasons: cached.reasons)
+            )
+            guard shouldRefreshGBrainCompletionInBackground(cached) else { return }
+            completionRefreshGeneration += 1
+            refreshGBrainCompletionInBackground(generation: completionRefreshGeneration)
+        case .adapter:
+            applyDetectedCompletion(
+                for: .adapter,
+                result: adapterCompletionResult(selectedVaultPath: selectedVaultPath)
+            )
+        case .email:
+            applyDetectedCompletion(for: .email, result: emailCompletionResult())
+        case .ingest, .goals:
+            break
+        }
     }
 
     private func shouldRefreshGBrainCompletionInBackground(
@@ -256,26 +319,29 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                 return
             }
             self.applyDetectedCompletion(
-                gbrainRuntimeCompleted: self.gbrainRuntimeOnboardingStore.cachedCompletionResult().isComplete,
-                gbrainCompleted: completed,
-                gbrainAdapterCompleted: self.gbrainAdapterOnboardingStore.cachedCompletionResult(
-                    selectedVaultPath: selectedVaultPath
-                ).isComplete
+                for: .gbrain,
+                result: StepCompletionResult(isComplete: completed, reasons: [])
+            )
+            self.applyDetectedCompletion(
+                for: .adapter,
+                result: self.adapterCompletionResult(selectedVaultPath: selectedVaultPath)
             )
         }
     }
 
-    private func applyDetectedCompletion(
-        gbrainRuntimeCompleted: Bool,
+    private func applyAllDetectedCompletion(
+        agentCompleted: Bool,
+        gbrainRuntimeCompletion: StepCompletionResult,
         gbrainCompleted: Bool,
-        gbrainAdapterCompleted: Bool
+        gbrainAdapterCompleted: Bool,
+        emailCompleted: Bool
     ) {
         var completed = Set<ZebraOnboardingChecklistStepID>()
 
-        if !ZebraAgentOnboardingStartup.shouldRunAutomaticWelcome() {
+        if agentCompleted {
             completed.insert(.agent)
         }
-        if gbrainRuntimeCompleted {
+        if shouldMarkRuntimeCompleted(gbrainRuntimeCompletion) {
             completed.insert(.gbrainRuntime)
         }
         if gbrainCompleted {
@@ -284,13 +350,42 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         if gbrainAdapterCompleted {
             completed.insert(.adapter)
         }
-        if emailConnected || isClawvisorEmailConfigured {
+        if emailCompleted {
             completed.insert(.email)
         }
 #if DEBUG
         completed.formUnion(developmentCompletedStepIDs)
 #endif
 
+        applyCompletedStepIDs(completed)
+    }
+
+    private func applyDetectedCompletion(
+        for stepID: ZebraOnboardingChecklistStepID,
+        result: StepCompletionResult
+    ) {
+        var completed = completedStepIDs
+        let shouldComplete: Bool
+        switch stepID {
+        case .gbrainRuntime:
+            shouldComplete = shouldMarkRuntimeCompleted(result)
+        default:
+            shouldComplete = result.isComplete
+        }
+        if shouldComplete {
+            completed.insert(stepID)
+        } else {
+            completed.remove(stepID)
+        }
+#if DEBUG
+        if developmentCompletedStepIDs.contains(stepID) {
+            completed.insert(stepID)
+        }
+#endif
+        applyCompletedStepIDs(completed)
+    }
+
+    private func applyCompletedStepIDs(_ completed: Set<ZebraOnboardingChecklistStepID>) {
         if let runningStepID, completed.contains(runningStepID) {
             self.runningStepID = nil
         }
@@ -303,22 +398,95 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         }
     }
 
+    private func shouldMarkRuntimeCompleted(_ result: StepCompletionResult) -> Bool {
+        if result.isComplete {
+            return true
+        }
+        guard completedStepIDs.contains(.gbrainRuntime) else {
+            return false
+        }
+        return !isHardRuntimeIncomplete(reasons: result.reasons)
+    }
+
+    private func isHardRuntimeIncomplete(reasons: [String]) -> Bool {
+        let softReasons: Set<String> = [
+            "executable_missing",
+            "credential_source_missing",
+            "credentials_unverified",
+            "runtime_config_unverified",
+            "llm_call_unverified",
+        ]
+        guard !reasons.isEmpty else { return false }
+        return !Set(reasons).isSubset(of: softReasons)
+    }
+
+    private func agentCompletionResult() -> StepCompletionResult {
+        StepCompletionResult(
+            isComplete: !ZebraAgentOnboardingStartup.shouldRunAutomaticWelcome(
+                preferencesURL: agentPreferenceURL,
+                stateURL: agentOnboardingStateURL
+            ),
+            reasons: []
+        )
+    }
+
+    private func runtimeCompletionResult() -> StepCompletionResult {
+        let result = gbrainRuntimeOnboardingStore.cachedCompletionResult()
+        return StepCompletionResult(isComplete: result.isComplete, reasons: result.reasons)
+    }
+
+    private func gbrainCompletionResultFromCachedReceipt(
+        selectedVaultPath: String?
+    ) -> ZebraGBrainOnboardingStore.CompletionResult {
+        gbrainOnboardingStore.cachedCompletionResult(selectedVaultPath: selectedVaultPath)
+    }
+
+    private func adapterCompletionResult(selectedVaultPath: String?) -> StepCompletionResult {
+        let result = gbrainAdapterOnboardingStore.cachedCompletionResult(
+            selectedVaultPath: selectedVaultPath
+        )
+        return StepCompletionResult(isComplete: result.isComplete, reasons: result.reasons)
+    }
+
+    private func emailCompletionResult() -> StepCompletionResult {
+        StepCompletionResult(
+            isComplete: emailConnected || isClawvisorEmailConfigured,
+            reasons: []
+        )
+    }
+
 #if os(macOS)
+    public func activateCompletionWatching() {
+        guard !isCompletionWatching else { return }
+        isCompletionWatching = true
+        recordWatchedCompletionFileSignatures()
+        startCompletionFileWatching()
+        refreshDetectedCompletion()
+    }
+
+    public func deactivateCompletionWatching() {
+        isCompletionWatching = false
+        stopCompletionFileWatching()
+    }
+
     private func startCompletionFileWatching() {
         completionWatchSources.forEach { $0.cancel() }
         completionWatchSources = []
 
-        let directoryPaths = Set([
-            ZebraAgentOnboardingStartup.defaultStateURL().deletingLastPathComponent().path,
-            ZebraAgentPreferenceStore.defaultPreferencesURL().deletingLastPathComponent().path,
-            ZebraGBrainRuntimeOnboardingStore.defaultStateURL().deletingLastPathComponent().path,
-            ZebraGBrainOnboardingStore.defaultStateURL().deletingLastPathComponent().path,
-            gbrainAdapterOnboardingStore.stateDirectoryPath(),
-        ])
+        let directoryPaths = Set(watchedCompletionFiles.map { $0.url.deletingLastPathComponent().path })
 
         for directoryPath in directoryPaths {
             installCompletionDirectoryWatcher(directoryPath: directoryPath)
         }
+    }
+
+    private func stopCompletionFileWatching() {
+        completionRefreshWorkItem?.cancel()
+        completionRefreshWorkItem = nil
+        pendingCompletionRefreshStepIDs = []
+        completionWatchSources.forEach { $0.cancel() }
+        completionWatchSources = []
+        watchedCompletionFileSignatures = [:]
     }
 
     private func installCompletionDirectoryWatcher(directoryPath: String) {
@@ -339,10 +507,11 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             let flags = source.data
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                guard self.isCompletionWatching else { return }
                 if flags.contains(.delete) || flags.contains(.rename) {
                     self.startCompletionFileWatching()
                 }
-                self.scheduleCompletionRefresh()
+                self.scheduleCompletionRefresh(for: self.changedWatchedStepIDs())
             }
         }
         source.setCancelHandler {
@@ -352,15 +521,63 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         completionWatchSources.append(source)
     }
 
-    private func scheduleCompletionRefresh() {
+    private func scheduleCompletionRefresh(for stepIDs: Set<ZebraOnboardingChecklistStepID>) {
+        guard !stepIDs.isEmpty else { return }
+        pendingCompletionRefreshStepIDs.formUnion(stepIDs)
         completionRefreshWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             Task { @MainActor [weak self] in
-                self?.refreshDetectedCompletion()
+                guard let self, self.isCompletionWatching else { return }
+                let stepIDs = self.pendingCompletionRefreshStepIDs
+                self.pendingCompletionRefreshStepIDs = []
+                stepIDs.forEach { self.refreshDetectedCompletion(for: $0) }
             }
         }
         completionRefreshWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: item)
+    }
+
+    private var watchedCompletionFiles: [WatchedCompletionFile] {
+        [
+            WatchedCompletionFile(url: agentOnboardingStateURL, stepID: .agent),
+            WatchedCompletionFile(url: agentEventsURL, stepID: .agent),
+            WatchedCompletionFile(url: agentPreferenceURL, stepID: .agent),
+            WatchedCompletionFile(url: gbrainRuntimeOnboardingStateURL, stepID: .gbrainRuntime),
+            WatchedCompletionFile(url: gbrainOnboardingStateURL, stepID: .gbrain),
+            WatchedCompletionFile(url: gbrainAdapterOnboardingStateURL, stepID: .adapter),
+        ]
+    }
+
+    private func recordWatchedCompletionFileSignatures() {
+        watchedCompletionFileSignatures = Dictionary(
+            uniqueKeysWithValues: watchedCompletionFiles.map { file in
+                (file.url.path, completionFileSignature(for: file.url))
+            }
+        )
+    }
+
+    private func changedWatchedStepIDs() -> Set<ZebraOnboardingChecklistStepID> {
+        var changed = Set<ZebraOnboardingChecklistStepID>()
+        for file in watchedCompletionFiles {
+            let next = completionFileSignature(for: file.url)
+            let previous = watchedCompletionFileSignatures[file.url.path]
+            if previous != next {
+                watchedCompletionFileSignatures[file.url.path] = next
+                changed.insert(file.stepID)
+            }
+        }
+        return changed
+    }
+
+    private func completionFileSignature(for url: URL) -> CompletionFileSignature {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path) else {
+            return CompletionFileSignature(exists: false, modificationTime: nil, size: nil)
+        }
+        return CompletionFileSignature(
+            exists: true,
+            modificationTime: (attributes[.modificationDate] as? Date)?.timeIntervalSince1970,
+            size: attributes[.size] as? UInt64
+        )
     }
 #endif
 

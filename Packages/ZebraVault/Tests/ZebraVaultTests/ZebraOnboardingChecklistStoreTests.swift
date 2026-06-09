@@ -79,6 +79,111 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(runtime?.executablePath, executable.path)
     }
 
+    @MainActor
+    func testCompletedRuntimeStepStaysCompletedDuringGBrainRefreshWhenRuntimeProbeIsTemporarilyUnavailable() throws {
+        let root = try makeTemporaryDirectory()
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        let runtimeStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try writeCompletedRuntimeState(
+            stateURL: runtimeStateURL,
+            runtime: "hermes",
+            executablePath: executable.path
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainRuntimeOnboardingStateURL: runtimeStateURL,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+
+        XCTAssertTrue(store.completedStepIDs.contains(.gbrainRuntime))
+
+        try FileManager.default.removeItem(at: executable)
+        store.beginLaunch(stepID: .gbrain)
+        store.refreshDetectedCompletion()
+
+        XCTAssertTrue(
+            store.completedStepIDs.contains(.gbrainRuntime),
+            "A previously completed runtime step should survive transient executable availability during later setup refreshes."
+        )
+    }
+
+    @MainActor
+    func testGBrainStateWatcherRefreshDoesNotReevaluateCompletedRuntimeStep() throws {
+        let root = try makeTemporaryDirectory()
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let runtimeStateURL = onboardingDirectory.appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try writeCompletedRuntimeState(
+            stateURL: runtimeStateURL,
+            runtime: "hermes",
+            executablePath: executable.path
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainRuntimeOnboardingStateURL: runtimeStateURL,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+
+        XCTAssertTrue(store.completedStepIDs.contains(.gbrainRuntime))
+
+        try writeGBrainPrepareAbortState(stateURL: gbrainStateURL)
+        try writeIncompleteRuntimeState(
+            stateURL: runtimeStateURL,
+            reason: "llm_call_verification_failed"
+        )
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        XCTAssertTrue(
+            store.completedStepIDs.contains(.gbrainRuntime),
+            "A gbrain-state watcher refresh should only evaluate the gbrain step, not demote the completed runtime step."
+        )
+
+        store.refreshDetectedCompletion(for: .gbrainRuntime)
+
+        XCTAssertFalse(
+            store.completedStepIDs.contains(.gbrainRuntime),
+            "The runtime step may be demoted when its own state records an explicit failed receipt."
+        )
+    }
+
+    @MainActor
+    func testRuntimeStepRefreshDemotesCompletedRuntimeWhenRuntimeReceiptIsMissing() throws {
+        let root = try makeTemporaryDirectory()
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let runtimeStateURL = onboardingDirectory.appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try writeCompletedRuntimeState(
+            stateURL: runtimeStateURL,
+            runtime: "hermes",
+            executablePath: executable.path
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainRuntimeOnboardingStateURL: runtimeStateURL,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+
+        XCTAssertTrue(store.completedStepIDs.contains(.gbrainRuntime))
+
+        try FileManager.default.removeItem(at: runtimeStateURL)
+        store.refreshDetectedCompletion(for: .gbrainRuntime)
+
+        XCTAssertFalse(
+            store.completedStepIDs.contains(.gbrainRuntime),
+            "The runtime step should be demoted when its own state file is removed and the receipt is missing."
+        )
+    }
+
     func testGBrainStartupLinePreparesSourceRepoBeforeRuntimeLaunch() throws {
         let launch = ZebraGBrainOnboardingStore.LaunchContext(
             launchDirectory: "/tmp/zebra-gbrain-work",
@@ -1361,6 +1466,23 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             "progress": [
                 "lastFailure": "source_repo_prepare_aborted",
                 "updatedAt": "2026-06-08T00:00:00Z",
+            ],
+        ]
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeIncompleteRuntimeState(stateURL: URL, reason: String) throws {
+        let state: [String: Any] = [
+            "schemaVersion": 1,
+            "receipt": [
+                "complete": false,
+                "verifiedAt": "2026-06-04T00:00:00Z",
+                "reasons": [reason],
             ],
         ]
         try FileManager.default.createDirectory(

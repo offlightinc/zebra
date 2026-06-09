@@ -64,19 +64,17 @@ struct ZebraSidebarBody: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
+            onboardingChecklistStore.activateCompletionWatching()
             refreshOnboardingChecklist()
+        }
+        .onDisappear {
+            onboardingChecklistStore.deactivateCompletionWatching()
         }
         .onChange(of: vaultState.selectedVaultPath) { _ in
             refreshOnboardingChecklist()
         }
         .onChange(of: emailListStore.isConnected) { _ in
             refreshOnboardingChecklist()
-        }
-        .task {
-            while !Task.isCancelled {
-                refreshOnboardingChecklist()
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
-            }
         }
     }
 
