@@ -47,6 +47,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private let homeDirectoryPath: String
     private let gbrainRuntimeOnboardingStore: ZebraGBrainRuntimeOnboardingStore
     private let gbrainOnboardingStore: ZebraGBrainOnboardingStore
+    private let gbrainAdapterOnboardingStore: ZebraGBrainAdapterOnboardingStore
     private var selectedVaultPath: String?
     private var emailConnected = false
     private var launchGeneration = 0
@@ -83,12 +84,19 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         fileManager: FileManager = .default,
         homeDirectoryPath: String = NSHomeDirectory(),
         gbrainRuntimeOnboardingStateURL: URL = ZebraGBrainRuntimeOnboardingStore.defaultStateURL(),
-        gbrainOnboardingStateURL: URL = ZebraGBrainOnboardingStore.defaultStateURL()
+        gbrainOnboardingStateURL: URL = ZebraGBrainOnboardingStore.defaultStateURL(),
+        gbrainAdapterOnboardingStateURL: URL = ZebraGBrainAdapterOnboardingStore.defaultStateURL()
     ) {
         self.fileManager = fileManager
         self.homeDirectoryPath = Self.standardizedPath(homeDirectoryPath)
         self.gbrainRuntimeOnboardingStore = ZebraGBrainRuntimeOnboardingStore(
             stateURL: gbrainRuntimeOnboardingStateURL,
+            fileManager: fileManager,
+            homeDirectoryPath: homeDirectoryPath
+        )
+        self.gbrainAdapterOnboardingStore = ZebraGBrainAdapterOnboardingStore(
+            stateURL: gbrainAdapterOnboardingStateURL,
+            gbrainOnboardingStateURL: gbrainOnboardingStateURL,
             fileManager: fileManager,
             homeDirectoryPath: homeDirectoryPath
         )
@@ -210,9 +218,13 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         let cachedGBrainCompletion = gbrainOnboardingStore.cachedCompletionResult(
             selectedVaultPath: selectedVaultPath
         )
+        let cachedGBrainAdapterCompletion = gbrainAdapterOnboardingStore.cachedCompletionResult(
+            selectedVaultPath: selectedVaultPath
+        )
         applyDetectedCompletion(
             gbrainRuntimeCompleted: cachedGBrainRuntimeCompletion.isComplete,
-            gbrainCompleted: cachedGBrainCompletion.isComplete
+            gbrainCompleted: cachedGBrainCompletion.isComplete,
+            gbrainAdapterCompleted: cachedGBrainAdapterCompletion.isComplete
         )
         guard shouldRefreshGBrainCompletionInBackground(cachedGBrainCompletion) else { return }
         refreshGBrainCompletionInBackground(generation: generation)
@@ -245,14 +257,18 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             }
             self.applyDetectedCompletion(
                 gbrainRuntimeCompleted: self.gbrainRuntimeOnboardingStore.cachedCompletionResult().isComplete,
-                gbrainCompleted: completed
+                gbrainCompleted: completed,
+                gbrainAdapterCompleted: self.gbrainAdapterOnboardingStore.cachedCompletionResult(
+                    selectedVaultPath: selectedVaultPath
+                ).isComplete
             )
         }
     }
 
     private func applyDetectedCompletion(
         gbrainRuntimeCompleted: Bool,
-        gbrainCompleted: Bool
+        gbrainCompleted: Bool,
+        gbrainAdapterCompleted: Bool
     ) {
         var completed = Set<ZebraOnboardingChecklistStepID>()
 
@@ -265,9 +281,9 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         if gbrainCompleted {
             completed.insert(.gbrain)
         }
-        // TODO(Zebra onboarding): Final step 3 should read the Zebra-owned
-        // GBrain setup receipt and verify the adapter on the resolved target,
-        // not by scanning `selectedVaultPath` directly.
+        if gbrainAdapterCompleted {
+            completed.insert(.adapter)
+        }
         if emailConnected || isClawvisorEmailConfigured {
             completed.insert(.email)
         }
@@ -297,6 +313,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             ZebraAgentPreferenceStore.defaultPreferencesURL().deletingLastPathComponent().path,
             ZebraGBrainRuntimeOnboardingStore.defaultStateURL().deletingLastPathComponent().path,
             ZebraGBrainOnboardingStore.defaultStateURL().deletingLastPathComponent().path,
+            gbrainAdapterOnboardingStore.stateDirectoryPath(),
         ])
 
         for directoryPath in directoryPaths {
@@ -434,12 +451,9 @@ public enum ZebraOnboardingChecklistCommand {
             }
             return gbrainSetupRuntimeStartupLine(launch: launch, runtime: runtime)
         case .adapter:
-            return agentStartupLine(
-                cwd: cwd,
-                prompt: """
-                Help me install and verify the gbrain-adapter overlay for this Zebra vault. First inspect the current vault for `.gbrain-adapter/skills`, RESOLVER.md, AGENTS.md, schema.md, and any adapter instructions. If the adapter is missing, identify the correct repository and install command before cloning. After install, verify the adapter fenced blocks and the router, daily-task-manager, and daily-task-prep skills, then summarize the exact result.
-                """
-            )
+            return ZebraGBrainAdapterOnboardingStore().prepareLaunch(
+                selectedVaultPath: selectedVaultPath
+            )?.startupLine
         case .email:
             ZebraClawvisorOnboardingCommand.prepareLaunchEnvironment()
             return ZebraClawvisorOnboardingCommand.shellStartupLine(agent: .default)

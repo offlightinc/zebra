@@ -1274,6 +1274,52 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testCompletedAdapterReceiptCompletesAdapterStep() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let sourceRepo = root
+            .appendingPathComponent("repos", isDirectory: true)
+            .appendingPathComponent("gbrain", isDirectory: true)
+        let adapterRepo = sourceRepo
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-adapter", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceRepo, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: adapterRepo, withIntermediateDirectories: true)
+        let executable = try installFakeGBrain(
+            root: root,
+            sourcePath: vault.path,
+            log: root.appendingPathComponent("gbrain-probe.log", isDirectory: false)
+        )
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = onboardingDirectory.appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: vault.path,
+            executablePath: executable.path,
+            sourceRepoPath: sourceRepo.path
+        )
+        try writeInstalledAdapterFiles(vault)
+        try writeCompletedAdapterState(
+            stateURL: adapterStateURL,
+            targetVaultPath: vault.path,
+            adapterRepoPath: adapterRepo.path
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainRuntimeOnboardingStateURL: onboardingDirectory.appendingPathComponent("gbrain-runtime-state.json", isDirectory: false),
+            gbrainOnboardingStateURL: gbrainStateURL,
+            gbrainAdapterOnboardingStateURL: adapterStateURL
+        )
+        store.syncExternalState(selectedVaultPath: vault.path, emailConnected: false)
+
+        XCTAssertTrue(store.completedStepIDs.contains(.gbrain))
+        XCTAssertTrue(store.completedStepIDs.contains(.adapter))
+    }
+
     private func writeCompletedRuntimeState(
         stateURL: URL,
         runtime: String,
@@ -1355,7 +1401,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     private func writeCompletedGBrainState(
         stateURL: URL,
         vaultPath: String,
-        executablePath: String
+        executablePath: String,
+        sourceRepoPath: String? = nil
     ) throws {
         let targetKey = "vault:\(vaultPath)"
         let timestamp = "2026-06-04T00:00:00Z"
@@ -1378,7 +1425,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             ],
             "reasons": [],
         ]
-        let state: [String: Any] = [
+        var state: [String: Any] = [
             "schemaVersion": 1,
             "progress": [
                 "resolvedTargetKey": targetKey,
@@ -1401,12 +1448,99 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 ],
             ],
         ]
+        if let sourceRepoPath {
+            state["activeGBrainBinding"] = [
+                "sourceRepoPath": sourceRepoPath,
+                "sourceRepoStatus": "existing",
+                "gbrainHomePath": sourceRepoPath,
+                "confirmedAt": timestamp,
+            ]
+        }
         try FileManager.default.createDirectory(
             at: stateURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
         let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeCompletedAdapterState(
+        stateURL: URL,
+        targetVaultPath: String,
+        adapterRepoPath: String
+    ) throws {
+        let targetKey = "vault:\(targetVaultPath)"
+        let timestamp = "2026-06-04T00:00:00Z"
+        let state: [String: Any] = [
+            "schemaVersion": 1,
+            "adapterSourceBinding": [
+                "repoPath": adapterRepoPath,
+                "remote": "test",
+                "ref": "main",
+                "commit": "test",
+                "status": "cloned",
+            ],
+            "receipt": [
+                "complete": true,
+                "targetKey": targetKey,
+                "targetVaultPath": targetVaultPath,
+                "adapterRepoPath": adapterRepoPath,
+                "adapterRemote": "test",
+                "adapterRef": "main",
+                "adapterCommit": "test",
+                "installerPath": "\(adapterRepoPath)/scripts/install.sh",
+                "installedAt": timestamp,
+                "verifiedAt": timestamp,
+                "checks": [
+                    "adapterSkillRouter": true,
+                    "adapterSkillDailyTaskManager": true,
+                    "adapterSkillDailyTaskPrep": true,
+                    "goalsReadme": true,
+                    "tasksReadme": true,
+                    "resolverBlock": true,
+                    "schemaBlock": true,
+                    "agentsBlock": true,
+                ],
+                "reasons": [],
+            ],
+        ]
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeInstalledAdapterFiles(_ vault: URL) throws {
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".gbrain-adapter/skills/router", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".gbrain-adapter/skills/daily-task-manager", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".gbrain-adapter/skills/daily-task-prep", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: vault.appendingPathComponent("goals", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: vault.appendingPathComponent("tasks", isDirectory: true), withIntermediateDirectories: true)
+        try "router\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/router/SKILL.md"), atomically: true, encoding: .utf8)
+        try "manager\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/daily-task-manager/SKILL.md"), atomically: true, encoding: .utf8)
+        try "prep\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/daily-task-prep/SKILL.md"), atomically: true, encoding: .utf8)
+        try "goals\n".write(to: vault.appendingPathComponent("goals/README.md"), atomically: true, encoding: .utf8)
+        try "tasks\n".write(to: vault.appendingPathComponent("tasks/README.md"), atomically: true, encoding: .utf8)
+        for file in ["RESOLVER.md", "schema.md", "AGENTS.md"] {
+            try """
+            # \(file)
+
+            <!-- gbrain-adapter:begin goals-tasks -->
+            installed
+            <!-- gbrain-adapter:end goals-tasks -->
+            """.write(to: vault.appendingPathComponent(file), atomically: true, encoding: .utf8)
+        }
     }
 
     private func installFakeGBrain(root: URL, sourcePath: String, log: URL) throws -> URL {
