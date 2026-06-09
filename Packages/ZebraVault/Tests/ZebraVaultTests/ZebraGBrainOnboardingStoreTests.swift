@@ -2624,6 +2624,69 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains(#""restored": false"#), "stdout: \(result.stdout) stderr: \(result.stderr)")
     }
 
+    func testHelperVerifyRestoresAutopilotWhenSourceProbeThrows() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let fake = try installFakeGBrainWithAutopilot(
+            root: root,
+            sourceId: "brain",
+            localPath: target.path,
+            malformedSourceList: true
+        )
+        let gbrainHome = root.appendingPathComponent(".gbrain", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        try #"{"engine":"pglite","database_path":"brain.pglite"}"#.write(
+            to: gbrainHome.appendingPathComponent("config.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "\(ProcessInfo.processInfo.processIdentifier)\n".write(to: gbrainHome.appendingPathComponent("autopilot.lock"), atomically: true, encoding: .utf8)
+        let launchAgents = root
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+        try "<plist />\n".write(
+            to: launchAgents.appendingPathComponent("com.gbrain.autopilot.plist"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: target.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            complete: false,
+            sourceVerification: true
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": fake.bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            environment: ["HOME": root.path],
+            arguments: [
+                "verify",
+                "--target", target.path,
+                "--source-id", "brain",
+                "--method", "user_created_repo",
+            ]
+        )
+
+        XCTAssertNotEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let log = try String(contentsOf: fake.log, encoding: .utf8)
+        XCTAssertTrue(log.contains("launchctl unload"), log)
+        XCTAssertTrue(log.contains("launchctl load"), log)
+    }
+
     func testHelperVerifyPreservesCompleteReceiptWhenDoctorProbeIsTransient() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
@@ -3618,7 +3681,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         localPath: String,
         releaseLockAfterUnload: Bool = true,
         doctorRequiresNoLock: Bool = false,
-        restoreFails: Bool = false
+        restoreFails: Bool = false,
+        malformedSourceList: Bool = false
     ) throws -> (bin: URL, log: URL) {
         let bin = root.appendingPathComponent("fake-gbrain-bin", isDirectory: true)
         let log = root.appendingPathComponent("autopilot-calls.log")
@@ -3649,6 +3713,15 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
               fi
             """
             : ""
+        let sourceListBlock = malformedSourceList
+            ? """
+              echo '{"sources":"bad"}'
+              exit 0
+            """
+            : """
+              echo '{"sources":[{"id":"\(sourceId)","local_path":"\(escapedPath)"}]}'
+              exit 0
+            """
         try """
         #!/bin/sh
         if [ "$1" = "--version" ]; then
@@ -3665,8 +3738,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
           exit 0
         fi
         if [ "$1" = "sources" ] && [ "$2" = "list" ]; then
-          echo '{"sources":[{"id":"\(sourceId)","local_path":"\(escapedPath)"}]}'
-          exit 0
+          \(sourceListBlock)
         fi
         exit 1
         """

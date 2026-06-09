@@ -3762,41 +3762,43 @@ public struct ZebraGBrainOnboardingStore {
             autopilot, autopilot_warnings = quiesce_autopilot_for_verify(executable, target)
             warnings.extend(autopilot_warnings)
             try:
-                result = subprocess.run(
-                    [executable, "doctor", "--json"],
-                    cwd=target if target and os.path.isdir(target) else None,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=45,
-                )
-                doctor_ok, _ = strict_doctor_result(result)
-                doctor_transient_reason = None if doctor_ok else transient_probe_reason((result.stderr or "") + "\\n" + (result.stdout or ""))
-                doctor_transient = doctor_transient_reason is not None
-                if doctor_transient_reason and doctor_transient_reason not in reasons:
-                    reasons.append(doctor_transient_reason)
-                elif not doctor_ok:
-                    reasons.append("doctor_failed")
-            except Exception as exc:
-                doctor_transient_reason = transient_probe_reason(str(exc))
-                doctor_transient = doctor_transient_reason is not None
-                if doctor_transient_reason and doctor_transient_reason not in reasons:
-                    reasons.append(doctor_transient_reason)
-                elif not doctor_transient:
-                    reasons.append("doctor_failed")
+                try:
+                    result = subprocess.run(
+                        [executable, "doctor", "--json"],
+                        cwd=target if target and os.path.isdir(target) else None,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=45,
+                    )
+                    doctor_ok, _ = strict_doctor_result(result)
+                    doctor_transient_reason = None if doctor_ok else transient_probe_reason((result.stderr or "") + "\\n" + (result.stdout or ""))
+                    doctor_transient = doctor_transient_reason is not None
+                    if doctor_transient_reason and doctor_transient_reason not in reasons:
+                        reasons.append(doctor_transient_reason)
+                    elif not doctor_ok:
+                        reasons.append("doctor_failed")
+                except Exception as exc:
+                    doctor_transient_reason = transient_probe_reason(str(exc))
+                    doctor_transient = doctor_transient_reason is not None
+                    if doctor_transient_reason and doctor_transient_reason not in reasons:
+                        reasons.append(doctor_transient_reason)
+                    elif not doctor_transient:
+                        reasons.append("doctor_failed")
 
-            if target and os.path.isdir(target) and source_id:
-                source_probe, current_source_id, listed_local_path, source_probe_reason = source_probe_status(executable, target, source_id)
-                current_ok = source_probe == "verified"
-                list_ok = source_probe == "verified"
-                if source_probe == "mismatch":
-                    source_probe_reasons.append("source_not_registered")
-                elif source_probe_reason:
-                    source_probe_reasons.append(source_probe_reason)
-                for reason in source_probe_reasons:
-                    if reason not in reasons:
-                        reasons.append(reason)
-            warnings.extend(restore_autopilot_after_verify(executable, target, autopilot))
+                if target and os.path.isdir(target) and source_id:
+                    source_probe, current_source_id, listed_local_path, source_probe_reason = source_probe_status(executable, target, source_id)
+                    current_ok = source_probe == "verified"
+                    list_ok = source_probe == "verified"
+                    if source_probe == "mismatch":
+                        source_probe_reasons.append("source_not_registered")
+                    elif source_probe_reason:
+                        source_probe_reasons.append(source_probe_reason)
+                    for reason in source_probe_reasons:
+                        if reason not in reasons:
+                            reasons.append(reason)
+            finally:
+                warnings.extend(restore_autopilot_after_verify(executable, target, autopilot))
 
         state = load_state()
         receipt = state.setdefault("receipt", {})
