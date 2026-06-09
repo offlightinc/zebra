@@ -762,6 +762,9 @@ public struct ZebraGBrainOnboardingStore {
         - Use: `zebra-gbrain-onboarding verify --target "<brain repo path>" --source-id "<source id>" --method "<targetResolution.method>"`
         - Include `--profile-id "<profile>"` if a profile was selected.
         - Verify must pass before the Zebra checklist can become checked.
+        - Step 9 PGLite/autopilot recovery: if final verify is blocked by `pglite_busy` or a lone `cycle_freshness` doctor failure, run `zebra-gbrain-onboarding recover-cycle-freshness --target "<brain repo path>" --source-id "<source id>"`, then rerun `gbrain doctor --json` and `zebra-gbrain-onboarding verify ...`.
+        - The recovery helper temporarily unloads autopilot only if it was running, confirms the remaining doctor blocker is exactly `cycle_freshness`, runs one explicit source-scoped `gbrain dream --source "<source id>"`, and restores autopilot in all outcomes when it was running before.
+        - Do not hardcode `brain` for recovery unless the verified source id is actually `brain`; use the Step 4/verify `--source-id` value.
 
         User decision rule:
         - Ask only for decisions required by the current `next section` or current `waitingForUser` block.
@@ -3717,6 +3720,154 @@ public struct ZebraGBrainOnboardingStore {
             warnings.append("autopilot_restart_failed")
         return warnings
 
+    def doctor_failed_checks(result):
+        if result.returncode == 0:
+            return []
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except Exception:
+            return ["doctor_failed"]
+        checks = payload.get("checks") or []
+        failed = []
+        for check in checks:
+            status = str(check.get("status") or "").lower()
+            if status in {"fail", "failed", "error"}:
+                failed.append(check.get("name") or "unknown")
+        return failed or ["doctor_failed"]
+
+    def recover_cycle_freshness():
+        flags = parse_flags(args)
+        target = flags.get("target")
+        source_id = flags.get("source_id")
+        reasons = []
+        warnings = []
+        status_value = "failed"
+        doctor_before_failed_checks = []
+        doctor_after_failed_checks = None
+        source_probe = "not_run"
+        source_probe_reason = None
+        dream_ran = False
+        dream_ok = False
+        executable = gbrain_executable()
+        autopilot = {
+            "pausedForVerify": False,
+            "wasRunning": False,
+            "restored": None,
+        }
+        if not target:
+            reasons.append("target_not_resolved")
+        else:
+            target = os.path.abspath(os.path.expanduser(target))
+            if not os.path.isdir(target):
+                reasons.append("receipt_target_missing")
+        if not source_id:
+            reasons.append("source_not_registered")
+        if not executable:
+            reasons.append("missing_gbrain_executable")
+        if reasons:
+            print(json.dumps({
+                "ok": False,
+                "status": status_value,
+                "reasons": reasons,
+                "warnings": warnings,
+                "autopilot": autopilot,
+            }, sort_keys=True))
+            sys.exit(1)
+
+        autopilot, autopilot_warnings = quiesce_autopilot_for_verify(executable, target)
+        warnings.extend(autopilot_warnings)
+        try:
+            doctor_before = subprocess.run(
+                [executable, "doctor", "--json"],
+                cwd=target,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=45,
+            )
+            doctor_before_failed_checks = doctor_failed_checks(doctor_before)
+            if not doctor_before_failed_checks:
+                status_value = "already_fresh"
+            elif doctor_before_failed_checks == [CYCLE_FRESHNESS_CHECK_NAME]:
+                source_probe, _, _, source_probe_reason = source_probe_status(executable, target, source_id)
+                if source_probe != "verified":
+                    if source_probe == "mismatch":
+                        reasons.append("source_not_registered")
+                    elif source_probe_reason:
+                        reasons.append(source_probe_reason)
+                    else:
+                        reasons.append("source_probe_not_verified")
+                    status_value = "source_probe_not_verified"
+                else:
+                    dream_ran = True
+                    try:
+                        dream_result = subprocess.run(
+                            [executable, "dream", "--source", source_id],
+                            cwd=target,
+                            text=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            timeout=1800,
+                        )
+                        dream_ok = dream_result.returncode == 0
+                        if not dream_ok:
+                            reasons.append("dream_failed")
+                            status_value = "dream_failed"
+                    except subprocess.TimeoutExpired:
+                        reasons.append("dream_timeout")
+                        status_value = "dream_timeout"
+                    if dream_ok:
+                        doctor_after = subprocess.run(
+                            [executable, "doctor", "--json"],
+                            cwd=target,
+                            text=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            timeout=45,
+                        )
+                        doctor_after_failed_checks = doctor_failed_checks(doctor_after)
+                        if not doctor_after_failed_checks:
+                            status_value = "recovered"
+                        else:
+                            reasons.append("doctor_failed")
+                            status_value = "doctor_still_failed"
+            else:
+                reasons.append("unexpected_doctor_blockers")
+                status_value = "unexpected_doctor_blockers"
+        except subprocess.TimeoutExpired:
+            reasons.append("doctor_timeout")
+            status_value = "doctor_timeout"
+        except Exception:
+            reasons.append("cycle_recovery_failed")
+            status_value = "failed"
+        finally:
+            warnings.extend(restore_autopilot_after_verify(executable, target, autopilot))
+
+        ok = len(reasons) == 0
+        print(json.dumps({
+            "ok": ok,
+            "status": status_value,
+            "reasons": reasons,
+            "warnings": warnings,
+            "doctorBefore": {
+                "failedChecks": doctor_before_failed_checks,
+            },
+            "doctorAfter": {
+                "failedChecks": doctor_after_failed_checks,
+            } if doctor_after_failed_checks is not None else None,
+            "sourceProbe": {
+                "status": source_probe,
+                "reason": source_probe_reason,
+            },
+            "dream": {
+                "ran": dream_ran,
+                "ok": dream_ok,
+                "sourceId": source_id,
+            },
+            "autopilot": autopilot,
+        }, sort_keys=True))
+        sys.exit(0 if ok else 1)
+
     def verify():
         flags = parse_flags(args)
         target = flags.get("target")
@@ -3966,8 +4117,10 @@ public struct ZebraGBrainOnboardingStore {
         status()
     elif command == "verify":
         verify()
+    elif command == "recover-cycle-freshness":
+        recover_cycle_freshness()
     else:
-        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-setup-packet|write-runtime-launcher|prepare-openclaw-agent|report|status|verify> [options]", file=sys.stderr)
+        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-setup-packet|write-runtime-launcher|prepare-openclaw-agent|report|status|verify|recover-cycle-freshness> [options]", file=sys.stderr)
         sys.exit(2)
     PY
     """
