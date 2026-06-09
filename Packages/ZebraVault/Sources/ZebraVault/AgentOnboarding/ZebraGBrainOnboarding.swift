@@ -712,8 +712,8 @@ public struct ZebraGBrainOnboardingStore {
         - The Zebra launch wrapper has already run `zebra-gbrain-onboarding prepare-source-repo` before starting this agent. Read the current state file before Step 1/2/3 work and use its `activeGBrainBinding.sourceRepoPath`.
         - Run GBrain installation from the active GBrain source repo.
         - If the active GBrain source repo is Zebra's recommended `~/gbrain` path, Step 1 install is `bun install`, then `bun install -g .`, then `gbrain --version`, all from that local source repo.
-        - If the active GBrain source repo is not Zebra's recommended `~/gbrain` path, Step 1 install is repo-local `bun install`; use Zebra's PATH-provided `gbrain` wrapper or `bun src/cli.ts` unless the user explicitly chooses global exposure for that custom repo.
-        - If global CLI exposure is required, install from the active local source repo with `bun install -g .`.
+        - If the active GBrain source repo is not Zebra's recommended `~/gbrain` path, Step 1 install is `bun install`, then `bun link`, then `gbrain --version`, all from that local source repo.
+        - Do not use Zebra's PATH-provided `gbrain` wrapper or `bun src/cli.ts` as the Step 1 completion verification; Step 1 must expose the active source repo through the user-visible `gbrain` command first.
         - Do not run `bun upgrade` during Zebra onboarding.
         - OpenClaw/Hermes commands for this setup run must execute with cwd equal to the active GBrain source repo.
         - Keep the GBrain config/DB boundary separate from the source repo; use `GBRAIN_HOME` or `GBRAIN_DATABASE_URL` from the launch environment.
@@ -2288,12 +2288,12 @@ public struct ZebraGBrainOnboardingStore {
         install_mode = (
             "recommended_home_global"
             if recommended else
-            "custom_source_repo_local"
+            "custom_source_repo_linked"
         )
         recommended_install_rule = (
             "- Because the active source repo is Zebra's recommended `~/gbrain` path, Step 1 must run `bun install`, then `bun install -g .` from that local source repo, then verify `gbrain --version`."
             if recommended else
-            "- Because the active source repo is not Zebra's recommended `~/gbrain` path, Step 1 must run repo-local `bun install` from that source repo. Use the Zebra-provided `gbrain` PATH wrapper or `bun src/cli.ts` for verification unless the user explicitly chooses global exposure."
+            "- Because the active source repo is not Zebra's recommended `~/gbrain` path, Step 1 must run `bun install`, then `bun link` from that source repo, then verify `gbrain --version`."
         )
         complete = bool((state.get("receipt") or {}).get("globalReadiness", {}).get("complete"))
         lines = [
@@ -2325,7 +2325,7 @@ public struct ZebraGBrainOnboardingStore {
             "- OpenClaw/Hermes commands for this setup run must execute with cwd equal to the active GBrain source repo.",
             "- Run GBrain installation from the active GBrain source repo.",
             recommended_install_rule,
-            "- If global CLI exposure is required, install from the active local source repo with `bun install -g .`.",
+            "- Do not use Zebra's PATH-provided `gbrain` wrapper or `bun src/cli.ts` as the Step 1 completion verification; Step 1 must expose the active source repo through the user-visible `gbrain` command first.",
             "- Do not run `bun upgrade` during Zebra onboarding.",
             "",
             RUNTIME_UPDATE_END,
@@ -2431,7 +2431,7 @@ public struct ZebraGBrainOnboardingStore {
         elif runtime == "hermes":
             lines.extend([
                 'cd "$ZEBRA_GBRAIN_SOURCE_REPO"',
-                f"exec {shell_quote(executable)} chat --source zebra-gbrain-onboarding --query {shell_quote(prompt)}",
+                f"exec {shell_quote(executable)} chat --tui --source zebra-gbrain-onboarding --query {shell_quote(prompt)}",
             ])
         else:
             raise RuntimeError(f"unsupported_runtime:{runtime}")
@@ -3096,7 +3096,8 @@ public struct ZebraGBrainOnboardingStore {
 
     def gbrain_version_ok():
         state = load_state()
-        executable = global_gbrain_executable(state) if recommended_source_repo_active(state) else gbrain_executable()
+        binding = state.get("activeGBrainBinding") or {}
+        executable = global_gbrain_executable(state) if binding.get("sourceRepoPath") else gbrain_executable()
         if not executable:
             return False
         try:
