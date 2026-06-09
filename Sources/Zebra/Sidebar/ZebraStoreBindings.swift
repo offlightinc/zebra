@@ -29,13 +29,16 @@ private struct ZebraStoreBindingsModifier: ViewModifier {
             .onChange(of: vaultState.selectedVaultPath) { _ in
                 syncVaultRootedStores()
             }
+            .onChange(of: vaultState.selectedVaultWasExplicitlyChosen) { _ in
+                syncVaultRootedStores()
+            }
             .onChange(of: activeMarkdownPathsObserver.paths) { newPaths in
                 modeState.activeMarkdownFilePaths = newPaths
             }
     }
 
     private func syncVaultRootedStores() {
-        let root = vaultState.selectedVault?.path
+        let root = vaultState.selectedVaultWasExplicitlyChosen ? vaultState.selectedVault?.path : nil
         markdownFiles.bind(rootPath: root)
         goals.bind(vaultRoot: root)
         tasks.bind(vaultRoot: root)

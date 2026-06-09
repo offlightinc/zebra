@@ -234,12 +234,19 @@ struct ZebraSidebarBody: View {
         guard let workspace = tabManager.selectedWorkspace,
               let startupLine = ZebraOnboardingChecklistCommand.shellStartupLine(
                 for: stepID,
-                selectedVaultPath: vaultState.selectedVaultPath
+                selectedVaultPath: onboardingSelectedVaultPath
               ) else {
             return
         }
         onboardingChecklistStore.beginLaunch(stepID: stepID)
-        if let agent = onboardingChecklistAgent(for: stepID) {
+        let agent = onboardingChecklistAgent(for: stepID)
+        #if DEBUG
+        cmuxDebugLog(
+            "zebra.onboarding.step.start step=\(stepID.rawValue) " +
+            "agent=\(agent == nil ? 0 : 1) bytes=\(startupLine.utf8.count)"
+        )
+        #endif
+        if let agent {
             guard let agentTerminals = zebra?.agentTerminals else { return }
             let source = ZebraAgentTerminalSource.onboardingChecklist(stepID)
             if stepID == .agent,
@@ -261,10 +268,14 @@ struct ZebraSidebarBody: View {
             )
             return
         }
-        _ = workspace.newTerminalSurfaceInFocusedPane(
-            focus: true,
-            initialInput: startupLine
+        #if DEBUG
+        cmuxDebugLog(
+            "zebra.onboarding.step.fallbackTerminal step=\(stepID.rawValue) " +
+            "bytes=\(startupLine.utf8.count)"
         )
+        #endif
+        workspace.newTerminalSurfaceInFocusedPane(focus: true)?
+            .zebraSendStartupLineWhenReady(startupLine)
     }
 
     private func onboardingChecklistAgent(for stepID: ZebraOnboardingChecklistStepID) -> MarkdownPillAgent? {
@@ -273,7 +284,7 @@ struct ZebraSidebarBody: View {
             return MarkdownPillAgent.defaultAgent()
         case .email:
             return ZebraClawvisorAgent.default.markdownPillAgent
-        case .gbrain:
+        case .gbrainRuntime, .gbrain:
             return nil
         }
     }
@@ -295,7 +306,13 @@ struct ZebraSidebarBody: View {
         registry.prune(validPanelIds: Set(workspace.panels.keys))
         registry.mark(panelId: terminalPanel.id, source: source, agent: agent)
         terminalPanel.focus()
-        terminalPanel.sendInput(startupLine)
+        #if DEBUG
+        cmuxDebugLog(
+            "zebra.onboarding.step.reuseInitialTerminal source=\(String(describing: source)) " +
+            "panel=\(terminalPanel.id.uuidString.prefix(5)) bytes=\(startupLine.utf8.count)"
+        )
+        #endif
+        terminalPanel.zebraSendStartupLine(startupLine)
         return true
     }
 
@@ -314,9 +331,13 @@ struct ZebraSidebarBody: View {
 
     private func refreshOnboardingChecklist() {
         onboardingChecklistStore.syncExternalState(
-            selectedVaultPath: vaultState.selectedVaultPath,
+            selectedVaultPath: onboardingSelectedVaultPath,
             emailConnected: emailListStore.isConnected
         )
+    }
+
+    private var onboardingSelectedVaultPath: String? {
+        vaultState.selectedVaultWasExplicitlyChosen ? vaultState.selectedVaultPath : nil
     }
 
     private func openMarkdownFile(filePath: String) {

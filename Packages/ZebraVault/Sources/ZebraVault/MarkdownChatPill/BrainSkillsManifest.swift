@@ -15,13 +15,17 @@ enum BrainSkillsManifest {
         var id: String { name }
     }
 
-    /// Default engine location. `~/.gbrain/config.json` only holds the
-    /// database path, not the engine path, so there's nothing to read for
-    /// engine resolution today. If users start putting gbrain elsewhere we
-    /// can add an env var (`GBRAIN_HOME`) or an app preference here.
+    /// Default engine location. GBrain setup records the user-confirmed
+    /// source repo; `~/gbrain` remains only the fallback recommendation.
     private static var defaultManifestURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("gbrain", isDirectory: true)
+        let sourceRepoURL: URL
+        if let sourceRepoPath = ZebraGBrainOnboardingStore().activeSourceRepoPathFromCachedState() {
+            sourceRepoURL = URL(fileURLWithPath: sourceRepoPath, isDirectory: true)
+        } else {
+            sourceRepoURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("gbrain", isDirectory: true)
+        }
+        return sourceRepoURL
             .appendingPathComponent("skills", isDirectory: true)
             .appendingPathComponent("manifest.json", isDirectory: false)
     }
@@ -34,14 +38,11 @@ enum BrainSkillsManifest {
         }
     }
 
-    // Cached parse — gbrain's manifest changes only when the user updates
-    // gbrain itself; reparsing on every keystroke is wasted IO. Both
-    // success and failure are cached so a gbrain-less environment doesn't
-    // hit disk again every time a new pill instance probes for skills.
-    // (`.success(nil)` would be ambiguous, hence the dedicated enum.)
-    private enum CachedResult {
-        case skills([Skill])
-        case unavailable
+    // Cache successful parses per manifest URL. Do not cache misses: GBrain
+    // setup can create or rebind the source repo while the app is running.
+    private struct CachedResult {
+        let manifestURL: URL
+        let skills: [Skill]
     }
     private static var cached: CachedResult?
 
@@ -50,15 +51,12 @@ enum BrainSkillsManifest {
     /// is the signal for the pill to keep the slash menu disabled — we'd
     /// rather show nothing than a stale or invented skill list.
     static func skills() -> [Skill]? {
-        if let cached {
-            switch cached {
-            case .skills(let list): return list
-            case .unavailable: return nil
-            }
+        let manifestURL = defaultManifestURL
+        if let cached, cached.manifestURL == manifestURL {
+            return cached.skills
         }
-        guard let data = try? Data(contentsOf: defaultManifestURL),
+        guard let data = try? Data(contentsOf: manifestURL),
               let manifest = try? JSONDecoder().decode(ManifestFile.self, from: data) else {
-            cached = .unavailable
             return nil
         }
         let parsed = manifest.skills.compactMap { entry -> Skill? in
@@ -69,7 +67,7 @@ enum BrainSkillsManifest {
                 description: entry.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             )
         }
-        cached = .skills(parsed)
+        cached = CachedResult(manifestURL: manifestURL, skills: parsed)
         return parsed
     }
 }

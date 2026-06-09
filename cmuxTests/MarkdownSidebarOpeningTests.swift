@@ -303,6 +303,27 @@ final class MarkdownSidebarOpeningTests: XCTestCase {
         XCTAssertEqual(workspace.bonsplitController.allPaneIds.count, 2)
     }
 
+    func testZebraStartupLineUsesTextEventAndSeparateReturnInput() {
+        let prompt = String(repeating: "message ", count: 250)
+        let line = "openclaw tui --message '\(prompt)'\r"
+
+        let events = ZebraTerminalStartupLinePlan.events(for: line)
+
+        XCTAssertEqual(events, [
+            .text("openclaw tui --message '\(prompt)'"),
+            .input("\r"),
+        ])
+    }
+
+    func testZebraStartupLineWithCRLFDropsBothBytesAndUsesReturnInput() {
+        let events = ZebraTerminalStartupLinePlan.events(for: "echo ready\r\n")
+
+        XCTAssertEqual(events, [
+            .text("echo ready"),
+            .input("\r"),
+        ])
+    }
+
     @MainActor
     private func assertZebraSidebarMarkdownOpenSkipsAgentPane(
         source: ZebraAgentTerminalSource,

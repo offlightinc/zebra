@@ -30,6 +30,7 @@ FAKE_HOLD_FILE=""
 FAKE_RELEASE_FILE=""
 RUN_PID=""
 RUN_OUTPUT_FILE=""
+TEST_ONBOARDING_LANGUAGE="en"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -77,6 +78,7 @@ setup_case() {
   FAKE_RELEASE_FILE=""
   RUN_PID=""
   RUN_OUTPUT_FILE=""
+  TEST_ONBOARDING_LANGUAGE="en"
   mkdir -p "$HOME_DIR/.local/bin" "$APP_DIR/onboarding" "$APP_DIR/agent" "$WORK_DIR"
   printf 'export PATH="$HOME/.local/bin:$PATH"\n' > "$HOME_DIR/.bash_profile"
   : > "$FAKE_LOG"
@@ -259,12 +261,35 @@ run_onboarding() {
     ZEBRA_AGENT_ONBOARDING_INCLUDE_GLOBAL_PATHS=0 \
     ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS=1 \
     ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=1 \
+    ZEBRA_ONBOARDING_LANGUAGE="$TEST_ONBOARDING_LANGUAGE" \
     ZEBRA_FAKE_AGENT_LOG="$FAKE_LOG" \
     ZEBRA_FAKE_READY_AGENTS="$READY_AGENTS" \
     ZEBRA_FAKE_HOLD_FILE="$FAKE_HOLD_FILE" \
     ZEBRA_FAKE_RELEASE_FILE="$FAKE_RELEASE_FILE" \
     PATH="/usr/bin:/bin" \
     "$SCRIPT" run --cwd "$WORK_DIR" >"$output_file" 2>&1 <<<"$input"
+  RUN_STATUS=$?
+  set -e
+  RUN_OUTPUT="$(cat "$output_file")"
+}
+
+run_onboarding_args() {
+  local input="$1"
+  local output_file="$CASE_DIR/output-args.txt"
+  shift
+  set +e
+  HOME="$HOME_DIR" \
+    ZEBRA_APP_SUPPORT_DIR="$APP_DIR" \
+    ZEBRA_AGENT_ONBOARDING_INCLUDE_GLOBAL_PATHS=0 \
+    ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS=1 \
+    ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=1 \
+    ZEBRA_ONBOARDING_LANGUAGE="$TEST_ONBOARDING_LANGUAGE" \
+    ZEBRA_FAKE_AGENT_LOG="$FAKE_LOG" \
+    ZEBRA_FAKE_READY_AGENTS="$READY_AGENTS" \
+    ZEBRA_FAKE_HOLD_FILE="$FAKE_HOLD_FILE" \
+    ZEBRA_FAKE_RELEASE_FILE="$FAKE_RELEASE_FILE" \
+    PATH="/usr/bin:/bin" \
+    "$SCRIPT" "$@" >"$output_file" 2>&1 <<<"$input"
   RUN_STATUS=$?
   set -e
   RUN_OUTPUT="$(cat "$output_file")"
@@ -278,6 +303,7 @@ run_onboarding_async() {
     ZEBRA_AGENT_ONBOARDING_INCLUDE_GLOBAL_PATHS=0 \
     ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS=1 \
     ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=1 \
+    ZEBRA_ONBOARDING_LANGUAGE="$TEST_ONBOARDING_LANGUAGE" \
     ZEBRA_FAKE_AGENT_LOG="$FAKE_LOG" \
     ZEBRA_FAKE_READY_AGENTS="$READY_AGENTS" \
     ZEBRA_FAKE_HOLD_FILE="$FAKE_HOLD_FILE" \
@@ -304,6 +330,7 @@ run_mark_ready() {
   HOME="$HOME_DIR" \
     ZEBRA_APP_SUPPORT_DIR="$APP_DIR" \
     ZEBRA_AGENT_ONBOARDING_INCLUDE_GLOBAL_PATHS=0 \
+    ZEBRA_ONBOARDING_LANGUAGE="$TEST_ONBOARDING_LANGUAGE" \
     PATH="/usr/bin:/bin" \
     "$SCRIPT" mark-ready --agent "$agent" --run-id "$run_id" >"$output_file" 2>&1
   RUN_STATUS=$?
@@ -320,6 +347,7 @@ test_waiting_for_continue_resumes_menu() {
 
   assert_eq "$RUN_STATUS" "1" "no-selection status"
   assert_contains "$RUN_OUTPUT" "Resuming Zebra agent onboarding for Antigravity." "resume message"
+  assert_contains "$RUN_OUTPUT" $'Resuming Zebra agent onboarding for Antigravity.\n\nChecking Antigravity readiness...' "resume message keeps paragraph break"
   assert_contains "$RUN_OUTPUT" "Antigravity did not finish Zebra setup." "continue menu"
   assert_contains "$RUN_OUTPUT" "2. Choose another agent" "alternate agent option"
   assert_not_contains "$RUN_OUTPUT" "Exit for now" "continue menu does not include exit"
@@ -391,6 +419,31 @@ test_fresh_choice_lists_missing_agents() {
   assert_not_contains "$RUN_OUTPUT" "Exit for now" "install failure menu does not include exit"
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "choose_primary" "declined install returns to primary choice state"
   assert_eq "$(cat "$FAKE_LOG")" "" "installed agent is not launched when missing agent is selected"
+}
+
+test_korean_language_keeps_agent_terms_in_english() {
+  setup_case korean-language
+  TEST_ONBOARDING_LANGUAGE="ko"
+  add_fake_agent codex
+
+  run_onboarding $'2\n'
+
+  assert_eq "$RUN_STATUS" "1" "korean no-selection status"
+  assert_contains "$RUN_OUTPUT" "어떤 agent를 Zebra의 default로 사용할까요?" "korean primary prompt"
+  assert_contains "$RUN_OUTPUT" "2. Codex [installed]" "technical menu terms stay English"
+  assert_contains "$RUN_OUTPUT" "Zebra onboarding을 위해 Codex를 시작합니다." "korean launch message"
+  assert_contains "$RUN_OUTPUT" "provider CLI" "technical CLI term stays English"
+  assert_not_contains "$RUN_OUTPUT" "Which agent should Zebra use by default?" "english primary prompt is not used"
+}
+
+test_korean_language_applies_to_unknown_option_error() {
+  setup_case korean-unknown-option
+
+  run_onboarding_args '' run --language ko --unknown
+
+  assert_eq "$RUN_STATUS" "2" "korean unknown option status"
+  assert_contains "$RUN_OUTPUT" "알 수 없는 option: --unknown" "korean unknown option message"
+  assert_not_contains "$RUN_OUTPUT" "unknown option: --unknown" "english unknown option is not used"
 }
 
 assert_declined_install_can_choose_another_agent() {
@@ -655,6 +708,8 @@ test_agent_working_resumes_to_continue_menu
 test_waiting_for_continue_can_choose_another_agent
 test_choose_install_target_resumes_install_menu
 test_fresh_choice_lists_missing_agents
+test_korean_language_keeps_agent_terms_in_english
+test_korean_language_applies_to_unknown_option_error
 test_declined_install_can_choose_another_agent_for_any_agent
 test_failed_install_resume_can_choose_another_agent_for_any_agent
 test_fresh_choice_launches_installed_selection

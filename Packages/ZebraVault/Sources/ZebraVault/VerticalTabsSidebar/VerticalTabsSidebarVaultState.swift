@@ -10,14 +10,17 @@ public struct VerticalTabsSidebarVault: Identifiable, Hashable {
 public final class VerticalTabsSidebarVaultState: ObservableObject {
     private static let vaultPathsDefaultsKey = "verticalTabsSidebar.vaultPaths"
     private static let selectedVaultPathDefaultsKey = "verticalTabsSidebar.selectedVaultPath"
+    private static let selectedVaultExplicitDefaultsKey = "verticalTabsSidebar.selectedVaultExplicitlyChosen"
 
     private let defaults: UserDefaults
     private let homeDirectoryPath: String
 
     @Published public private(set) var vaults: [VerticalTabsSidebarVault]
+    @Published public private(set) var selectedVaultWasExplicitlyChosen: Bool
     @Published public var selectedVaultPath: String? {
         didSet {
             guard selectedVaultPath != oldValue else { return }
+            selectedVaultWasExplicitlyChosen = selectedVaultPath != nil
             persist()
         }
     }
@@ -35,6 +38,7 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
     ) {
         self.defaults = defaults
         self.homeDirectoryPath = Self.normalizedPath(homeDirectoryPath)
+        self.selectedVaultWasExplicitlyChosen = false
 
         let resolvedPaths = vaultPaths ?? Self.loadVaultPaths(
             defaults: defaults,
@@ -42,8 +46,10 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
         )
         self.vaults = Self.makeVaults(paths: resolvedPaths)
 
-        let restoredSelectedPath = selectedVaultPath
-            ?? defaults.string(forKey: Self.selectedVaultPathDefaultsKey)
+        let providedSelectedPath = selectedVaultPath.map(Self.normalizedPath)
+        let storedSelectedPath = defaults.string(forKey: Self.selectedVaultPathDefaultsKey).map(Self.normalizedPath)
+        let storedExplicitSelection = defaults.object(forKey: Self.selectedVaultExplicitDefaultsKey) as? Bool
+        let restoredSelectedPath = providedSelectedPath ?? storedSelectedPath
         let normalizedSelectedPath = restoredSelectedPath.map(Self.normalizedPath)
         if let normalizedSelectedPath,
            Self.isDirectory(normalizedSelectedPath) {
@@ -52,15 +58,25 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
                 self.vaults.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             }
             self.selectedVaultPath = normalizedSelectedPath
+            self.selectedVaultWasExplicitlyChosen = Self.resolveExplicitSelection(
+                providedSelectedPath: providedSelectedPath,
+                storedSelectedPath: storedSelectedPath,
+                storedExplicitSelection: storedExplicitSelection,
+                homeDirectoryPath: self.homeDirectoryPath
+            )
         } else if let homeDefaultPath = Self.homeDefaultVaultPath(homeDirectoryPath: self.homeDirectoryPath),
                   self.vaults.contains(where: { $0.path == homeDefaultPath }) {
             self.selectedVaultPath = homeDefaultPath
+            self.selectedVaultWasExplicitlyChosen = false
         } else {
             self.selectedVaultPath = self.vaults.first?.path
+            self.selectedVaultWasExplicitlyChosen = false
         }
+        persist()
     }
 
     public func selectVault(_ vault: VerticalTabsSidebarVault) {
+        selectedVaultWasExplicitlyChosen = true
         selectedVaultPath = vault.path
     }
 
@@ -71,6 +87,7 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
             vaults.append(Self.makeVault(path: path))
             vaults.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
+        selectedVaultWasExplicitlyChosen = true
         selectedVaultPath = path
         persist()
     }
@@ -82,6 +99,7 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
         } else {
             defaults.removeObject(forKey: Self.selectedVaultPathDefaultsKey)
         }
+        defaults.set(selectedVaultWasExplicitlyChosen, forKey: Self.selectedVaultExplicitDefaultsKey)
     }
 
     private static func loadVaultPaths(
@@ -110,6 +128,24 @@ public final class VerticalTabsSidebarVaultState: ObservableObject {
         let normalized = normalizedPath(homeDirectoryPath)
         guard !normalized.isEmpty, isDirectory(normalized) else { return nil }
         return normalized
+    }
+
+    private static func resolveExplicitSelection(
+        providedSelectedPath: String?,
+        storedSelectedPath: String?,
+        storedExplicitSelection: Bool?,
+        homeDirectoryPath: String
+    ) -> Bool {
+        if providedSelectedPath != nil {
+            return true
+        }
+        if let storedExplicitSelection {
+            return storedExplicitSelection
+        }
+        guard let storedSelectedPath else {
+            return false
+        }
+        return normalizedPath(storedSelectedPath) != normalizedPath(homeDirectoryPath)
     }
 
     private static func makeVaults(paths: [String]) -> [VerticalTabsSidebarVault] {

@@ -1053,9 +1053,10 @@ public struct MarkdownChatPill: View {
         .padding(.vertical, 4)
         .background(MarkdownPillPalette.accent.opacity(0.10))
         .overlay(
-            Capsule().stroke(MarkdownPillPalette.accent.opacity(0.25), lineWidth: 1)
+            RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous)
+                .stroke(MarkdownPillPalette.accent.opacity(0.25), lineWidth: 1)
         )
-        .clipShape(Capsule())
+        .clipShape(RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous))
         .fixedSize(horizontal: false, vertical: true)
     }
 

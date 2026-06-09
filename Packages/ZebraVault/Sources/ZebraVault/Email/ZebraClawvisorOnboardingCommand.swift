@@ -107,15 +107,17 @@ public enum ZebraClawvisorOnboardingCommand {
     /// onboarding flow here instead of silently falling back to Claude
     /// Code's prompt.
     static func systemPrompt(for agent: ZebraClawvisorAgent) -> String {
+        let language = ZebraOnboardingLanguage.current()
+        let languagePrefix = "\(language.promptPolicy)\n\n\(language.clawvisorFlowPresentationInstruction)"
         switch agent {
         case .claudeCode:
-            return claudeCodeSystemPrompt
+            return "\(languagePrefix)\n\n\(claudeCodeSystemPrompt)"
         case .claudeDesktop, .openClawHermes, .otherAgents:
             // Unreachable in practice — caller-side guard blocks these. If we
             // ever land here it means a non-available agent slipped past the
             // guard; log and return the Claude Code prompt as a safe fallback.
             assertionFailure("systemPrompt called for unwired agent: \(agent.rawValue)")
-            return claudeCodeSystemPrompt
+            return "\(languagePrefix)\n\n\(claudeCodeSystemPrompt)"
         }
     }
 
@@ -292,7 +294,7 @@ Style:
   • After the user answers, don't re-explain steps the user has already
     finished.
   • After the first response, use one short paragraph + a single question
-    per turn. Korean is fine; the user's UI is Korean.
+    per turn. Follow the language policy above for user-facing prose.
   • Never fabricate URLs, agent install commands, slash command
     names, or `user_id` values. The `curl` line in step 3 carries
     a personalized `user_id` — only the user can read it off their

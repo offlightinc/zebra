@@ -9,7 +9,8 @@ public enum ZebraAgentOnboardingScriptCommand {
     public static func shellStartupLine(
         command: Command,
         cwd: String,
-        agent: ZebraAgentKind? = nil
+        agent: ZebraAgentKind? = nil,
+        languageCode: String? = nil
     ) -> String? {
         guard let scriptURL = Bundle.main.url(
             forResource: "zebra-agent-onboarding",
@@ -29,6 +30,10 @@ public enum ZebraAgentOnboardingScriptCommand {
         if let agent {
             arguments += ["--agent", agent.rawValue]
         }
+        let resolvedLanguageCode = languageCode
+            .flatMap(ZebraOnboardingLanguage.resolve(_:))?
+            .code ?? ZebraOnboardingLanguage.current().code
+        arguments += ["--language", resolvedLanguageCode]
         return arguments.map(ZebraAgentLaunchCommand.shellQuote).joined(separator: " ") + "\r"
     }
 }

@@ -15,9 +15,139 @@ import ZebraVault
 
 extension MarkdownPanel: ZebraMarkdownPanelModel {}
 
+enum ZebraTerminalStartupLineEvent: Equatable {
+    case text(String)
+    case input(String)
+}
+
+enum ZebraTerminalStartupLinePlan {
+    static func events(for startupLine: String) -> [ZebraTerminalStartupLineEvent] {
+        let lineEnding: String
+        let commandText: String
+        if startupLine.hasSuffix("\r\n") {
+            lineEnding = "\r"
+            commandText = String(startupLine.dropLast())
+        } else if startupLine.hasSuffix("\r") || startupLine.hasSuffix("\n") {
+            lineEnding = "\r"
+            commandText = String(startupLine.dropLast())
+        } else {
+            lineEnding = ""
+            commandText = startupLine
+        }
+
+        var events: [ZebraTerminalStartupLineEvent] = []
+        if !commandText.isEmpty {
+            events.append(.text(commandText))
+        }
+        if !lineEnding.isEmpty {
+            events.append(.input(lineEnding))
+        }
+        return events
+    }
+}
+
 extension TerminalPanel: ZebraTerminalPanel {
     var isSurfaceReady: Bool {
         surface.surface != nil
+    }
+
+    func zebraSendStartupLine(_ startupLine: String) {
+        // Long commands overflow the kernel PTY input queue (TTYHOG = 1024 bytes)
+        // while the shell is still starting up and not yet draining input, which
+        // truncates the command mid-line. Stage long commands into a temp script
+        // and inject only a short `source '<path>'` line.
+        let injectedLine = ZebraTerminalStartupStaging.stage(startupLine: startupLine)
+        let events = ZebraTerminalStartupLinePlan.events(for: injectedLine)
+        #if DEBUG
+        let eventSummary = events.map { event -> String in
+            switch event {
+            case .text(let text):
+                return "text:\(text.utf8.count)"
+            case .input(let input):
+                return "input:\(input.utf8.count)"
+            }
+        }.joined(separator: ",")
+        cmuxDebugLog(
+            "zebra.startup.send panel=\(id.uuidString.prefix(5)) " +
+            "ready=\(isSurfaceReady ? 1 : 0) bytes=\(startupLine.utf8.count) " +
+            "staged=\(injectedLine.utf8.count != startupLine.utf8.count ? 1 : 0) " +
+            "injectedBytes=\(injectedLine.utf8.count) events=\(eventSummary)"
+        )
+        #endif
+        for event in events {
+            switch event {
+            case .text(let text):
+                sendText(text)
+            case .input(let input):
+                sendInput(input)
+            }
+        }
+    }
+
+    func zebraSendStartupLineWhenReady(_ startupLine: String) {
+        #if DEBUG
+        cmuxDebugLog(
+            "zebra.startup.wait panel=\(id.uuidString.prefix(5)) " +
+            "ready=\(isSurfaceReady ? 1 : 0) bytes=\(startupLine.utf8.count)"
+        )
+        #endif
+        let runSequence = { [weak self] in
+            self?.zebraSendStartupLine(startupLine)
+        }
+
+        if isSurfaceReady {
+            #if DEBUG
+            cmuxDebugLog(
+                "zebra.startup.wait.immediate panel=\(id.uuidString.prefix(5))"
+            )
+            #endif
+            runSequence()
+            return
+        }
+
+        var resolved = false
+        var observer: NSObjectProtocol?
+        let cleanup = {
+            if let observer {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        }
+
+        observer = NotificationCenter.default.addObserver(
+            forName: .terminalSurfaceDidBecomeReady,
+            object: surface,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self,
+                  !resolved,
+                  self.isSurfaceReady else { return }
+            resolved = true
+            cleanup()
+            #if DEBUG
+            cmuxDebugLog(
+                "zebra.startup.wait.ready panel=\(self.id.uuidString.prefix(5))"
+            )
+            #endif
+            runSequence()
+        }
+
+        #if DEBUG
+        cmuxDebugLog(
+            "zebra.startup.wait.requestStart panel=\(id.uuidString.prefix(5))"
+        )
+        #endif
+        surface.requestBackgroundSurfaceStartIfNeeded()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, !resolved else { return }
+            resolved = true
+            cleanup()
+            #if DEBUG
+            cmuxDebugLog(
+                "zebra.agentTerminal.startup.timeout panel=\(self.id.uuidString.prefix(5))"
+            )
+            #endif
+        }
     }
 }
 
@@ -839,45 +969,13 @@ private extension Workspace {
     }
 
     func sendStartupSequence(_ startupLine: String, to terminalPanel: TerminalPanel) {
-        let runSequence = {
-            terminalPanel.sendInput(startupLine)
-        }
-
-        if terminalPanel.isSurfaceReady {
-            runSequence()
-            return
-        }
-
-        var resolved = false
-        var observer: NSObjectProtocol?
-        let cleanup = {
-            if let observer {
-                NotificationCenter.default.removeObserver(observer)
-            }
-        }
-
-        observer = NotificationCenter.default.addObserver(
-            forName: .terminalSurfaceDidBecomeReady,
-            object: nil,
-            queue: .main
-        ) { _ in
-            guard !resolved,
-                  terminalPanel.isSurfaceReady else { return }
-            resolved = true
-            cleanup()
-            runSequence()
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
-            guard !resolved else { return }
-            resolved = true
-            cleanup()
-            #if DEBUG
-            cmuxDebugLog(
-                "zebra.agentTerminal.startup.timeout panel=\(terminalPanel.id.uuidString.prefix(5))"
-            )
-            #endif
-        }
+        #if DEBUG
+        cmuxDebugLog(
+            "zebra.agentTerminal.startup.sequence panel=\(terminalPanel.id.uuidString.prefix(5)) " +
+            "bytes=\(startupLine.utf8.count)"
+        )
+        #endif
+        terminalPanel.zebraSendStartupLineWhenReady(startupLine)
     }
 }
 
