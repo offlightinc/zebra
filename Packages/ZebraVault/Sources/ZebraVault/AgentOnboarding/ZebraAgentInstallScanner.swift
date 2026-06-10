@@ -3,6 +3,7 @@ import Foundation
 public struct ZebraAgentScanEnvironment: Sendable {
     public let homeDirectoryPath: String
     public let searchPath: String?
+    public let codexInstallDirectoryPath: String?
     public let fileExistsAtPath: @Sendable (String) -> Bool
     public let isExecutableFileAtPath: @Sendable (String) -> Bool
     public let applicationPathForName: @Sendable (String) -> String?
@@ -12,6 +13,7 @@ public struct ZebraAgentScanEnvironment: Sendable {
     public init(
         homeDirectoryPath: String,
         searchPath: String?,
+        codexInstallDirectoryPath: String? = nil,
         fileExistsAtPath: @escaping @Sendable (String) -> Bool,
         isExecutableFileAtPath: @escaping @Sendable (String) -> Bool,
         applicationPathForName: @escaping @Sendable (String) -> String?,
@@ -20,6 +22,7 @@ public struct ZebraAgentScanEnvironment: Sendable {
     ) {
         self.homeDirectoryPath = homeDirectoryPath
         self.searchPath = searchPath
+        self.codexInstallDirectoryPath = codexInstallDirectoryPath
         self.fileExistsAtPath = fileExistsAtPath
         self.isExecutableFileAtPath = isExecutableFileAtPath
         self.applicationPathForName = applicationPathForName
@@ -30,6 +33,7 @@ public struct ZebraAgentScanEnvironment: Sendable {
     public static let live = ZebraAgentScanEnvironment(
         homeDirectoryPath: FileManager.default.homeDirectoryForCurrentUser.path,
         searchPath: ProcessInfo.processInfo.environment["PATH"],
+        codexInstallDirectoryPath: ProcessInfo.processInfo.environment["CODEX_INSTALL_DIR"],
         fileExistsAtPath: { FileManager.default.fileExists(atPath: $0) },
         isExecutableFileAtPath: { FileManager.default.isExecutableFile(atPath: $0) },
         applicationPathForName: { _ in nil },
@@ -129,6 +133,15 @@ public struct ZebraAgentInstallScanner {
 
     private func executableCandidates(for kind: ZebraAgentKind) -> [String] {
         var candidates = kind.executablePathCandidates(homeDirectoryPath: environment.homeDirectoryPath)
+        if kind == .codex,
+           let codexInstallDirectoryPath = nonEmpty(environment.codexInstallDirectoryPath) {
+            candidates.insert(
+                URL(fileURLWithPath: codexInstallDirectoryPath, isDirectory: true)
+                    .appendingPathComponent(kind.binaryName)
+                    .path,
+                at: 0
+            )
+        }
 
         let pathEntries = environment.searchPath?
             .split(separator: ":")
@@ -186,6 +199,11 @@ public struct ZebraAgentInstallScanner {
 
     private func standardizedPath(_ path: String) -> String {
         (path as NSString).standardizingPath
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     public static func runVersionCommand(

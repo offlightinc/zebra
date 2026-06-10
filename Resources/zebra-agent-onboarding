@@ -22,6 +22,7 @@ STATUS_PROBE_TIMEOUT_SECONDS="${ZEBRA_AGENT_STATUS_TIMEOUT_SECONDS:-8}"
 READINESS_POLL_INTERVAL_SECONDS="${ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS:-3}"
 ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS="${ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS:-15}"
 ONBOARDING_LANGUAGE="${ZEBRA_ONBOARDING_LANGUAGE:-}"
+CODEX_INSTALL_BIN_DIR="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
 case "$STATUS_PROBE_TIMEOUT_SECONDS" in
   ''|*[!0-9]*) STATUS_PROBE_TIMEOUT_SECONDS=8 ;;
 esac
@@ -38,9 +39,9 @@ esac
 # Zebra is often launched outside the user's login shell. Include common CLI
 # install locations before scanning or launching provider tools.
 if [[ "$INCLUDE_GLOBAL_AGENT_PATHS" == "0" ]]; then
-  export PATH="$HOME/.local/bin:$PATH"
+  export PATH="$CODEX_INSTALL_BIN_DIR:$HOME/.local/bin:$PATH"
 else
-  export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+  export PATH="$CODEX_INSTALL_BIN_DIR:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 fi
 
 RUN_ID=""
@@ -445,6 +446,18 @@ installer_command() {
   esac
 }
 
+install_not_found_message() {
+  local agent="$1"
+  case "$agent" in
+    codex)
+      printf 'Installer completed, but codex was not found at %s or fallback paths.' "$CODEX_INSTALL_BIN_DIR/codex"
+      ;;
+    *)
+      printf 'Installer completed, but %s was not found on PATH or known install paths.' "$(binary_name "$agent")"
+      ;;
+  esac
+}
+
 mkdirs() {
   mkdir -p "$ONBOARDING_DIR" "$AGENT_DIR"
 }
@@ -656,6 +669,14 @@ candidate_path_options() {
   CANDIDATE_PATH_OPTIONS=()
   case "$agent" in
     antigravity)
+      CANDIDATE_PATH_OPTIONS+=("$HOME/.local/bin/$binary")
+      if [[ "$INCLUDE_GLOBAL_AGENT_PATHS" != "0" ]]; then
+        CANDIDATE_PATH_OPTIONS+=("/opt/homebrew/bin/$binary")
+        CANDIDATE_PATH_OPTIONS+=("/usr/local/bin/$binary")
+      fi
+      ;;
+    codex)
+      CANDIDATE_PATH_OPTIONS+=("$CODEX_INSTALL_BIN_DIR/$binary")
       CANDIDATE_PATH_OPTIONS+=("$HOME/.local/bin/$binary")
       if [[ "$INCLUDE_GLOBAL_AGENT_PATHS" != "0" ]]; then
         CANDIDATE_PATH_OPTIONS+=("/opt/homebrew/bin/$binary")
@@ -1314,7 +1335,7 @@ install_then_launch() {
         select_and_launch "$agent" post_install
         return
       fi
-      set_state_error install_failed "$agent" "Installer completed, but $(binary_name "$agent") was not found on PATH or known install paths." true
+      set_state_error install_failed "$agent" "$(install_not_found_message "$agent")" true
       write_state failed "$agent"
     elif [[ "$INSTALL_RESULT" == "declined" ]]; then
       msg install_not_run

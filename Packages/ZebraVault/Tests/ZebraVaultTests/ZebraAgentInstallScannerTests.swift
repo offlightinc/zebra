@@ -36,6 +36,37 @@ final class ZebraAgentInstallScannerTests: XCTestCase {
         XCTAssertTrue(codex.terminalLaunchable)
     }
 
+    func testCodexStandalonePathIsPreferredOverHomebrewCandidate() throws {
+        let standalonePath = "/Users/test/.local/bin/codex"
+        let homebrewPath = "/opt/homebrew/bin/codex"
+        let scanner = ZebraAgentInstallScanner(
+            environment: makeEnvironment(
+                executablePaths: [standalonePath, homebrewPath]
+            )
+        )
+
+        let codex = try XCTUnwrap(scanner.scan().first { $0.id == .codex })
+
+        XCTAssertEqual(codex.installState, .installed)
+        XCTAssertEqual(codex.executablePath, standalonePath)
+    }
+
+    func testCodexInstallDirectoryIsPreferredOverKnownCandidates() throws {
+        let customPath = "/Users/test/tools/bin/codex"
+        let standalonePath = "/Users/test/.local/bin/codex"
+        let scanner = ZebraAgentInstallScanner(
+            environment: makeEnvironment(
+                codexInstallDirectoryPath: "/Users/test/tools/bin",
+                executablePaths: [customPath, standalonePath]
+            )
+        )
+
+        let codex = try XCTUnwrap(scanner.scan().first { $0.id == .codex })
+
+        XCTAssertEqual(codex.installState, .installed)
+        XCTAssertEqual(codex.executablePath, customPath)
+    }
+
     func testGeminiBinaryIsIgnoredForOnboardingCandidates() {
         let scanner = ZebraAgentInstallScanner(
             environment: makeEnvironment(
@@ -88,6 +119,7 @@ final class ZebraAgentInstallScannerTests: XCTestCase {
     private func makeEnvironment(
         homeDirectoryPath: String = "/Users/test",
         searchPath: String = "/opt/homebrew/bin:/usr/local/bin:/Users/test/.local/bin",
+        codexInstallDirectoryPath: String? = nil,
         filePaths: Set<String> = [],
         executablePaths: Set<String> = [],
         filePrefixes: [String: String] = [:],
@@ -96,6 +128,7 @@ final class ZebraAgentInstallScannerTests: XCTestCase {
         ZebraAgentScanEnvironment(
             homeDirectoryPath: homeDirectoryPath,
             searchPath: searchPath,
+            codexInstallDirectoryPath: codexInstallDirectoryPath,
             fileExistsAtPath: { filePaths.contains($0) || executablePaths.contains($0) },
             isExecutableFileAtPath: { executablePaths.contains($0) },
             applicationPathForName: { _ in nil },

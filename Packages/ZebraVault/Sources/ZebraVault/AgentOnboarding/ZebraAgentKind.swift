@@ -44,11 +44,17 @@ public enum ZebraAgentKind: String, CaseIterable, Codable, Identifiable, Sendabl
     func executablePathCandidates(homeDirectoryPath: String) -> [String] {
         let localBin = "\(homeDirectoryPath)/.local/bin/\(binaryName)"
         switch self {
-        case .claude, .codex:
+        case .claude:
             return [
                 "/opt/homebrew/bin/\(binaryName)",
                 "/usr/local/bin/\(binaryName)",
                 localBin,
+            ]
+        case .codex:
+            return [
+                localBin,
+                "/opt/homebrew/bin/\(binaryName)",
+                "/usr/local/bin/\(binaryName)",
             ]
         case .antigravity:
             return [
