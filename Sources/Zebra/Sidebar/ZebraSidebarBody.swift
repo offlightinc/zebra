@@ -24,6 +24,8 @@ struct ZebraSidebarBody: View {
     @EnvironmentObject var brainSyncService: BrainSyncService
     @EnvironmentObject var onboardingChecklistStore: ZebraOnboardingChecklistStore
     @Environment(\.zebra) private var zebra
+    @State private var observedOnboardingCompletedStepIDs: Set<ZebraOnboardingChecklistStepID>?
+    @State private var pendingGBrainRuntimeStartAfterAgentLaunch = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -66,9 +68,15 @@ struct ZebraSidebarBody: View {
         .onAppear {
             onboardingChecklistStore.activateCompletionWatching()
             refreshOnboardingChecklist()
+            observedOnboardingCompletedStepIDs = onboardingChecklistStore.completedStepIDs
         }
         .onDisappear {
             onboardingChecklistStore.deactivateCompletionWatching()
+            observedOnboardingCompletedStepIDs = nil
+            pendingGBrainRuntimeStartAfterAgentLaunch = false
+        }
+        .onChange(of: onboardingChecklistStore.completedStepIDs) { completedStepIDs in
+            handleOnboardingCompletionChange(completedStepIDs)
         }
         .onChange(of: vaultState.selectedVaultPath) { _ in
             refreshOnboardingChecklist()
@@ -241,7 +249,15 @@ struct ZebraSidebarBody: View {
             for: stepID,
             selectedVaultPath: onboardingSelectedVaultPath
         ) else { return }
-        onboardingChecklistStore.beginLaunch(stepID: stepID)
+        var launchBegan = false
+        func beginLaunchIfNeeded() {
+            guard !launchBegan else { return }
+            launchBegan = true
+            onboardingChecklistStore.beginLaunch(stepID: stepID)
+            if stepID == .agent {
+                pendingGBrainRuntimeStartAfterAgentLaunch = true
+            }
+        }
         let agent = onboardingChecklistAgent(for: stepID)
         #if DEBUG
         cmuxDebugLog(
@@ -252,16 +268,19 @@ struct ZebraSidebarBody: View {
         if let agent {
             guard let agentTerminals = zebra?.agentTerminals else { return }
             let source = ZebraAgentTerminalSource.onboardingChecklist(stepID)
-            if stepID == .agent,
-               sendAgentOnboardingToInitialTerminalIfAvailable(
-                   startupLine,
-                   in: workspace,
-                   source: source,
-                   agent: agent,
-                   markedBy: agentTerminals
-               ) {
-                return
+            if stepID == .agent {
+                beginLaunchIfNeeded()
+                if sendAgentOnboardingToInitialTerminalIfAvailable(
+                    startupLine,
+                    in: workspace,
+                    source: source,
+                    agent: agent,
+                    markedBy: agentTerminals
+                ) {
+                    return
+                }
             }
+            beginLaunchIfNeeded()
             workspace.openZebraAgentTerminal(
                 startupLine: startupLine,
                 source: source,
@@ -277,8 +296,33 @@ struct ZebraSidebarBody: View {
             "bytes=\(startupLine.utf8.count)"
         )
         #endif
+        beginLaunchIfNeeded()
         workspace.newTerminalSurfaceInFocusedPane(focus: true)?
             .zebraSendStartupLineWhenReady(startupLine)
+    }
+
+    private func handleOnboardingCompletionChange(
+        _ completedStepIDs: Set<ZebraOnboardingChecklistStepID>
+    ) {
+        guard let previousCompletedStepIDs = observedOnboardingCompletedStepIDs else {
+            observedOnboardingCompletedStepIDs = completedStepIDs
+            return
+        }
+        observedOnboardingCompletedStepIDs = completedStepIDs
+        guard let nextStep = ZebraOnboardingChecklistStore.automaticStepToStart(
+            previousCompletedStepIDs: previousCompletedStepIDs,
+            currentCompletedStepIDs: completedStepIDs,
+            didStartAgentStepInCurrentSession: pendingGBrainRuntimeStartAfterAgentLaunch
+        ) else {
+            if pendingGBrainRuntimeStartAfterAgentLaunch,
+               !previousCompletedStepIDs.contains(.agent),
+               completedStepIDs.contains(.agent) {
+                pendingGBrainRuntimeStartAfterAgentLaunch = false
+            }
+            return
+        }
+        pendingGBrainRuntimeStartAfterAgentLaunch = false
+        startOnboardingChecklistStep(nextStep)
     }
 
     private func startOnboardingChecklistEmailStep(in workspace: Workspace) {
@@ -349,11 +393,11 @@ struct ZebraSidebarBody: View {
 
     private func onboardingChecklistAgent(for stepID: ZebraOnboardingChecklistStepID) -> MarkdownPillAgent? {
         switch stepID {
-        case .agent, .adapter, .ingest, .goals:
+        case .agent, .gbrainRuntime, .adapter, .ingest, .goals:
             return MarkdownPillAgent.defaultAgent()
         case .email:
             return MarkdownPillAgent.defaultAgent()
-        case .gbrainRuntime, .gbrain:
+        case .gbrain:
             return nil
         }
     }

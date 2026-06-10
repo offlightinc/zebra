@@ -83,6 +83,54 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(line.contains("\r\r"))
     }
 
+    func testGBrainCodexSetupPersistsAutoReviewConfigAndProjectTrust() throws {
+        let cwd = try makeTemporaryDirectory()
+        let configURL = try makeTemporaryDirectory()
+            .appendingPathComponent("config.toml", isDirectory: false)
+
+        XCTAssertTrue(MarkdownChatPillCommand.prepareCodexGBrainSetupConfig(
+            cwd: cwd.path,
+            configURL: configURL
+        ))
+        XCTAssertTrue(MarkdownChatPillCommand.prepareCodexGBrainSetupConfig(
+            cwd: cwd.path,
+            configURL: configURL
+        ))
+
+        let raw = try String(contentsOf: configURL, encoding: .utf8)
+        let section = "[projects.\"\(cwd.path)\"]"
+        XCTAssertEqual(raw.components(separatedBy: "approvals_reviewer = \"auto_review\"").count - 1, 1)
+        XCTAssertEqual(raw.components(separatedBy: section).count - 1, 1)
+        XCTAssertTrue(raw.contains("trust_level = \"trusted\""))
+        XCTAssertFalse(raw.contains("dangerously-bypass"))
+    }
+
+    func testGBrainCodexSetupReplacesExistingAutoReviewAndUntrustedProject() throws {
+        let cwd = try makeTemporaryDirectory()
+        let configURL = try makeTemporaryDirectory()
+            .appendingPathComponent("config.toml", isDirectory: false)
+        try """
+        model = "gpt-5"
+        approvals_reviewer = "manual"
+
+        [projects.\"\(cwd.path)\"]
+        trust_level = "untrusted"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        XCTAssertTrue(MarkdownChatPillCommand.prepareCodexGBrainSetupConfig(
+            cwd: cwd.path,
+            configURL: configURL
+        ))
+
+        let raw = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(raw.contains("model = \"gpt-5\""))
+        XCTAssertTrue(raw.contains("approvals_reviewer = \"auto_review\""))
+        XCTAssertTrue(raw.contains("[projects.\"\(cwd.path)\"]"))
+        XCTAssertTrue(raw.contains("trust_level = \"trusted\""))
+        XCTAssertFalse(raw.contains("approvals_reviewer = \"manual\""))
+        XCTAssertFalse(raw.contains("trust_level = \"untrusted\""))
+    }
+
     func testGBrainCodexLaunchWithoutSelectedVaultDisablesTrustedAutomation() throws {
         let cwd = try makeTemporaryDirectory()
 

@@ -174,6 +174,20 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         completedCount < totalCount
     }
 
+    public static func automaticStepToStart(
+        previousCompletedStepIDs previous: Set<ZebraOnboardingChecklistStepID>,
+        currentCompletedStepIDs current: Set<ZebraOnboardingChecklistStepID>,
+        didStartAgentStepInCurrentSession: Bool
+    ) -> ZebraOnboardingChecklistStepID? {
+        guard didStartAgentStepInCurrentSession,
+              !previous.contains(.agent),
+              current.contains(.agent),
+              !current.contains(.gbrainRuntime) else {
+            return nil
+        }
+        return .gbrainRuntime
+    }
+
     public func prefetchGBrainDocsIfNeeded() {
         didStartGBrainDocsPrefetch = true
     }
@@ -673,7 +687,15 @@ public enum ZebraOnboardingChecklistCommand {
                 languageCode: language.code
             )
         case .gbrainRuntime:
-            return ZebraGBrainRuntimeOnboardingStore().prepareLaunch()?.startupLine
+            guard let launch = ZebraGBrainRuntimeOnboardingStore().prepareLaunch() else {
+                return nil
+            }
+            return agentStartupLine(
+                cwd: launch.launchDirectory,
+                prompt: launch.startupPrompt,
+                shellEnvironmentPrefix: launch.shellEnvironmentPrefix,
+                useGBrainSetupLaunch: true
+            )
         case .gbrain:
             guard let runtime = ZebraGBrainRuntimeOnboardingStore().selectedRuntimeForGBrainSetup() else {
                 return nil
@@ -762,7 +784,8 @@ public enum ZebraOnboardingChecklistCommand {
         cwd: String,
         prompt: String,
         agent: MarkdownPillAgent = MarkdownPillAgent.defaultAgent(),
-        shellEnvironmentPrefix: String = ""
+        shellEnvironmentPrefix: String = "",
+        useGBrainSetupLaunch: Bool = false
     ) -> String {
         let localizedPrompt = "\(ZebraOnboardingLanguage.current().promptPolicy)\n\n\(prompt)"
         _ = MarkdownChatPillCommand.prepareLaunchEnvironment(
@@ -770,13 +793,28 @@ public enum ZebraOnboardingChecklistCommand {
             markdownFilePath: nil,
             launchDirectory: cwd
         )
-        let startupLine = MarkdownChatPillCommand.shellStartupLine(
-            agent: agent,
-            markdownFilePath: nil,
-            surface: .fallback(typeLabel: "onboarding"),
-            userPrompt: localizedPrompt,
-            launchDirectory: cwd
-        )
+        if useGBrainSetupLaunch, agent == .codex {
+            _ = MarkdownChatPillCommand.prepareCodexGBrainSetupConfig(cwd: cwd)
+        }
+        let startupLine: String
+        if useGBrainSetupLaunch {
+            startupLine = MarkdownChatPillCommand.shellStartupLineForGBrainSetup(
+                agent: agent,
+                cwd: cwd,
+                userPrompt: localizedPrompt,
+                allowTrustedAutomation: true,
+                allowLaunchDirectoryTrust: true,
+                allowApprovalAutomation: true
+            )
+        } else {
+            startupLine = MarkdownChatPillCommand.shellStartupLine(
+                agent: agent,
+                markdownFilePath: nil,
+                surface: .fallback(typeLabel: "onboarding"),
+                userPrompt: localizedPrompt,
+                launchDirectory: cwd
+            )
+        }
         if shellEnvironmentPrefix.isEmpty {
             return startupLine
         }

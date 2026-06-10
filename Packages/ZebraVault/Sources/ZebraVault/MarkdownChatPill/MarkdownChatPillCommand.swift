@@ -248,6 +248,44 @@ public enum MarkdownChatPillCommand {
         return "\(invocation(agent: agent, cwdShellExpression: cwdShellExpression, trustCwd: nil, trustEligible: false, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation))\r"
     }
 
+    @discardableResult
+    static func prepareCodexGBrainSetupConfig(
+        cwd: String,
+        configURL: URL = codexConfigURL()
+    ) -> Bool {
+        let trustCwd = codexConfigTrustCwd(cwd)
+        let raw = (try? String(contentsOf: configURL, encoding: .utf8)) ?? ""
+        let updated = upsertingCodexGBrainSetupConfig(in: raw, trustCwd: trustCwd)
+        do {
+            try FileManager.default.createDirectory(
+                at: configURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try updated.write(to: configURL, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    static func upsertingCodexGBrainSetupConfig(
+        in raw: String,
+        trustCwd: String?
+    ) -> String {
+        var updated = upsertingTopLevelStringAssignment(
+            in: raw,
+            key: "approvals_reviewer",
+            value: "auto_review"
+        )
+        if let trustCwd {
+            updated = upsertingCodexProjectTrust(
+                in: updated,
+                sectionHeader: "[projects.\"\(trustCwd)\"]"
+            )
+        }
+        return updated
+    }
+
     public static func worktreeFrontmatterPath(_ markdownContent: String?) -> String? {
         guard let markdownContent,
               let block = FrontmatterUtils.extractFrontmatterBlock(from: markdownContent) else {
@@ -386,6 +424,94 @@ public enum MarkdownChatPillCommand {
 
     private static func standardizedPath(_ path: String) -> String {
         (path as NSString).standardizingPath
+    }
+
+    private static func upsertingTopLevelStringAssignment(
+        in raw: String,
+        key: String,
+        value: String
+    ) -> String {
+        var lines = raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let assignment = "\(key) = \"\(value)\""
+        let firstSectionIndex = lines.firstIndex { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasPrefix("[") && trimmed.hasSuffix("]")
+        } ?? lines.endIndex
+
+        if let existingIndex = lines[..<firstSectionIndex].firstIndex(where: { line in
+            topLevelAssignmentKey(in: line) == key
+        }) {
+            lines[existingIndex] = assignment
+        } else {
+            lines.insert(assignment, at: firstSectionIndex)
+        }
+
+        return ensuringTrailingNewline(lines.joined(separator: "\n"))
+    }
+
+    private static func topLevelAssignmentKey(in line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.hasPrefix("#"),
+              let equalsIndex = trimmed.firstIndex(of: "=") else {
+            return nil
+        }
+        return String(trimmed[..<equalsIndex]).trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func upsertingCodexProjectTrust(
+        in raw: String,
+        sectionHeader: String
+    ) -> String {
+        var lines = raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let sectionIndex = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == sectionHeader }) else {
+            var output = raw
+            if !output.isEmpty, !output.hasSuffix("\n") {
+                output.append("\n")
+            }
+            if !output.isEmpty {
+                output.append("\n")
+            }
+            output.append("\(sectionHeader)\ntrust_level = \"trusted\"\n")
+            return output
+        }
+
+        let sectionEnd = lines[(sectionIndex + 1)...].firstIndex { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasPrefix("[") && trimmed.hasSuffix("]")
+        } ?? lines.endIndex
+
+        if let trustLineIndex = lines[(sectionIndex + 1)..<sectionEnd].firstIndex(where: { line in
+            topLevelAssignmentKey(in: line) == "trust_level"
+        }) {
+            lines[trustLineIndex] = "trust_level = \"trusted\""
+        } else {
+            lines.insert("trust_level = \"trusted\"", at: sectionIndex + 1)
+        }
+
+        return ensuringTrailingNewline(lines.joined(separator: "\n"))
+    }
+
+    private static func ensuringTrailingNewline(_ value: String) -> String {
+        value.hasSuffix("\n") ? value : value + "\n"
+    }
+
+    private static func codexConfigURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex", isDirectory: true)
+            .appendingPathComponent("config.toml", isDirectory: false)
+    }
+
+    private static func codexConfigTrustCwd(_ cwd: String) -> String? {
+        guard let trustCwd = safeTrustCwd(cwd),
+              trustCwd != standardizedPath(NSHomeDirectory()) else {
+            return nil
+        }
+        for scalar in trustCwd.unicodeScalars {
+            if scalar == "\\" {
+                return nil
+            }
+        }
+        return trustCwd
     }
 
     /// 자동 trust 처리를 허용할지 판단. 빈 string / 상대경로 / filesystem root `/` /
