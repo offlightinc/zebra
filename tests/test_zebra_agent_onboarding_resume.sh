@@ -31,6 +31,7 @@ FAKE_RELEASE_FILE=""
 RUN_PID=""
 RUN_OUTPUT_FILE=""
 TEST_ONBOARDING_LANGUAGE="en"
+TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="0"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -79,6 +80,7 @@ setup_case() {
   RUN_PID=""
   RUN_OUTPUT_FILE=""
   TEST_ONBOARDING_LANGUAGE="en"
+  TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="0"
   mkdir -p "$HOME_DIR/.local/bin" "$APP_DIR/onboarding" "$APP_DIR/agent" "$WORK_DIR"
   printf 'export PATH="$HOME/.local/bin:$PATH"\n' > "$HOME_DIR/.bash_profile"
   : > "$FAKE_LOG"
@@ -181,6 +183,238 @@ chmod +x "\$HOME/.local/bin/$binary"
 INSTALL
 FAKE
   chmod +x "$HOME_DIR/.local/bin/curl"
+  cat > "$HOME_DIR/.local/bin/npm" <<'FAKE'
+#!/usr/bin/env bash
+printf 'unexpected npm fallback\n' >&2
+exit 127
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/npm"
+  cat > "$HOME_DIR/.local/bin/brew" <<'FAKE'
+#!/usr/bin/env bash
+printf 'unexpected brew fallback\n' >&2
+exit 127
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/brew"
+}
+
+add_fake_codex_standalone_release_installer() {
+  local binary source release_dir target archive
+  binary="$(fake_agent_binary_name codex)"
+  mkdir -p "$CASE_DIR/install-source" "$CASE_DIR/releases"
+  source="$CASE_DIR/install-source/$binary"
+  write_fake_agent codex "$source"
+  for target in aarch64-apple-darwin x86_64-apple-darwin; do
+    release_dir="$CASE_DIR/releases/$target"
+    mkdir -p "$release_dir"
+    cp "$source" "$release_dir/codex-$target"
+    chmod +x "$release_dir/codex-$target"
+    archive="$CASE_DIR/releases/codex-$target.tar.gz"
+    tar -czf "$archive" -C "$release_dir" "codex-$target"
+  done
+  cat > "$HOME_DIR/.local/bin/curl" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+for arg in "\$@"; do
+  case "\$arg" in
+    https://chatgpt.com/codex/install.sh)
+      printf 'simulated chatgpt installer failure\n' >&2
+      exit 56
+      ;;
+  esac
+done
+output=""
+url=""
+while [[ "\$#" -gt 0 ]]; do
+  case "\$1" in
+    -o)
+      output="\${2:-}"
+      shift 2
+      ;;
+    http*)
+      url="\$1"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+case "\$url" in
+  *codex-aarch64-apple-darwin.tar.gz)
+    cp "$CASE_DIR/releases/codex-aarch64-apple-darwin.tar.gz" "\$output"
+    ;;
+  *codex-x86_64-apple-darwin.tar.gz)
+    cp "$CASE_DIR/releases/codex-x86_64-apple-darwin.tar.gz" "\$output"
+    ;;
+  *)
+    printf 'unexpected curl url: %s\n' "\$url" >&2
+    exit 22
+    ;;
+esac
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/curl"
+}
+
+add_fake_codex_official_and_standalone_installers() {
+  local binary source release_dir target archive
+  binary="$(fake_agent_binary_name codex)"
+  mkdir -p "$CASE_DIR/install-source" "$CASE_DIR/releases"
+  source="$CASE_DIR/install-source/$binary"
+  write_fake_agent codex "$source"
+  for target in aarch64-apple-darwin x86_64-apple-darwin; do
+    release_dir="$CASE_DIR/releases/$target"
+    mkdir -p "$release_dir"
+    cp "$source" "$release_dir/codex-$target"
+    chmod +x "$release_dir/codex-$target"
+    archive="$CASE_DIR/releases/codex-$target.tar.gz"
+    tar -czf "$archive" -C "$release_dir" "codex-$target"
+  done
+  cat > "$HOME_DIR/.local/bin/curl" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "\$*" >> "$CASE_DIR/curl.log"
+for arg in "\$@"; do
+  case "\$arg" in
+    https://chatgpt.com/codex/install.sh)
+      cat <<'INSTALL'
+#!/usr/bin/env sh
+set -eu
+mkdir -p "\$HOME/.local/bin"
+cat > "\$HOME/.local/bin/codex" <<'CODEX'
+#!/usr/bin/env bash
+printf 'official codex should not run\n' >&2
+exit 66
+CODEX
+chmod +x "\$HOME/.local/bin/codex"
+INSTALL
+      exit 0
+      ;;
+  esac
+done
+output=""
+url=""
+while [[ "\$#" -gt 0 ]]; do
+  case "\$1" in
+    -o)
+      output="\${2:-}"
+      shift 2
+      ;;
+    http*)
+      url="\$1"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+case "\$url" in
+  *codex-aarch64-apple-darwin.tar.gz)
+    cp "$CASE_DIR/releases/codex-aarch64-apple-darwin.tar.gz" "\$output"
+    ;;
+  *codex-x86_64-apple-darwin.tar.gz)
+    cp "$CASE_DIR/releases/codex-x86_64-apple-darwin.tar.gz" "\$output"
+    ;;
+  *)
+    printf 'unexpected curl url: %s\n' "\$url" >&2
+    exit 22
+    ;;
+esac
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/curl"
+}
+
+add_fake_codex_official_hidden_and_standalone_installers() {
+  local binary source release_dir target archive
+  binary="$(fake_agent_binary_name codex)"
+  mkdir -p "$CASE_DIR/install-source" "$CASE_DIR/releases"
+  source="$CASE_DIR/install-source/$binary"
+  write_fake_agent codex "$source"
+  for target in aarch64-apple-darwin x86_64-apple-darwin; do
+    release_dir="$CASE_DIR/releases/$target"
+    mkdir -p "$release_dir"
+    cp "$source" "$release_dir/codex-$target"
+    chmod +x "$release_dir/codex-$target"
+    archive="$CASE_DIR/releases/codex-$target.tar.gz"
+    tar -czf "$archive" -C "$release_dir" "codex-$target"
+  done
+  cat > "$HOME_DIR/.local/bin/curl" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "\$*" >> "$CASE_DIR/curl.log"
+for arg in "\$@"; do
+  case "\$arg" in
+    https://chatgpt.com/codex/install.sh)
+      cat <<'INSTALL'
+#!/usr/bin/env sh
+set -eu
+mkdir -p "\$HOME/.codex/bin"
+cp "$source" "\$HOME/.codex/bin/codex"
+chmod +x "\$HOME/.codex/bin/codex"
+INSTALL
+      exit 0
+      ;;
+  esac
+done
+output=""
+url=""
+while [[ "\$#" -gt 0 ]]; do
+  case "\$1" in
+    -o)
+      output="\${2:-}"
+      shift 2
+      ;;
+    http*)
+      url="\$1"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+case "\$url" in
+  *codex-aarch64-apple-darwin.tar.gz)
+    cp "$CASE_DIR/releases/codex-aarch64-apple-darwin.tar.gz" "\$output"
+    ;;
+  *codex-x86_64-apple-darwin.tar.gz)
+    cp "$CASE_DIR/releases/codex-x86_64-apple-darwin.tar.gz" "\$output"
+    ;;
+  *)
+    printf 'unexpected curl url: %s\n' "\$url" >&2
+    exit 22
+    ;;
+esac
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/curl"
+}
+
+add_fake_claude_hidden_installer() {
+  local source
+  mkdir -p "$CASE_DIR/install-source"
+  source="$CASE_DIR/install-source/claude"
+  write_fake_agent claude "$source"
+  cat > "$HOME_DIR/.local/bin/curl" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+for arg in "\$@"; do
+  case "\$arg" in
+    https://claude.ai/install.sh)
+      cat <<'INSTALL'
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p "\$HOME/.claude/local"
+cp "$source" "\$HOME/.claude/local/claude"
+chmod +x "\$HOME/.claude/local/claude"
+INSTALL
+      exit 0
+      ;;
+  esac
+done
+printf 'unexpected curl args: %s\n' "\$*" >&2
+exit 22
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/curl"
 }
 
 set_ready_agents() {
@@ -262,6 +496,7 @@ run_onboarding() {
     ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS=1 \
     ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=1 \
     ZEBRA_ONBOARDING_LANGUAGE="$TEST_ONBOARDING_LANGUAGE" \
+    ZEBRA_AGENT_ONBOARDING_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="$TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE" \
     ZEBRA_FAKE_AGENT_LOG="$FAKE_LOG" \
     ZEBRA_FAKE_READY_AGENTS="$READY_AGENTS" \
     ZEBRA_FAKE_HOLD_FILE="$FAKE_HOLD_FILE" \
@@ -284,6 +519,7 @@ run_onboarding_args() {
     ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS=1 \
     ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=1 \
     ZEBRA_ONBOARDING_LANGUAGE="$TEST_ONBOARDING_LANGUAGE" \
+    ZEBRA_AGENT_ONBOARDING_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="$TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE" \
     ZEBRA_FAKE_AGENT_LOG="$FAKE_LOG" \
     ZEBRA_FAKE_READY_AGENTS="$READY_AGENTS" \
     ZEBRA_FAKE_HOLD_FILE="$FAKE_HOLD_FILE" \
@@ -304,6 +540,7 @@ run_onboarding_async() {
     ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS=1 \
     ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=1 \
     ZEBRA_ONBOARDING_LANGUAGE="$TEST_ONBOARDING_LANGUAGE" \
+    ZEBRA_AGENT_ONBOARDING_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="$TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE" \
     ZEBRA_FAKE_AGENT_LOG="$FAKE_LOG" \
     ZEBRA_FAKE_READY_AGENTS="$READY_AGENTS" \
     ZEBRA_FAKE_HOLD_FILE="$FAKE_HOLD_FILE" \
@@ -399,7 +636,7 @@ test_choose_install_target_resumes_install_menu() {
 
   assert_eq "$RUN_STATUS" "1" "declined install exit status"
   assert_contains "$RUN_OUTPUT" "Resuming Zebra agent onboarding at install selection." "resume message"
-  assert_contains "$RUN_OUTPUT" "Zebra will run the official installer for Antigravity:" "install prompt"
+  assert_contains "$RUN_OUTPUT" "Zebra will run the installer command for Antigravity:" "install prompt"
   assert_not_contains "$RUN_OUTPUT" "Exit for now" "install failure menu does not include exit"
   assert_eq "$(plist_raw "$STATE_FILE" runId)" "run-install" "run id is preserved"
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "choose_install_target" "phase remains install selection"
@@ -415,7 +652,7 @@ test_fresh_choice_lists_missing_agents() {
   assert_contains "$RUN_OUTPUT" "Which agent should Zebra use by default?" "primary prompt"
   assert_contains "$RUN_OUTPUT" "2. Codex [installed]" "installed option"
   assert_contains "$RUN_OUTPUT" "3. Antigravity [not installed]" "missing option"
-  assert_contains "$RUN_OUTPUT" "Zebra will run the official installer for Antigravity:" "missing selection installs"
+  assert_contains "$RUN_OUTPUT" "Zebra will run the installer command for Antigravity:" "missing selection installs"
   assert_not_contains "$RUN_OUTPUT" "Exit for now" "install failure menu does not include exit"
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "choose_primary" "declined install returns to primary choice state"
   assert_eq "$(cat "$FAKE_LOG")" "" "installed agent is not launched when missing agent is selected"
@@ -466,7 +703,7 @@ assert_declined_install_can_choose_another_agent() {
   assert_contains "$RUN_OUTPUT" "Choose another agent for Zebra:" "$failed_agent alternate menu"
   assert_contains "$(cat "$FAKE_LOG")" "$alternate_agent:" "$failed_agent alternate agent launches"
   [[ "$(cat "$FAKE_LOG")" != *"$failed_agent:"* ]] || fail "$failed_agent should not launch when choosing another"
-  [[ "$RUN_OUTPUT" != *"Zebra will run the official installer for $alternate_display:"* ]] || fail "handled alternate selection should not start a second $alternate_agent install flow"
+  [[ "$RUN_OUTPUT" != *"Zebra will run the installer command for $alternate_display:"* ]] || fail "handled alternate selection should not start a second $alternate_agent install flow"
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "$failed_agent alternate agent completes state"
   assert_eq "$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent)" "$alternate_agent" "$failed_agent alternate agent is saved"
 }
@@ -491,7 +728,7 @@ assert_failed_install_resume_can_choose_another_agent() {
   assert_contains "$RUN_OUTPUT" "Choose another agent for Zebra:" "$failed_agent alternate menu"
   assert_contains "$(cat "$FAKE_LOG")" "$alternate_agent:" "$failed_agent alternate agent launches"
   [[ "$(cat "$FAKE_LOG")" != *"$failed_agent:"* ]] || fail "$failed_agent should not launch when resuming and choosing another"
-  [[ "$RUN_OUTPUT" != *"Zebra will run the official installer for $alternate_display:"* ]] || fail "handled alternate selection should not start a second $alternate_agent install flow"
+  [[ "$RUN_OUTPUT" != *"Zebra will run the installer command for $alternate_display:"* ]] || fail "handled alternate selection should not start a second $alternate_agent install flow"
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "$failed_agent alternate agent completes state"
   assert_eq "$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent)" "$alternate_agent" "$failed_agent alternate agent is saved"
 }
@@ -539,6 +776,39 @@ test_claude_status_probe_completes_onboarding() {
   assert_eq "$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent)" "claude" "primary preference is saved after readiness"
 }
 
+test_missing_claude_install_exposes_hidden_binary_to_new_shells() {
+  local primary pid i resolved_claude
+  setup_case claude-hidden-post-install
+  add_fake_claude_hidden_installer
+  set_ready_agents claude
+  hold_fake_agent
+
+  run_onboarding_async $'1\ny\n'
+
+  for i in {1..30}; do
+    primary="$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent 2>/dev/null || true)"
+    [[ "$primary" == "claude" && -f "$FAKE_HOLD_FILE" ]] && break
+    sleep 0.2
+  done
+
+  assert_eq "$primary" "claude" "hidden claude install saves primary before the interactive cli exits"
+  pid="$(cat "$FAKE_HOLD_FILE")"
+  kill -0 "$pid" 2>/dev/null || fail "hidden claude interactive cli should still be running after completion"
+
+  touch "$FAKE_RELEASE_FILE"
+  finish_onboarding_async
+
+  assert_eq "$RUN_STATUS" "0" "hidden claude onboarding status"
+  assert_contains "$RUN_OUTPUT" "Install complete. Re-scanning..." "hidden claude rescan message"
+  assert_contains "$RUN_OUTPUT" "Claude Code found at" "hidden claude is found after exposure"
+  [[ -L "$HOME_DIR/.local/bin/claude" ]] || fail "hidden claude install should be exposed through ~/.local/bin/claude"
+  assert_contains "$RUN_OUTPUT" "Updated shell startup files so claude is available in new terminals." "hidden claude shell path message"
+  assert_contains "$(cat "$FAKE_LOG")" "claude:auth status --json" "hidden claude readiness uses polling status"
+  resolved_claude="$(HOME="$HOME_DIR" PATH="/usr/bin:/bin" /bin/zsh -lc 'command -v claude')"
+  assert_eq "$resolved_claude" "$HOME_DIR/.local/bin/claude" "new zsh login shell can find claude"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "hidden claude state phase is complete"
+}
+
 test_codex_status_probe_completes_onboarding() {
   setup_case codex-ready
   add_fake_agent codex
@@ -581,7 +851,7 @@ test_codex_polling_completes_while_cli_is_still_running() {
 }
 
 test_missing_codex_install_then_polling_completes() {
-  local primary pid i
+  local primary pid i resolved_codex
   setup_case codex-post-install-polling
   add_fake_installer_for_agent codex
   set_ready_agents codex
@@ -605,9 +875,117 @@ test_missing_codex_install_then_polling_completes() {
   assert_eq "$RUN_STATUS" "0" "post-install onboarding status"
   assert_contains "$RUN_OUTPUT" "Install complete. Re-scanning..." "post-install rescan message"
   assert_contains "$RUN_OUTPUT" "Codex found at" "installed codex is found after rescan"
+  assert_contains "$RUN_OUTPUT" "Updated shell startup files so codex is available in new terminals." "post-install shell path message"
   assert_contains "$(cat "$FAKE_LOG")" "codex:login status" "post-install codex readiness uses polling status"
   assert_contains "$(cat "$APP_DIR/onboarding/agent-cli-events.jsonl")" '"event":"install_succeeded"' "install success is recorded"
+  assert_contains "$(cat "$APP_DIR/onboarding/agent-cli-events.jsonl")" '"event":"shell_path_configured"' "shell path setup is recorded"
+  assert_contains "$(cat "$HOME_DIR/.zprofile")" "# >>> Zebra agent CLI PATH >>>" "zprofile contains managed path block"
+  assert_contains "$(cat "$HOME_DIR/.zprofile")" "$HOME_DIR/.local/bin" "zprofile includes installed codex directory"
+  assert_contains "$(cat "$HOME_DIR/.config/fish/conf.d/zebra-agent-path.fish")" "$HOME_DIR/.local/bin" "fish config includes installed codex directory"
+  resolved_codex="$(HOME="$HOME_DIR" PATH="/usr/bin:/bin" /bin/zsh -lc 'command -v codex')"
+  assert_eq "$resolved_codex" "$HOME_DIR/.local/bin/codex" "new zsh login shell can find codex"
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "post-install state phase is complete"
+}
+
+test_missing_codex_install_uses_standalone_when_package_managers_absent() {
+  local primary pid i resolved_codex
+  setup_case codex-standalone-fallback
+  add_fake_codex_standalone_release_installer
+  set_ready_agents codex
+  hold_fake_agent
+
+  run_onboarding_async $'2\ny\n'
+
+  for i in {1..30}; do
+    primary="$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent 2>/dev/null || true)"
+    [[ "$primary" == "codex" && -f "$FAKE_HOLD_FILE" ]] && break
+    sleep 0.2
+  done
+
+  assert_eq "$primary" "codex" "standalone fallback saves primary before the interactive cli exits"
+  pid="$(cat "$FAKE_HOLD_FILE")"
+  kill -0 "$pid" 2>/dev/null || fail "standalone fallback interactive codex should still be running after completion"
+
+  touch "$FAKE_RELEASE_FILE"
+  finish_onboarding_async
+
+  assert_eq "$RUN_STATUS" "0" "standalone fallback onboarding status"
+  assert_contains "$RUN_OUTPUT" "Install complete. Re-scanning..." "standalone fallback rescan message"
+  assert_contains "$RUN_OUTPUT" "Codex found at" "standalone fallback codex is found after rescan"
+  [[ -x "$HOME_DIR/.local/bin/codex" ]] || fail "standalone fallback should install codex to ~/.local/bin"
+  assert_contains "$(cat "$FAKE_LOG")" "codex:login status" "standalone fallback codex readiness uses polling status"
+  resolved_codex="$(HOME="$HOME_DIR" PATH="/usr/bin:/bin" /bin/zsh -lc 'command -v codex')"
+  assert_eq "$resolved_codex" "$HOME_DIR/.local/bin/codex" "new zsh login shell can find standalone codex"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "standalone fallback state phase is complete"
+}
+
+test_codex_forced_official_failure_skips_successful_official_installer() {
+  local primary pid i curl_log
+  setup_case codex-force-official-failure
+  add_fake_codex_official_and_standalone_installers
+  TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="1"
+  set_ready_agents codex
+  hold_fake_agent
+
+  run_onboarding_async $'2\ny\n'
+
+  for i in {1..30}; do
+    primary="$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent 2>/dev/null || true)"
+    [[ "$primary" == "codex" && -f "$FAKE_HOLD_FILE" ]] && break
+    sleep 0.2
+  done
+
+  assert_eq "$primary" "codex" "forced official failure saves primary before the interactive cli exits"
+  pid="$(cat "$FAKE_HOLD_FILE")"
+  kill -0 "$pid" 2>/dev/null || fail "forced official failure interactive codex should still be running after completion"
+
+  touch "$FAKE_RELEASE_FILE"
+  finish_onboarding_async
+
+  assert_eq "$RUN_STATUS" "0" "forced official failure onboarding status"
+  curl_log="$(cat "$CASE_DIR/curl.log")"
+  assert_contains "$RUN_OUTPUT" "Codex official installer did not complete. Trying fallbacks..." "forced official failure explains official fallback"
+  assert_contains "$RUN_OUTPUT" "npm was not found. Skipping npm fallback." "forced official failure explains missing npm"
+  assert_contains "$RUN_OUTPUT" "brew was not found. Skipping Homebrew fallback." "forced official failure explains missing brew"
+  assert_contains "$RUN_OUTPUT" "Installing Codex standalone binary from OpenAI GitHub Release..." "forced official failure explains standalone fallback"
+  assert_contains "$RUN_OUTPUT" "Codex install succeeded via standalone." "forced official failure reports standalone success"
+  assert_not_contains "$curl_log" "https://chatgpt.com/codex/install.sh" "forced official failure skips official installer"
+  assert_contains "$curl_log" "github.com/openai/codex/releases/latest/download/codex-" "forced official failure downloads GitHub release"
+  assert_contains "$(cat "$FAKE_LOG")" "codex:login status" "forced official failure codex readiness uses polling status"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "forced official failure state phase is complete"
+}
+
+test_codex_auto_exposes_hidden_official_install_to_new_shells() {
+  local primary pid i curl_log resolved_codex
+  setup_case codex-hidden-official
+  add_fake_codex_official_hidden_and_standalone_installers
+  set_ready_agents codex
+  hold_fake_agent
+
+  run_onboarding_async $'2\ny\n'
+
+  for i in {1..30}; do
+    primary="$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent 2>/dev/null || true)"
+    [[ "$primary" == "codex" && -f "$FAKE_HOLD_FILE" ]] && break
+    sleep 0.2
+  done
+
+  assert_eq "$primary" "codex" "hidden official install saves primary before the interactive cli exits"
+  pid="$(cat "$FAKE_HOLD_FILE")"
+  kill -0 "$pid" 2>/dev/null || fail "hidden official interactive codex should still be running after completion"
+
+  touch "$FAKE_RELEASE_FILE"
+  finish_onboarding_async
+
+  assert_eq "$RUN_STATUS" "0" "hidden official onboarding status"
+  curl_log="$(cat "$CASE_DIR/curl.log")"
+  assert_contains "$curl_log" "https://chatgpt.com/codex/install.sh" "auto mode tries official installer first"
+  assert_not_contains "$curl_log" "github.com/openai/codex/releases/latest/download/codex-" "visible hidden official install does not need GitHub fallback"
+  [[ -L "$HOME_DIR/.local/bin/codex" ]] || fail "hidden codex install should be exposed through ~/.local/bin/codex"
+  assert_contains "$(cat "$FAKE_LOG")" "codex:login status" "hidden official codex readiness uses polling status"
+  resolved_codex="$(HOME="$HOME_DIR" PATH="/usr/bin:/bin" /bin/zsh -lc 'command -v codex')"
+  assert_eq "$resolved_codex" "$HOME_DIR/.local/bin/codex" "new zsh login shell finds exposed hidden codex"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "hidden official state phase is complete"
 }
 
 test_antigravity_launch_starts_interactive_cli_without_prompt() {
@@ -714,9 +1092,13 @@ test_declined_install_can_choose_another_agent_for_any_agent
 test_failed_install_resume_can_choose_another_agent_for_any_agent
 test_fresh_choice_launches_installed_selection
 test_claude_status_probe_completes_onboarding
+test_missing_claude_install_exposes_hidden_binary_to_new_shells
 test_codex_status_probe_completes_onboarding
 test_codex_polling_completes_while_cli_is_still_running
 test_missing_codex_install_then_polling_completes
+test_missing_codex_install_uses_standalone_when_package_managers_absent
+test_codex_forced_official_failure_skips_successful_official_installer
+test_codex_auto_exposes_hidden_official_install_to_new_shells
 test_antigravity_launch_starts_interactive_cli_without_prompt
 test_antigravity_auth_log_completes_onboarding
 test_antigravity_stale_auth_log_does_not_complete_until_fresh_event
