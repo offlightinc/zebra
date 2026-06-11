@@ -593,6 +593,12 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     6. OpenAI API key 사용
     ```
 
+    Hermes runtime에서만 2번 선택지 label을 다음처럼 바꾼다:
+
+    ```text
+    2. Claude Code 계정으로 로그인 (Claude Max plan + extra usage credits 필수)
+    ```
+
     사용자가 번호로 답하면 agent가 해당 provider id로 `configure-runtime <runtime>
     --provider <provider-id>`를 호출한다.
 
