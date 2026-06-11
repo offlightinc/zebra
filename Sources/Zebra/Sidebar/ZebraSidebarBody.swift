@@ -103,6 +103,9 @@ struct ZebraSidebarBody: View {
             store: onboardingChecklistStore,
             onStartStep: { stepID in
                 startOnboardingChecklistStep(stepID)
+            },
+            onStopStep: { stepID in
+                stopOnboardingChecklistStep(stepID)
             }
         )
         .padding(8)
@@ -245,6 +248,21 @@ struct ZebraSidebarBody: View {
         )
     }
 
+    private func stopOnboardingChecklistStep(_ stepID: ZebraOnboardingChecklistStepID) {
+        guard let workspace = tabManager.selectedWorkspace,
+              let agentTerminals = zebra?.agentTerminals else { return }
+        let targetSource = ZebraAgentTerminalSource.onboardingChecklist(stepID)
+        let terminalPanels = workspace.panels.values.compactMap { $0 as? TerminalPanel }
+        for panel in terminalPanels {
+            guard let reg = agentTerminals.registration(panelId: panel.id),
+                  reg.source == targetSource else { continue }
+            panel.sendInput("\u{03}")
+            panel.surface.forceRefresh(reason: "zebra.onboarding.stop")
+            break
+        }
+        onboardingChecklistStore.cancelRunning(stepID: stepID)
+    }
+
     private func startOnboardingChecklistStep(_ stepID: ZebraOnboardingChecklistStepID) {
         guard onboardingChecklistStore.runningStepID != stepID else { return }
         guard let workspace = tabManager.selectedWorkspace else {
@@ -306,8 +324,17 @@ struct ZebraSidebarBody: View {
         )
         #endif
         beginLaunchIfNeeded()
-        workspace.newTerminalSurfaceInFocusedPane(focus: true)?
-            .zebraSendStartupLineWhenReady(startupLine)
+        if let panel = workspace.newTerminalSurfaceInFocusedPane(focus: true) {
+            if let agentTerminals = zebra?.agentTerminals {
+                agentTerminals.prune(validPanelIds: Set(workspace.panels.keys))
+                agentTerminals.mark(
+                    panelId: panel.id,
+                    source: .onboardingChecklist(stepID),
+                    agent: nil
+                )
+            }
+            panel.zebraSendStartupLineWhenReady(startupLine)
+        }
     }
 
     private func handleOnboardingCompletionChange(
@@ -361,8 +388,17 @@ struct ZebraSidebarBody: View {
             "provider=\(request.provider) bytes=\(request.startupLine.utf8.count)"
         )
         #endif
-        workspace.newTerminalSurfaceInFocusedPane(focus: true)?
-            .zebraSendStartupLineWhenReady(request.startupLine)
+        if let panel = workspace.newTerminalSurfaceInFocusedPane(focus: true) {
+            if let agentTerminals = zebra?.agentTerminals {
+                agentTerminals.prune(validPanelIds: Set(workspace.panels.keys))
+                agentTerminals.mark(
+                    panelId: panel.id,
+                    source: .onboardingChecklist(.gbrainRuntime),
+                    agent: nil
+                )
+            }
+            panel.zebraSendStartupLineWhenReady(request.startupLine)
+        }
     }
 
     private func startOnboardingChecklistEmailStep(in workspace: Workspace) {

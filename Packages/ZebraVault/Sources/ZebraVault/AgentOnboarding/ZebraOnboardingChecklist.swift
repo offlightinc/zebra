@@ -24,6 +24,7 @@ public struct ZebraOnboardingChecklistStepSnapshot: Identifiable, Equatable {
     public let isActive: Bool
     public let isRunning: Bool
     public let showsStart: Bool
+    public let wasStartedBefore: Bool
 }
 
 @MainActor
@@ -36,6 +37,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private struct StepDefinition {
         let id: ZebraOnboardingChecklistStepID
         let number: Int
+        let staleTimeout: TimeInterval
     }
 
 #if os(macOS)
@@ -52,13 +54,13 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 #endif
 
     private static let steps: [StepDefinition] = [
-        StepDefinition(id: .agent, number: 1),
-        StepDefinition(id: .gbrainRuntime, number: 2),
-        StepDefinition(id: .gbrain, number: 3),
-        StepDefinition(id: .adapter, number: 4),
-        StepDefinition(id: .email, number: 5),
-        StepDefinition(id: .ingest, number: 6),
-        StepDefinition(id: .goals, number: 7),
+        StepDefinition(id: .agent,         number: 1, staleTimeout: 5 * 60),
+        StepDefinition(id: .gbrainRuntime, number: 2, staleTimeout: 10 * 60),
+        StepDefinition(id: .gbrain,        number: 3, staleTimeout: 15 * 60),
+        StepDefinition(id: .adapter,       number: 4, staleTimeout: 5 * 60),
+        StepDefinition(id: .email,         number: 5, staleTimeout: 5 * 60),
+        StepDefinition(id: .ingest,        number: 6, staleTimeout: 5 * 60),
+        StepDefinition(id: .goals,         number: 7, staleTimeout: 5 * 60),
     ]
 
     private let fileManager: FileManager
@@ -75,6 +77,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private var selectedVaultPath: String?
     private var emailConnectionRepairState: ZebraEmailConnectionRepairState?
     private var launchGeneration = 0
+    private var startedStepIDs: Set<ZebraOnboardingChecklistStepID> = []
     private var gbrainDocsPrefetchTask: Task<Bool, Never>?
     private var gbrainCompletionRefreshTask: Task<Bool, Never>?
     private var completionRefreshGeneration = 0
@@ -203,7 +206,8 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                 isDevelopmentCompleted: isDevelopmentCompleted(step.id),
                 isActive: firstIncomplete == step.id,
                 isRunning: runningStepID == step.id,
-                showsStart: firstIncomplete == step.id && runningStepID != step.id
+                showsStart: firstIncomplete == step.id && runningStepID != step.id,
+                wasStartedBefore: startedStepIDs.contains(step.id)
             )
         }
     }
@@ -227,11 +231,22 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     public func beginLaunch(stepID: ZebraOnboardingChecklistStepID) {
         activeStepID = stepID
         runningStepID = stepID
+        startedStepIDs.insert(stepID)
+        scheduleStaleTimeout(for: stepID)
+    }
+
+    public func cancelRunning(stepID: ZebraOnboardingChecklistStepID) {
+        guard runningStepID == stepID else { return }
+        launchGeneration += 1
+        runningStepID = nil
+    }
+
+    private func scheduleStaleTimeout(for stepID: ZebraOnboardingChecklistStepID) {
         launchGeneration += 1
         let generation = launchGeneration
-
+        let timeout = Self.steps.first { $0.id == stepID }?.staleTimeout ?? 300
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 120_000_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             await MainActor.run { [weak self] in
                 guard let self,
                       self.launchGeneration == generation,
@@ -555,6 +570,9 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     private func scheduleCompletionRefresh(for stepIDs: Set<ZebraOnboardingChecklistStepID>) {
         guard !stepIDs.isEmpty else { return }
+        if let runningID = runningStepID, stepIDs.contains(runningID) {
+            scheduleStaleTimeout(for: runningID)
+        }
         pendingCompletionRefreshStepIDs.formUnion(stepIDs)
         completionRefreshWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
@@ -872,13 +890,16 @@ public enum ZebraOnboardingChecklistCommand {
 public struct ZebraOnboardingChecklistCard: View {
     @ObservedObject private var store: ZebraOnboardingChecklistStore
     private let onStartStep: (ZebraOnboardingChecklistStepID) -> Void
+    private let onStopStep: ((ZebraOnboardingChecklistStepID) -> Void)?
 
     public init(
         store: ZebraOnboardingChecklistStore,
-        onStartStep: @escaping (ZebraOnboardingChecklistStepID) -> Void
+        onStartStep: @escaping (ZebraOnboardingChecklistStepID) -> Void,
+        onStopStep: ((ZebraOnboardingChecklistStepID) -> Void)? = nil
     ) {
         self.store = store
         self.onStartStep = onStartStep
+        self.onStopStep = onStopStep
     }
 
     public var body: some View {
@@ -892,6 +913,7 @@ public struct ZebraOnboardingChecklistCard: View {
                                 snapshot: snapshot,
                                 title: Self.title(for: snapshot.id),
                                 onStart: { onStartStep(snapshot.id) },
+                                onStop: onStopStep.map { callback in { callback(snapshot.id) } },
                                 onDevelopmentToggle: developmentToggleAction(for: snapshot.id)
                             )
                         }
@@ -995,6 +1017,7 @@ private struct ZebraOnboardingChecklistRow: View {
     let snapshot: ZebraOnboardingChecklistStepSnapshot
     let title: String
     let onStart: () -> Void
+    let onStop: (() -> Void)?
     let onDevelopmentToggle: (() -> Void)?
 
     @State private var hovering = false
@@ -1021,7 +1044,10 @@ private struct ZebraOnboardingChecklistRow: View {
 
             if snapshot.showsStart {
                 Button(action: onStart) {
-                    Text(String(localized: "brain.onboarding.checklist.start", defaultValue: "Start"))
+                    Text(snapshot.wasStartedBefore
+                        ? String(localized: "brain.onboarding.checklist.restart", defaultValue: "Restart")
+                        : String(localized: "brain.onboarding.checklist.start", defaultValue: "Start")
+                    )
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(ZebraOnboardingChecklistPalette.startText)
                         .padding(.horizontal, 11)
@@ -1049,11 +1075,21 @@ private struct ZebraOnboardingChecklistRow: View {
     @ViewBuilder
     private var statusIndicator: some View {
         if snapshot.isRunning {
-            ProgressView()
-                .controlSize(.small)
-                .scaleEffect(0.45)
-                .tint(ZebraOnboardingChecklistPalette.accent)
+            if hovering, let onStop {
+                Button(action: onStop) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundColor(ZebraOnboardingChecklistPalette.accent)
+                }
+                .buttonStyle(.plain)
                 .frame(width: 13, height: 13)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.45)
+                    .tint(ZebraOnboardingChecklistPalette.accent)
+                    .frame(width: 13, height: 13)
+            }
         } else if snapshot.isCompleted {
             if let onDevelopmentToggle, snapshot.isDevelopmentCompleted {
                 Button(action: onDevelopmentToggle) {
