@@ -105,6 +105,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     @Published public private(set) var completedStepIDs: Set<ZebraOnboardingChecklistStepID> = []
     @Published public private(set) var activeStepID: ZebraOnboardingChecklistStepID?
     @Published public private(set) var runningStepID: ZebraOnboardingChecklistStepID?
+    @Published public private(set) var pendingRuntimeInteractiveAuthRequest: ZebraGBrainRuntimeOnboardingStore.InteractiveAuthRequest?
 
     public init(
         fileManager: FileManager = .default,
@@ -262,6 +263,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         completionRefreshGeneration += 1
         let generation = completionRefreshGeneration
         let runtimeCompletion = runtimeCompletionResult()
+        refreshRuntimeInteractiveAuthRequest()
         let cachedGBrainCompletion = gbrainCompletionResultFromCachedReceipt(
             selectedVaultPath: selectedVaultPath
         )
@@ -284,6 +286,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         case .agent:
             applyDetectedCompletion(for: .agent, result: agentCompletionResult())
         case .gbrainRuntime:
+            refreshRuntimeInteractiveAuthRequest()
             applyDetectedCompletion(for: .gbrainRuntime, result: runtimeCompletionResult())
         case .gbrain:
             let cached = gbrainCompletionResultFromCachedReceipt(selectedVaultPath: selectedVaultPath)
@@ -448,6 +451,10 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         return StepCompletionResult(isComplete: result.isComplete, reasons: result.reasons)
     }
 
+    private func refreshRuntimeInteractiveAuthRequest() {
+        pendingRuntimeInteractiveAuthRequest = gbrainRuntimeOnboardingStore.pendingInteractiveAuthRequest()
+    }
+
     private func gbrainCompletionResultFromCachedReceipt(
         selectedVaultPath: String?
     ) -> ZebraGBrainOnboardingStore.CompletionResult {
@@ -479,6 +486,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     public func deactivateCompletionWatching() {
         isCompletionWatching = false
+        pendingRuntimeInteractiveAuthRequest = nil
         stopCompletionFileWatching()
     }
 
@@ -690,12 +698,7 @@ public enum ZebraOnboardingChecklistCommand {
             guard let launch = ZebraGBrainRuntimeOnboardingStore().prepareLaunch() else {
                 return nil
             }
-            return agentStartupLine(
-                cwd: launch.launchDirectory,
-                prompt: launch.startupPrompt,
-                shellEnvironmentPrefix: launch.shellEnvironmentPrefix,
-                useGBrainSetupLaunch: true
-            )
+            return gbrainRuntimeStartupLine(launch: launch)
         case .gbrain:
             guard let runtime = ZebraGBrainRuntimeOnboardingStore().selectedRuntimeForGBrainSetup() else {
                 return nil
@@ -748,6 +751,31 @@ public enum ZebraOnboardingChecklistCommand {
         return "\(launch.shellEnvironmentPrefix)\(prepareSourceRepoPrefix)\(startupLine)"
     }
 
+    static func gbrainRuntimeStartupLine(
+        launch: ZebraGBrainRuntimeOnboardingStore.LaunchContext,
+        agent: MarkdownPillAgent = MarkdownPillAgent.defaultAgent(),
+        codexConfigURL: URL? = nil
+    ) -> String {
+        if agent == .codex {
+            if let codexConfigURL {
+                _ = MarkdownChatPillCommand.prepareCodexGBrainSetupConfig(
+                    cwd: launch.launchDirectory,
+                    configURL: codexConfigURL
+                )
+            } else {
+                _ = MarkdownChatPillCommand.prepareCodexGBrainSetupConfig(cwd: launch.launchDirectory)
+            }
+        }
+        return agentStartupLine(
+            cwd: launch.launchDirectory,
+            prompt: launch.startupPrompt,
+            agent: agent,
+            shellEnvironmentPrefix: launch.shellEnvironmentPrefix,
+            useGBrainSetupLaunch: true,
+            shouldPrepareCodexGBrainSetupConfig: false
+        )
+    }
+
     private static func gbrainSetupSelectedRuntimeCommand(
         launch: ZebraGBrainOnboardingStore.LaunchContext,
         runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime
@@ -785,7 +813,8 @@ public enum ZebraOnboardingChecklistCommand {
         prompt: String,
         agent: MarkdownPillAgent = MarkdownPillAgent.defaultAgent(),
         shellEnvironmentPrefix: String = "",
-        useGBrainSetupLaunch: Bool = false
+        useGBrainSetupLaunch: Bool = false,
+        shouldPrepareCodexGBrainSetupConfig: Bool = true
     ) -> String {
         let localizedPrompt = "\(ZebraOnboardingLanguage.current().promptPolicy)\n\n\(prompt)"
         _ = MarkdownChatPillCommand.prepareLaunchEnvironment(
@@ -793,7 +822,7 @@ public enum ZebraOnboardingChecklistCommand {
             markdownFilePath: nil,
             launchDirectory: cwd
         )
-        if useGBrainSetupLaunch, agent == .codex {
+        if useGBrainSetupLaunch, agent == .codex, shouldPrepareCodexGBrainSetupConfig {
             _ = MarkdownChatPillCommand.prepareCodexGBrainSetupConfig(cwd: cwd)
         }
         let startupLine: String

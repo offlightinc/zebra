@@ -25,6 +25,17 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         public let reasons: [String]
     }
 
+    public struct InteractiveAuthRequest: Equatable {
+        public let id: String
+        public let authKey: String
+        public let runtime: String
+        public let provider: String
+        public let runtimeProvider: String?
+        public let reason: String?
+        public let requestedAt: String?
+        public let startupLine: String
+    }
+
     private struct State: Codable {
         var schemaVersion: Int
         var receipt: Receipt?
@@ -120,18 +131,56 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         return SelectedRuntime(runtime: runtime, executablePath: executablePath)
     }
 
+    public func pendingInteractiveAuthRequest() -> InteractiveAuthRequest? {
+        guard let data = try? Data(contentsOf: stateURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let interactiveAuth = object["interactiveAuth"] as? [String: Any],
+              interactiveAuth["status"] as? String == "required" else {
+            return nil
+        }
+        guard let runtime = nonEmpty(interactiveAuth["runtime"] as? String),
+              Self.supportedRuntimeIDs.contains(runtime),
+              let provider = nonEmpty(interactiveAuth["provider"] as? String),
+              Self.isSafeInteractiveAuthIdentifier(provider),
+              interactiveAuthArgvMatchesRequest(interactiveAuth, runtime: runtime, provider: provider),
+              let startupLine = interactiveAuthStartupLine(runtime: runtime, provider: provider) else {
+            return nil
+        }
+        let requestedAt = nonEmpty(interactiveAuth["requestedAt"] as? String)
+        let authKey = "\(runtime)|\(provider)"
+        let id = "\(authKey)|\(requestedAt ?? "pending")"
+        return InteractiveAuthRequest(
+            id: id,
+            authKey: authKey,
+            runtime: runtime,
+            provider: provider,
+            runtimeProvider: nonEmpty(interactiveAuth["runtimeProvider"] as? String),
+            reason: nonEmpty(interactiveAuth["reason"] as? String),
+            requestedAt: requestedAt,
+            startupLine: startupLine
+        )
+    }
+
     public func prepareLaunch() -> LaunchContext? {
         guard let helperPath = installHelperScript() else { return nil }
         guard let documentPath = installInstructionDocument() else { return nil }
         let launchDirectory = onboardingWorkDirectoryPath()
         let helperDirectory = helperPath.deletingLastPathComponent().path
+        let homeDirectory = homeDirectoryPath as NSString
+        let pathEntries = [
+            helperDirectory,
+            homeDirectory.appendingPathComponent(".local/bin"),
+            homeDirectory.appendingPathComponent(".bun/bin"),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+        ]
         let environmentPrefix = [
             "cd \(ZebraAgentLaunchCommand.shellQuote(launchDirectory))",
             "export ZEBRA_GBRAIN_RUNTIME_STATE=\(ZebraAgentLaunchCommand.shellQuote(stateURL.path))",
             "export ZEBRA_GBRAIN_RUNTIME_HOME=\(ZebraAgentLaunchCommand.shellQuote(homeDirectoryPath))",
             "export ZEBRA_ONBOARDING_LANGUAGE=\(ZebraAgentLaunchCommand.shellQuote(onboardingLanguage.code))",
             "export ZEBRA_GBRAIN_RUNTIME_DOC=\(ZebraAgentLaunchCommand.shellQuote(documentPath.path))",
-            "export PATH=\(ZebraAgentLaunchCommand.shellQuote(helperDirectory)):\"$PATH\"",
+            "export PATH=\(pathEntries.map(ZebraAgentLaunchCommand.shellQuote).joined(separator: ":")):\"$PATH\"",
         ].joined(separator: " && ") + " && "
         let startupLine = environmentPrefix + "\(ZebraAgentLaunchCommand.shellQuote(helperPath.path)) run\r"
         return LaunchContext(
@@ -178,6 +227,56 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         }
     }
 
+    private func interactiveAuthArgvMatchesRequest(
+        _ interactiveAuth: [String: Any],
+        runtime: String,
+        provider: String
+    ) -> Bool {
+        guard let argv = interactiveAuth["argv"] as? [String] else {
+            return true
+        }
+        guard argv.count == 5 else { return false }
+        return argv[1] == "interactive-auth"
+            && argv[2] == runtime
+            && argv[3] == "--provider"
+            && argv[4] == provider
+    }
+
+    private func interactiveAuthStartupLine(runtime: String, provider: String) -> String? {
+        guard let helperPath = installHelperScript(),
+              let documentPath = installInstructionDocument() else {
+            return nil
+        }
+        let launchDirectory = onboardingWorkDirectoryPath()
+        let helperDirectory = helperPath.deletingLastPathComponent().path
+        let homeDirectory = homeDirectoryPath as NSString
+        let pathEntries = [
+            helperDirectory,
+            homeDirectory.appendingPathComponent(".local/bin"),
+            homeDirectory.appendingPathComponent(".bun/bin"),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+        ]
+        let command = [
+            ZebraAgentLaunchCommand.shellQuote(helperPath.path),
+            "interactive-auth",
+            ZebraAgentLaunchCommand.shellQuote(runtime),
+            "--provider",
+            ZebraAgentLaunchCommand.shellQuote(provider),
+        ].joined(separator: " ")
+        let failureMessage = "Zebra runtime auth did not complete. This terminal will stay open so you can review the error or retry."
+        let commands = [
+            "cd \(ZebraAgentLaunchCommand.shellQuote(launchDirectory))",
+            "export ZEBRA_GBRAIN_RUNTIME_STATE=\(ZebraAgentLaunchCommand.shellQuote(stateURL.path))",
+            "export ZEBRA_GBRAIN_RUNTIME_HOME=\(ZebraAgentLaunchCommand.shellQuote(homeDirectoryPath))",
+            "export ZEBRA_ONBOARDING_LANGUAGE=\(ZebraAgentLaunchCommand.shellQuote(onboardingLanguage.code))",
+            "export ZEBRA_GBRAIN_RUNTIME_DOC=\(ZebraAgentLaunchCommand.shellQuote(documentPath.path))",
+            "export PATH=\(pathEntries.map(ZebraAgentLaunchCommand.shellQuote).joined(separator: ":")):\"$PATH\"",
+            "if \(command); then exit; else printf '\\n%s\\n' \(ZebraAgentLaunchCommand.shellQuote(failureMessage)); fi",
+        ]
+        return commands.joined(separator: " && ") + "\r"
+    }
+
     private func startupPrompt(helperPath: String, documentPath: String) -> String {
         """
         You are Zebra's Step 2 runtime setup agent.
@@ -205,6 +304,18 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     private static func standardizedPath(_ path: String) -> String {
         (path as NSString).standardizingPath
+    }
+
+    private static func isSafeInteractiveAuthIdentifier(_ value: String) -> Bool {
+        guard !value.isEmpty else { return false }
+        return value.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 45, 46, 48...57, 65...90, 95, 97...122:
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     private static let supportedRuntimeIDs: Set<String> = [
@@ -301,6 +412,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     zebra-gbrain-runtime-onboarding recover-prerequisite <clt|node|bun>
     zebra-gbrain-runtime-onboarding install-runtime <openclaw|hermes>
     zebra-gbrain-runtime-onboarding configure-runtime <openclaw|hermes> ...
+    zebra-gbrain-runtime-onboarding interactive-auth <openclaw|hermes> --provider <provider-id>
     zebra-gbrain-runtime-onboarding verify-runtime <openclaw|hermes>
     zebra-gbrain-runtime-onboarding write-receipt
     ```
@@ -427,8 +539,18 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     npm install -g openclaw
     ```
 
-    이 flow 안에서 npm global prefix를 바꾸지 않는다. npm global permission 문제가 나면
-    그 실패를 state에 기록하고 사용자에게 보이게 한다.
+    설치 전에 `npm config get prefix`로 현재 npm global prefix를 확인한다. 현재 prefix가
+    global package install에 필요한 `bin`과 `lib/node_modules`를 쓸 수 있으면 그대로 둔다.
+    root-owned `/usr/local`처럼 현재 사용자가 쓸 수 없는 prefix면 다음을 먼저 실행한다:
+
+    ```bash
+    mkdir -p "$HOME/.local/bin" "$HOME/.local/lib/node_modules"
+    npm config set prefix "$HOME/.local"
+    ```
+
+    그 뒤 같은 `npm install -g openclaw`를 실행한다. 이 설정은 Zebra-private runtime이
+    아니라 사용자 계정의 npm global prefix를 고치는 것이다. 이후 `~/.local/bin`이 PATH에
+    있으면 `openclaw`와 future npm global command가 일반 terminal에서도 resolve된다.
 
     #### Hermes
 
@@ -457,8 +579,40 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     필요하면 agent가 사용자에게 LLM connection/provider 선택을 묻는다. Helper는 구체적인
     runtime configuration command를 실행하고 non-secret state를 쓴다.
 
+    Provider 선택을 물을 때는 bullet list를 쓰지 말고 번호 선택지로 제시한다. 사용자는
+    provider id가 아니라 번호로 답할 수 있어야 한다. 예:
+
+    ```text
+    사용할 계정/키 방식을 선택해주세요.
+
+    1. ChatGPT/Codex 계정으로 로그인
+    2. Claude Code 계정으로 로그인
+    3. OpenRouter API key 사용
+    4. Anthropic API key 사용
+    5. Google Gemini API key 사용
+    6. OpenAI API key 사용
+    ```
+
+    사용자가 번호로 답하면 agent가 해당 provider id로 `configure-runtime <runtime>
+    --provider <provider-id>`를 호출한다.
+
     Secret 값은 Zebra state에 쓰면 안 된다. State에는 environment variable 이름,
     OAuth source, entered-key source label 같은 key source만 기록할 수 있다.
+
+    OpenClaw/Hermes OAuth 또는 provider CLI login이 실제 terminal TTY를 요구하면,
+    agent tool 안에서 login command를 계속 실행하지 않는다. Helper는
+    `interactive_auth_required`를 state에 쓰고, 실제 Zebra terminal에서 실행할
+    `interactive-auth` command를 `interactiveAuth.command`에 기록한다.
+    Zebra 앱은 이 pending state를 watch해서 실제 terminal을 연다. 앱은 state의 raw
+    command string을 그대로 실행하지 않고, `runtime`, `provider`, `requestedAt` 같은
+    구조화된 request 값을 검증한 뒤 Zebra-owned helper command를 조립해서 실행한다.
+    같은 request는 자동으로 한 번만 실행하고, 같은 runtime/provider의 반복 request는 짧은
+    간격 안에서 다시 열지 않는다. Auth command가 성공하면 terminal은 자동 종료되고,
+    실패하거나 취소되면 사용자가 원인을 확인할 수 있도록 terminal을 남긴다.
+
+    Agent는 이 상태를 실패로 처리하지 않는다. 사용자가 real terminal에서
+    `interactive-auth`를 완료한 뒤, agent는 `status --json`, `configure-runtime`,
+    `verify-runtime`을 다시 호출해서 helper probe 결과로 완료 여부를 확인한다.
 
     ### 6. Verify selected runtime
 
@@ -614,7 +768,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     - Node/npm recovery는 official Node.js macOS pkg를 사용한다. Homebrew도 아니고
       Zebra-private runtime도 아니다.
     - Bun recovery는 official Bun installer를 사용한다.
-    - OpenClaw install은 `npm install -g openclaw`를 유지한다.
+    - OpenClaw install은 `npm install -g openclaw`를 유지하되, npm global prefix가
+      root-owned/write 불가면 먼저 `npm config set prefix "$HOME/.local"`을 적용한다.
     - Hermes install은 이미 검증된 minimal installer command를 유지한다.
     - Step 2 완료 기준은 binary 존재 여부가 아니라 `gbrain-runtime-state.json`의 runtime
       receipt다.
@@ -792,11 +947,31 @@ public struct ZebraGBrainRuntimeOnboardingStore {
       exit 1
     fi
 
+    resolve_helper_path() {
+      case "$0" in
+        */*)
+          helper_dir_name="$(dirname "$0")"
+          helper_base_name="$(basename "$0")"
+          helper_dir_abs="$(cd "$helper_dir_name" 2>/dev/null && pwd -P || true)"
+          if [ -n "$helper_dir_abs" ]; then
+            printf '%s/%s\n' "$helper_dir_abs" "$helper_base_name"
+          else
+            printf '%s\n' "$0"
+          fi
+          ;;
+        *)
+          command -v "$0" 2>/dev/null || printf '%s\n' "$0"
+          ;;
+      esac
+    }
+
+    export ZEBRA_GBRAIN_RUNTIME_HELPER_PATH="$(resolve_helper_path)"
     "$PYTHON_BIN" - "$STATE" "$COMMAND" "$@" <<'PY'
     import contextlib
     import getpass
     import json
     import os
+    import shlex
     import shutil
     import subprocess
     import sys
@@ -881,12 +1056,17 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     def redacted_result(result, credential=None):
         credential = credential or {}
-        return {
+        output = {
             "ok": bool(result.get("ok")),
             "exitCode": result.get("code"),
             "stdoutTail": output_tail(redact_output(result.get("stdout", ""), credential)),
             "stderrTail": output_tail(redact_output(result.get("stderr", ""), credential)),
         }
+        if result.get("requiresInteractiveAuth"):
+            output["requiresInteractiveAuth"] = True
+            output["blockingReason"] = result.get("blockingReason") or "interactive_auth_required"
+            output["interactiveAuthCommand"] = result.get("interactiveAuthCommand") or ""
+        return output
 
     def record_attempt(kind, attempted_command, result, *, recoverable=True, blocking_reason=""):
         state = load_state()
@@ -929,6 +1109,32 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         path = shutil.which(name) or ""
         return path
 
+    def tool_candidate_paths(name):
+        candidates = []
+        path_match = shutil.which(name)
+        if path_match:
+            candidates.append(path_match)
+        if name == "bun":
+            candidates.extend([
+                str(home / ".bun" / "bin" / "bun"),
+                "/opt/homebrew/bin/bun",
+                "/usr/local/bin/bun",
+            ])
+        seen = set()
+        output = []
+        for candidate in candidates:
+            expanded = str(Path(candidate).expanduser())
+            if expanded not in seen:
+                seen.add(expanded)
+                output.append(expanded)
+        return output
+
+    def first_executable_path(candidates):
+        for candidate in candidates:
+            if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+        return ""
+
     def version_for_command(path, *args):
         if not path:
             return ""
@@ -938,10 +1144,11 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         return ""
 
     def tool_fact(name, *, required_for=None, blocking_now=False, version_args=("--version",), path_override=None):
-        path = path_override if path_override is not None else command_available(name)
+        candidates = [path_override] if path_override is not None and path_override else tool_candidate_paths(name)
+        path = path_override if path_override is not None else first_executable_path(candidates)
         ok = bool(path and os.path.exists(path) and os.access(path, os.X_OK))
         version = version_for_command(path, *version_args) if ok and version_args else ""
-        return {
+        fact = {
             "detectedAt": now(),
             "ok": ok,
             "path": path or "",
@@ -950,6 +1157,9 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "blockingNow": bool(blocking_now and not ok),
             "reason": "" if ok else f"{name}_missing",
         }
+        if candidates:
+            fact["candidates"] = candidates
+        return fact
 
     def file_fact(label, path, *, required_for=None, blocking_now=False):
         ok = os.path.exists(path) and os.access(path, os.X_OK)
@@ -1070,6 +1280,93 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             }
         except Exception as exc:
             return {"ok": False, "code": -1, "stdout": "", "stderr": str(exc)}
+
+    def has_interactive_tty():
+        if os.environ.get("ZEBRA_GBRAIN_RUNTIME_ASSUME_TTY", "").strip() == "1":
+            return True
+        try:
+            with open("/dev/tty", "rb", buffering=0):
+                return True
+        except Exception:
+            return False
+
+    def helper_command_argv(runtime, provider_id):
+        helper_path = os.environ.get("ZEBRA_GBRAIN_RUNTIME_HELPER_PATH", "").strip() or "zebra-gbrain-runtime-onboarding"
+        return [helper_path, "interactive-auth", runtime, "--provider", provider_id]
+
+    def helper_command_line(runtime, provider_id):
+        env_parts = {
+            "ZEBRA_GBRAIN_RUNTIME_STATE": str(state_path),
+            "ZEBRA_GBRAIN_RUNTIME_HOME": str(home),
+        }
+        doc_path = os.environ.get("ZEBRA_GBRAIN_RUNTIME_DOC", "").strip()
+        if doc_path:
+            env_parts["ZEBRA_GBRAIN_RUNTIME_DOC"] = doc_path
+        language = os.environ.get("ZEBRA_ONBOARDING_LANGUAGE", "").strip()
+        if language:
+            env_parts["ZEBRA_ONBOARDING_LANGUAGE"] = language
+        argv = helper_command_argv(runtime, provider_id)
+        return " ".join(
+            [f"{key}={shlex.quote(value)}" for key, value in env_parts.items()]
+            + [shlex.quote(part) for part in argv]
+        )
+
+    def interactive_auth_required_result(runtime, provider, reason):
+        provider_id = provider.get("id", "")
+        command = helper_command_line(runtime, provider_id)
+        return {
+            "ok": False,
+            "code": 0,
+            "stdout": "",
+            "stderr": reason,
+            "requiresInteractiveAuth": True,
+            "blockingReason": "interactive_auth_required",
+            "interactiveAuthCommand": command,
+            "interactiveAuthArgv": helper_command_argv(runtime, provider_id),
+        }
+
+    def write_interactive_auth_request(runtime, provider, credential, result):
+        provider_id = provider.get("id", "")
+        state = load_state()
+        state["schemaVersion"] = 1
+        state["selection"] = {
+            "selectedRuntime": runtime,
+            "selectedProvider": provider_id,
+            "runtimeProvider": provider_id_for_runtime(provider, runtime),
+            "runtimeModel": provider.get("hermes_model") if runtime == "hermes" else "",
+            "credential": non_secret_credential(credential),
+            "updatedAt": now(),
+        }
+        state["runtimeConfig"] = {
+            "configuredAt": now(),
+            "result": redacted_result(result, credential),
+        }
+        state["interactiveAuth"] = {
+            "status": "required",
+            "runtime": runtime,
+            "provider": provider_id,
+            "runtimeProvider": provider_id_for_runtime(provider, runtime),
+            "reason": result.get("stderr") or result.get("blockingReason") or "interactive_auth_required",
+            "command": result.get("interactiveAuthCommand") or helper_command_line(runtime, provider_id),
+            "argv": result.get("interactiveAuthArgv") or helper_command_argv(runtime, provider_id),
+            "requestedAt": now(),
+        }
+        progress = state.setdefault("progress", {})
+        progress["status"] = "waiting_for_user"
+        progress["currentSection"] = "Configure selected runtime"
+        progress["waitingForUser"] = {
+            "section": "Configure selected runtime",
+            "note": "Run the interactive auth command in a real Zebra terminal, then rerun configure-runtime.",
+            "createdAt": now(),
+        }
+        progress.pop("lastFailure", None)
+        state["receipt"] = {
+            "complete": False,
+            "verifiedAt": now(),
+            "reasons": ["interactive_auth_required"],
+        }
+        save_state(state)
+        return state
 
     def run_interactive_process(argv, *, env=None, timeout=600):
         try:
@@ -1511,6 +1808,70 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             return json.loads(text[start:end + 1])
         raise ValueError("json_output_missing")
 
+    def path_writable_or_creatable(path):
+        candidate = Path(path).expanduser()
+        current = candidate
+        while not current.exists():
+            parent = current.parent
+            if parent == current:
+                return False
+            current = parent
+        return os.access(str(current), os.W_OK | os.X_OK)
+
+    def npm_environment():
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+        return env
+
+    def npm_global_prefix():
+        result = run_process(["npm", "config", "get", "prefix"], env=npm_environment(), timeout=30)
+        if not result["ok"]:
+            return "", result
+        lines = [line.strip() for line in result.get("stdout", "").splitlines() if line.strip()]
+        prefix = lines[-1] if lines else ""
+        if prefix in {"undefined", "null"}:
+            prefix = ""
+        return prefix, result
+
+    def npm_prefix_supports_global_install(prefix):
+        if not prefix:
+            return False
+        expanded = Path(prefix).expanduser()
+        return (
+            path_writable_or_creatable(expanded / "bin") and
+            path_writable_or_creatable(expanded / "lib" / "node_modules")
+        )
+
+    def configure_user_npm_global_prefix():
+        local_prefix = home / ".local"
+        (local_prefix / "bin").mkdir(parents=True, exist_ok=True)
+        (local_prefix / "lib" / "node_modules").mkdir(parents=True, exist_ok=True)
+        prepend_path_once(str(local_prefix / "bin"))
+        result = run_process(
+            ["npm", "config", "set", "prefix", str(local_prefix)],
+            env=npm_environment(),
+            timeout=60,
+        )
+        record_attempt(
+            "install-runtime:openclaw:npm-prefix",
+            f"npm config set prefix {local_prefix}",
+            result,
+            recoverable=True,
+            blocking_reason="" if result["ok"] else "npm_prefix_config_failed",
+        )
+        return result
+
+    def install_openclaw_runtime():
+        prefix, prefix_result = npm_global_prefix()
+        if not prefix_result["ok"]:
+            return prefix_result
+        if not npm_prefix_supports_global_install(prefix):
+            prefix_result = configure_user_npm_global_prefix()
+            if not prefix_result["ok"]:
+                return prefix_result
+        prepend_path_once(str(home / ".local" / "bin"))
+        return run_process(["npm", "install", "-g", "openclaw"], env=npm_environment(), timeout=900)
+
     def install_runtime(runtime):
         if runtime == "openclaw":
             print(message(
@@ -1518,7 +1879,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
                 "npm으로 OpenClaw CLI를 설치합니다...",
                 "npmでOpenClaw CLIをインストールします...",
             ))
-            return run_process(["npm", "install", "-g", "openclaw"], timeout=900)
+            return install_openclaw_runtime()
         print(message(
             "Installing Hermes CLI with the installer in minimal mode...",
             "installer로 Hermes CLI를 최소 모드로 설치합니다...",
@@ -1624,6 +1985,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
                 "stdout": verified.get("stdout", ""),
                 "stderr": verified.get("stderr", "") or "openai_codex_import_not_verified",
             }
+        if not has_interactive_tty():
+            return interactive_auth_required_result("hermes", provider, "hermes_openai_codex_auth_requires_tty")
         print(message(
             "OpenAI account login is required for Hermes. Continue the Hermes auth flow below.",
             "Hermes에서 OpenAI 계정 연동이 필요합니다. 아래 Hermes 인증 절차를 계속 진행하세요.",
@@ -1773,6 +2136,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             return {"ok": True, "code": 0, "stdout": "", "stderr": ""}
         status, logged_in = claude_cli_auth_status(env)
         if not logged_in:
+            if not has_interactive_tty():
+                return interactive_auth_required_result("openclaw", provider, "claude_cli_auth_login_requires_tty")
             print(message(
                 "Claude CLI login is required. Continue the Claude login flow below.",
                 "Claude CLI 로그인이 필요합니다. 아래 Claude 로그인 절차를 계속 진행하세요.",
@@ -1794,6 +2159,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "OpenClaw에 Claude CLI auth profile을 등록합니다...",
             "OpenClawにClaude CLI auth profileを登録します...",
         ))
+        if not has_interactive_tty():
+            return interactive_auth_required_result("openclaw", provider, "openclaw_claude_cli_registration_requires_tty")
         return run_interactive_process_until(
             [exe, "models", "auth", "login", "--provider", "anthropic", "--method", "cli", "--set-default"],
             lambda: openclaw_auth_profile_usable(exe, provider_id, credential),
@@ -1816,6 +2183,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "OpenClaw에 ChatGPT/Codex 계정 연동을 등록합니다...",
             "OpenClawにChatGPT/Codexアカウント連携を登録します...",
         ))
+        if not has_interactive_tty():
+            return interactive_auth_required_result("openclaw", provider, "openclaw_openai_oauth_requires_tty")
         return run_interactive_process_until(
             [exe, "models", "auth", "login", "--provider", "openai", "--method", "oauth", "--set-default"],
             lambda: openclaw_auth_profile_usable(exe, provider_id, credential),
@@ -2057,6 +2426,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             script = "set -o pipefail; curl -fsSL https://bun.sh/install | bash"
             result = run_process(["/bin/bash", "-lc", script], timeout=1200)
             record_attempt("recover-prerequisite:bun", script, result, recoverable=True, blocking_reason="" if result["ok"] else "bun_install_failed")
+            if result["ok"]:
+                prepend_path_once(str(home / ".bun" / "bin"))
             preflight = write_preflight()
             print(json.dumps({"ok": result["ok"], "result": redacted_result(result), "preflight": preflight}, indent=2, sort_keys=True))
             if not result["ok"]:
@@ -2149,6 +2520,17 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             command_result = run_hermes_config(executable["path"], provider, credential)
         else:
             command_result = run_openclaw_config(executable["path"], provider, credential)
+        if command_result.get("requiresInteractiveAuth"):
+            state = write_interactive_auth_request(runtime, provider, credential, command_result)
+            print(json.dumps({
+                "ok": False,
+                "requiresInteractiveAuth": True,
+                "blockingReason": "interactive_auth_required",
+                "interactiveAuth": state.get("interactiveAuth"),
+                "selection": state.get("selection"),
+                "runtimeConfig": state.get("runtimeConfig"),
+            }, indent=2, sort_keys=True))
+            return
         state = load_state()
         state["schemaVersion"] = 1
         state["selection"] = {
@@ -2163,6 +2545,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "configuredAt": now(),
             "result": redacted_result(command_result, credential),
         }
+        state.pop("interactiveAuth", None)
         if not command_result["ok"]:
             state["receipt"] = {
                 "complete": False,
@@ -2174,6 +2557,90 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             print_command_failure(command_result, credential)
             raise RuntimeError(f"{runtime}_config_failed")
         print(json.dumps({"ok": True, "selection": state["selection"], "runtimeConfig": state["runtimeConfig"]}, indent=2, sort_keys=True))
+
+    def interactive_auth_command(runtime, provider_id):
+        executable = executable_for_runtime(runtime)
+        provider = provider_by_id(provider_id)
+        credential = credential_for(provider, runtime)
+        if not has_interactive_tty():
+            result = interactive_auth_required_result(runtime, provider, "interactive_auth_command_requires_tty")
+            state = write_interactive_auth_request(runtime, provider, credential, result)
+            print(json.dumps({
+                "ok": False,
+                "requiresInteractiveAuth": True,
+                "blockingReason": "interactive_auth_command_requires_tty",
+                "interactiveAuth": state.get("interactiveAuth"),
+            }, indent=2, sort_keys=True))
+            raise RuntimeError("interactive_auth_command_requires_tty")
+
+        state = load_state()
+        state["schemaVersion"] = 1
+        state["selection"] = {
+            "selectedRuntime": runtime,
+            "selectedProvider": provider_id,
+            "runtimeProvider": provider_id_for_runtime(provider, runtime),
+            "runtimeModel": provider.get("hermes_model") if runtime == "hermes" else "",
+            "credential": non_secret_credential(credential),
+            "updatedAt": now(),
+        }
+        state["interactiveAuth"] = {
+            "status": "running",
+            "runtime": runtime,
+            "provider": provider_id,
+            "runtimeProvider": provider_id_for_runtime(provider, runtime),
+            "startedAt": now(),
+        }
+        save_state(state)
+
+        print_provider_selection_notice(runtime, provider)
+        if runtime == "hermes":
+            command_result = run_hermes_config(executable["path"], provider, credential)
+        else:
+            command_result = run_openclaw_config(executable["path"], provider, credential)
+
+        state = load_state()
+        state["schemaVersion"] = 1
+        state["runtimeConfig"] = {
+            "configuredAt": now(),
+            "result": redacted_result(command_result, credential),
+        }
+        if command_result["ok"]:
+            state["interactiveAuth"] = {
+                "status": "completed",
+                "runtime": runtime,
+                "provider": provider_id,
+                "runtimeProvider": provider_id_for_runtime(provider, runtime),
+                "completedAt": now(),
+            }
+            progress = state.setdefault("progress", {})
+            if progress.get("waitingForUser", {}).get("section") == "Configure selected runtime":
+                progress.pop("waitingForUser", None)
+            progress.pop("lastFailure", None)
+            save_state(state)
+            print(json.dumps({
+                "ok": True,
+                "interactiveAuth": state.get("interactiveAuth"),
+                "selection": state.get("selection"),
+                "runtimeConfig": state.get("runtimeConfig"),
+            }, indent=2, sort_keys=True))
+            return
+
+        state["interactiveAuth"] = {
+            "status": "failed",
+            "runtime": runtime,
+            "provider": provider_id,
+            "runtimeProvider": provider_id_for_runtime(provider, runtime),
+            "failedAt": now(),
+            "result": redacted_result(command_result, credential),
+        }
+        state["receipt"] = {
+            "complete": False,
+            "verifiedAt": now(),
+            "reasons": [f"{runtime}_config_failed"],
+        }
+        save_state(state)
+        print_command_failure(command_result, credential)
+        raise RuntimeError(f"{runtime}_config_failed")
 
     def selected_provider_for_runtime(runtime, flags):
         provider_id = flags.get("provider", "")
@@ -2252,6 +2719,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             ],
             "progress": state.get("progress"),
             "selection": state.get("selection"),
+            "interactiveAuth": state.get("interactiveAuth"),
             "receipt": state.get("receipt"),
         }
         print(json.dumps(output, indent=2, sort_keys=True))
@@ -2265,6 +2733,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "preflight": state.get("preflight"),
             "progress": state.get("progress"),
             "selection": state.get("selection"),
+            "interactiveAuth": state.get("interactiveAuth"),
             "runtimeConfig": state.get("runtimeConfig"),
             "runtimeVerification": state.get("runtimeVerification"),
             "receipt": state.get("receipt"),
@@ -2304,6 +2773,20 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             if not provider_id:
                 raise RuntimeError("provider_missing")
             configure_runtime_command(runtime, provider_id)
+        except KeyboardInterrupt:
+            print("\\nCancelled.", file=sys.stderr)
+            sys.exit(130)
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif command == "interactive-auth":
+        try:
+            runtime = sys.argv[3] if len(sys.argv) > 3 else ""
+            flags = parse_flags(sys.argv[4:])
+            provider_id = flags.get("provider", "")
+            if not provider_id:
+                raise RuntimeError("provider_missing")
+            interactive_auth_command(runtime, provider_id)
         except KeyboardInterrupt:
             print("\\nCancelled.", file=sys.stderr)
             sys.exit(130)

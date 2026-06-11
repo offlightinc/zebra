@@ -26,6 +26,9 @@ struct ZebraSidebarBody: View {
     @Environment(\.zebra) private var zebra
     @State private var observedOnboardingCompletedStepIDs: Set<ZebraOnboardingChecklistStepID>?
     @State private var pendingGBrainRuntimeStartAfterAgentLaunch = false
+    @State private var launchedRuntimeInteractiveAuthRequestIDs: Set<String> = []
+    @State private var lastRuntimeInteractiveAuthLaunchByKey: [String: Date] = [:]
+    private static let runtimeInteractiveAuthAutoRetryInterval: TimeInterval = 120
 
     var body: some View {
         HStack(spacing: 0) {
@@ -68,15 +71,21 @@ struct ZebraSidebarBody: View {
         .onAppear {
             onboardingChecklistStore.activateCompletionWatching()
             refreshOnboardingChecklist()
+            startRuntimeInteractiveAuthIfNeeded(onboardingChecklistStore.pendingRuntimeInteractiveAuthRequest)
             observedOnboardingCompletedStepIDs = onboardingChecklistStore.completedStepIDs
         }
         .onDisappear {
             onboardingChecklistStore.deactivateCompletionWatching()
             observedOnboardingCompletedStepIDs = nil
             pendingGBrainRuntimeStartAfterAgentLaunch = false
+            launchedRuntimeInteractiveAuthRequestIDs = []
+            lastRuntimeInteractiveAuthLaunchByKey = [:]
         }
         .onChange(of: onboardingChecklistStore.completedStepIDs) { completedStepIDs in
             handleOnboardingCompletionChange(completedStepIDs)
+        }
+        .onChange(of: onboardingChecklistStore.pendingRuntimeInteractiveAuthRequest) { request in
+            startRuntimeInteractiveAuthIfNeeded(request)
         }
         .onChange(of: vaultState.selectedVaultPath) { _ in
             refreshOnboardingChecklist()
@@ -323,6 +332,37 @@ struct ZebraSidebarBody: View {
         }
         pendingGBrainRuntimeStartAfterAgentLaunch = false
         startOnboardingChecklistStep(nextStep)
+    }
+
+    private func startRuntimeInteractiveAuthIfNeeded(
+        _ request: ZebraGBrainRuntimeOnboardingStore.InteractiveAuthRequest?
+    ) {
+        guard let request,
+              !request.startupLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !launchedRuntimeInteractiveAuthRequestIDs.contains(request.id),
+              let workspace = tabManager.selectedWorkspace else {
+            return
+        }
+        let now = Date()
+        if let lastLaunch = lastRuntimeInteractiveAuthLaunchByKey[request.authKey],
+           now.timeIntervalSince(lastLaunch) < Self.runtimeInteractiveAuthAutoRetryInterval {
+            #if DEBUG
+            cmuxDebugLog(
+                "zebra.onboarding.runtimeInteractiveAuth.skip authKey=\(request.authKey)"
+            )
+            #endif
+            return
+        }
+        launchedRuntimeInteractiveAuthRequestIDs.insert(request.id)
+        lastRuntimeInteractiveAuthLaunchByKey[request.authKey] = now
+        #if DEBUG
+        cmuxDebugLog(
+            "zebra.onboarding.runtimeInteractiveAuth.start runtime=\(request.runtime) " +
+            "provider=\(request.provider) bytes=\(request.startupLine.utf8.count)"
+        )
+        #endif
+        workspace.newTerminalSurfaceInFocusedPane(focus: true)?
+            .zebraSendStartupLineWhenReady(request.startupLine)
     }
 
     private func startOnboardingChecklistEmailStep(in workspace: Workspace) {

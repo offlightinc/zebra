@@ -131,6 +131,57 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(raw.contains("trust_level = \"untrusted\""))
     }
 
+    func testGBrainRuntimeCodexLaunchPersistsAutoReviewConfigWithoutApprovalPolicy() throws {
+        let cwd = try makeTemporaryDirectory()
+        let configURL = try makeTemporaryDirectory()
+            .appendingPathComponent("config.toml", isDirectory: false)
+        let launch = ZebraGBrainRuntimeOnboardingStore.LaunchContext(
+            launchDirectory: cwd.path,
+            startupLine: "",
+            startupPrompt: "Set up Step 2 runtime",
+            helperPath: "/tmp/zebra-gbrain-runtime-onboarding",
+            documentPath: "/tmp/gbrain-runtime-agent-onboarding.md",
+            shellEnvironmentPrefix: "export ZEBRA_GBRAIN_RUNTIME_STATE='/tmp/state.json' && "
+        )
+
+        let line = ZebraOnboardingChecklistCommand.gbrainRuntimeStartupLine(
+            launch: launch,
+            agent: .codex,
+            codexConfigURL: configURL
+        )
+
+        let raw = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(raw.contains("approvals_reviewer = \"auto_review\""))
+        XCTAssertTrue(raw.contains("[projects.\"\(cwd.path)\"]"))
+        XCTAssertTrue(raw.contains("trust_level = \"trusted\""))
+        XCTAssertFalse(raw.contains("approval_policy"))
+        XCTAssertTrue(line.contains("--ask-for-approval on-request"))
+        XCTAssertTrue(line.contains("'approvals_reviewer=\"auto_review\"'"))
+    }
+
+    func testGBrainRuntimeNonCodexLaunchDoesNotWriteCodexAutoReviewConfig() throws {
+        let cwd = try makeTemporaryDirectory()
+        let configURL = try makeTemporaryDirectory()
+            .appendingPathComponent("config.toml", isDirectory: false)
+        let launch = ZebraGBrainRuntimeOnboardingStore.LaunchContext(
+            launchDirectory: cwd.path,
+            startupLine: "",
+            startupPrompt: "Set up Step 2 runtime",
+            helperPath: "/tmp/zebra-gbrain-runtime-onboarding",
+            documentPath: "/tmp/gbrain-runtime-agent-onboarding.md",
+            shellEnvironmentPrefix: ""
+        )
+
+        let line = ZebraOnboardingChecklistCommand.gbrainRuntimeStartupLine(
+            launch: launch,
+            agent: .claude,
+            codexConfigURL: configURL
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: configURL.path))
+        XCTAssertTrue(line.contains("claude --permission-mode auto"))
+    }
+
     func testGBrainCodexLaunchWithoutSelectedVaultDisablesTrustedAutomation() throws {
         let cwd = try makeTemporaryDirectory()
 
