@@ -23,6 +23,9 @@ FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="${ZEBRA_AGENT_ONBOARDING_FORCE_CODEX_OFF
 STATUS_PROBE_TIMEOUT_SECONDS="${ZEBRA_AGENT_STATUS_TIMEOUT_SECONDS:-8}"
 READINESS_POLL_INTERVAL_SECONDS="${ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS:-3}"
 ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS="${ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS:-15}"
+CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS="${ZEBRA_AGENT_CLAUDE_USABLE_TIMEOUT_SECONDS:-20}"
+CLAUDE_POST_USABLE_AUTH_DELAY_SECONDS="${ZEBRA_AGENT_CLAUDE_POST_USABLE_AUTH_DELAY_SECONDS:-2}"
+CLAUDE_POST_USABLE_AUTH_RETRIES="${ZEBRA_AGENT_CLAUDE_POST_USABLE_AUTH_RETRIES:-3}"
 ONBOARDING_LANGUAGE="${ZEBRA_ONBOARDING_LANGUAGE:-}"
 case "$STATUS_PROBE_TIMEOUT_SECONDS" in
   ''|*[!0-9]*) STATUS_PROBE_TIMEOUT_SECONDS=8 ;;
@@ -36,6 +39,17 @@ case "$ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS" in
   ''|*[!0-9]*) ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=15 ;;
 esac
 [[ "$ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS" -gt 0 ]] || ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=15
+case "$CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS" in
+  ''|*[!0-9]*) CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS=20 ;;
+esac
+[[ "$CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS" -gt 0 ]] || CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS=20
+case "$CLAUDE_POST_USABLE_AUTH_DELAY_SECONDS" in
+  ''|*[!0-9]*) CLAUDE_POST_USABLE_AUTH_DELAY_SECONDS=2 ;;
+esac
+case "$CLAUDE_POST_USABLE_AUTH_RETRIES" in
+  ''|*[!0-9]*) CLAUDE_POST_USABLE_AUTH_RETRIES=3 ;;
+esac
+[[ "$CLAUDE_POST_USABLE_AUTH_RETRIES" -gt 0 ]] || CLAUDE_POST_USABLE_AUTH_RETRIES=3
 
 # Zebra is often launched outside the user's login shell. Include common CLI
 # install locations before scanning or launching provider tools.
@@ -450,6 +464,29 @@ json_string_array() {
     json_string "$item"
   done
   printf ']'
+}
+
+json_raw_field() {
+  local key="$1"
+  local payload="$2"
+  local tmp status
+  tmp="$(mktemp "${TMPDIR:-/tmp}/zebra-json.XXXXXX")"
+  printf '%s' "$payload" > "$tmp"
+  plutil -extract "$key" raw -o - "$tmp" 2>/dev/null
+  status="$?"
+  rm -f "$tmp"
+  return "$status"
+}
+
+json_bool_field_is_true() {
+  local key="$1"
+  local payload="$2"
+  local value
+  value="$(json_raw_field "$key" "$payload" 2>/dev/null | tr '[:upper:]' '[:lower:]')" || return 1
+  case "$value" in
+    true|1|yes) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 valid_agent() {
@@ -1716,11 +1753,13 @@ readiness_probe_method() {
 append_readiness_probe_started_event() {
   local agent="$1"
   local method="$2"
+  local context="${3:-}"
   local extra
   extra=',"agent":'
   extra+="$(json_string "$agent")"
   extra+=',"method":'
   extra+="$(json_string "$method")"
+  extra+="$context"
   append_event agent_readiness_probe_started "$extra"
 }
 
@@ -1728,6 +1767,7 @@ append_readiness_probe_event() {
   local event="$1"
   local agent="$2"
   local method="$3"
+  local context="${4:-}"
   local extra
   extra=',"agent":'
   extra+="$(json_string "$agent")"
@@ -1741,6 +1781,22 @@ append_readiness_probe_event() {
   else
     extra+='false'
   fi
+  if [[ "$agent" == "claude" && "$method" == "claude auth status --json" ]]; then
+    extra+=',"loggedIn":'
+    if json_bool_field_is_true loggedIn "$CLI_PROBE_STDOUT"; then
+      extra+='true'
+    else
+      extra+='false'
+    fi
+  elif [[ "$agent" == "claude" && "$method" == "claude -p readiness probe" ]]; then
+    extra+=',"usable":'
+    if [[ "$CLI_PROBE_STATUS" -eq 0 && "$CLI_PROBE_TIMED_OUT" -eq 0 ]]; then
+      extra+='true'
+    else
+      extra+='false'
+    fi
+  fi
+  extra+="$context"
   append_event "$event" "$extra"
 }
 
@@ -1766,7 +1822,6 @@ agent_readiness_verified() {
     executable_path="$(binary_name "$agent")"
   fi
   method="$(readiness_probe_method "$agent")"
-  append_readiness_probe_started_event "$agent" "$method"
   CLI_PROBE_STDOUT=""
   CLI_PROBE_STDERR=""
   CLI_PROBE_STATUS=0
@@ -1774,12 +1829,15 @@ agent_readiness_verified() {
 
   case "$agent" in
     claude)
-      run_cli_probe "$STATUS_PROBE_TIMEOUT_SECONDS" "$executable_path" auth status --json || true
+      claude_readiness_verified "$executable_path"
+      return "$?"
       ;;
     codex)
+      append_readiness_probe_started_event "$agent" "$method"
       run_cli_probe "$STATUS_PROBE_TIMEOUT_SECONDS" "$executable_path" login status || true
       ;;
     antigravity)
+      append_readiness_probe_started_event "$agent" "$method"
       if antigravity_readiness_verified; then
         CLI_PROBE_STATUS=0
       else
@@ -1793,6 +1851,68 @@ agent_readiness_verified() {
     return 0
   fi
   append_readiness_probe_event agent_readiness_probe_failed "$agent" "$method"
+  return 1
+}
+
+readiness_probe_context() {
+  local stage="$1"
+  local attempt="${2:-}"
+  local context
+  context=',"stage":'
+  context+="$(json_string "$stage")"
+  if [[ -n "$attempt" ]]; then
+    context+=',"attempt":'
+    context+="$attempt"
+  fi
+  printf '%s' "$context"
+}
+
+claude_auth_status_logged_in() {
+  local executable_path="$1"
+  run_cli_probe "$STATUS_PROBE_TIMEOUT_SECONDS" "$executable_path" auth status --json || true
+  [[ "$CLI_PROBE_STATUS" -eq 0 && "$CLI_PROBE_TIMED_OUT" -eq 0 ]] || return 1
+  json_bool_field_is_true loggedIn "$CLI_PROBE_STDOUT"
+}
+
+claude_usable_probe_verified() {
+  local executable_path="$1"
+  run_cli_probe "$CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS" "$executable_path" --safe-mode --no-session-persistence --output-format json --max-turns 1 --tools "" -p "Reply exactly: ok" || true
+  [[ "$CLI_PROBE_STATUS" -eq 0 && "$CLI_PROBE_TIMED_OUT" -eq 0 ]]
+}
+
+claude_readiness_verified() {
+  local executable_path="$1"
+  local auth_method usable_method context attempt
+  auth_method="claude auth status --json"
+  usable_method="claude -p readiness probe"
+
+  context="$(readiness_probe_context auth-status-initial)"
+  append_readiness_probe_started_event claude "$auth_method" "$context"
+  if ! claude_auth_status_logged_in "$executable_path"; then
+    append_readiness_probe_event agent_readiness_probe_failed claude "$auth_method" "$context"
+    return 1
+  fi
+  append_readiness_probe_event agent_readiness_probe_succeeded claude "$auth_method" "$context"
+
+  context="$(readiness_probe_context usable-probe)"
+  append_readiness_probe_started_event claude "$usable_method" "$context"
+  if ! claude_usable_probe_verified "$executable_path"; then
+    append_readiness_probe_event agent_readiness_probe_failed claude "$usable_method" "$context"
+    return 1
+  fi
+  append_readiness_probe_event agent_readiness_probe_succeeded claude "$usable_method" "$context"
+
+  for ((attempt = 1; attempt <= CLAUDE_POST_USABLE_AUTH_RETRIES; attempt++)); do
+    sleep "$CLAUDE_POST_USABLE_AUTH_DELAY_SECONDS"
+    context="$(readiness_probe_context auth-status-after-usable "$attempt")"
+    append_readiness_probe_started_event claude "$auth_method" "$context"
+    if claude_auth_status_logged_in "$executable_path"; then
+      append_readiness_probe_event agent_readiness_probe_succeeded claude "$auth_method" "$context"
+      return 0
+    fi
+    append_readiness_probe_event agent_readiness_probe_failed claude "$auth_method" "$context"
+  done
+
   return 1
 }
 
