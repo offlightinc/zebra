@@ -224,14 +224,15 @@ public enum MarkdownChatPillCommand {
         userPrompt: String,
         allowTrustedAutomation: Bool = true,
         allowLaunchDirectoryTrust: Bool? = nil,
-        allowApprovalAutomation: Bool = true
+        allowApprovalAutomation: Bool = true,
+        executableShellExpression: String? = nil
     ) -> String {
         let contextPrefix = MarkdownChatPillContextPrefix.build(
             markdownFilePath: nil,
             surface: .fallback(typeLabel: "onboarding")
         )
         let trustEligible = allowLaunchDirectoryTrust ?? allowTrustedAutomation
-        return "\(invocation(agent: agent, cwd: cwd, trustEligible: trustEligible, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation))\r"
+        return "\(invocation(agent: agent, cwd: cwd, trustEligible: trustEligible, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation, executableShellExpression: executableShellExpression))\r"
     }
 
     public static func shellStartupLineForGBrainSetup(
@@ -239,13 +240,14 @@ public enum MarkdownChatPillCommand {
         cwdShellExpression: String,
         userPrompt: String,
         allowTrustedAutomation: Bool = true,
-        allowApprovalAutomation: Bool = true
+        allowApprovalAutomation: Bool = true,
+        executableShellExpression: String? = nil
     ) -> String {
         let contextPrefix = MarkdownChatPillContextPrefix.build(
             markdownFilePath: nil,
             surface: .fallback(typeLabel: "onboarding")
         )
-        return "\(invocation(agent: agent, cwdShellExpression: cwdShellExpression, trustCwd: nil, trustEligible: false, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation))\r"
+        return "\(invocation(agent: agent, cwdShellExpression: cwdShellExpression, trustCwd: nil, trustEligible: false, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation, executableShellExpression: executableShellExpression))\r"
     }
 
     @discardableResult
@@ -356,7 +358,8 @@ public enum MarkdownChatPillCommand {
         prompt: String,
         mode: InvocationMode = .standard,
         allowTrustedAutomation: Bool = true,
-        allowApprovalAutomation: Bool = true
+        allowApprovalAutomation: Bool = true,
+        executableShellExpression: String? = nil
     ) -> String {
         invocation(
             agent: agent,
@@ -367,7 +370,8 @@ public enum MarkdownChatPillCommand {
             prompt: prompt,
             mode: mode,
             allowTrustedAutomation: allowTrustedAutomation,
-            allowApprovalAutomation: allowApprovalAutomation
+            allowApprovalAutomation: allowApprovalAutomation,
+            executableShellExpression: executableShellExpression
         )
     }
 
@@ -380,7 +384,8 @@ public enum MarkdownChatPillCommand {
         prompt: String,
         mode: InvocationMode = .standard,
         allowTrustedAutomation: Bool = true,
-        allowApprovalAutomation: Bool = true
+        allowApprovalAutomation: Bool = true,
+        executableShellExpression: String? = nil
     ) -> String {
         let promptArgument = singleLineShellArgument(prompt)
         // Visible context = surface advisory + gbrain advisory + blank line + user prompt
@@ -390,8 +395,9 @@ public enum MarkdownChatPillCommand {
         let visibleContextPrompt = "\(contextPrefix)\n\n\(promptArgument)"
         switch agent {
         case .codex:
+            let executable = executableShellExpression ?? "codex"
             var parts = [
-                "cd \(cwdShellExpression) && codex",
+                "cd \(cwdShellExpression) && \(executable)",
                 "-C \(cwdShellExpression)"
             ]
             // trust 우회는 (a) surface 가 file-bound 이고 (b) cwd 가 안전한
@@ -410,10 +416,12 @@ public enum MarkdownChatPillCommand {
             parts.append(shellQuote(visibleContextPrompt))
             return parts.joined(separator: " ")
         case .claude:
+            let executable = executableShellExpression ?? "claude"
             let permissionMode = mode == .gbrainSetup && allowTrustedAutomation ? " --permission-mode auto" : ""
-            return "cd \(cwdShellExpression) && claude\(permissionMode) --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
+            return "cd \(cwdShellExpression) && \(executable)\(permissionMode) --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
         case .antigravity:
-            return "cd \(cwdShellExpression) && agy --prompt-interactive --add-dir \(cwdShellExpression) \(shellQuote(visibleContextPrompt))"
+            let executable = executableShellExpression ?? "agy"
+            return "cd \(cwdShellExpression) && \(executable) --prompt-interactive --add-dir \(cwdShellExpression) \(shellQuote(visibleContextPrompt))"
         }
     }
 

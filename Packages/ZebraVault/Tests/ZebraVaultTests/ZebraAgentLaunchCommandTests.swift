@@ -182,6 +182,96 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(line.contains("claude --permission-mode auto"))
     }
 
+    func testChainedGBrainRuntimeCommandFileUsesInjectedAgentExecutable() throws {
+        let cwd = try makeTemporaryDirectory()
+        let commandFileURL = try makeTemporaryDirectory()
+            .appendingPathComponent("chained-step2-command.sh", isDirectory: false)
+        let launch = ZebraGBrainRuntimeOnboardingStore.LaunchContext(
+            launchDirectory: cwd.path,
+            startupLine: "",
+            startupPrompt: "Set up Step 2 runtime",
+            helperPath: "/tmp/zebra-gbrain-runtime-onboarding",
+            documentPath: "/tmp/gbrain-runtime-agent-onboarding.md",
+            shellEnvironmentPrefix: "export ZEBRA_GBRAIN_RUNTIME_STATE='/tmp/state.json' && "
+        )
+
+        XCTAssertTrue(ZebraOnboardingChecklistCommand.writeChainedGBrainRuntimeCommandFile(
+            launch: launch,
+            commandFileURL: commandFileURL
+        ))
+
+        let raw = try String(contentsOf: commandFileURL, encoding: .utf8)
+        XCTAssertTrue(raw.contains("case \"${ZEBRA_SELECTED_AGENT}\" in"))
+        XCTAssertTrue(raw.contains("claude)"))
+        XCTAssertTrue(raw.contains("codex)"))
+        XCTAssertTrue(raw.contains("antigravity)"))
+        XCTAssertTrue(raw.contains("\"$ZEBRA_AGENT_EXECUTABLE\" --permission-mode auto"))
+        XCTAssertTrue(raw.contains("\"$ZEBRA_AGENT_EXECUTABLE\" -C '\(cwd.path)'"))
+        XCTAssertTrue(raw.contains("\"$ZEBRA_AGENT_EXECUTABLE\" --prompt-interactive"))
+        XCTAssertFalse(raw.contains("\r"))
+        XCTAssertEqual(try octalPermissions(atPath: commandFileURL.path), 0o600)
+    }
+
+    func testChainedGBrainRuntimeCodexCommandDoesNotPersistCodexConfigDuringGeneration() throws {
+        let cwd = try makeTemporaryDirectory()
+        let configURL = try makeTemporaryDirectory()
+            .appendingPathComponent("config.toml", isDirectory: false)
+        let launch = ZebraGBrainRuntimeOnboardingStore.LaunchContext(
+            launchDirectory: cwd.path,
+            startupLine: "",
+            startupPrompt: "Set up Step 2 runtime",
+            helperPath: "/tmp/zebra-gbrain-runtime-onboarding",
+            documentPath: "/tmp/gbrain-runtime-agent-onboarding.md",
+            shellEnvironmentPrefix: ""
+        )
+
+        let line = ZebraOnboardingChecklistCommand.gbrainRuntimeStartupLine(
+            launch: launch,
+            agent: .codex,
+            codexConfigURL: configURL,
+            executableShellExpression: "\"$ZEBRA_AGENT_EXECUTABLE\"",
+            shouldPrepareCodexGBrainSetupConfig: false
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: configURL.path))
+        XCTAssertTrue(line.contains("\"$ZEBRA_AGENT_EXECUTABLE\" -C '\(cwd.path)'"))
+        XCTAssertTrue(line.contains("--ask-for-approval on-request"))
+        XCTAssertTrue(line.contains("'approvals_reviewer=\"auto_review\"'"))
+        XCTAssertTrue(line.contains("'projects.\"\(cwd.path)\".trust_level=\"trusted\"'"))
+    }
+
+    func testAgentOnboardingScriptCommandQuotesContinueCommandFile() {
+        let line = ZebraAgentOnboardingScriptCommand.shellStartupLine(
+            scriptPath: "/tmp/zebra-agent-onboarding",
+            command: .run,
+            cwd: "/Users/han/project/it's-zebra",
+            languageCode: "ko-KR",
+            continueWithCommandFile: "/Users/han/Library/Application Support/zebra/onboarding/chained step2.sh"
+        )
+
+        XCTAssertEqual(
+            line,
+            "'/tmp/zebra-agent-onboarding' 'run' '--cwd' '/Users/han/project/it'\\''s-zebra' '--language' 'ko' '--continue-with-command-file' '/Users/han/Library/Application Support/zebra/onboarding/chained step2.sh'\r"
+        )
+    }
+
+    func testAgentPreferencesRoundTripPrimaryExecutablePath() throws {
+        let preferencesURL = try makeTemporaryDirectory()
+            .appendingPathComponent("preferences.json", isDirectory: false)
+        let store = ZebraAgentPreferenceStore(fileURL: preferencesURL)
+
+        try store.save(ZebraAgentPreferences(
+            primaryAgent: .codex,
+            primaryAgentExecutablePath: "/opt/homebrew/bin/codex",
+            updatedBy: "test"
+        ))
+
+        let loaded = store.load()
+        XCTAssertEqual(loaded.primaryAgent, .codex)
+        XCTAssertEqual(loaded.primaryAgentExecutablePath, "/opt/homebrew/bin/codex")
+        XCTAssertEqual(loaded.updatedBy, "test")
+    }
+
     func testGBrainCodexLaunchWithoutSelectedVaultDisablesTrustedAutomation() throws {
         let cwd = try makeTemporaryDirectory()
 

@@ -63,6 +63,7 @@ RUN_ID=""
 SAVED_PRIMARY=""
 SELECTED_AGENT=""
 REQUESTED_AGENT=""
+CONTINUE_COMMAND_FILE=""
 ONBOARDING_CWD="$PWD"
 SELF_PATH=""
 STATE_ERROR_CODE=""
@@ -102,7 +103,7 @@ RESUME_FLOW_HANDLED=0
 
 usage() {
   cat <<'USAGE'
-zebra-agent-onboarding [run|choose-primary] [--cwd <path>] [--agent <agent>] [--language <en|ja|ko>]
+zebra-agent-onboarding [run|choose-primary] [--cwd <path>] [--agent <agent>] [--language <en|ja|ko>] [--continue-with-command-file <path>]
 zebra-agent-onboarding mark-ready --agent <agent> --run-id <runId> [--language <en|ja|ko>]
 
 Commands:
@@ -110,6 +111,11 @@ Commands:
   choose-primary  Force a primary-agent choice even if a saved preference exists.
                   Pass --agent to recover or install a specific selected agent.
   mark-ready      Compatibility write path; normal flow completes via readiness probes.
+
+Options:
+  --continue-with-command-file <path>
+                  After primary-agent selection succeeds, run this command file
+                  in the same terminal instead of launching the bare provider CLI.
 
 Supported agents:
   claude, codex, antigravity
@@ -977,12 +983,19 @@ ensure_preferences_base() {
 set_primary_preference() {
   local agent="$1"
   local updated_by="${2:-onboarding}"
+  local executable_path="${3:-}"
   local tmp
   mkdir -p "$AGENT_DIR"
   tmp="$(mktemp "$PREFERENCES_FILE.tmp.XXXXXX")"
   ensure_preferences_base "$tmp"
   plutil -replace primaryAgent -string "$agent" "$tmp" >/dev/null 2>&1 \
     || plutil -insert primaryAgent -string "$agent" "$tmp" >/dev/null
+  if [[ -n "$executable_path" ]]; then
+    plutil -replace primaryAgentExecutablePath -string "$executable_path" "$tmp" >/dev/null 2>&1 \
+      || plutil -insert primaryAgentExecutablePath -string "$executable_path" "$tmp" >/dev/null
+  else
+    plutil -remove primaryAgentExecutablePath "$tmp" >/dev/null 2>&1 || true
+  fi
   plutil -replace updatedAt -string "$(now_iso)" "$tmp" >/dev/null 2>&1 \
     || plutil -insert updatedAt -string "$(now_iso)" "$tmp" >/dev/null
   plutil -replace updatedBy -string "$updated_by" "$tmp" >/dev/null 2>&1 \
@@ -1711,7 +1724,7 @@ event_exists() {
 complete_onboarding() {
   local agent="$1"
   local source="$2"
-  local extra lock_dir i
+  local extra lock_dir i executable_path
   lock_dir="$ONBOARDING_DIR/agent-complete.$RUN_ID.$agent.lock"
   mkdir -p "$ONBOARDING_DIR"
   if ! mkdir "$lock_dir" 2>/dev/null; then
@@ -1732,7 +1745,11 @@ complete_onboarding() {
   extra+=',"source":'
   extra+="$(json_string "$source")"
   update_state_complete "$agent"
-  set_primary_preference "$agent" onboarding
+  executable_path="$(path_for_agent "$agent")"
+  if [[ -z "$executable_path" ]]; then
+    executable_path="$(command -v -- "$(binary_name "$agent")" 2>/dev/null || true)"
+  fi
+  set_primary_preference "$agent" onboarding "$executable_path"
   if ! ready_event_exists "$agent"; then
     append_event agent_ready_reported "$extra"
   fi
@@ -1986,6 +2003,55 @@ verify_and_complete_agent_ready() {
   return 1
 }
 
+has_continue_command_file() {
+  [[ -n "${CONTINUE_COMMAND_FILE:-}" ]]
+}
+
+launch_chained_step2() {
+  local agent="$1"
+  local executable_path="$2"
+  local status extra
+  if [[ -z "$CONTINUE_COMMAND_FILE" || ! -f "$CONTINUE_COMMAND_FILE" ]]; then
+    extra=',"agent":'
+    extra+="$(json_string "$agent")"
+    extra+=',"commandFile":'
+    extra+="$(json_nullable_string "$CONTINUE_COMMAND_FILE")"
+    append_event agent_launch_chained_step2_missing "$extra"
+    set_state_error chained_step2_missing "$agent" "Chained Step 2 command file was not found." true
+    write_state failed "$agent"
+    return 1
+  fi
+
+  complete_onboarding "$agent" chained-step2
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  extra+=',"commandFile":'
+  extra+="$(json_string "$CONTINUE_COMMAND_FILE")"
+  extra+=',"executablePath":'
+  extra+="$(json_string "$executable_path")"
+  append_event agent_launch_chained_step2_started "$extra"
+
+  if (
+    cd "$ONBOARDING_CWD" && \
+      ZEBRA_SELECTED_AGENT="$agent" \
+      ZEBRA_AGENT_EXECUTABLE="$executable_path" \
+      /bin/bash "$CONTINUE_COMMAND_FILE"
+  ); then
+    status=0
+  else
+    status="$?"
+  fi
+
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  extra+=',"commandFile":'
+  extra+="$(json_string "$CONTINUE_COMMAND_FILE")"
+  extra+=',"exitCode":'
+  extra+="$status"
+  append_event agent_launch_chained_step2_exited "$extra"
+  return "$status"
+}
+
 launch_selected_agent() {
   local agent="$1"
   local status extra
@@ -2007,6 +2073,10 @@ launch_selected_agent() {
   msg start_agent "$(display_name "$agent")"
   msg provider_signin
   write_state agent_working "$agent"
+  if has_continue_command_file; then
+    launch_chained_step2 "$agent" "$executable_path"
+    return $?
+  fi
   if [[ "$agent" == "antigravity" ]]; then
     write_antigravity_auth_log_baseline
   fi
@@ -2138,6 +2208,10 @@ resume_existing_flow() {
       msg resume_agent "$(display_name "$resume_agent")"
       append_resume_event "$resume_phase" "$resume_agent"
       scan_agents_for_resume
+      if has_continue_command_file && is_agent_installed "$resume_agent"; then
+        launch_selected_agent "$resume_agent"
+        return $?
+      fi
       if verify_and_complete_agent_ready "$resume_agent"; then
         return 0
       fi
@@ -2356,6 +2430,10 @@ main() {
               usage >&2
               exit 2
             }
+            shift 2
+            ;;
+          --continue-with-command-file)
+            CONTINUE_COMMAND_FILE="${2:-}"
             shift 2
             ;;
           --language)

@@ -30,6 +30,7 @@ FAKE_HOLD_FILE=""
 FAKE_RELEASE_FILE=""
 RUN_PID=""
 RUN_OUTPUT_FILE=""
+CONTINUE_COMMAND_FILE=""
 TEST_ONBOARDING_LANGUAGE="en"
 TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="0"
 
@@ -79,6 +80,7 @@ setup_case() {
   FAKE_RELEASE_FILE=""
   RUN_PID=""
   RUN_OUTPUT_FILE=""
+  CONTINUE_COMMAND_FILE=""
   TEST_ONBOARDING_LANGUAGE="en"
   TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="0"
   mkdir -p "$HOME_DIR/.local/bin" "$APP_DIR/onboarding" "$APP_DIR/agent" "$WORK_DIR"
@@ -464,6 +466,17 @@ write_preferences() {
 JSON
 }
 
+write_continue_command_file() {
+  CONTINUE_COMMAND_FILE="$CASE_DIR/chained-step2.sh"
+  cat > "$CONTINUE_COMMAND_FILE" <<'CHAIN'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'chain:%s:%s:%s\n' "${ZEBRA_SELECTED_AGENT:?}" "${ZEBRA_AGENT_EXECUTABLE:?}" "$PWD" >> "${ZEBRA_FAKE_AGENT_LOG:?}"
+"$ZEBRA_AGENT_EXECUTABLE" chained-step2 "$ZEBRA_SELECTED_AGENT"
+CHAIN
+  chmod 600 "$CONTINUE_COMMAND_FILE"
+}
+
 write_state() {
   local phase="$1"
   local run_id="$2"
@@ -526,6 +539,29 @@ run_onboarding_args() {
     ZEBRA_FAKE_RELEASE_FILE="$FAKE_RELEASE_FILE" \
     PATH="/usr/bin:/bin" \
     "$SCRIPT" "$@" >"$output_file" 2>&1 <<<"$input"
+  RUN_STATUS=$?
+  set -e
+  RUN_OUTPUT="$(cat "$output_file")"
+}
+
+run_onboarding_chained() {
+  local input="$1"
+  local output_file="$CASE_DIR/output-chained.txt"
+  [[ -n "$CONTINUE_COMMAND_FILE" ]] || fail "continue command file was not prepared"
+  set +e
+  HOME="$HOME_DIR" \
+    ZEBRA_APP_SUPPORT_DIR="$APP_DIR" \
+    ZEBRA_AGENT_ONBOARDING_INCLUDE_GLOBAL_PATHS=0 \
+    ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS=1 \
+    ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=1 \
+    ZEBRA_ONBOARDING_LANGUAGE="$TEST_ONBOARDING_LANGUAGE" \
+    ZEBRA_AGENT_ONBOARDING_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="$TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE" \
+    ZEBRA_FAKE_AGENT_LOG="$FAKE_LOG" \
+    ZEBRA_FAKE_READY_AGENTS="$READY_AGENTS" \
+    ZEBRA_FAKE_HOLD_FILE="$FAKE_HOLD_FILE" \
+    ZEBRA_FAKE_RELEASE_FILE="$FAKE_RELEASE_FILE" \
+    PATH="/usr/bin:/bin" \
+    "$SCRIPT" run --cwd "$WORK_DIR" --continue-with-command-file "$CONTINUE_COMMAND_FILE" >"$output_file" 2>&1 <<<"$input"
   RUN_STATUS=$?
   set -e
   RUN_OUTPUT="$(cat "$output_file")"
@@ -760,6 +796,55 @@ test_fresh_choice_launches_installed_selection() {
   [[ ! -f "$APP_DIR/agent/preferences.json" ]] || fail "primary preference should not be saved before mark-ready"
   assert_eq "$(plist_raw "$STATE_FILE" selectedAgent)" "codex" "selected agent is persisted"
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "waiting_for_continue" "launch exit moves to continue menu"
+}
+
+test_chained_step2_launches_selected_agent_without_readiness_watcher() {
+  local fake_log events primary_path expected_codex_path expected_work_dir
+  setup_case chained-codex
+  add_fake_agent codex
+  set_ready_agents codex
+  write_continue_command_file
+
+  run_onboarding_chained $'2\n'
+
+  fake_log="$(cat "$FAKE_LOG")"
+  events="$(cat "$APP_DIR/onboarding/agent-cli-events.jsonl")"
+  primary_path="$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgentExecutablePath)"
+  expected_codex_path="$(cd "$(dirname "$HOME_DIR/.local/bin/codex")" && pwd)/codex"
+  expected_work_dir="$(cd "$WORK_DIR" && pwd)"
+  assert_eq "$RUN_STATUS" "0" "chained codex status"
+  assert_contains "$RUN_OUTPUT" "Starting Codex for Zebra onboarding." "chained launch message"
+  assert_contains "$fake_log" "chain:codex:$expected_codex_path:$expected_work_dir" "command file receives selected executable"
+  assert_contains "$fake_log" "codex:chained-step2 codex" "command file launches selected executable"
+  assert_not_contains "$fake_log" "codex:login status" "chained flow skips codex readiness probe"
+  assert_contains "$events" '"event":"agent_launch_chained_step2_started"' "chained start event is recorded"
+  assert_not_contains "$events" '"event":"agent_readiness_watch_started"' "chained flow skips readiness watcher"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "chained flow completes agent state before step2"
+  assert_eq "$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent)" "codex" "chained flow saves primary"
+  assert_eq "$primary_path" "$expected_codex_path" "chained flow saves selected executable"
+}
+
+test_chained_step2_resume_agent_working_relaunches_command_file() {
+  local fake_log expected_codex_path expected_work_dir
+  setup_case chained-resume
+  write_preferences codex
+  write_state agent_working run-chained codex
+  add_fake_agent codex
+  write_continue_command_file
+
+  run_onboarding_chained ''
+
+  fake_log="$(cat "$FAKE_LOG")"
+  expected_codex_path="$(cd "$(dirname "$HOME_DIR/.local/bin/codex")" && pwd)/codex"
+  expected_work_dir="$(cd "$WORK_DIR" && pwd)"
+  assert_eq "$RUN_STATUS" "0" "chained resume status"
+  assert_contains "$RUN_OUTPUT" "Resuming Zebra agent onboarding for Codex." "chained resume message"
+  assert_not_contains "$RUN_OUTPUT" "Codex did not finish Zebra setup." "chained resume does not show continue menu"
+  assert_contains "$fake_log" "chain:codex:$expected_codex_path:$expected_work_dir" "resume command file receives selected executable"
+  assert_contains "$fake_log" "codex:chained-step2 codex" "resume command file launches selected executable"
+  assert_not_contains "$fake_log" "codex:login status" "chained resume skips readiness probe"
+  assert_eq "$(plist_raw "$STATE_FILE" runId)" "run-chained" "chained resume preserves run id"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "chained resume completes state"
 }
 
 test_claude_status_probe_completes_onboarding() {
@@ -1091,6 +1176,8 @@ test_korean_language_applies_to_unknown_option_error
 test_declined_install_can_choose_another_agent_for_any_agent
 test_failed_install_resume_can_choose_another_agent_for_any_agent
 test_fresh_choice_launches_installed_selection
+test_chained_step2_launches_selected_agent_without_readiness_watcher
+test_chained_step2_resume_agent_working_relaunches_command_file
 test_claude_status_probe_completes_onboarding
 test_missing_claude_install_exposes_hidden_binary_to_new_shells
 test_codex_status_probe_completes_onboarding

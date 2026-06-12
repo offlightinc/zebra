@@ -272,17 +272,19 @@ struct ZebraSidebarBody: View {
             startOnboardingChecklistEmailStep(in: workspace)
             return
         }
-        guard let startupLine = ZebraOnboardingChecklistCommand.shellStartupLine(
+        guard let launchPlan = ZebraOnboardingChecklistCommand.launchPlan(
             for: stepID,
-            selectedVaultPath: onboardingSelectedVaultPath
+            selectedVaultPath: onboardingSelectedVaultPath,
+            chainGBrainRuntimeAfterAgent: stepID == .agent
         ) else { return }
+        let startupLine = launchPlan.startupLine
         var launchBegan = false
         func beginLaunchIfNeeded() {
             guard !launchBegan else { return }
             launchBegan = true
             onboardingChecklistStore.beginLaunch(stepID: stepID)
             if stepID == .agent {
-                pendingGBrainRuntimeStartAfterAgentLaunch = true
+                pendingGBrainRuntimeStartAfterAgentLaunch = !launchPlan.launchesGBrainRuntimeInAgentTerminal
             }
         }
         let agent = onboardingChecklistAgent(for: stepID)

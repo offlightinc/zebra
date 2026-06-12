@@ -699,24 +699,38 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 }
 
 public enum ZebraOnboardingChecklistCommand {
+    public struct LaunchPlan {
+        public let startupLine: String
+        public let launchesGBrainRuntimeInAgentTerminal: Bool
+        public let chainedCommandFilePath: String?
+    }
+
     public static func shellStartupLine(
         for stepID: ZebraOnboardingChecklistStepID,
         selectedVaultPath: String?
     ) -> String? {
+        launchPlan(for: stepID, selectedVaultPath: selectedVaultPath)?.startupLine
+    }
+
+    public static func launchPlan(
+        for stepID: ZebraOnboardingChecklistStepID,
+        selectedVaultPath: String?,
+        chainGBrainRuntimeAfterAgent: Bool = false
+    ) -> LaunchPlan? {
         let cwd = launchDirectory(selectedVaultPath: selectedVaultPath)
         let language = ZebraOnboardingLanguage.current()
         switch stepID {
         case .agent:
-            return ZebraAgentOnboardingScriptCommand.shellStartupLine(
-                command: .run,
+            return agentLaunchPlan(
                 cwd: cwd,
-                languageCode: language.code
+                language: language,
+                chainGBrainRuntimeAfterAgent: chainGBrainRuntimeAfterAgent
             )
         case .gbrainRuntime:
             guard let launch = ZebraGBrainRuntimeOnboardingStore().prepareLaunch() else {
                 return nil
             }
-            return gbrainRuntimeStartupLine(launch: launch)
+            return standaloneLaunchPlan(gbrainRuntimeStartupLine(launch: launch))
         case .gbrain:
             guard let runtime = ZebraGBrainRuntimeOnboardingStore().selectedRuntimeForGBrainSetup() else {
                 return nil
@@ -726,31 +740,147 @@ public enum ZebraOnboardingChecklistCommand {
             ) else {
                 return nil
             }
-            return gbrainSetupRuntimeStartupLine(launch: launch, runtime: runtime)
+            return standaloneLaunchPlan(gbrainSetupRuntimeStartupLine(launch: launch, runtime: runtime))
         case .adapter:
             return ZebraGBrainAdapterOnboardingStore().prepareLaunch(
                 selectedVaultPath: selectedVaultPath
-            )?.startupLine
+            ).flatMap { standaloneLaunchPlan($0.startupLine) }
         case .email:
             guard let agent = ZebraClawvisorOnboardingCommand.readyPrimaryAgent() else {
                 return nil
             }
-            return ZebraClawvisorOnboardingCommand.launchPlan(agent: agent).startupLine
+            return standaloneLaunchPlan(ZebraClawvisorOnboardingCommand.launchPlan(agent: agent).startupLine)
         case .ingest:
-            return agentStartupLine(
-                cwd: cwd,
-                prompt: """
-                Help me finish Zebra onboarding for ingest sources in this vault. Check which sources are already present, recommend the smallest useful first source set, connect or document the missing credentials, then run a limited initial ingest if the local tooling is available. Keep all writes within the active brain vault.
-                """
+            return standaloneLaunchPlan(
+                agentStartupLine(
+                    cwd: cwd,
+                    prompt: """
+                    Help me finish Zebra onboarding for ingest sources in this vault. Check which sources are already present, recommend the smallest useful first source set, connect or document the missing credentials, then run a limited initial ingest if the local tooling is available. Keep all writes within the active brain vault.
+                    """
+                )
             )
         case .goals:
-            return agentStartupLine(
-                cwd: cwd,
-                prompt: """
-                Help me finish Zebra onboarding by creating one useful starter goal and one starter task in this vault using the local brain conventions. Then give a short walkthrough of how to open goals, tasks, email, and documents from the Zebra sidebar.
-                """
+            return standaloneLaunchPlan(
+                agentStartupLine(
+                    cwd: cwd,
+                    prompt: """
+                    Help me finish Zebra onboarding by creating one useful starter goal and one starter task in this vault using the local brain conventions. Then give a short walkthrough of how to open goals, tasks, email, and documents from the Zebra sidebar.
+                    """
+                )
             )
         }
+    }
+
+    private static func agentLaunchPlan(
+        cwd: String,
+        language: ZebraOnboardingLanguage,
+        chainGBrainRuntimeAfterAgent: Bool
+    ) -> LaunchPlan? {
+        let commandFilePath: String?
+        if chainGBrainRuntimeAfterAgent,
+           let launch = ZebraGBrainRuntimeOnboardingStore().prepareLaunch() {
+            let commandFileURL = chainedGBrainRuntimeCommandFileURL()
+            commandFilePath = writeChainedGBrainRuntimeCommandFile(
+                launch: launch,
+                commandFileURL: commandFileURL
+            ) ? commandFileURL.path : nil
+        } else {
+            commandFilePath = nil
+        }
+
+        guard let startupLine = ZebraAgentOnboardingScriptCommand.shellStartupLine(
+                command: .run,
+                cwd: cwd,
+                languageCode: language.code,
+                continueWithCommandFile: commandFilePath
+            )
+        else { return nil }
+
+        return LaunchPlan(
+            startupLine: startupLine,
+            launchesGBrainRuntimeInAgentTerminal: commandFilePath != nil,
+            chainedCommandFilePath: commandFilePath
+        )
+    }
+
+    private static func standaloneLaunchPlan(_ startupLine: String?) -> LaunchPlan? {
+        guard let startupLine else { return nil }
+        return LaunchPlan(
+            startupLine: startupLine,
+            launchesGBrainRuntimeInAgentTerminal: false,
+            chainedCommandFilePath: nil
+        )
+    }
+
+    private static func chainedGBrainRuntimeCommandFileURL() -> URL {
+        ZebraGBrainOnboardingStore.onboardingDirectoryURL()
+            .appendingPathComponent(
+                "chained-step2-command-\(UUID().uuidString).sh",
+                isDirectory: false
+            )
+    }
+
+    @discardableResult
+    static func writeChainedGBrainRuntimeCommandFile(
+        launch: ZebraGBrainRuntimeOnboardingStore.LaunchContext,
+        commandFileURL: URL,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        do {
+            try fileManager.createDirectory(
+                at: commandFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try chainedGBrainRuntimeCommandScript(launch: launch)
+                .write(to: commandFileURL, atomically: true, encoding: .utf8)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: commandFileURL.path)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    static func chainedGBrainRuntimeCommandScript(
+        launch: ZebraGBrainRuntimeOnboardingStore.LaunchContext
+    ) -> String {
+        let executableExpression = "\"$ZEBRA_AGENT_EXECUTABLE\""
+        let cases = MarkdownPillAgent.allCases.map { agent -> String in
+            let command = shellScriptCommand(
+                fromTerminalStartupLine: gbrainRuntimeStartupLine(
+                    launch: launch,
+                    agent: agent,
+                    executableShellExpression: executableExpression,
+                    shouldPrepareCodexGBrainSetupConfig: false
+                )
+            )
+            return """
+              \(agent.rawValue))
+                \(command)
+                ;;
+            """
+        }.joined(separator: "\n")
+
+        return """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        : "${ZEBRA_SELECTED_AGENT:?}"
+        : "${ZEBRA_AGENT_EXECUTABLE:?}"
+        case "${ZEBRA_SELECTED_AGENT}" in
+        \(cases)
+          *)
+            printf 'Unsupported Zebra chained onboarding agent: %s\\n' "${ZEBRA_SELECTED_AGENT}" >&2
+            exit 2
+            ;;
+        esac
+        """
+    }
+
+    private static func shellScriptCommand(fromTerminalStartupLine line: String) -> String {
+        var command = line
+        while let last = command.last, last == "\r" || last == "\n" {
+            command.removeLast()
+        }
+        return command
     }
 
     static func gbrainSetupRuntimeStartupLine(
@@ -772,9 +902,11 @@ public enum ZebraOnboardingChecklistCommand {
     static func gbrainRuntimeStartupLine(
         launch: ZebraGBrainRuntimeOnboardingStore.LaunchContext,
         agent: MarkdownPillAgent = MarkdownPillAgent.defaultAgent(),
-        codexConfigURL: URL? = nil
+        codexConfigURL: URL? = nil,
+        executableShellExpression: String? = nil,
+        shouldPrepareCodexGBrainSetupConfig: Bool = true
     ) -> String {
-        if agent == .codex {
+        if agent == .codex && shouldPrepareCodexGBrainSetupConfig {
             if let codexConfigURL {
                 _ = MarkdownChatPillCommand.prepareCodexGBrainSetupConfig(
                     cwd: launch.launchDirectory,
@@ -790,7 +922,8 @@ public enum ZebraOnboardingChecklistCommand {
             agent: agent,
             shellEnvironmentPrefix: launch.shellEnvironmentPrefix,
             useGBrainSetupLaunch: true,
-            shouldPrepareCodexGBrainSetupConfig: false
+            shouldPrepareCodexGBrainSetupConfig: false,
+            executableShellExpression: executableShellExpression
         )
     }
 
@@ -832,7 +965,8 @@ public enum ZebraOnboardingChecklistCommand {
         agent: MarkdownPillAgent = MarkdownPillAgent.defaultAgent(),
         shellEnvironmentPrefix: String = "",
         useGBrainSetupLaunch: Bool = false,
-        shouldPrepareCodexGBrainSetupConfig: Bool = true
+        shouldPrepareCodexGBrainSetupConfig: Bool = true,
+        executableShellExpression: String? = nil
     ) -> String {
         let localizedPrompt = "\(ZebraOnboardingLanguage.current().promptPolicy)\n\n\(prompt)"
         _ = MarkdownChatPillCommand.prepareLaunchEnvironment(
@@ -851,7 +985,8 @@ public enum ZebraOnboardingChecklistCommand {
                 userPrompt: localizedPrompt,
                 allowTrustedAutomation: true,
                 allowLaunchDirectoryTrust: true,
-                allowApprovalAutomation: true
+                allowApprovalAutomation: true,
+                executableShellExpression: executableShellExpression
             )
         } else {
             startupLine = MarkdownChatPillCommand.shellStartupLine(

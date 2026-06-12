@@ -10,7 +10,8 @@ public enum ZebraAgentOnboardingScriptCommand {
         command: Command,
         cwd: String,
         agent: ZebraAgentKind? = nil,
-        languageCode: String? = nil
+        languageCode: String? = nil,
+        continueWithCommandFile: String? = nil
     ) -> String? {
         guard let scriptURL = Bundle.main.url(
             forResource: "zebra-agent-onboarding",
@@ -19,8 +20,26 @@ public enum ZebraAgentOnboardingScriptCommand {
             return nil
         }
 
+        return shellStartupLine(
+            scriptPath: scriptURL.path,
+            command: command,
+            cwd: cwd,
+            agent: agent,
+            languageCode: languageCode,
+            continueWithCommandFile: continueWithCommandFile
+        )
+    }
+
+    public static func shellStartupLine(
+        scriptPath: String,
+        command: Command,
+        cwd: String,
+        agent: ZebraAgentKind? = nil,
+        languageCode: String? = nil,
+        continueWithCommandFile: String? = nil
+    ) -> String {
         var arguments = [
-            scriptURL.path,
+            scriptPath,
             command.rawValue,
         ]
         let trimmedCWD = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -34,6 +53,10 @@ public enum ZebraAgentOnboardingScriptCommand {
             .flatMap(ZebraOnboardingLanguage.resolve(_:))?
             .code ?? ZebraOnboardingLanguage.current().code
         arguments += ["--language", resolvedLanguageCode]
+        if let continueWithCommandFile,
+           !continueWithCommandFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            arguments += ["--continue-with-command-file", continueWithCommandFile]
+        }
         return arguments.map(ZebraAgentLaunchCommand.shellQuote).joined(separator: " ") + "\r"
     }
 }
