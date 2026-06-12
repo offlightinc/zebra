@@ -1,17 +1,5 @@
 import SwiftUI
 
-/// Captures the email sidebar agent picker trigger button's bounds so the
-/// dropdown can be rendered at `disconnectedContent`'s root level (outside
-/// the inner VStack/Spacer layout). Scoped `fileprivate` so it can't leak
-/// anchors into the chat pill's `AgentButtonAnchorKey` if either view ever
-/// ends up nested inside the other.
-fileprivate struct EmailAgentButtonAnchorKey: PreferenceKey {
-    static let defaultValue: Anchor<CGRect>? = nil
-    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
-        value = nextValue() ?? value
-    }
-}
-
 public struct VerticalTabsSidebarEmailContent: View {
     @ObservedObject public var state: VerticalTabsSidebarModeState
     private let threads: [EmailThreadItem]?
@@ -22,13 +10,10 @@ public struct VerticalTabsSidebarEmailContent: View {
     private let errorMessage: String?
     private let connectionRepairState: ZebraEmailConnectionRepairState?
     private let selectedThreadId: String?
-    private let onConnect: ((ZebraClawvisorAgent) -> Void)?
+    private let onConnect: (() -> Void)?
     private let onRefresh: (() -> Void)?
     private let onSelectThread: ((EmailThreadItem) -> Void)?
     private let onCreateLabel: ((String) -> EmailUserLabel)?
-
-    @State private var selectedAgent: ZebraClawvisorAgent = .default
-    @State private var agentMenuOpen: Bool = false
 
     public init(state: VerticalTabsSidebarModeState) {
         self.state = state
@@ -56,7 +41,7 @@ public struct VerticalTabsSidebarEmailContent: View {
         errorMessage: String?,
         connectionRepairState: ZebraEmailConnectionRepairState?,
         selectedThreadId: String?,
-        onConnect: @escaping (ZebraClawvisorAgent) -> Void,
+        onConnect: @escaping () -> Void,
         onRefresh: @escaping () -> Void,
         onSelectThread: @escaping (EmailThreadItem) -> Void,
         onCreateLabel: @escaping (String) -> EmailUserLabel
@@ -131,80 +116,17 @@ public struct VerticalTabsSidebarEmailContent: View {
                     .padding(.horizontal, 16)
                 connectButton
                     .frame(width: max(80, geo.size.width * 2 / 3))
-                agentSelectorButton
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(BVColor.bg)
-        .overlayPreferenceValue(EmailAgentButtonAnchorKey.self) { anchor in
-            agentDropdownOverlay(anchor: anchor)
-        }
-    }
-
-    /// Renders the agent picker dropdown BELOW the agent button. Anchored
-    /// via `EmailAgentButtonAnchorKey`. Lives at `disconnectedContent`'s root so
-    /// it doesn't get tangled in the inner VStack/Spacer layout.
-    @ViewBuilder
-    private func agentDropdownOverlay(anchor: Anchor<CGRect>?) -> some View {
-        GeometryReader { geo in
-            if let anchor, agentMenuOpen {
-                let rect = geo[anchor]
-                let dropdownWidth: CGFloat = 240
-                let gap: CGFloat = 6
-                ZStack(alignment: .topLeading) {
-                    Color.clear
-                    agentDropdownPanel
-                        .offset(x: max(0, min(geo.size.width - dropdownWidth, rect.midX - dropdownWidth / 2)))
-                }
-                .frame(
-                    width: geo.size.width,
-                    height: max(0, geo.size.height - rect.maxY - gap),
-                    alignment: .topLeading
-                )
-                .offset(y: rect.maxY + gap)
-                .allowsHitTesting(true)
-            }
-        }
-        .dismissOnOutsideMouseUp(isPresented: $agentMenuOpen)
-    }
-
-    private var agentDropdownPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(ZebraClawvisorAgent.allCases) { option in
-                Button {
-                    if option.isAvailable {
-                        selectedAgent = option
-                        agentMenuOpen = false
-                    }
-                } label: {
-                    ZebraClawvisorAgentMenuRow(
-                        agent: option,
-                        active: option == selectedAgent
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(!option.isAvailable)
-            }
-        }
-        .padding(4)
-        .frame(width: 240)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(MarkdownPillPalette.popoverBg)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(MarkdownPillPalette.borderStrong, lineWidth: 1)
-        )
-        .shadow(color: BVColor.shadowStrong, radius: 30, x: 0, y: 24)
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// Standalone "Connect" button. Tapping kicks off the onboarding agent
-    /// flow for the currently selected agent (shown in the pill below).
+    /// flow for the primary agent.
     private var connectButton: some View {
-        Button(action: { onConnect?(selectedAgent) }) {
+        Button(action: { onConnect?() }) {
             HStack(spacing: 6) {
                 if isLoading {
                     ProgressView()
@@ -225,41 +147,7 @@ public struct VerticalTabsSidebarEmailContent: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isLoading || onConnect == nil || !selectedAgent.isAvailable)
-    }
-
-    /// Nested agent pill (darker fill capsule) inside `connectAndAgentBox`.
-    /// Tapping opens the agent dropdown.
-    private var agentSelectorButton: some View {
-        Button {
-            agentMenuOpen.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: selectedAgent.symbolName)
-                    .font(.system(size: 11, weight: .medium))
-                Text(selectedAgent.label)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(BVColor.fgFaint)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 22)
-            .background(
-                Capsule()
-                    .fill(BVColor.bg)
-                    .overlay(Capsule().stroke(BVColor.border.opacity(0.6)))
-            )
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        // Publish the button's bounds so `disconnectedContent` can render the
-        // dropdown BELOW the pill via `.overlayPreferenceValue`. Embedding the
-        // dropdown inline as an `.overlay` on this Button was unreliable —
-        // alignmentGuide offsets didn't escape some intermediate layout
-        // boundary and the popup rendered above the trigger instead of below.
-        .anchorPreference(key: EmailAgentButtonAnchorKey.self, value: .bounds) { $0 }
+        .disabled(isLoading || onConnect == nil)
     }
 
     private func errorContent(_ message: String) -> some View {
@@ -278,7 +166,7 @@ public struct VerticalTabsSidebarEmailContent: View {
                 .lineLimit(4)
                 .padding(.horizontal, 24)
             if !isConnected {
-                Button(action: { onConnect?(selectedAgent) }) {
+                Button(action: { onConnect?() }) {
                     HStack(spacing: 6) {
                         if isLoading {
                             ProgressView()
@@ -365,7 +253,7 @@ public struct VerticalTabsSidebarEmailContent: View {
                     .padding(.horizontal, 24)
             }
             if state.kind != .provisioning {
-                Button(action: { onConnect?(selectedAgent) }) {
+                Button(action: { onConnect?() }) {
                     HStack(spacing: 6) {
                         Image(systemName: "link")
                             .font(.system(size: 11, weight: .medium))
@@ -381,8 +269,7 @@ public struct VerticalTabsSidebarEmailContent: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(isLoading || onConnect == nil || !selectedAgent.isAvailable)
-                agentSelectorButton
+                .disabled(isLoading || onConnect == nil)
             }
             Button(action: { onRefresh?() }) {
                 HStack(spacing: 6) {
@@ -411,9 +298,6 @@ public struct VerticalTabsSidebarEmailContent: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(BVColor.bg)
-        .overlayPreferenceValue(EmailAgentButtonAnchorKey.self) { anchor in
-            agentDropdownOverlay(anchor: anchor)
-        }
     }
 
     private func repairSymbol(for kind: ZebraEmailConnectionRepairState.Kind) -> String {

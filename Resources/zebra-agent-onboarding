@@ -18,9 +18,14 @@ STATE_FILE="$ONBOARDING_DIR/agent-cli-state.json"
 EVENTS_FILE="$ONBOARDING_DIR/agent-cli-events.jsonl"
 PREFERENCES_FILE="$AGENT_DIR/preferences.json"
 INCLUDE_GLOBAL_AGENT_PATHS="${ZEBRA_AGENT_ONBOARDING_INCLUDE_GLOBAL_PATHS:-1}"
+CONFIGURE_SHELL_PATH="${ZEBRA_AGENT_ONBOARDING_CONFIGURE_SHELL_PATH:-1}"
+FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="${ZEBRA_AGENT_ONBOARDING_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE:-0}"
 STATUS_PROBE_TIMEOUT_SECONDS="${ZEBRA_AGENT_STATUS_TIMEOUT_SECONDS:-8}"
 READINESS_POLL_INTERVAL_SECONDS="${ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS:-3}"
 ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS="${ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS:-15}"
+CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS="${ZEBRA_AGENT_CLAUDE_USABLE_TIMEOUT_SECONDS:-20}"
+CLAUDE_POST_USABLE_AUTH_DELAY_SECONDS="${ZEBRA_AGENT_CLAUDE_POST_USABLE_AUTH_DELAY_SECONDS:-2}"
+CLAUDE_POST_USABLE_AUTH_RETRIES="${ZEBRA_AGENT_CLAUDE_POST_USABLE_AUTH_RETRIES:-3}"
 ONBOARDING_LANGUAGE="${ZEBRA_ONBOARDING_LANGUAGE:-}"
 CODEX_INSTALL_BIN_DIR="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
 case "$STATUS_PROBE_TIMEOUT_SECONDS" in
@@ -35,6 +40,17 @@ case "$ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS" in
   ''|*[!0-9]*) ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=15 ;;
 esac
 [[ "$ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS" -gt 0 ]] || ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=15
+case "$CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS" in
+  ''|*[!0-9]*) CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS=20 ;;
+esac
+[[ "$CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS" -gt 0 ]] || CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS=20
+case "$CLAUDE_POST_USABLE_AUTH_DELAY_SECONDS" in
+  ''|*[!0-9]*) CLAUDE_POST_USABLE_AUTH_DELAY_SECONDS=2 ;;
+esac
+case "$CLAUDE_POST_USABLE_AUTH_RETRIES" in
+  ''|*[!0-9]*) CLAUDE_POST_USABLE_AUTH_RETRIES=3 ;;
+esac
+[[ "$CLAUDE_POST_USABLE_AUTH_RETRIES" -gt 0 ]] || CLAUDE_POST_USABLE_AUTH_RETRIES=3
 
 # Zebra is often launched outside the user's login shell. Include common CLI
 # install locations before scanning or launching provider tools.
@@ -48,6 +64,7 @@ RUN_ID=""
 SAVED_PRIMARY=""
 SELECTED_AGENT=""
 REQUESTED_AGENT=""
+CONTINUE_COMMAND_FILE=""
 ONBOARDING_CWD="$PWD"
 SELF_PATH=""
 STATE_ERROR_CODE=""
@@ -87,7 +104,7 @@ RESUME_FLOW_HANDLED=0
 
 usage() {
   cat <<'USAGE'
-zebra-agent-onboarding [run|choose-primary] [--cwd <path>] [--agent <agent>] [--language <en|ja|ko>]
+zebra-agent-onboarding [run|choose-primary] [--cwd <path>] [--agent <agent>] [--language <en|ja|ko>] [--continue-with-command-file <path>]
 zebra-agent-onboarding mark-ready --agent <agent> --run-id <runId> [--language <en|ja|ko>]
 
 Commands:
@@ -95,6 +112,11 @@ Commands:
   choose-primary  Force a primary-agent choice even if a saved preference exists.
                   Pass --agent to recover or install a specific selected agent.
   mark-ready      Compatibility write path; normal flow completes via readiness probes.
+
+Options:
+  --continue-with-command-file <path>
+                  After primary-agent selection succeeds, run this command file
+                  in the same terminal instead of launching the bare provider CLI.
 
 Supported agents:
   claude, codex, antigravity
@@ -171,7 +193,19 @@ msg_en() {
     install_found_at) printf '%s found at %s.\n' "$@" ;;
     install_manual_command) printf '\nManual install command for %s:\n\n  %s\n\n' "$@" ;;
     install_not_run) printf '\nInstaller was not run.\n' "$@" ;;
-    install_official_prompt) printf '\nZebra will run the official installer for %s:\n\n  %s\n\n' "$@" ;;
+    install_official_prompt) printf '\nZebra will run the installer command for %s:\n\n  %s\n\n' "$@" ;;
+    install_shell_path_configured) printf 'Updated shell startup files so %s is available in new terminals.\n' "$@" ;;
+    install_codex_try_official) printf 'Trying Codex official installer...\n' "$@" ;;
+    install_codex_skip_official) printf 'Codex official installer did not complete. Trying fallbacks...\n' "$@" ;;
+    install_codex_official_failed) printf 'Codex official installer did not complete. Trying fallbacks...\n' "$@" ;;
+    install_codex_try_npm) printf 'Trying Codex npm install with existing npm...\n' "$@" ;;
+    install_codex_skip_npm) printf 'npm was not found. Skipping npm fallback.\n' "$@" ;;
+    install_codex_npm_failed) printf 'Codex npm install did not complete.\n' "$@" ;;
+    install_codex_try_brew) printf 'Trying Codex Homebrew install with existing brew...\n' "$@" ;;
+    install_codex_skip_brew) printf 'brew was not found. Skipping Homebrew fallback.\n' "$@" ;;
+    install_codex_brew_failed) printf 'Codex Homebrew install did not complete.\n' "$@" ;;
+    install_codex_try_standalone) printf 'Installing Codex standalone binary from OpenAI GitHub Release...\n' "$@" ;;
+    install_codex_method_succeeded) printf 'Codex install succeeded via %s.\n' "$@" ;;
     install_press_return) printf 'Press Return to continue.' "$@" ;;
     install_retry) printf '  1. Retry %s install\n' "$@" ;;
     install_show_manual) printf '  3. Show manual install command\n' "$@" ;;
@@ -240,7 +274,19 @@ msg_ko() {
     install_found_at) printf '%s를 %s에서 찾았습니다.\n' "$@" ;;
     install_manual_command) printf '\n%s manual install command:\n\n  %s\n\n' "$@" ;;
     install_not_run) printf '\ninstaller를 실행하지 않았습니다.\n' "$@" ;;
-    install_official_prompt) printf '\nZebra가 %s official installer를 실행합니다:\n\n  %s\n\n' "$@" ;;
+    install_official_prompt) printf '\nZebra가 %s installer command를 실행합니다:\n\n  %s\n\n' "$@" ;;
+    install_shell_path_configured) printf '새 터미널에서도 %s를 사용할 수 있도록 shell startup file을 업데이트했습니다.\n' "$@" ;;
+    install_codex_try_official) printf 'Codex official installer를 시도합니다...\n' "$@" ;;
+    install_codex_skip_official) printf 'Codex official installer가 완료되지 않았습니다. fallback을 시도합니다...\n' "$@" ;;
+    install_codex_official_failed) printf 'Codex official installer가 완료되지 않았습니다. fallback을 시도합니다...\n' "$@" ;;
+    install_codex_try_npm) printf '기존 npm으로 Codex npm install을 시도합니다...\n' "$@" ;;
+    install_codex_skip_npm) printf 'npm을 찾지 못했습니다. npm fallback을 건너뜁니다.\n' "$@" ;;
+    install_codex_npm_failed) printf 'Codex npm install이 완료되지 않았습니다.\n' "$@" ;;
+    install_codex_try_brew) printf '기존 brew로 Codex Homebrew install을 시도합니다...\n' "$@" ;;
+    install_codex_skip_brew) printf 'brew를 찾지 못했습니다. Homebrew fallback을 건너뜁니다.\n' "$@" ;;
+    install_codex_brew_failed) printf 'Codex Homebrew install이 완료되지 않았습니다.\n' "$@" ;;
+    install_codex_try_standalone) printf 'OpenAI GitHub Release에서 Codex standalone binary를 설치합니다...\n' "$@" ;;
+    install_codex_method_succeeded) printf '%s 경로로 Codex install이 완료되었습니다.\n' "$@" ;;
     install_press_return) printf '계속하려면 Return을 누르세요.' "$@" ;;
     install_retry) printf '  1. %s install 재시도\n' "$@" ;;
     install_show_manual) printf '  3. manual install command 보기\n' "$@" ;;
@@ -309,7 +355,19 @@ msg_ja() {
     install_found_at) printf '%sを%sで見つけました。\n' "$@" ;;
     install_manual_command) printf '\n%s manual install command:\n\n  %s\n\n' "$@" ;;
     install_not_run) printf '\ninstallerは実行されませんでした。\n' "$@" ;;
-    install_official_prompt) printf '\nZebraが%s official installerを実行します:\n\n  %s\n\n' "$@" ;;
+    install_official_prompt) printf '\nZebraが%s installer commandを実行します:\n\n  %s\n\n' "$@" ;;
+    install_shell_path_configured) printf '新しいターミナルでも%sを使えるようにshell startup fileを更新しました。\n' "$@" ;;
+    install_codex_try_official) printf 'Codex official installerを試します...\n' "$@" ;;
+    install_codex_skip_official) printf 'Codex official installerは完了しませんでした。fallbackを試します...\n' "$@" ;;
+    install_codex_official_failed) printf 'Codex official installerは完了しませんでした。fallbackを試します...\n' "$@" ;;
+    install_codex_try_npm) printf '既存のnpmでCodex npm installを試します...\n' "$@" ;;
+    install_codex_skip_npm) printf 'npmが見つかりません。npm fallbackをスキップします。\n' "$@" ;;
+    install_codex_npm_failed) printf 'Codex npm installは完了しませんでした。\n' "$@" ;;
+    install_codex_try_brew) printf '既存のbrewでCodex Homebrew installを試します...\n' "$@" ;;
+    install_codex_skip_brew) printf 'brewが見つかりません。Homebrew fallbackをスキップします。\n' "$@" ;;
+    install_codex_brew_failed) printf 'Codex Homebrew installは完了しませんでした。\n' "$@" ;;
+    install_codex_try_standalone) printf 'OpenAI GitHub ReleaseからCodex standalone binaryをインストールします...\n' "$@" ;;
+    install_codex_method_succeeded) printf '%s経由でCodex installが完了しました。\n' "$@" ;;
     install_press_return) printf '続けるにはReturnを押してください。' "$@" ;;
     install_retry) printf '  1. %s installを再試行\n' "$@" ;;
     install_show_manual) printf '  3. manual install commandを表示\n' "$@" ;;
@@ -415,6 +473,29 @@ json_string_array() {
   printf ']'
 }
 
+json_raw_field() {
+  local key="$1"
+  local payload="$2"
+  local tmp status
+  tmp="$(mktemp "${TMPDIR:-/tmp}/zebra-json.XXXXXX")"
+  printf '%s' "$payload" > "$tmp"
+  plutil -extract "$key" raw -o - "$tmp" 2>/dev/null
+  status="$?"
+  rm -f "$tmp"
+  return "$status"
+}
+
+json_bool_field_is_true() {
+  local key="$1"
+  local payload="$2"
+  local value
+  value="$(json_raw_field "$key" "$payload" 2>/dev/null | tr '[:upper:]' '[:lower:]')" || return 1
+  case "$value" in
+    true|1|yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 valid_agent() {
   case "$1" in
     claude|codex|antigravity) return 0 ;;
@@ -441,7 +522,7 @@ binary_name() {
 installer_command() {
   case "$1" in
     claude) printf 'curl -fsSL https://claude.ai/install.sh | bash' ;;
-    codex) printf 'curl -fsSL https://chatgpt.com/codex/install.sh | sh' ;;
+    codex) printf 'curl -fsSL https://chatgpt.com/codex/install.sh | sh; if that fails, use existing npm or brew; if neither is available, install the official GitHub Release binary' ;;
     antigravity) printf 'curl -fsSL https://antigravity.google/cli/install.sh | bash' ;;
   esac
 }
@@ -456,6 +537,280 @@ install_not_found_message() {
       printf 'Installer completed, but %s was not found on PATH or known install paths.' "$(binary_name "$agent")"
       ;;
   esac
+}
+
+codex_standalone_target() {
+  case "$(uname -m)" in
+    arm64) printf 'aarch64-apple-darwin' ;;
+    x86_64) printf 'x86_64-apple-darwin' ;;
+    *) return 1 ;;
+  esac
+}
+
+install_codex_from_github_release() {
+  local target archive_url tmpdir archive extracted install_path
+  target="$(codex_standalone_target)" || return 1
+  archive_url="https://github.com/openai/codex/releases/latest/download/codex-$target.tar.gz"
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/zebra-codex-install.XXXXXX")" || return 1
+  archive="$tmpdir/codex.tar.gz"
+  install_path="$CODEX_INSTALL_BIN_DIR/codex"
+
+  if ! curl -fL "$archive_url" -o "$archive"; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if ! tar -xzf "$archive" -C "$tmpdir"; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  extracted="$tmpdir/codex-$target"
+  if [[ ! -f "$extracted" ]]; then
+    extracted=""
+    for candidate in "$tmpdir"/codex*; do
+      if [[ -f "$candidate" && -x "$candidate" ]]; then
+        extracted="$candidate"
+        break
+      fi
+    done
+  fi
+  if [[ -z "$extracted" || ! -f "$extracted" ]]; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$install_path")"
+  cp "$extracted" "$install_path"
+  chmod +x "$install_path"
+  rm -rf "$tmpdir"
+}
+
+agent_is_available_to_zebra() {
+  local agent="$1"
+  resolve_executable "$agent"
+  [[ "$RESOLVE_STATUS" == "installed" && -n "$RESOLVE_PATH" ]]
+}
+
+hidden_agent_executable_candidates() {
+  local agent="$1"
+  local binary
+  binary="$(binary_name "$agent")"
+  case "$agent" in
+    claude)
+      printf '%s\n' \
+        "$HOME/.claude/local/$binary" \
+        "$HOME/.claude/bin/$binary" \
+        "$HOME/.local/share/claude/$binary"
+      ;;
+    codex)
+      printf '%s\n' \
+        "$HOME/.codex/bin/$binary" \
+        "$HOME/.local/share/codex/$binary"
+      ;;
+  esac
+}
+
+expose_hidden_agent_install() {
+  local agent="$1"
+  local binary source target
+  binary="$(binary_name "$agent")"
+  if [[ "$agent" == "codex" ]]; then
+    target="$CODEX_INSTALL_BIN_DIR/$binary"
+  else
+    target="$HOME/.local/bin/$binary"
+  fi
+  while IFS= read -r source; do
+    [[ -n "$source" && -x "$source" ]] || continue
+    is_transient_path "$source" && continue
+    if [[ "$agent" == "claude" ]] && is_cmux_claude_wrapper "$source"; then
+      continue
+    fi
+    mkdir -p "$(dirname "$target")"
+    if [[ "$source" != "$target" ]]; then
+      ln -sf "$source" "$target"
+    fi
+    agent_is_available_to_zebra "$agent" && return 0
+  done < <(hidden_agent_executable_candidates "$agent")
+  return 1
+}
+
+run_claude_installer_chain() {
+  set -o pipefail
+  if curl -fsSL https://claude.ai/install.sh | bash; then
+    if agent_is_available_to_zebra claude; then
+      return 0
+    fi
+    expose_hidden_agent_install claude
+  fi
+}
+
+run_codex_installer_chain() {
+  set -o pipefail
+  if [[ "$FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE" == "1" ]]; then
+    msg install_codex_skip_official
+  else
+    msg install_codex_try_official
+    if curl -fsSL https://chatgpt.com/codex/install.sh | sh; then
+      if agent_is_available_to_zebra codex; then
+        msg install_codex_method_succeeded "official installer"
+        return 0
+      fi
+      if expose_hidden_agent_install codex; then
+        msg install_codex_method_succeeded "official installer"
+        return 0
+      fi
+    fi
+    msg install_codex_official_failed
+  fi
+
+  if command -v npm >/dev/null 2>&1; then
+    msg install_codex_try_npm
+    if npm install -g @openai/codex; then
+      if agent_is_available_to_zebra codex; then
+        msg install_codex_method_succeeded "npm"
+        return 0
+      fi
+    fi
+    msg install_codex_npm_failed
+  else
+    msg install_codex_skip_npm
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    msg install_codex_try_brew
+    if brew install --cask codex; then
+      if agent_is_available_to_zebra codex; then
+        msg install_codex_method_succeeded "Homebrew"
+        return 0
+      fi
+    fi
+    msg install_codex_brew_failed
+  else
+    msg install_codex_skip_brew
+  fi
+
+  msg install_codex_try_standalone
+  if install_codex_from_github_release && agent_is_available_to_zebra codex; then
+    msg install_codex_method_succeeded "standalone"
+    return 0
+  fi
+  return 1
+}
+
+shell_single_quote() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
+path_dir_seen() {
+  local needle="$1"
+  shift || true
+  local item
+  for item in "$@"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+agent_shell_path_dirs() {
+  local agent="$1"
+  local executable_path executable_dir
+  local dirs=()
+  executable_path="$(path_for_agent "$agent")"
+  if [[ -n "$executable_path" ]]; then
+    executable_dir="$(cd "$(dirname "$executable_path")" 2>/dev/null && pwd || true)"
+    if [[ -n "$executable_dir" ]]; then
+      dirs+=("$executable_dir")
+    fi
+  fi
+  if [[ "$agent" == "codex" ]]; then
+    dirs+=("$CODEX_INSTALL_BIN_DIR")
+  fi
+  dirs+=("$HOME/.local/bin")
+  if [[ "$INCLUDE_GLOBAL_AGENT_PATHS" != "0" ]]; then
+    dirs+=("/opt/homebrew/bin" "/usr/local/bin")
+  fi
+
+  local seen=()
+  local dir
+  for dir in "${dirs[@]}"; do
+    [[ -n "$dir" ]] || continue
+    if [[ "${#seen[@]}" -gt 0 ]] && path_dir_seen "$dir" "${seen[@]}"; then
+      continue
+    fi
+    seen+=("$dir")
+    printf '%s\n' "$dir"
+  done
+}
+
+write_managed_block() {
+  local file="$1"
+  local block="$2"
+  local tmp
+  mkdir -p "$(dirname "$file")"
+  tmp="$(mktemp "$file.tmp.XXXXXX")"
+  if [[ -f "$file" ]]; then
+    awk '
+      $0 == "# >>> Zebra agent CLI PATH >>>" { skip = 1; next }
+      $0 == "# <<< Zebra agent CLI PATH <<<" { skip = 0; next }
+      skip != 1 { print }
+    ' "$file" > "$tmp"
+  else
+    : > "$tmp"
+  fi
+  if [[ -s "$tmp" ]]; then
+    printf '\n' >> "$tmp"
+  fi
+  printf '%s\n' "$block" >> "$tmp"
+  mv "$tmp" "$file"
+}
+
+agent_shell_path_sh_block() {
+  local dir quoted
+  printf '# >>> Zebra agent CLI PATH >>>\n'
+  while IFS= read -r dir; do
+    [[ -n "$dir" ]] || continue
+    quoted="$(shell_single_quote "$dir")"
+    printf 'zebra_agent_cli_path_dir=%s\n' "$quoted"
+    printf 'case ":$PATH:" in\n'
+    printf '  *":$zebra_agent_cli_path_dir:"*) ;;\n'
+    printf '  *) export PATH="$zebra_agent_cli_path_dir:$PATH" ;;\n'
+    printf 'esac\n'
+  done
+  printf 'unset zebra_agent_cli_path_dir\n'
+  printf '# <<< Zebra agent CLI PATH <<<'
+}
+
+agent_shell_path_fish_block() {
+  local dir quoted
+  printf '# >>> Zebra agent CLI PATH >>>\n'
+  while IFS= read -r dir; do
+    [[ -n "$dir" ]] || continue
+    quoted="$(shell_single_quote "$dir")"
+    printf 'if not contains -- %s $PATH\n' "$quoted"
+    printf '    set -gx PATH %s $PATH\n' "$quoted"
+    printf 'end\n'
+  done
+  printf '# <<< Zebra agent CLI PATH <<<'
+}
+
+configure_shell_path_for_agent() {
+  local agent="$1"
+  local sh_block fish_block extra
+  [[ "$CONFIGURE_SHELL_PATH" != "0" ]] || return 0
+  sh_block="$(agent_shell_path_dirs "$agent" | agent_shell_path_sh_block)"
+  fish_block="$(agent_shell_path_dirs "$agent" | agent_shell_path_fish_block)"
+
+  write_managed_block "$HOME/.zprofile" "$sh_block"
+  write_managed_block "$HOME/.zshrc" "$sh_block"
+  write_managed_block "$HOME/.bash_profile" "$sh_block"
+  write_managed_block "$HOME/.bashrc" "$sh_block"
+  write_managed_block "$HOME/.config/fish/conf.d/zebra-agent-path.fish" "$fish_block"
+
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  append_event shell_path_configured "$extra"
+  msg install_shell_path_configured "$(binary_name "$agent")"
 }
 
 mkdirs() {
@@ -648,12 +1003,19 @@ ensure_preferences_base() {
 set_primary_preference() {
   local agent="$1"
   local updated_by="${2:-onboarding}"
+  local executable_path="${3:-}"
   local tmp
   mkdir -p "$AGENT_DIR"
   tmp="$(mktemp "$PREFERENCES_FILE.tmp.XXXXXX")"
   ensure_preferences_base "$tmp"
   plutil -replace primaryAgent -string "$agent" "$tmp" >/dev/null 2>&1 \
     || plutil -insert primaryAgent -string "$agent" "$tmp" >/dev/null
+  if [[ -n "$executable_path" ]]; then
+    plutil -replace primaryAgentExecutablePath -string "$executable_path" "$tmp" >/dev/null 2>&1 \
+      || plutil -insert primaryAgentExecutablePath -string "$executable_path" "$tmp" >/dev/null
+  else
+    plutil -remove primaryAgentExecutablePath "$tmp" >/dev/null 2>&1 || true
+  fi
   plutil -replace updatedAt -string "$(now_iso)" "$tmp" >/dev/null 2>&1 \
     || plutil -insert updatedAt -string "$(now_iso)" "$tmp" >/dev/null
   plutil -replace updatedBy -string "$updated_by" "$tmp" >/dev/null 2>&1 \
@@ -1251,7 +1613,19 @@ run_installer() {
   append_event install_started "$extra"
 
   msg installing "$(display_name "$agent")"
-  if /bin/bash -lc "$command_label"; then
+  if [[ "$agent" == "claude" ]]; then
+    if run_claude_installer_chain; then
+      status=0
+    else
+      status="$?"
+    fi
+  elif [[ "$agent" == "codex" ]]; then
+    if run_codex_installer_chain; then
+      status=0
+    else
+      status="$?"
+    fi
+  elif /bin/bash -lc "$command_label"; then
     status=0
   else
     status="$?"
@@ -1332,6 +1706,7 @@ install_then_launch() {
       rescan_after_install "$agent"
       if is_agent_installed "$agent"; then
         msg install_found_at "$(display_name "$agent")" "$(path_for_agent "$agent")"
+        configure_shell_path_for_agent "$agent"
         select_and_launch "$agent" post_install
         return
       fi
@@ -1377,7 +1752,7 @@ event_exists() {
 complete_onboarding() {
   local agent="$1"
   local source="$2"
-  local extra lock_dir i
+  local extra lock_dir i executable_path
   lock_dir="$ONBOARDING_DIR/agent-complete.$RUN_ID.$agent.lock"
   mkdir -p "$ONBOARDING_DIR"
   if ! mkdir "$lock_dir" 2>/dev/null; then
@@ -1398,7 +1773,11 @@ complete_onboarding() {
   extra+=',"source":'
   extra+="$(json_string "$source")"
   update_state_complete "$agent"
-  set_primary_preference "$agent" onboarding
+  executable_path="$(path_for_agent "$agent")"
+  if [[ -z "$executable_path" ]]; then
+    executable_path="$(command -v -- "$(binary_name "$agent")" 2>/dev/null || true)"
+  fi
+  set_primary_preference "$agent" onboarding "$executable_path"
   if ! ready_event_exists "$agent"; then
     append_event agent_ready_reported "$extra"
   fi
@@ -1419,11 +1798,13 @@ readiness_probe_method() {
 append_readiness_probe_started_event() {
   local agent="$1"
   local method="$2"
+  local context="${3:-}"
   local extra
   extra=',"agent":'
   extra+="$(json_string "$agent")"
   extra+=',"method":'
   extra+="$(json_string "$method")"
+  extra+="$context"
   append_event agent_readiness_probe_started "$extra"
 }
 
@@ -1431,6 +1812,7 @@ append_readiness_probe_event() {
   local event="$1"
   local agent="$2"
   local method="$3"
+  local context="${4:-}"
   local extra
   extra=',"agent":'
   extra+="$(json_string "$agent")"
@@ -1444,6 +1826,22 @@ append_readiness_probe_event() {
   else
     extra+='false'
   fi
+  if [[ "$agent" == "claude" && "$method" == "claude auth status --json" ]]; then
+    extra+=',"loggedIn":'
+    if json_bool_field_is_true loggedIn "$CLI_PROBE_STDOUT"; then
+      extra+='true'
+    else
+      extra+='false'
+    fi
+  elif [[ "$agent" == "claude" && "$method" == "claude -p readiness probe" ]]; then
+    extra+=',"usable":'
+    if [[ "$CLI_PROBE_STATUS" -eq 0 && "$CLI_PROBE_TIMED_OUT" -eq 0 ]]; then
+      extra+='true'
+    else
+      extra+='false'
+    fi
+  fi
+  extra+="$context"
   append_event "$event" "$extra"
 }
 
@@ -1469,7 +1867,6 @@ agent_readiness_verified() {
     executable_path="$(binary_name "$agent")"
   fi
   method="$(readiness_probe_method "$agent")"
-  append_readiness_probe_started_event "$agent" "$method"
   CLI_PROBE_STDOUT=""
   CLI_PROBE_STDERR=""
   CLI_PROBE_STATUS=0
@@ -1477,12 +1874,15 @@ agent_readiness_verified() {
 
   case "$agent" in
     claude)
-      run_cli_probe "$STATUS_PROBE_TIMEOUT_SECONDS" "$executable_path" auth status --json || true
+      claude_readiness_verified "$executable_path"
+      return "$?"
       ;;
     codex)
+      append_readiness_probe_started_event "$agent" "$method"
       run_cli_probe "$STATUS_PROBE_TIMEOUT_SECONDS" "$executable_path" login status || true
       ;;
     antigravity)
+      append_readiness_probe_started_event "$agent" "$method"
       if antigravity_readiness_verified; then
         CLI_PROBE_STATUS=0
       else
@@ -1496,6 +1896,68 @@ agent_readiness_verified() {
     return 0
   fi
   append_readiness_probe_event agent_readiness_probe_failed "$agent" "$method"
+  return 1
+}
+
+readiness_probe_context() {
+  local stage="$1"
+  local attempt="${2:-}"
+  local context
+  context=',"stage":'
+  context+="$(json_string "$stage")"
+  if [[ -n "$attempt" ]]; then
+    context+=',"attempt":'
+    context+="$attempt"
+  fi
+  printf '%s' "$context"
+}
+
+claude_auth_status_logged_in() {
+  local executable_path="$1"
+  run_cli_probe "$STATUS_PROBE_TIMEOUT_SECONDS" "$executable_path" auth status --json || true
+  [[ "$CLI_PROBE_STATUS" -eq 0 && "$CLI_PROBE_TIMED_OUT" -eq 0 ]] || return 1
+  json_bool_field_is_true loggedIn "$CLI_PROBE_STDOUT"
+}
+
+claude_usable_probe_verified() {
+  local executable_path="$1"
+  run_cli_probe "$CLAUDE_USABLE_PROBE_TIMEOUT_SECONDS" "$executable_path" --safe-mode --no-session-persistence --output-format json --max-turns 1 --tools "" -p "Reply exactly: ok" || true
+  [[ "$CLI_PROBE_STATUS" -eq 0 && "$CLI_PROBE_TIMED_OUT" -eq 0 ]]
+}
+
+claude_readiness_verified() {
+  local executable_path="$1"
+  local auth_method usable_method context attempt
+  auth_method="claude auth status --json"
+  usable_method="claude -p readiness probe"
+
+  context="$(readiness_probe_context auth-status-initial)"
+  append_readiness_probe_started_event claude "$auth_method" "$context"
+  if ! claude_auth_status_logged_in "$executable_path"; then
+    append_readiness_probe_event agent_readiness_probe_failed claude "$auth_method" "$context"
+    return 1
+  fi
+  append_readiness_probe_event agent_readiness_probe_succeeded claude "$auth_method" "$context"
+
+  context="$(readiness_probe_context usable-probe)"
+  append_readiness_probe_started_event claude "$usable_method" "$context"
+  if ! claude_usable_probe_verified "$executable_path"; then
+    append_readiness_probe_event agent_readiness_probe_failed claude "$usable_method" "$context"
+    return 1
+  fi
+  append_readiness_probe_event agent_readiness_probe_succeeded claude "$usable_method" "$context"
+
+  for ((attempt = 1; attempt <= CLAUDE_POST_USABLE_AUTH_RETRIES; attempt++)); do
+    sleep "$CLAUDE_POST_USABLE_AUTH_DELAY_SECONDS"
+    context="$(readiness_probe_context auth-status-after-usable "$attempt")"
+    append_readiness_probe_started_event claude "$auth_method" "$context"
+    if claude_auth_status_logged_in "$executable_path"; then
+      append_readiness_probe_event agent_readiness_probe_succeeded claude "$auth_method" "$context"
+      return 0
+    fi
+    append_readiness_probe_event agent_readiness_probe_failed claude "$auth_method" "$context"
+  done
+
   return 1
 }
 
@@ -1569,6 +2031,55 @@ verify_and_complete_agent_ready() {
   return 1
 }
 
+has_continue_command_file() {
+  [[ -n "${CONTINUE_COMMAND_FILE:-}" ]]
+}
+
+launch_chained_step2() {
+  local agent="$1"
+  local executable_path="$2"
+  local status extra
+  if [[ -z "$CONTINUE_COMMAND_FILE" || ! -f "$CONTINUE_COMMAND_FILE" ]]; then
+    extra=',"agent":'
+    extra+="$(json_string "$agent")"
+    extra+=',"commandFile":'
+    extra+="$(json_nullable_string "$CONTINUE_COMMAND_FILE")"
+    append_event agent_launch_chained_step2_missing "$extra"
+    set_state_error chained_step2_missing "$agent" "Chained Step 2 command file was not found." true
+    write_state failed "$agent"
+    return 1
+  fi
+
+  complete_onboarding "$agent" chained-step2
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  extra+=',"commandFile":'
+  extra+="$(json_string "$CONTINUE_COMMAND_FILE")"
+  extra+=',"executablePath":'
+  extra+="$(json_string "$executable_path")"
+  append_event agent_launch_chained_step2_started "$extra"
+
+  if (
+    cd "$ONBOARDING_CWD" && \
+      ZEBRA_SELECTED_AGENT="$agent" \
+      ZEBRA_AGENT_EXECUTABLE="$executable_path" \
+      /bin/bash "$CONTINUE_COMMAND_FILE"
+  ); then
+    status=0
+  else
+    status="$?"
+  fi
+
+  extra=',"agent":'
+  extra+="$(json_string "$agent")"
+  extra+=',"commandFile":'
+  extra+="$(json_string "$CONTINUE_COMMAND_FILE")"
+  extra+=',"exitCode":'
+  extra+="$status"
+  append_event agent_launch_chained_step2_exited "$extra"
+  return "$status"
+}
+
 launch_selected_agent() {
   local agent="$1"
   local status extra
@@ -1590,6 +2101,10 @@ launch_selected_agent() {
   msg start_agent "$(display_name "$agent")"
   msg provider_signin
   write_state agent_working "$agent"
+  if has_continue_command_file; then
+    launch_chained_step2 "$agent" "$executable_path"
+    return $?
+  fi
   if [[ "$agent" == "antigravity" ]]; then
     write_antigravity_auth_log_baseline
   fi
@@ -1721,6 +2236,10 @@ resume_existing_flow() {
       msg resume_agent "$(display_name "$resume_agent")"
       append_resume_event "$resume_phase" "$resume_agent"
       scan_agents_for_resume
+      if has_continue_command_file && is_agent_installed "$resume_agent"; then
+        launch_selected_agent "$resume_agent"
+        return $?
+      fi
       if verify_and_complete_agent_ready "$resume_agent"; then
         return 0
       fi
@@ -1939,6 +2458,10 @@ main() {
               usage >&2
               exit 2
             }
+            shift 2
+            ;;
+          --continue-with-command-file)
+            CONTINUE_COMMAND_FILE="${2:-}"
             shift 2
             ;;
           --language)

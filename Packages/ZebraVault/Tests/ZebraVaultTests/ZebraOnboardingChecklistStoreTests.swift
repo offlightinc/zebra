@@ -33,6 +33,92 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testAutomaticStepStartRequiresCurrentSessionAgentLaunchLatch() {
+        XCTAssertNil(
+            ZebraOnboardingChecklistStore.automaticStepToStart(
+                previousCompletedStepIDs: [],
+                currentCompletedStepIDs: [.agent],
+                didStartAgentStepInCurrentSession: false
+            )
+        )
+
+        XCTAssertEqual(
+            ZebraOnboardingChecklistStore.automaticStepToStart(
+                previousCompletedStepIDs: [],
+                currentCompletedStepIDs: [.agent],
+                didStartAgentStepInCurrentSession: true
+            ),
+            .gbrainRuntime
+        )
+    }
+
+    @MainActor
+    func testAutomaticStepStartDoesNotRepeatWhenRuntimeIsAlreadyComplete() {
+        XCTAssertNil(
+            ZebraOnboardingChecklistStore.automaticStepToStart(
+                previousCompletedStepIDs: [],
+                currentCompletedStepIDs: [.agent, .gbrainRuntime],
+                didStartAgentStepInCurrentSession: true
+            )
+        )
+        XCTAssertNil(
+            ZebraOnboardingChecklistStore.automaticStepToStart(
+                previousCompletedStepIDs: [.agent],
+                currentCompletedStepIDs: [.agent],
+                didStartAgentStepInCurrentSession: true
+            )
+        )
+    }
+
+    @MainActor
+    func testChainedRuntimeHandoffMovesRunningStateToRuntimeWithoutCompletingIt() throws {
+        let root = try makeTemporaryDirectory()
+        let store = makeChecklistStore(homeURL: root)
+
+        store.beginLaunch(stepID: .agent)
+        let shouldHandoff = ZebraOnboardingChecklistStore.shouldBeginChainedRuntimeHandoff(
+            previousCompletedStepIDs: [],
+            currentCompletedStepIDs: [.agent],
+            didLaunchRuntimeInAgentTerminal: true
+        )
+
+        XCTAssertTrue(shouldHandoff)
+        if shouldHandoff {
+            store.beginLaunch(stepID: .gbrainRuntime)
+        }
+
+        XCTAssertEqual(store.runningStepID, .gbrainRuntime)
+        XCTAssertFalse(store.completedStepIDs.contains(.gbrainRuntime))
+        XCTAssertFalse(try XCTUnwrap(store.snapshots.first { $0.id == .agent }).isRunning)
+        XCTAssertTrue(try XCTUnwrap(store.snapshots.first { $0.id == .gbrainRuntime }).isRunning)
+    }
+
+    @MainActor
+    func testChainedRuntimeHandoffDoesNotBeginWithoutAgentCompletionOrWhenRuntimeComplete() {
+        XCTAssertFalse(
+            ZebraOnboardingChecklistStore.shouldBeginChainedRuntimeHandoff(
+                previousCompletedStepIDs: [],
+                currentCompletedStepIDs: [.agent],
+                didLaunchRuntimeInAgentTerminal: false
+            )
+        )
+        XCTAssertFalse(
+            ZebraOnboardingChecklistStore.shouldBeginChainedRuntimeHandoff(
+                previousCompletedStepIDs: [.agent],
+                currentCompletedStepIDs: [.agent],
+                didLaunchRuntimeInAgentTerminal: true
+            )
+        )
+        XCTAssertFalse(
+            ZebraOnboardingChecklistStore.shouldBeginChainedRuntimeHandoff(
+                previousCompletedStepIDs: [],
+                currentCompletedStepIDs: [.agent, .gbrainRuntime],
+                didLaunchRuntimeInAgentTerminal: true
+            )
+        )
+    }
+
+    @MainActor
     func testCompletedRuntimeReceiptCompletesRuntimeStepOnly() throws {
         let root = try makeTemporaryDirectory()
         let executable = try installFakeRuntime(root: root, name: "hermes")
@@ -417,6 +503,615 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains("\"statePath\""))
     }
 
+    func testRuntimeLaunchInstallsFixedInstructionDocumentAndRunIsNonInteractive() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+
+        let launch = try XCTUnwrap(store.prepareLaunch())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: launch.documentPath))
+        let installedDocument = try String(
+            contentsOf: URL(fileURLWithPath: launch.documentPath),
+            encoding: .utf8
+        )
+        let sourceDocument = try String(
+            contentsOf: Self.runtimeOnboardingDocumentURL(),
+            encoding: .utf8
+        )
+        XCTAssertEqual(installedDocument, sourceDocument)
+        XCTAssertTrue(launch.startupPrompt.contains(launch.documentPath))
+        XCTAssertTrue(launch.startupPrompt.contains("status --json"))
+        XCTAssertTrue(launch.shellEnvironmentPrefix.contains("ZEBRA_GBRAIN_RUNTIME_DOC"))
+        XCTAssertTrue(launch.shellEnvironmentPrefix.contains("\(root.path)/.local/bin"))
+        XCTAssertTrue(launch.shellEnvironmentPrefix.contains("\(root.path)/.bun/bin"))
+        XCTAssertTrue(launch.shellEnvironmentPrefix.contains("/opt/homebrew/bin"))
+        XCTAssertTrue(launch.shellEnvironmentPrefix.contains("/usr/local/bin"))
+
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let result = try runProcess(
+            executableURL: helperURL,
+            arguments: ["run"],
+            environment: [
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+                "ZEBRA_GBRAIN_RUNTIME_DOC": launch.documentPath,
+            ]
+        )
+        let payloadStart = try XCTUnwrap(result.stdout.firstIndex(of: "{"))
+        let payloadText = String(result.stdout[payloadStart...])
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(payloadText.utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(payload["mode"] as? String, "agent_orchestrated")
+        XCTAssertEqual(payload["documentPath"] as? String, launch.documentPath)
+        XCTAssertFalse(result.stdout.contains("Select runtime"))
+        XCTAssertFalse(result.stdout.contains("Select LLM connection"))
+    }
+
+    func testRuntimeHelperRequestsCLTInstallWhenPython3IsMissing() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let noPythonBin = root.appendingPathComponent("no-python-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: noPythonBin, withIntermediateDirectories: true)
+        try installFakeCommand(
+            directory: noPythonBin,
+            name: "xcode-select",
+            content: """
+            #!/bin/sh
+            exit 0
+            """
+        )
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["preflight", "--json"],
+            environment: [
+                "PATH": noPythonBin.path,
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            ]
+        )
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["requiresUserAction"] as? Bool, true)
+        XCTAssertEqual(payload["blockingReason"] as? String, "clt_install_required")
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let waitingForUser = try XCTUnwrap(progress["waitingForUser"] as? [String: Any])
+        let lastFailure = try XCTUnwrap(progress["lastFailure"] as? [String: Any])
+        let attempts = try XCTUnwrap(state["attempts"] as? [[String: Any]])
+        let preflight = try XCTUnwrap(state["preflight"] as? [String: Any])
+        let facts = try XCTUnwrap(preflight["facts"] as? [String: Any])
+        let python3 = try XCTUnwrap(facts["python3"] as? [String: Any])
+
+        XCTAssertEqual(progress["status"] as? String, "waiting_for_user")
+        XCTAssertEqual(waitingForUser["section"] as? String, "Recover common prerequisites")
+        XCTAssertEqual(lastFailure["reason"] as? String, "clt_install_required")
+        XCTAssertEqual(attempts.first?["attemptedCommand"] as? String, "xcode-select --install")
+        XCTAssertEqual(python3["blockingNow"] as? Bool, true)
+        XCTAssertEqual(python3["blockingReason"] as? String, "clt_install_required")
+    }
+
+    func testRuntimeHelperRequestsManualCLTInstallWhenPython3IsUnusableCLTShim() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "python3",
+            content: """
+            #!/bin/sh
+            echo 'xcode-select: error: No developer tools were found and no install could be requested' >&2
+            exit 1
+            """
+        )
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "xcode-select",
+            content: """
+            #!/bin/sh
+            echo 'xcode-select: error: No developer tools were found and no install could be requested' >&2
+            exit 1
+            """
+        )
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["preflight", "--json"],
+            environment: [
+                "PATH": fakeBin.path,
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            ]
+        )
+
+        XCTAssertNotEqual(result.status, 0)
+        XCTAssertTrue(result.stdout.contains("clt_manual_install_required"))
+        XCTAssertTrue(result.stderr.contains("Install CLT manually"))
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let lastFailure = try XCTUnwrap(progress["lastFailure"] as? [String: Any])
+        let attempts = try XCTUnwrap(state["attempts"] as? [[String: Any]])
+        let preflight = try XCTUnwrap(state["preflight"] as? [String: Any])
+        let facts = try XCTUnwrap(preflight["facts"] as? [String: Any])
+        let python3 = try XCTUnwrap(facts["python3"] as? [String: Any])
+
+        XCTAssertEqual(lastFailure["reason"] as? String, "clt_manual_install_required")
+        XCTAssertEqual(attempts.first?["attemptedCommand"] as? String, "xcode-select --install")
+        XCTAssertEqual(python3["present"] as? Bool, true)
+        XCTAssertEqual(python3["blockingReason"] as? String, "clt_manual_install_required")
+    }
+
+    func testRuntimeHelperCLTRecoveryWritesStateWithoutUsablePython() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "python3",
+            content: """
+            #!/bin/sh
+            echo 'xcode-select: error: No developer tools were found and no install could be requested' >&2
+            exit 1
+            """
+        )
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "xcode-select",
+            content: """
+            #!/bin/sh
+            echo 'xcode-select: error: No developer tools were found and no install could be requested' >&2
+            exit 1
+            """
+        )
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["recover-prerequisite", "clt"],
+            environment: [
+                "PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            ]
+        )
+
+        XCTAssertNotEqual(result.status, 0)
+        XCTAssertTrue(result.stdout.contains("clt_manual_install_required"))
+        XCTAssertTrue(result.stderr.contains("Install CLT manually"))
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let lastFailure = try XCTUnwrap(progress["lastFailure"] as? [String: Any])
+        let attempts = try XCTUnwrap(state["attempts"] as? [[String: Any]])
+
+        XCTAssertEqual(lastFailure["reason"] as? String, "clt_manual_install_required")
+        XCTAssertEqual(attempts.first?["attemptedCommand"] as? String, "xcode-select --install")
+    }
+
+    func testRuntimeHelperPreflightFindsBunInHomeBunBinOutsidePath() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let bunBin = root
+            .appendingPathComponent(".bun", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        try installFakeCommand(
+            directory: bunBin,
+            name: "bun",
+            content: """
+            #!/bin/sh
+            echo '1.3.14'
+            exit 0
+            """
+        )
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["preflight", "--json"],
+            environment: [
+                "PATH": "/usr/bin:/bin",
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let preflight = try XCTUnwrap(state["preflight"] as? [String: Any])
+        let facts = try XCTUnwrap(preflight["facts"] as? [String: Any])
+        let bun = try XCTUnwrap(facts["bun"] as? [String: Any])
+
+        XCTAssertEqual(bun["ok"] as? Bool, true)
+        XCTAssertEqual(bun["path"] as? String, bunBin.appendingPathComponent("bun").path)
+        XCTAssertEqual(bun["version"] as? String, "1.3.14")
+    }
+
+    func testRuntimeHelperPreflightAndReportWriteProgressState() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+        ]
+
+        let started = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "started", "--section", "Baseline preflight"],
+            environment: environment
+        )
+        XCTAssertEqual(started.status, 0)
+
+        let preflight = try runProcess(
+            executableURL: helperURL,
+            arguments: ["preflight", "--json"],
+            environment: environment
+        )
+        XCTAssertEqual(preflight.status, 0)
+
+        let completed = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--section", "Baseline preflight"],
+            environment: environment
+        )
+        XCTAssertEqual(completed.status, 0)
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let completedSections = try XCTUnwrap(progress["completedSections"] as? [String])
+        let preflightState = try XCTUnwrap(state["preflight"] as? [String: Any])
+        let facts = try XCTUnwrap(preflightState["facts"] as? [String: Any])
+        let npm = try XCTUnwrap(facts["npm"] as? [String: Any])
+
+        XCTAssertTrue(completedSections.contains("Baseline preflight"))
+        XCTAssertEqual(npm["requiredFor"] as? [String], ["openclaw"])
+        XCTAssertEqual(npm["blockingNow"] as? Bool, false)
+    }
+
+    func testRuntimeHelperNodeRecoveryReportsUserActionInsteadOfInstallCompletion() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let openLog = root.appendingPathComponent("open.log", isDirectory: false)
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "curl",
+            content: """
+            #!/bin/sh
+            output=
+            while [ "$#" -gt 0 ]; do
+              if [ "$1" = "-o" ]; then
+                shift
+                output="$1"
+              fi
+              shift || break
+            done
+            : > "$output"
+            exit 0
+            """
+        )
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "open",
+            content: """
+            #!/bin/sh
+            printf '%s\\n' "$*" > '\(shellSingleQuoted(openLog.path))'
+            exit 0
+            """
+        )
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["recover-prerequisite", "node"],
+            environment: [
+                "PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+                "ZEBRA_NODE_PKG_URL": "https://example.invalid/node.pkg",
+            ]
+        )
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["requiresUserAction"] as? Bool, true)
+        XCTAssertEqual(payload["blockingReason"] as? String, "node_pkg_install_required")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: openLog.path))
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let waitingForUser = try XCTUnwrap(progress["waitingForUser"] as? [String: Any])
+        XCTAssertEqual(waitingForUser["section"] as? String, "Recover selected-runtime prerequisites")
+    }
+
+    func testRuntimeHelperOpenClawInstallSetsUserNpmPrefixWhenGlobalPrefixIsNotWritable() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let log = root.appendingPathComponent("npm.log", isDirectory: false)
+        let rootOwnedPrefix = root.appendingPathComponent("root-owned-prefix", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: rootOwnedPrefix.appendingPathComponent("lib", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: rootOwnedPrefix.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rootOwnedPrefix.path)
+        }
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "npm",
+            content: """
+            #!/bin/sh
+            printf '%s\\n' "$*" >> '\(shellSingleQuoted(log.path))'
+            if [ "$1" = "config" ] && [ "$2" = "get" ] && [ "$3" = "prefix" ]; then
+              echo '\(shellSingleQuoted(rootOwnedPrefix.path))'
+              exit 0
+            fi
+            if [ "$1" = "config" ] && [ "$2" = "set" ] && [ "$3" = "prefix" ]; then
+              printf '%s\\n' "$4" > "$ZEBRA_GBRAIN_RUNTIME_HOME/.npm-prefix"
+              exit 0
+            fi
+            if [ "$1" = "install" ] && [ "$2" = "-g" ] && [ "$3" = "openclaw" ]; then
+              mkdir -p "$ZEBRA_GBRAIN_RUNTIME_HOME/.local/bin"
+              openclaw="$ZEBRA_GBRAIN_RUNTIME_HOME/.local/bin/openclaw"
+              printf '%s\\n' '#!/bin/sh' > "$openclaw"
+              printf '%s\\n' 'if [ "$1" = "--version" ]; then echo "OpenClaw test"; exit 0; fi' >> "$openclaw"
+              printf '%s\\n' 'exit 0' >> "$openclaw"
+              chmod 755 "$openclaw"
+              exit 0
+            fi
+            exit 1
+            """
+        )
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["install-runtime", "openclaw"],
+            environment: [
+                "PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            ]
+        )
+        let payloadStart = try XCTUnwrap(result.stdout.firstIndex(of: "{"))
+        let payloadText = String(result.stdout[payloadStart...])
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(payloadText.utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        let detection = try XCTUnwrap(payload["detection"] as? [String: Any])
+        XCTAssertEqual(detection["path"] as? String, root.appendingPathComponent(".local/bin/openclaw").path)
+
+        let logText = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(logText.contains("config get prefix"))
+        XCTAssertTrue(logText.contains("config set prefix \(root.path)/.local"))
+        XCTAssertTrue(logText.contains("install -g openclaw"))
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(".npm-prefix"), encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            root.appendingPathComponent(".local", isDirectory: true).path
+        )
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let attempts = try XCTUnwrap(state["attempts"] as? [[String: Any]])
+        XCTAssertTrue(attempts.contains { ($0["kind"] as? String) == "install-runtime:openclaw:npm-prefix" })
+        XCTAssertTrue(attempts.contains { ($0["kind"] as? String) == "install-runtime:openclaw" })
+    }
+
+    func testRuntimeHelperOpenClawCodexOAuthWithoutTTYRequestsInteractiveAuth() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let log = root.appendingPathComponent("openclaw.log", isDirectory: false)
+        _ = try installFakeOpenClawRuntime(directory: fakeBin, log: log)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["configure-runtime", "openclaw", "--provider", "openai-codex"],
+            environment: [
+                "PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            ]
+        )
+        let payloadStart = try XCTUnwrap(result.stdout.firstIndex(of: "{"))
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(String(result.stdout[payloadStart...]).utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["requiresInteractiveAuth"] as? Bool, true)
+        XCTAssertEqual(payload["blockingReason"] as? String, "interactive_auth_required")
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let interactiveAuth = try XCTUnwrap(state["interactiveAuth"] as? [String: Any])
+        XCTAssertEqual(interactiveAuth["status"] as? String, "required")
+        XCTAssertEqual(interactiveAuth["runtime"] as? String, "openclaw")
+        XCTAssertEqual(interactiveAuth["provider"] as? String, "openai-codex")
+        XCTAssertTrue((interactiveAuth["command"] as? String ?? "").contains("interactive-auth openclaw --provider openai-codex"))
+
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let waitingForUser = try XCTUnwrap(progress["waitingForUser"] as? [String: Any])
+        XCTAssertEqual(waitingForUser["section"] as? String, "Configure selected runtime")
+
+        let logText = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(logText.contains("models status"))
+        XCTAssertFalse(logText.contains("models auth login"))
+    }
+
+    func testRuntimeHelperOpenClawClaudeAuthWithoutTTYRequestsInteractiveAuth() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let openClawLog = root.appendingPathComponent("openclaw.log", isDirectory: false)
+        let claudeLog = root.appendingPathComponent("claude.log", isDirectory: false)
+        _ = try installFakeOpenClawRuntime(directory: fakeBin, log: openClawLog)
+        _ = try installFakeClaudeRuntime(directory: fakeBin, log: claudeLog, loggedIn: false)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["configure-runtime", "openclaw", "--provider", "anthropic-claude-code"],
+            environment: [
+                "PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            ]
+        )
+        let payloadStart = try XCTUnwrap(result.stdout.firstIndex(of: "{"))
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(String(result.stdout[payloadStart...]).utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["requiresInteractiveAuth"] as? Bool, true)
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let interactiveAuth = try XCTUnwrap(state["interactiveAuth"] as? [String: Any])
+        XCTAssertEqual(interactiveAuth["status"] as? String, "required")
+        XCTAssertEqual(interactiveAuth["runtime"] as? String, "openclaw")
+        XCTAssertEqual(interactiveAuth["provider"] as? String, "anthropic-claude-code")
+        XCTAssertEqual(interactiveAuth["reason"] as? String, "claude_cli_auth_login_requires_tty")
+        XCTAssertTrue((interactiveAuth["command"] as? String ?? "").contains("interactive-auth openclaw --provider anthropic-claude-code"))
+
+        let claudeLogText = try String(contentsOf: claudeLog, encoding: .utf8)
+        XCTAssertTrue(claudeLogText.contains("auth status"))
+        XCTAssertFalse(claudeLogText.contains("auth login"))
+    }
+
+    @MainActor
+    func testChecklistStorePublishesPendingRuntimeInteractiveAuthRequest() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(
+            withJSONObject: [
+                "schemaVersion": 1,
+                "interactiveAuth": [
+                    "status": "required",
+                    "runtime": "openclaw",
+                    "provider": "openai-codex",
+                    "command": "echo should-not-run",
+                ],
+            ],
+            options: [.prettyPrinted, .sortedKeys]
+        ).write(to: stateURL, options: .atomic)
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainRuntimeOnboardingStateURL: stateURL
+        )
+
+        store.syncExternalState(selectedVaultPath: nil)
+
+        let request = try XCTUnwrap(store.pendingRuntimeInteractiveAuthRequest)
+        XCTAssertEqual(request.id, "openclaw|openai-codex|pending")
+        XCTAssertEqual(request.authKey, "openclaw|openai-codex")
+        XCTAssertEqual(request.runtime, "openclaw")
+        XCTAssertEqual(request.provider, "openai-codex")
+        XCTAssertTrue(request.startupLine.contains("interactive-auth 'openclaw' --provider 'openai-codex'"))
+        XCTAssertTrue(request.startupLine.contains("then exit; else"))
+        XCTAssertFalse(request.startupLine.contains("should-not-run"))
+    }
+
     func testRuntimeHelperStatusFindsHermesLauncherOutsidePath() throws {
         let root = try makeTemporaryDirectory()
         _ = try installFakeRuntime(
@@ -504,32 +1199,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en OPENAI_API_KEY=ambient-openai-key $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "1\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
-            environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
-            ]
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "hermes",
+            provider: "openai-codex",
+            environment: ["OPENAI_API_KEY": "ambient-openai-key"]
         )
-
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("auth status openai-codex"))
         XCTAssertFalse(logText.contains("login --provider openai-codex"))
@@ -601,32 +1279,14 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "1\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
-            environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
-            ]
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "openclaw",
+            provider: "openai-codex"
         )
-
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
         XCTAssertFalse(logText.contains("onboard --non-interactive"))
@@ -668,32 +1328,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) FAKE_OPENCLAW_AUTH_READY=openai ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "1\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
-            environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
-            ]
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "openclaw",
+            provider: "openai-codex",
+            environment: ["FAKE_OPENCLAW_AUTH_READY": "openai"]
         )
-
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models status --json --probe-provider openai"))
         XCTAssertFalse(logText.contains("models auth login --provider openai"))
@@ -734,32 +1377,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) FAKE_OPENCLAW_LOGIN_HANGS_AFTER_READY=openai ZEBRA_GBRAIN_RUNTIME_INTERACTIVE_GRACE_SECONDS=0.1 ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "1\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "openclaw",
+            provider: "openai-codex",
             environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
+                "FAKE_OPENCLAW_LOGIN_HANGS_AFTER_READY": "openai",
+                "ZEBRA_GBRAIN_RUNTIME_INTERACTIVE_GRACE_SECONDS": "0.1",
             ]
         )
-
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
         XCTAssertTrue(logText.contains("models status --json --probe-provider openai"))
@@ -800,32 +1429,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) OPENAI_API_KEY=ambient-openai-key CODEX_API_KEY=ambient-codex-key ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "1\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "openclaw",
+            provider: "openai-codex",
             environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
+                "OPENAI_API_KEY": "ambient-openai-key",
+                "CODEX_API_KEY": "ambient-codex-key",
             ]
         )
-
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
         XCTAssertFalse(logText.contains("env OPENAI_API_KEY"))
@@ -866,32 +1481,14 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "2\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
-            environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
-            ]
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "openclaw",
+            provider: "anthropic-claude-code"
         )
-
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let openClawLogText = try String(contentsOf: openClawLog, encoding: .utf8)
         XCTAssertTrue(openClawLogText.contains("models auth login --provider anthropic --method cli --set-default"))
         XCTAssertFalse(openClawLogText.contains("onboard --non-interactive"))
@@ -941,32 +1538,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) FAKE_OPENCLAW_AUTH_READY=claude-cli ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "2\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
-            environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
-            ]
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "openclaw",
+            provider: "anthropic-claude-code",
+            environment: ["FAKE_OPENCLAW_AUTH_READY": "claude-cli"]
         )
-
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let openClawLogText = try String(contentsOf: openClawLog, encoding: .utf8)
         XCTAssertTrue(openClawLogText.contains("models status --json --probe-provider claude-cli"))
         XCTAssertFalse(openClawLogText.contains("models auth login --provider anthropic"))
@@ -1012,32 +1592,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_SKIP_CLAUDE_KEYCHAIN=1 ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "2\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
-            environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
-            ]
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "hermes",
+            provider: "anthropic-claude-code",
+            environment: ["ZEBRA_GBRAIN_RUNTIME_SKIP_CLAUDE_KEYCHAIN": "1"]
         )
-
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertFalse(logText.contains("login --provider openai-codex"))
         XCTAssertTrue(logText.contains("config set model.provider anthropic"))
@@ -1093,34 +1656,17 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) OPENAI_API_KEY= ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "6\\r"
-        expect "Enter OpenAI API key"
-        send "entered-openai-key\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
-            environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
-            ]
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "hermes",
+            provider: "openai-api",
+            environment: ["OPENAI_API_KEY": ""],
+            secretPrompt: "Enter OpenAI API key",
+            secretResponse: "entered-openai-key"
         )
-
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
         )
@@ -1166,32 +1712,19 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) ANTHROPIC_TOKEN=test-anthropic-token ANTHROPIC_API_KEY= CLAUDE_CODE_OAUTH_TOKEN= ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "4\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "hermes",
+            provider: "anthropic-api",
             environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
+                "ANTHROPIC_TOKEN": "test-anthropic-token",
+                "ANTHROPIC_API_KEY": "",
+                "CLAUDE_CODE_OAUTH_TOKEN": "",
             ]
         )
-
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
         )
@@ -1243,32 +1776,20 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) ANTHROPIC_TOKEN= ANTHROPIC_API_KEY= CLAUDE_CODE_OAUTH_TOKEN= ZEBRA_GBRAIN_RUNTIME_SKIP_CLAUDE_KEYCHAIN=1 ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "2\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "hermes",
+            provider: "anthropic-claude-code",
             environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
+                "ANTHROPIC_TOKEN": "",
+                "ANTHROPIC_API_KEY": "",
+                "CLAUDE_CODE_OAUTH_TOKEN": "",
+                "ZEBRA_GBRAIN_RUNTIME_SKIP_CLAUDE_KEYCHAIN": "1",
             ]
         )
-
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
         )
@@ -1315,32 +1836,16 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("zebra-gbrain-runtime-onboarding", isDirectory: false)
-        let expectScript = root.appendingPathComponent("run-helper.expect", isDirectory: false)
-        let expectContent = """
-        set timeout 20
-        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en OPENAI_API_KEY=test-openai-key $env(TEST_HELPER) run
-        expect "Select runtime"
-        send "1\\r"
-        expect "Select LLM connection"
-        send "6\\r"
-        expect eof
-        set result [wait]
-        exit [lindex $result 3]
-        """
-        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
-
-        let result = try runProcess(
-            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
-            arguments: [expectScript.path],
-            environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
-                "TEST_STATE": stateURL.path,
-                "TEST_HOME": root.path,
-                "TEST_HELPER": helperURL.path,
-            ]
+        _ = try runRuntimeHelperFlow(
+            helperURL: helperURL,
+            root: root,
+            stateURL: stateURL,
+            fakeBin: fakeBin,
+            runtime: "hermes",
+            provider: "openai-api",
+            environment: ["OPENAI_API_KEY": "test-openai-key"],
+            expectVerificationFailure: true
         )
-
-        XCTAssertNotEqual(result.status, 0)
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
         )
@@ -1368,7 +1873,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false),
             gbrainOnboardingStateURL: stateURL
         )
-        store.syncExternalState(selectedVaultPath: vault.path, emailConnected: false)
+        store.syncExternalState(selectedVaultPath: vault.path)
 
         try? await Task.sleep(nanoseconds: 300_000_000)
 
@@ -1419,10 +1924,144 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             gbrainOnboardingStateURL: gbrainStateURL,
             gbrainAdapterOnboardingStateURL: adapterStateURL
         )
-        store.syncExternalState(selectedVaultPath: vault.path, emailConnected: false)
+        store.syncExternalState(selectedVaultPath: vault.path)
 
         XCTAssertTrue(store.completedStepIDs.contains(.gbrain))
         XCTAssertTrue(store.completedStepIDs.contains(.adapter))
+    }
+
+    @MainActor
+    func testEmailStepDoesNotCompleteFromExternalConnectedCache() throws {
+        let root = try makeTemporaryDirectory()
+        let store = makeChecklistStore(homeURL: root)
+
+        store.syncExternalState(selectedVaultPath: nil)
+
+        XCTAssertFalse(store.completedStepIDs.contains(.email))
+    }
+
+    @MainActor
+    func testEmailStepCompletesFromClawvisorEnv() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=https://app.clawvisor.com
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            CLAWVISOR_GMAIL_TASK_ID=task_test
+            ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=test@example.com
+            """,
+            homeURL: root
+        )
+
+        let store = makeChecklistStore(homeURL: root)
+
+        XCTAssertTrue(store.completedStepIDs.contains(.email))
+    }
+
+    @MainActor
+    func testEmailStepDoesNotCompleteWhenConnectionRepairIsActive() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=https://app.clawvisor.com
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            CLAWVISOR_GMAIL_TASK_ID=task_test
+            ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=test@example.com
+            """,
+            homeURL: root
+        )
+        let store = makeChecklistStore(homeURL: root)
+
+        store.syncExternalState(
+            selectedVaultPath: nil,
+            emailConnectionRepairState: ZebraEmailConnectionRepairState(kind: .taskPendingApproval)
+        )
+
+        XCTAssertFalse(store.completedStepIDs.contains(.email))
+    }
+
+    @MainActor
+    func testEmailStepDoesNotCompleteWhenClawvisorTaskIdIsMissing() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=https://app.clawvisor.com
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=test@example.com
+            """,
+            homeURL: root
+        )
+
+        let store = makeChecklistStore(homeURL: root)
+
+        XCTAssertFalse(store.completedStepIDs.contains(.email))
+    }
+
+    @MainActor
+    func testEmailStepDoesNotCompleteWhenGmailAccountIsMissing() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=https://app.clawvisor.com
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            CLAWVISOR_GMAIL_TASK_ID=task_test
+            """,
+            homeURL: root
+        )
+
+        let store = makeChecklistStore(homeURL: root)
+
+        XCTAssertFalse(store.completedStepIDs.contains(.email))
+    }
+
+#if DEBUG
+    @MainActor
+    func testEmailStepCannotBeCompletedByDevelopmentToggle() throws {
+        let root = try makeTemporaryDirectory()
+        let store = makeChecklistStore(homeURL: root)
+
+        store.developmentToggleStepCompleted(.email)
+
+        XCTAssertFalse(store.completedStepIDs.contains(.email))
+    }
+#endif
+
+#if os(macOS)
+    @MainActor
+    func testCompletionWatcherCreatesGbrainDirectoryWithPrivatePermissions() throws {
+        let root = try makeTemporaryDirectory()
+
+        let store = makeChecklistStore(homeURL: root)
+        store.activateCompletionWatching()
+
+        let gbrainURL = root.appendingPathComponent(".gbrain", isDirectory: true)
+        let attributes = try FileManager.default.attributesOfItem(atPath: gbrainURL.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
+        XCTAssertEqual(permissions & 0o777, 0o700)
+    }
+#endif
+
+    @MainActor
+    private func makeChecklistStore(homeURL: URL) -> ZebraOnboardingChecklistStore {
+        ZebraOnboardingChecklistStore(
+            homeDirectoryPath: homeURL.path,
+            gbrainRuntimeOnboardingStateURL: homeURL
+                .appendingPathComponent("onboarding", isDirectory: true)
+                .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false),
+            gbrainOnboardingStateURL: homeURL
+                .appendingPathComponent("onboarding", isDirectory: true)
+                .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        )
+    }
+
+    private func writeClawvisorEnv(_ raw: String, homeURL: URL) throws {
+        let gbrainURL = homeURL.appendingPathComponent(".gbrain", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainURL, withIntermediateDirectories: true)
+        try raw.write(
+            to: gbrainURL.appendingPathComponent(".env", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     private func writeCompletedRuntimeState(
@@ -1711,6 +2350,95 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         return (process.terminationStatus, stdoutText, stderrText)
     }
 
+    @discardableResult
+    private func runRuntimeHelperFlow(
+        helperURL: URL,
+        root: URL,
+        stateURL: URL,
+        fakeBin: URL,
+        runtime: String,
+        provider: String,
+        environment extraEnvironment: [String: String] = [:],
+        secretPrompt: String? = nil,
+        secretResponse: String? = nil,
+        expectVerificationFailure: Bool = false
+    ) throws -> (
+        configure: (status: Int32, stdout: String, stderr: String),
+        verify: (status: Int32, stdout: String, stderr: String),
+        receipt: (status: Int32, stdout: String, stderr: String)?
+    ) {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to provide a TTY to runtime helper configure commands")
+        }
+
+        let expectScript = root.appendingPathComponent("configure-runtime.expect", isDirectory: false)
+        var processEnvironment: [String: String] = [
+            "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+            "TEST_STATE": stateURL.path,
+            "TEST_HOME": root.path,
+            "TEST_HELPER": helperURL.path,
+            "TEST_RUNTIME": runtime,
+            "TEST_PROVIDER": provider,
+        ]
+        var extraTokens: [String] = []
+        for (index, key) in extraEnvironment.keys.sorted().enumerated() {
+            let envKey = "TEST_EXTRA_\(index)"
+            processEnvironment[envKey] = "\(key)=\(extraEnvironment[key] ?? "")"
+            extraTokens.append("$env(\(envKey))")
+        }
+        let promptBlock: String
+        if let secretPrompt, let secretResponse {
+            promptBlock = """
+            expect "\(secretPrompt)"
+            send "\(secretResponse)\\r"
+            """
+        } else {
+            promptBlock = ""
+        }
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) ZEBRA_GBRAIN_RUNTIME_STATE=$env(TEST_STATE) ZEBRA_GBRAIN_RUNTIME_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en \(extraTokens.joined(separator: " ")) $env(TEST_HELPER) configure-runtime $env(TEST_RUNTIME) --provider $env(TEST_PROVIDER)
+        \(promptBlock)
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let configure = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: processEnvironment
+        )
+        XCTAssertEqual(configure.status, 0, "stdout:\n\(configure.stdout)\nstderr:\n\(configure.stderr)")
+
+        let helperEnvironment = [
+            "PATH": "\(fakeBin.path):/usr/bin:/bin",
+            "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ].merging(extraEnvironment) { _, new in new }
+
+        let verify = try runProcess(
+            executableURL: helperURL,
+            arguments: ["verify-runtime", runtime],
+            environment: helperEnvironment
+        )
+        if expectVerificationFailure {
+            XCTAssertNotEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
+            return (configure, verify, nil)
+        }
+        XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
+
+        let receipt = try runProcess(
+            executableURL: helperURL,
+            arguments: ["write-receipt"],
+            environment: helperEnvironment
+        )
+        XCTAssertEqual(receipt.status, 0, "stdout:\n\(receipt.stdout)\nstderr:\n\(receipt.stderr)")
+        return (configure, verify, receipt)
+    }
+
     private func installFakeRuntime(root: URL, name: String) throws -> URL {
         try installFakeRuntime(
             directory: root.appendingPathComponent("bin", isDirectory: true),
@@ -1732,6 +2460,24 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         try scriptContent.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         return script
+    }
+
+    private func installFakeCommand(directory: URL, name: String, content: String) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let script = directory.appendingPathComponent(name, isDirectory: false)
+        try content.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+    }
+
+    private static func runtimeOnboardingDocumentURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("docs", isDirectory: true)
+            .appendingPathComponent("zebra-gbrain-runtime-agent-onboarding.md", isDirectory: false)
     }
 
     private func installFakeOpenClawRuntime(directory: URL, log: URL) throws -> URL {

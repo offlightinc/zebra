@@ -4,6 +4,10 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     public struct LaunchContext {
         public let launchDirectory: String
         public let startupLine: String
+        public let startupPrompt: String
+        public let helperPath: String
+        public let documentPath: String
+        public let shellEnvironmentPrefix: String
     }
 
     public struct SelectedRuntime: Equatable {
@@ -19,6 +23,17 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     public struct CompletionResult: Equatable {
         public let isComplete: Bool
         public let reasons: [String]
+    }
+
+    public struct InteractiveAuthRequest: Equatable {
+        public let id: String
+        public let authKey: String
+        public let runtime: String
+        public let provider: String
+        public let runtimeProvider: String?
+        public let reason: String?
+        public let requestedAt: String?
+        public let startupLine: String
     }
 
     private struct State: Codable {
@@ -116,21 +131,65 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         return SelectedRuntime(runtime: runtime, executablePath: executablePath)
     }
 
+    public func pendingInteractiveAuthRequest() -> InteractiveAuthRequest? {
+        guard let data = try? Data(contentsOf: stateURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let interactiveAuth = object["interactiveAuth"] as? [String: Any],
+              interactiveAuth["status"] as? String == "required" else {
+            return nil
+        }
+        guard let runtime = nonEmpty(interactiveAuth["runtime"] as? String),
+              Self.supportedRuntimeIDs.contains(runtime),
+              let provider = nonEmpty(interactiveAuth["provider"] as? String),
+              Self.isSafeInteractiveAuthIdentifier(provider),
+              interactiveAuthArgvMatchesRequest(interactiveAuth, runtime: runtime, provider: provider),
+              let startupLine = interactiveAuthStartupLine(runtime: runtime, provider: provider) else {
+            return nil
+        }
+        let requestedAt = nonEmpty(interactiveAuth["requestedAt"] as? String)
+        let authKey = "\(runtime)|\(provider)"
+        let id = "\(authKey)|\(requestedAt ?? "pending")"
+        return InteractiveAuthRequest(
+            id: id,
+            authKey: authKey,
+            runtime: runtime,
+            provider: provider,
+            runtimeProvider: nonEmpty(interactiveAuth["runtimeProvider"] as? String),
+            reason: nonEmpty(interactiveAuth["reason"] as? String),
+            requestedAt: requestedAt,
+            startupLine: startupLine
+        )
+    }
+
     public func prepareLaunch() -> LaunchContext? {
         guard let helperPath = installHelperScript() else { return nil }
+        guard let documentPath = installInstructionDocument() else { return nil }
         let launchDirectory = onboardingWorkDirectoryPath()
         let helperDirectory = helperPath.deletingLastPathComponent().path
-        let startupLine = [
+        let homeDirectory = homeDirectoryPath as NSString
+        let pathEntries = [
+            helperDirectory,
+            homeDirectory.appendingPathComponent(".local/bin"),
+            homeDirectory.appendingPathComponent(".bun/bin"),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+        ]
+        let environmentPrefix = [
             "cd \(ZebraAgentLaunchCommand.shellQuote(launchDirectory))",
             "export ZEBRA_GBRAIN_RUNTIME_STATE=\(ZebraAgentLaunchCommand.shellQuote(stateURL.path))",
             "export ZEBRA_GBRAIN_RUNTIME_HOME=\(ZebraAgentLaunchCommand.shellQuote(homeDirectoryPath))",
             "export ZEBRA_ONBOARDING_LANGUAGE=\(ZebraAgentLaunchCommand.shellQuote(onboardingLanguage.code))",
-            "export PATH=\(ZebraAgentLaunchCommand.shellQuote(helperDirectory)):\"$PATH\"",
-            "\(ZebraAgentLaunchCommand.shellQuote(helperPath.path)) run",
-        ].joined(separator: " && ") + "\r"
+            "export ZEBRA_GBRAIN_RUNTIME_DOC=\(ZebraAgentLaunchCommand.shellQuote(documentPath.path))",
+            "export PATH=\(pathEntries.map(ZebraAgentLaunchCommand.shellQuote).joined(separator: ":")):\"$PATH\"",
+        ].joined(separator: " && ") + " && "
+        let startupLine = environmentPrefix + "\(ZebraAgentLaunchCommand.shellQuote(helperPath.path)) run\r"
         return LaunchContext(
             launchDirectory: launchDirectory,
-            startupLine: startupLine
+            startupLine: startupLine,
+            startupPrompt: startupPrompt(helperPath: helperPath.path, documentPath: documentPath.path),
+            helperPath: helperPath.path,
+            documentPath: documentPath.path,
+            shellEnvironmentPrefix: environmentPrefix
         )
     }
 
@@ -154,6 +213,87 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         }
     }
 
+    private func installInstructionDocument() -> URL? {
+        let url = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-runtime-agent-onboarding.md", isDirectory: false)
+        do {
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Self.instructionDocument.write(to: url, atomically: true, encoding: .utf8)
+            try fileManager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    private func interactiveAuthArgvMatchesRequest(
+        _ interactiveAuth: [String: Any],
+        runtime: String,
+        provider: String
+    ) -> Bool {
+        guard let argv = interactiveAuth["argv"] as? [String] else {
+            return true
+        }
+        guard argv.count == 5 else { return false }
+        return argv[1] == "interactive-auth"
+            && argv[2] == runtime
+            && argv[3] == "--provider"
+            && argv[4] == provider
+    }
+
+    private func interactiveAuthStartupLine(runtime: String, provider: String) -> String? {
+        guard let helperPath = installHelperScript(),
+              let documentPath = installInstructionDocument() else {
+            return nil
+        }
+        let launchDirectory = onboardingWorkDirectoryPath()
+        let helperDirectory = helperPath.deletingLastPathComponent().path
+        let homeDirectory = homeDirectoryPath as NSString
+        let pathEntries = [
+            helperDirectory,
+            homeDirectory.appendingPathComponent(".local/bin"),
+            homeDirectory.appendingPathComponent(".bun/bin"),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+        ]
+        let command = [
+            ZebraAgentLaunchCommand.shellQuote(helperPath.path),
+            "interactive-auth",
+            ZebraAgentLaunchCommand.shellQuote(runtime),
+            "--provider",
+            ZebraAgentLaunchCommand.shellQuote(provider),
+        ].joined(separator: " ")
+        let failureMessage = "Zebra runtime auth did not complete. This terminal will stay open so you can review the error or retry."
+        let commands = [
+            "cd \(ZebraAgentLaunchCommand.shellQuote(launchDirectory))",
+            "export ZEBRA_GBRAIN_RUNTIME_STATE=\(ZebraAgentLaunchCommand.shellQuote(stateURL.path))",
+            "export ZEBRA_GBRAIN_RUNTIME_HOME=\(ZebraAgentLaunchCommand.shellQuote(homeDirectoryPath))",
+            "export ZEBRA_ONBOARDING_LANGUAGE=\(ZebraAgentLaunchCommand.shellQuote(onboardingLanguage.code))",
+            "export ZEBRA_GBRAIN_RUNTIME_DOC=\(ZebraAgentLaunchCommand.shellQuote(documentPath.path))",
+            "export PATH=\(pathEntries.map(ZebraAgentLaunchCommand.shellQuote).joined(separator: ":")):\"$PATH\"",
+            "if \(command); then exit; else printf '\\n%s\\n' \(ZebraAgentLaunchCommand.shellQuote(failureMessage)); fi",
+        ]
+        return commands.joined(separator: " && ") + "\r"
+    }
+
+    private func startupPrompt(helperPath: String, documentPath: String) -> String {
+        """
+        You are Zebra's Step 2 runtime setup agent.
+
+        \(onboardingLanguage.promptPolicy)
+
+        Before running setup commands, read the complete Step 2 instruction document at:
+        \(documentPath)
+
+        Then run:
+        \(helperPath) status --json
+        \(helperPath) preflight --json
+
+        Follow the document exactly. Use `zebra-gbrain-runtime-onboarding report` before and after each section. Do not run a legacy interactive setup flow, do not prepare the GBrain source repo in Step 2, and do not invent install commands outside the helper contract.
+        """
+    }
+
     private func onboardingWorkDirectoryPath() -> String {
         let directory = stateURL
             .deletingLastPathComponent()
@@ -166,10 +306,481 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         (path as NSString).standardizingPath
     }
 
+    private static func isSafeInteractiveAuthIdentifier(_ value: String) -> Bool {
+        guard !value.isEmpty else { return false }
+        return value.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 45, 46, 48...57, 65...90, 95, 97...122:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
     private static let supportedRuntimeIDs: Set<String> = [
         "openclaw",
         "hermes",
     ]
+
+    private static let instructionDocument = """
+    # Zebra GBrain Runtime Agent Onboarding
+
+    이 문서는 Zebra 온보딩 Step 2의 기준 문서다.
+
+    Step 2는 이후 GBrain setup을 받쳐 줄 OpenClaw 또는 Hermes runtime layer를
+    준비한다. 이 단계는 agent-orchestrated flow다. Step 1에서 선택된 primary
+    agent가 이 문서를 읽고, Zebra helper/report command를 호출하고, 진행 상태를
+    기록한다. helper는 deterministic check, install, verification, state write만
+    담당한다.
+
+    Step 2는 GBrain source repo를 준비하지 않는다. Source repo 선택, clone/reuse,
+    docs snapshot, `bun install`, `bun install -g .` 또는 `bun link`, 그리고
+    `gbrain --version` 검증은 Step 3 책임으로 남긴다.
+
+    ## 단계 경계
+
+    ### Step 1: primary agent bootstrap
+
+    Step 1은 Codex, Claude, Antigravity 중 하나를 global CLI로 실행 가능하게 만든다.
+    아직 primary agent가 없으므로 Step 1은 deterministic shell-script flow가 맞다.
+
+    Step 1이 끝나면 Zebra는 선택된 primary agent를 새 terminal에서 시작한다.
+
+    ### Step 2: runtime/prerequisite setup
+
+    Step 2는 primary agent가 진행한다.
+
+    Agent는 반드시 다음을 지킨다:
+
+    - 이 문서를 읽는다.
+    - `zebra-gbrain-runtime-onboarding` command를 호출한다.
+    - workflow section 전후로 `report`를 호출한다.
+    - 제품 선택 또는 blocking OS prompt가 필요한 경우에만 사용자에게 묻는다.
+    - 이 contract 밖의 install command를 임의로 만들지 않는다.
+
+    Helper는 다음을 담당한다:
+
+    - prerequisite fact를 감지한다.
+    - 승인된 recovery/install command를 실행한다.
+    - 선택된 runtime을 configure한다.
+    - 선택된 runtime이 LLM을 호출할 수 있는지 verify한다.
+    - state와 final receipt를 쓴다.
+
+    Helper는 runtime/provider 선택을 사용자에게 직접 묻고 setup 전체를 끝까지 진행하는
+    end-to-end interactive flow를 실행하면 안 된다.
+
+    ### Step 3: GBrain setup
+
+    Step 3는 기존 repo-first GBrain flow를 유지한다.
+
+    Step 3는 `activeGBrainBinding.sourceRepoPath`를 준비하고, `~/gbrain` 또는
+    사용자가 선택한 source repo를 clone/reuse하고, local GBrain docs를 snapshot하고,
+    repo-local `bun install`을 실행하고, active repo를 user-visible `gbrain` command로
+    노출한 뒤 `gbrain --version`을 검증한다.
+
+    ## 문서 모델
+
+    Step 2는 이 고정 Zebra-owned 문서를 authoritative workflow document로 사용한다.
+
+    Step 2용 run-specific setup packet은 만들지 않는다. Step 3는 active GBrain source
+    docs와 snapshot commit이 실행마다 달라질 수 있어서 run-specific packet이 필요하다.
+    Step 2에는 그런 외부 문서 snapshot 문제가 없다.
+
+    현재 실행 context는 helper에서 가져온다:
+
+    ```bash
+    zebra-gbrain-runtime-onboarding run
+    zebra-gbrain-runtime-onboarding status --json
+    zebra-gbrain-runtime-onboarding preflight --json
+    ```
+
+    `run`은 non-interactive wrapper다. 현재 status, next action, 이 문서 경로를 출력할
+    수는 있지만, 질문을 하거나 full setup flow를 직접 수행하면 안 된다.
+
+    ## Helper Command
+
+    Step 2 helper는 `zebra-gbrain-runtime-onboarding`이다.
+
+    작고 deterministic한 command를 제공해야 한다:
+
+    ```bash
+    zebra-gbrain-runtime-onboarding run
+    zebra-gbrain-runtime-onboarding status --json
+    zebra-gbrain-runtime-onboarding preflight --json
+    zebra-gbrain-runtime-onboarding report --status <status> --section <section> [--note <note>]
+    zebra-gbrain-runtime-onboarding recover-prerequisite <clt|node|bun>
+    zebra-gbrain-runtime-onboarding install-runtime <openclaw|hermes>
+    zebra-gbrain-runtime-onboarding configure-runtime <openclaw|hermes> ...
+    zebra-gbrain-runtime-onboarding interactive-auth <openclaw|hermes> --provider <provider-id>
+    zebra-gbrain-runtime-onboarding verify-runtime <openclaw|hermes>
+    zebra-gbrain-runtime-onboarding write-receipt
+    ```
+
+    허용되는 report status:
+
+    ```text
+    started
+    completed
+    waiting_for_user
+    failed
+    ```
+
+    Agent는 다음과 같은 형태로 report를 사용한다:
+
+    ```bash
+    zebra-gbrain-runtime-onboarding report --status started --section "Baseline preflight"
+    zebra-gbrain-runtime-onboarding preflight --json
+    zebra-gbrain-runtime-onboarding report --status completed --section "Baseline preflight"
+    ```
+
+    ## Workflow
+
+    ### 1. Baseline preflight
+
+    가장 먼저 preflight를 실행한다. Preflight는 넓게 감지하되 아무것도 설치하지 않는다.
+
+    Preflight fact에는 다음을 포함한다:
+
+    - `python3`
+    - `/bin/sh`
+    - `/bin/bash`
+    - `curl`
+    - `git`
+    - `xcode-select` / Command Line Tools 상태
+    - `node`
+    - `npm`
+    - `bun`
+    - `openclaw`
+    - `hermes`
+
+    각 fact는 다음을 기록한다:
+
+    - `detectedAt`
+    - `ok`
+    - `path`
+    - `version`
+    - `requiredFor`
+    - `blockingNow`
+    - `reason`
+
+    특정 경로에서만 필요한 tool이 없다고 해서 즉시 blocker로 만들지 않는다. 예를 들어
+    `npm`이 없어도 사용자가 OpenClaw를 선택하기 전에는 blocking이 아니다.
+
+    ### 2. Choose runtime
+
+    Agent가 preflight 결과를 보고 user-facing runtime branch를 선택하게 한다. Helper가
+    이 질문을 직접 하면 안 된다.
+
+    유효한 runtime 선택지:
+
+    ```text
+    openclaw
+    hermes
+    ```
+
+    Agent는 현재 상태에 맞는 선택지만 설명한다:
+
+    - OpenClaw만 설치됨: OpenClaw 사용, 또는 Hermes 설치 후 사용.
+    - Hermes만 설치됨: Hermes 사용, 또는 OpenClaw 설치 후 사용.
+    - 둘 다 설치됨: 사용할 runtime 선택.
+    - 둘 다 없음: Zebra가 설치할 runtime 선택.
+
+    Agent는 선택되지 않은 runtime의 dependency를 설치하지 않는다.
+
+    ### 3. Recover common prerequisites
+
+    선택된 runtime과 무관하게 Step 3에서 필요한 prerequisite만 복구한다:
+
+    - Command Line Tools / `git`
+    - `bun`
+
+    Python은 설치하지 않는다.
+
+    Command Line Tools가 없으면 다음을 trigger한다:
+
+    ```bash
+    xcode-select --install
+    ```
+
+    이 작업은 recoverable이지만 blocking이다. 사용자가 macOS installer UI를 완료해야
+    하기 때문이다. `blockingReason: clt_install_required`를 기록한다.
+
+    `bun`이 없으면 official Bun installer를 사용한다:
+
+    ```bash
+    curl -fsSL https://bun.sh/install | bash
+    ```
+
+    `~/.bun/bin/bun --version`을 검증한다. 새 shell에서 `bun`이 PATH로 resolve되는지도
+    기록한다.
+
+    ### 4. Recover selected-runtime prerequisites
+
+    선택된 runtime에 필요한 prerequisite만 복구한다.
+
+    #### OpenClaw
+
+    OpenClaw는 Node/npm이 필요하다.
+
+    `node` 또는 `npm`이 없으면 official Node.js macOS pkg install path를 사용한다.
+    Homebrew를 설치하지 않는다. Zebra-private Node/npm runtime을 만들지 않는다.
+
+    Node 설치 후 일반 terminal PATH에서 다음이 resolve되는지 검증한다:
+
+    ```bash
+    node --version
+    npm --version
+    ```
+
+    `openclaw`가 없으면 다음으로 설치한다:
+
+    ```bash
+    npm install -g openclaw
+    ```
+
+    설치 전에 `npm config get prefix`로 현재 npm global prefix를 확인한다. 현재 prefix가
+    global package install에 필요한 `bin`과 `lib/node_modules`를 쓸 수 있으면 그대로 둔다.
+    root-owned `/usr/local`처럼 현재 사용자가 쓸 수 없는 prefix면 다음을 먼저 실행한다:
+
+    ```bash
+    mkdir -p "$HOME/.local/bin" "$HOME/.local/lib/node_modules"
+    npm config set prefix "$HOME/.local"
+    ```
+
+    그 뒤 같은 `npm install -g openclaw`를 실행한다. 이 설정은 Zebra-private runtime이
+    아니라 사용자 계정의 npm global prefix를 고치는 것이다. 이후 `~/.local/bin`이 PATH에
+    있으면 `openclaw`와 future npm global command가 일반 terminal에서도 resolve된다.
+
+    #### Hermes
+
+    Hermes는 이 onboarding path에서 Node/npm을 요구하지 않는다.
+
+    `hermes`가 없으면 현재 검증된 minimal installer command를 그대로 사용한다:
+
+    ```bash
+    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup --skip-browser --no-skills --non-interactive
+    ```
+
+    Hermes detect 후보:
+
+    - `command -v hermes`
+    - `$HERMES_INSTALL_DIR/venv/bin/hermes`
+    - `~/.local/bin/hermes`
+    - `~/.hermes/hermes-agent/venv/bin/hermes`
+    - `/usr/local/bin/hermes`
+
+    Python/venv installer failure는 exit code, stderr tail, blocking reason과 함께 기록한다.
+
+    ### 5. Configure selected runtime
+
+    선택된 runtime만 configure한다.
+
+    필요하면 agent가 사용자에게 LLM connection/provider 선택을 묻는다. Helper는 구체적인
+    runtime configuration command를 실행하고 non-secret state를 쓴다.
+
+    Provider 선택을 물을 때는 bullet list를 쓰지 말고 번호 선택지로 제시한다. 사용자는
+    provider id가 아니라 번호로 답할 수 있어야 한다. 예:
+
+    ```text
+    사용할 계정/키 방식을 선택해주세요.
+
+    1. ChatGPT/Codex 계정으로 로그인
+    2. Claude Code 계정으로 로그인
+    3. OpenRouter API key 사용
+    4. Anthropic API key 사용
+    5. Google Gemini API key 사용
+    6. OpenAI API key 사용
+    ```
+
+    Hermes runtime에서만 2번 선택지 label을 다음처럼 바꾼다:
+
+    ```text
+    2. Claude Code 계정으로 로그인 (Claude Max plan + extra usage credits 필수)
+    ```
+
+    사용자가 번호로 답하면 agent가 해당 provider id로 `configure-runtime <runtime>
+    --provider <provider-id>`를 호출한다.
+
+    Secret 값은 Zebra state에 쓰면 안 된다. State에는 environment variable 이름,
+    OAuth source, entered-key source label 같은 key source만 기록할 수 있다.
+
+    OpenClaw/Hermes OAuth 또는 provider CLI login이 실제 terminal TTY를 요구하면,
+    agent tool 안에서 login command를 계속 실행하지 않는다. Helper는
+    `interactive_auth_required`를 state에 쓰고, 실제 Zebra terminal에서 실행할
+    `interactive-auth` command를 `interactiveAuth.command`에 기록한다.
+    Zebra 앱은 이 pending state를 watch해서 실제 terminal을 연다. 앱은 state의 raw
+    command string을 그대로 실행하지 않고, `runtime`, `provider`, `requestedAt` 같은
+    구조화된 request 값을 검증한 뒤 Zebra-owned helper command를 조립해서 실행한다.
+    같은 request는 자동으로 한 번만 실행하고, 같은 runtime/provider의 반복 request는 짧은
+    간격 안에서 다시 열지 않는다. Auth command가 성공하면 terminal은 자동 종료되고,
+    실패하거나 취소되면 사용자가 원인을 확인할 수 있도록 terminal을 남긴다.
+
+    Agent는 이 상태를 실패로 처리하지 않는다. 사용자가 real terminal에서
+    `interactive-auth`를 완료한 뒤, agent는 `status --json`, `configure-runtime`,
+    `verify-runtime`을 다시 호출해서 helper probe 결과로 완료 여부를 확인한다.
+
+    ### 6. Verify selected runtime
+
+    선택된 runtime이 minimal LLM call을 할 수 있는지 verify한다.
+
+    OpenClaw는 model/auth status probe path를 사용한다.
+
+    Hermes는 helper에서 이미 사용하는 minimal chat/status path를 사용한다.
+
+    Verification 결과는 `llmCall` check로 기록한다.
+
+    ### 7. Write runtime receipt
+
+    선택된 runtime이 설치, configure, verify까지 끝나면 final receipt를 다음 파일에 쓴다:
+
+    ```text
+    ~/Library/Application Support/zebra/onboarding/gbrain-runtime-state.json
+    ```
+
+    Checklist는 receipt가 complete이고 required check가 모두 true일 때만 Step 2를 완료로
+    봐야 한다.
+
+    ## Prerequisite Policy
+
+    ### python3
+
+    Python은 설치하지 않는다.
+
+    가능하면 system/CLT 제공 `python3`를 사용한다. 없으면 `python3_missing` 같은 blocking
+    state를 기록한다. Python installer를 실행하지 않는다.
+
+    ### /bin/sh and /bin/bash
+
+    이 둘은 system tool이다. 둘 중 하나가 없으면 machine이 blocked 또는 damaged 상태라고
+    본다. Shell replacement를 설치하려고 하지 않는다.
+
+    ### curl
+
+    `curl`은 Bun과 Hermes installer에 필요하다. 없으면 blocking state를 기록한다. 이
+    flow에서 curl을 따로 설치하지 않는다.
+
+    ### git and Command Line Tools
+
+    Step 3는 GBrain source repo clone/reuse와 docs snapshot을 위해 `git`이 필요하다.
+
+    Command Line Tools 또는 usable `git`이 없으면 다음을 trigger한다:
+
+    ```bash
+    xcode-select --install
+    ```
+
+    그 뒤 사용자가 macOS installer UI를 완료하고 preflight를 다시 실행할 때까지
+    `waiting_for_user`를 report한다.
+
+    ### Node and npm
+
+    Node/npm은 OpenClaw branch에서만 필요하다.
+
+    OpenClaw가 선택됐고 Node/npm이 없으면 official Node.js macOS pkg path로 설치한다.
+    결과는 Zebra 안에서만이 아니라 일반 terminal에서도 사용할 수 있어야 한다.
+
+    ### Bun
+
+    Bun은 Step 3 GBrain setup에 필요하다. 없으면 official Bun installer로 설치한다.
+
+    ### OpenClaw
+
+    OpenClaw는 사용자가 OpenClaw를 선택했고 설치되어 있지 않을 때만 설치한다. 설치 명령:
+
+    ```bash
+    npm install -g openclaw
+    ```
+
+    ### Hermes
+
+    Hermes는 사용자가 Hermes를 선택했고 설치되어 있지 않을 때만 설치한다. Dynamic flag
+    discovery 없이 검증된 minimal Hermes installer command를 사용한다.
+
+    ## State File
+
+    Step 2 state 위치:
+
+    ```text
+    ~/Library/Application Support/zebra/onboarding/gbrain-runtime-state.json
+    ```
+
+    State에는 다음을 포함한다:
+
+    ```text
+    schemaVersion
+    progress
+    preflight
+    attempts
+    selection
+    receipt
+    ```
+
+    `progress`에는 다음을 포함한다:
+
+    - current section
+    - completed sections
+    - waiting-for-user reason
+    - last failure
+
+    `preflight`에는 fact와 detection timestamp를 포함한다.
+
+    `attempts`에는 다음을 포함한다:
+
+    - attempted command
+    - started/finished timestamp
+    - exit code
+    - stdout tail
+    - stderr tail
+    - recoverable flag
+    - blocking reason
+
+    `selection`에는 다음을 포함한다:
+
+    - selected runtime
+    - selected provider when chosen
+
+    `receipt`에는 다음을 포함한다:
+
+    - complete
+    - runtime
+    - executable path
+    - version
+    - provider
+    - key source
+    - config paths
+    - checks
+    - verified timestamp
+    - reasons
+
+    ## 사람 검증용 요약
+
+    이 섹션은 설계 의도가 대략 맞는지 빠르게 확인하기 위한 요약이다.
+
+    - Step 1은 agent-driven 작업 전에 global primary agent CLI를 먼저 bootstrap한다.
+    - Step 2는 primary-agent orchestrated flow다. Agent가 이 고정 문서를 읽고
+      helper/report command를 호출한다.
+    - Step 2는 run-specific packet을 만들지 않는다.
+    - Step 2는 GBrain source repo를 prepare/clone/install하지 않는다.
+    - Step 3는 `activeGBrainBinding.sourceRepoPath`, GBrain repo clone/reuse, docs
+      snapshot, `bun install`, `bun install -g .` 또는 `bun link`, `gbrain --version`을
+      계속 담당한다.
+    - Preflight는 넓게 감지하지만 아무것도 설치하지 않는다.
+    - Recovery는 선택된 경로에 필요한 것만 설치한다.
+    - `npm`이 없어도 OpenClaw가 선택되기 전에는 문제가 아니다.
+    - Zebra는 Python을 설치하지 않는다. 기존 macOS/CLT `python3`를 사용한다.
+    - CLT/git recovery는 `xcode-select --install`이고, 이후 user-waiting/blocking
+      상태가 된다.
+    - Node/npm recovery는 official Node.js macOS pkg를 사용한다. Homebrew도 아니고
+      Zebra-private runtime도 아니다.
+    - Bun recovery는 official Bun installer를 사용한다.
+    - OpenClaw install은 `npm install -g openclaw`를 유지하되, npm global prefix가
+      root-owned/write 불가면 먼저 `npm config set prefix "$HOME/.local"`을 적용한다.
+    - Hermes install은 이미 검증된 minimal installer command를 유지한다.
+    - Step 2 완료 기준은 binary 존재 여부가 아니라 `gbrain-runtime-state.json`의 runtime
+      receipt다.
+
+    """
 
     private func nonEmpty(_ values: [String]?) -> [String]? {
         guard let values, !values.isEmpty else { return nil }
@@ -194,21 +805,184 @@ public struct ZebraGBrainRuntimeOnboardingStore {
       shift
     fi
 
+    write_shell_python_blocked_state() {
+      reason="${1:-python3_missing}"
+      status="${2:-failed}"
+      attempt_command="${3:-}"
+      attempt_exit_code="${4:-}"
+      waiting_note="${5:-}"
+      python_present=false
+      python_path=""
+      if [ -n "${PYTHON_BIN:-}" ]; then
+        python_present=true
+        python_path="$PYTHON_BIN"
+      fi
+      DETECTED_AT="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf 'unknown')"
+      STATE_DIR="${STATE%/*}"
+      if [ "$STATE_DIR" != "$STATE" ]; then
+        /bin/mkdir -p "$STATE_DIR" 2>/dev/null || true
+      fi
+      {
+        printf '{\n'
+        printf '  "schemaVersion": 1,\n'
+        printf '  "progress": {\n'
+        printf '    "status": "%s",\n' "$status"
+        printf '    "currentSection": "Baseline preflight",\n'
+        if [ -n "$waiting_note" ]; then
+          printf '    "waitingForUser": {\n'
+          printf '      "section": "Recover common prerequisites",\n'
+          printf '      "note": "Install macOS Command Line Tools, then rerun Step 2.",\n'
+          printf '      "createdAt": "%s"\n' "$DETECTED_AT"
+          printf '    },\n'
+        fi
+        printf '    "lastFailure": {\n'
+        printf '      "reason": "%s",\n' "$reason"
+        printf '      "recoverable": true,\n'
+        printf '      "updatedAt": "%s"\n' "$DETECTED_AT"
+        printf '    }\n'
+        printf '  },\n'
+        if [ -n "$attempt_command" ]; then
+          printf '  "attempts": [\n'
+          printf '    {\n'
+          printf '      "attemptedCommand": "%s",\n' "$attempt_command"
+          printf '      "startedAt": "%s",\n' "$DETECTED_AT"
+          printf '      "finishedAt": "%s",\n' "$DETECTED_AT"
+          printf '      "exitCode": %s,\n' "${attempt_exit_code:-1}"
+          printf '      "stdoutTail": "",\n'
+          printf '      "stderrTail": "",\n'
+          printf '      "recoverable": true,\n'
+          printf '      "blockingReason": "%s"\n' "$reason"
+          printf '    }\n'
+          printf '  ],\n'
+        fi
+        printf '  "preflight": {\n'
+        printf '    "detectedAt": "%s",\n' "$DETECTED_AT"
+        printf '    "facts": {\n'
+        printf '      "python3": {\n'
+        printf '        "name": "python3",\n'
+        printf '        "ok": false,\n'
+        printf '        "present": %s,\n' "$python_present"
+        printf '        "path": "%s",\n' "$python_path"
+        printf '        "version": "",\n'
+        printf '        "requiredFor": ["step2-helper"],\n'
+        printf '        "blockingNow": true,\n'
+        printf '        "recoverable": true,\n'
+        printf '        "reason": "%s",\n' "$reason"
+        printf '        "blockingReason": "%s"\n' "$reason"
+        printf '      }\n'
+        printf '    }\n'
+        printf '  }\n'
+        printf '}\n'
+      } > "$STATE" 2>/dev/null || true
+    }
+
+    print_shell_python_blocked_status() {
+      reason="${1:-python3_missing}"
+      printf '{\n'
+      printf '  "ok": false,\n'
+      printf '  "statePath": "%s",\n' "$STATE"
+      printf '  "blockingReason": "%s",\n' "$reason"
+      printf '  "next": [\n'
+      printf '    "Install macOS Command Line Tools so /usr/bin/python3 can run.",\n'
+      printf '    "Then rerun Zebra Step 2 runtime setup."\n'
+      printf '  ]\n'
+      printf '}\n'
+    }
+
+    request_shell_clt_install() {
+      XCODE_SELECT_BIN="$(command -v xcode-select || printf '/usr/bin/xcode-select')"
+      if "$XCODE_SELECT_BIN" --install >/dev/null 2>&1; then
+        write_shell_python_blocked_state "clt_install_required" "waiting_for_user" "xcode-select --install" "0" "1"
+        printf '{\n  "ok": false,\n  "requiresUserAction": true,\n  "blockingReason": "clt_install_required",\n  "statePath": "%s"\n}\n' "$STATE"
+        return 0
+      fi
+
+      code="$?"
+      write_shell_python_blocked_state "clt_manual_install_required" "failed" "xcode-select --install" "$code" ""
+      printf '{\n  "ok": false,\n  "requiresUserAction": true,\n  "blockingReason": "clt_manual_install_required",\n  "statePath": "%s"\n}\n' "$STATE"
+      echo "xcode-select --install could not request Command Line Tools. Install CLT manually, then rerun Step 2." >&2
+      return 1
+    }
+
     PYTHON_BIN="$(command -v python3 || true)"
+    PYTHON_READY=0
+    PYTHON_BLOCK_REASON="python3_missing"
+    if [ -n "$PYTHON_BIN" ]; then
+      if "$PYTHON_BIN" -c 'import sys' >/dev/null 2>&1; then
+        PYTHON_READY=1
+      else
+        PYTHON_BLOCK_REASON="python3_unusable"
+      fi
+    fi
+
+    if [ "$PYTHON_READY" != "1" ]; then
+      case "$COMMAND" in
+        recover-prerequisite)
+          target="${1:-}"
+          if [ "$target" = "clt" ]; then
+            request_shell_clt_install
+            exit "$?"
+          fi
+          write_shell_python_blocked_state "$PYTHON_BLOCK_REASON" "failed" "" "" ""
+          print_shell_python_blocked_status "$PYTHON_BLOCK_REASON"
+          echo "python3 is required before recover-prerequisite $target can run" >&2
+          exit 1
+          ;;
+        report)
+          write_shell_python_blocked_state "$PYTHON_BLOCK_REASON" "failed" "" "" ""
+          printf '{\n  "ok": true,\n  "statePath": "%s",\n  "blockingReason": "%s"\n}\n' "$STATE" "$PYTHON_BLOCK_REASON"
+          exit 0
+          ;;
+        run|status|preflight|"")
+          request_shell_clt_install
+          exit "$?"
+          ;;
+        *)
+          write_shell_python_blocked_state "$PYTHON_BLOCK_REASON" "failed" "" "" ""
+          print_shell_python_blocked_status "$PYTHON_BLOCK_REASON"
+          echo "python3 is required for zebra-gbrain-runtime-onboarding $COMMAND" >&2
+          exit 1
+          ;;
+      esac
+    fi
+
     if [ -z "$PYTHON_BIN" ]; then
+      write_shell_python_blocked_state "python3_missing" "failed" "" "" ""
+      print_shell_python_blocked_status "python3_missing"
       echo "python3 is required for zebra-gbrain-runtime-onboarding" >&2
       exit 1
     fi
 
+    resolve_helper_path() {
+      case "$0" in
+        */*)
+          helper_dir_name="$(dirname "$0")"
+          helper_base_name="$(basename "$0")"
+          helper_dir_abs="$(cd "$helper_dir_name" 2>/dev/null && pwd -P || true)"
+          if [ -n "$helper_dir_abs" ]; then
+            printf '%s/%s\n' "$helper_dir_abs" "$helper_base_name"
+          else
+            printf '%s\n' "$0"
+          fi
+          ;;
+        *)
+          command -v "$0" 2>/dev/null || printf '%s\n' "$0"
+          ;;
+      esac
+    }
+
+    export ZEBRA_GBRAIN_RUNTIME_HELPER_PATH="$(resolve_helper_path)"
     "$PYTHON_BIN" - "$STATE" "$COMMAND" "$@" <<'PY'
     import contextlib
     import getpass
     import json
     import os
+    import shlex
     import shutil
     import subprocess
     import sys
     import time
+    import urllib.request
     from datetime import datetime, timezone
     from pathlib import Path
     try:
@@ -257,6 +1031,242 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             handle.write("\\n")
         os.replace(tmp, state_path)
 
+    def parse_flags(argv):
+        flags = {}
+        positional = []
+        i = 0
+        while i < len(argv):
+            item = argv[i]
+            if item.startswith("--"):
+                key = item[2:].replace("-", "_")
+                if "=" in key:
+                    key, value = key.split("=", 1)
+                    flags[key] = value
+                    i += 1
+                elif i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                    flags[key] = argv[i + 1]
+                    i += 2
+                else:
+                    flags[key] = "true"
+                    i += 1
+            else:
+                positional.append(item)
+                i += 1
+        flags["_positional"] = positional
+        return flags
+
+    def output_tail(text, limit=2000):
+        if not text:
+            return ""
+        return text[-limit:]
+
+    def redacted_result(result, credential=None):
+        credential = credential or {}
+        output = {
+            "ok": bool(result.get("ok")),
+            "exitCode": result.get("code"),
+            "stdoutTail": output_tail(redact_output(result.get("stdout", ""), credential)),
+            "stderrTail": output_tail(redact_output(result.get("stderr", ""), credential)),
+        }
+        if result.get("requiresInteractiveAuth"):
+            output["requiresInteractiveAuth"] = True
+            output["blockingReason"] = result.get("blockingReason") or "interactive_auth_required"
+            output["interactiveAuthCommand"] = result.get("interactiveAuthCommand") or ""
+        return output
+
+    def record_attempt(kind, attempted_command, result, *, recoverable=True, blocking_reason=""):
+        state = load_state()
+        state["schemaVersion"] = 1
+        attempts = state.setdefault("attempts", [])
+        attempts.append({
+            "kind": kind,
+            "attemptedCommand": attempted_command,
+            "finishedAt": now(),
+            "exitCode": result.get("code"),
+            "stdoutTail": output_tail(result.get("stdout", "")),
+            "stderrTail": output_tail(result.get("stderr", "")),
+            "recoverable": bool(recoverable),
+            "blockingReason": blocking_reason,
+        })
+        save_state(state)
+
+    def provider_by_id(provider_id):
+        for provider in provider_choices:
+            if provider["id"] == provider_id:
+                return provider
+        raise RuntimeError(f"unsupported_provider:{provider_id}")
+
+    def non_secret_credential(credential):
+        return {
+            "source": credential.get("source", ""),
+            "envName": credential.get("envName", ""),
+            "persistEnvName": credential.get("persistEnvName", ""),
+        }
+
+    def executable_for_runtime(runtime):
+        if runtime not in {"openclaw", "hermes"}:
+            raise RuntimeError(f"unsupported_runtime:{runtime}")
+        detected = detect_runtime(runtime)
+        if not detected.get("installed"):
+            raise RuntimeError(f"{runtime}_executable_missing")
+        return detected
+
+    def command_available(name):
+        path = shutil.which(name) or ""
+        return path
+
+    def tool_candidate_paths(name):
+        candidates = []
+        path_match = shutil.which(name)
+        if path_match:
+            candidates.append(path_match)
+        if name == "bun":
+            candidates.extend([
+                str(home / ".bun" / "bin" / "bun"),
+                "/opt/homebrew/bin/bun",
+                "/usr/local/bin/bun",
+            ])
+        seen = set()
+        output = []
+        for candidate in candidates:
+            expanded = str(Path(candidate).expanduser())
+            if expanded not in seen:
+                seen.add(expanded)
+                output.append(expanded)
+        return output
+
+    def first_executable_path(candidates):
+        for candidate in candidates:
+            if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+        return ""
+
+    def version_for_command(path, *args):
+        if not path:
+            return ""
+        result = run_process([path, *args], timeout=10)
+        if result["ok"] and (result["stdout"] or result["stderr"]):
+            return (result["stdout"] or result["stderr"]).splitlines()[0][:160]
+        return ""
+
+    def tool_fact(name, *, required_for=None, blocking_now=False, version_args=("--version",), path_override=None):
+        candidates = [path_override] if path_override is not None and path_override else tool_candidate_paths(name)
+        path = path_override if path_override is not None else first_executable_path(candidates)
+        ok = bool(path and os.path.exists(path) and os.access(path, os.X_OK))
+        version = version_for_command(path, *version_args) if ok and version_args else ""
+        fact = {
+            "detectedAt": now(),
+            "ok": ok,
+            "path": path or "",
+            "version": version,
+            "requiredFor": required_for or [],
+            "blockingNow": bool(blocking_now and not ok),
+            "reason": "" if ok else f"{name}_missing",
+        }
+        if candidates:
+            fact["candidates"] = candidates
+        return fact
+
+    def file_fact(label, path, *, required_for=None, blocking_now=False):
+        ok = os.path.exists(path) and os.access(path, os.X_OK)
+        return {
+            "detectedAt": now(),
+            "ok": ok,
+            "path": path,
+            "version": "",
+            "requiredFor": required_for or [],
+            "blockingNow": bool(blocking_now and not ok),
+            "reason": "" if ok else f"{label}_missing",
+        }
+
+    def xcode_select_fact():
+        path = command_available("xcode-select") or "/usr/bin/xcode-select"
+        result = run_process([path, "-p"], timeout=10) if os.path.exists(path) else {"ok": False, "stdout": "", "stderr": "xcode-select missing"}
+        return {
+            "detectedAt": now(),
+            "ok": bool(result.get("ok") and result.get("stdout")),
+            "path": (result.get("stdout") or "").strip(),
+            "version": "",
+            "requiredFor": ["gbrain-step3"],
+            "blockingNow": not bool(result.get("ok") and result.get("stdout")),
+            "reason": "" if result.get("ok") and result.get("stdout") else "clt_missing",
+            "stderrTail": output_tail(result.get("stderr", "")),
+        }
+
+    def runtime_fact(name, *, required_for):
+        detected = detect_runtime(name)
+        return {
+            "detectedAt": now(),
+            "ok": bool(detected.get("installed")),
+            "path": detected.get("path", ""),
+            "version": detected.get("version", ""),
+            "requiredFor": required_for,
+            "blockingNow": False,
+            "reason": "" if detected.get("installed") else f"{name}_missing",
+            "candidates": detected.get("candidates", []),
+        }
+
+    def collect_preflight():
+        python_path = command_available("python3") or sys.executable or ""
+        facts = {
+            "python3": tool_fact("python3", required_for=["helper-runtime"], blocking_now=True, path_override=python_path),
+            "sh": file_fact("sh", "/bin/sh", required_for=["helper-runtime"], blocking_now=True),
+            "bash": file_fact("bash", "/bin/bash", required_for=["hermes", "bun"], blocking_now=True),
+            "curl": tool_fact("curl", required_for=["hermes", "bun", "node"], blocking_now=True),
+            "git": tool_fact("git", required_for=["gbrain-step3"], blocking_now=True),
+            "xcodeSelect": xcode_select_fact(),
+            "node": tool_fact("node", required_for=["openclaw"], blocking_now=False),
+            "npm": tool_fact("npm", required_for=["openclaw"], blocking_now=False),
+            "bun": tool_fact("bun", required_for=["gbrain-step3"], blocking_now=True),
+            "openclaw": runtime_fact("openclaw", required_for=["openclaw"]),
+            "hermes": runtime_fact("hermes", required_for=["hermes"]),
+        }
+        return {"detectedAt": now(), "facts": facts}
+
+    def write_preflight():
+        preflight = collect_preflight()
+        state = load_state()
+        state["schemaVersion"] = 1
+        state["preflight"] = preflight
+        save_state(state)
+        return preflight
+
+    def report_progress(flags):
+        status = flags.get("status", "")
+        section = flags.get("section", "")
+        note = flags.get("note", "")
+        if status not in {"started", "completed", "waiting_for_user", "failed"}:
+            raise RuntimeError("invalid_report_status")
+        if not section:
+            raise RuntimeError("report_section_missing")
+        state = load_state()
+        state["schemaVersion"] = 1
+        progress = state.setdefault("progress", {})
+        progress["currentSection"] = section
+        progress["lastStatus"] = status
+        progress["updatedAt"] = now()
+        if status == "completed":
+            completed = progress.setdefault("completedSections", [])
+            if section not in completed:
+                completed.append(section)
+            if progress.get("waitingForUser", {}).get("section") == section:
+                progress.pop("waitingForUser", None)
+            progress.pop("lastFailure", None)
+        elif status == "waiting_for_user":
+            progress["waitingForUser"] = {
+                "section": section,
+                "note": note,
+                "createdAt": now(),
+            }
+        elif status == "failed":
+            progress["lastFailure"] = {
+                "section": section,
+                "note": note,
+                "createdAt": now(),
+            }
+        save_state(state)
+        print(json.dumps({"ok": True, "progress": progress}, indent=2, sort_keys=True))
+
     def run_process(argv, *, env=None, timeout=45, input_text=None):
         try:
             completed = subprocess.run(
@@ -276,6 +1286,93 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             }
         except Exception as exc:
             return {"ok": False, "code": -1, "stdout": "", "stderr": str(exc)}
+
+    def has_interactive_tty():
+        if os.environ.get("ZEBRA_GBRAIN_RUNTIME_ASSUME_TTY", "").strip() == "1":
+            return True
+        try:
+            with open("/dev/tty", "rb", buffering=0):
+                return True
+        except Exception:
+            return False
+
+    def helper_command_argv(runtime, provider_id):
+        helper_path = os.environ.get("ZEBRA_GBRAIN_RUNTIME_HELPER_PATH", "").strip() or "zebra-gbrain-runtime-onboarding"
+        return [helper_path, "interactive-auth", runtime, "--provider", provider_id]
+
+    def helper_command_line(runtime, provider_id):
+        env_parts = {
+            "ZEBRA_GBRAIN_RUNTIME_STATE": str(state_path),
+            "ZEBRA_GBRAIN_RUNTIME_HOME": str(home),
+        }
+        doc_path = os.environ.get("ZEBRA_GBRAIN_RUNTIME_DOC", "").strip()
+        if doc_path:
+            env_parts["ZEBRA_GBRAIN_RUNTIME_DOC"] = doc_path
+        language = os.environ.get("ZEBRA_ONBOARDING_LANGUAGE", "").strip()
+        if language:
+            env_parts["ZEBRA_ONBOARDING_LANGUAGE"] = language
+        argv = helper_command_argv(runtime, provider_id)
+        return " ".join(
+            [f"{key}={shlex.quote(value)}" for key, value in env_parts.items()]
+            + [shlex.quote(part) for part in argv]
+        )
+
+    def interactive_auth_required_result(runtime, provider, reason):
+        provider_id = provider.get("id", "")
+        command = helper_command_line(runtime, provider_id)
+        return {
+            "ok": False,
+            "code": 0,
+            "stdout": "",
+            "stderr": reason,
+            "requiresInteractiveAuth": True,
+            "blockingReason": "interactive_auth_required",
+            "interactiveAuthCommand": command,
+            "interactiveAuthArgv": helper_command_argv(runtime, provider_id),
+        }
+
+    def write_interactive_auth_request(runtime, provider, credential, result):
+        provider_id = provider.get("id", "")
+        state = load_state()
+        state["schemaVersion"] = 1
+        state["selection"] = {
+            "selectedRuntime": runtime,
+            "selectedProvider": provider_id,
+            "runtimeProvider": provider_id_for_runtime(provider, runtime),
+            "runtimeModel": provider.get("hermes_model") if runtime == "hermes" else "",
+            "credential": non_secret_credential(credential),
+            "updatedAt": now(),
+        }
+        state["runtimeConfig"] = {
+            "configuredAt": now(),
+            "result": redacted_result(result, credential),
+        }
+        state["interactiveAuth"] = {
+            "status": "required",
+            "runtime": runtime,
+            "provider": provider_id,
+            "runtimeProvider": provider_id_for_runtime(provider, runtime),
+            "reason": result.get("stderr") or result.get("blockingReason") or "interactive_auth_required",
+            "command": result.get("interactiveAuthCommand") or helper_command_line(runtime, provider_id),
+            "argv": result.get("interactiveAuthArgv") or helper_command_argv(runtime, provider_id),
+            "requestedAt": now(),
+        }
+        progress = state.setdefault("progress", {})
+        progress["status"] = "waiting_for_user"
+        progress["currentSection"] = "Configure selected runtime"
+        progress["waitingForUser"] = {
+            "section": "Configure selected runtime",
+            "note": "Run the interactive auth command in a real Zebra terminal, then rerun configure-runtime.",
+            "createdAt": now(),
+        }
+        progress.pop("lastFailure", None)
+        state["receipt"] = {
+            "complete": False,
+            "verifiedAt": now(),
+            "reasons": ["interactive_auth_required"],
+        }
+        save_state(state)
+        return state
 
     def run_interactive_process(argv, *, env=None, timeout=600):
         try:
@@ -717,98 +1814,69 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             return json.loads(text[start:end + 1])
         raise ValueError("json_output_missing")
 
-    def runtime_options(detection):
-        openclaw = detection["openclaw"]["installed"]
-        hermes = detection["hermes"]["installed"]
-        if openclaw and not hermes:
-            return [
-                ("openclaw", message("Use OpenClaw", "OpenClaw 사용", "OpenClawを使用")),
-                ("hermes", message("Install Hermes and use it", "Hermes 설치 후 사용", "Hermesをインストールして使用")),
-            ]
-        if hermes and not openclaw:
-            return [
-                ("hermes", message("Use Hermes", "Hermes 사용", "Hermesを使用")),
-                ("openclaw", message("Install OpenClaw and use it", "OpenClaw 설치 후 사용", "OpenClawをインストールして使用")),
-            ]
-        if openclaw and hermes:
-            return [
-                ("openclaw", message("Use OpenClaw", "OpenClaw 사용", "OpenClawを使用")),
-                ("hermes", message("Use Hermes", "Hermes 사용", "Hermesを使用")),
-            ]
-        return [
-            ("openclaw", message("Install OpenClaw and use it", "OpenClaw 설치 후 사용", "OpenClawをインストールして使用")),
-            ("hermes", message("Install Hermes and use it", "Hermes 설치 후 사용", "Hermesをインストールして使用")),
-        ]
+    def path_writable_or_creatable(path):
+        candidate = Path(path).expanduser()
+        current = candidate
+        while not current.exists():
+            parent = current.parent
+            if parent == current:
+                return False
+            current = parent
+        return os.access(str(current), os.W_OK | os.X_OK)
 
-    def installed_notice(detection):
-        openclaw = detection["openclaw"]["installed"]
-        hermes = detection["hermes"]["installed"]
-        if openclaw and hermes:
-            print(message(
-                "OpenClaw and Hermes are both installed. Choose which execution tool gbrain should use.\\nFiles or settings needed to run gbrain may be added or changed on the selected side.",
-                "OpenClaw와 Hermes가 모두 설치되어 있으므로 gbrain에 사용할 실행 도구를 선택하세요.\\n선택한 쪽에는 gbrain 실행에 필요한 파일이나 설정이 추가되거나 바뀔 수 있습니다.",
-                "OpenClawとHermesはどちらもインストール済みです。gbrainで使用する実行ツールを選んでください。\\n選択した側にgbrain実行に必要なファイルや設定が追加または変更される場合があります。",
-            ))
-        elif openclaw:
-            print(message(
-                "OpenClaw is already installed, so gbrain can use it as its execution tool.\\nDuring setup, files or settings needed to run gbrain may be added or changed on the OpenClaw side.\\n\\nIf you want to keep your existing OpenClaw settings unchanged, install Hermes and use that for gbrain instead.",
-                "현재 OpenClaw가 설치되어 있어 gbrain 실행 도구로 바로 사용할 수 있습니다.\\n다만 준비 과정에서 gbrain 실행에 필요한 파일이나 설정이 OpenClaw 쪽에 추가되거나 바뀔 수 있으니 참고하세요.\\n\\n기존 OpenClaw 설정을 그대로 두고 싶다면 Hermes를 설치해 gbrain에 사용하세요.",
-                "OpenClawはすでにインストールされているため、gbrainの実行ツールとしてそのまま使用できます。\\n準備中に、gbrain実行に必要なファイルや設定がOpenClaw側に追加または変更される場合があります。\\n\\n既存のOpenClaw設定をそのままにしたい場合は、Hermesをインストールしてgbrainに使用してください。",
-            ))
-        elif hermes:
-            print(message(
-                "Hermes is already installed, so gbrain can use it as its execution tool.\\nDuring setup, files or settings needed to run gbrain may be added or changed on the Hermes side.\\n\\nIf you want to keep your existing Hermes settings unchanged, install OpenClaw and use that for gbrain instead.",
-                "현재 Hermes가 설치되어 있어 gbrain 실행 도구로 바로 사용할 수 있습니다.\\n다만 준비 과정에서 gbrain 실행에 필요한 파일이나 설정이 Hermes 쪽에 추가되거나 바뀔 수 있으니 참고하세요.\\n\\n기존 Hermes 설정을 그대로 두고 싶다면 OpenClaw를 설치해 gbrain에 사용하세요.",
-                "Hermesはすでにインストールされているため、gbrainの実行ツールとしてそのまま使用できます。\\n準備中に、gbrain実行に必要なファイルや設定がHermes側に追加または変更される場合があります。\\n\\n既存のHermes設定をそのままにしたい場合は、OpenClawをインストールしてgbrainに使用してください。",
-            ))
-        else:
-            print(message(
-                "gbrain runs through OpenClaw or Hermes. Choose which execution tool to use, and Zebra will install only what is needed before continuing gbrain setup.",
-                "gbrain은 OpenClaw 또는 Hermes를 통해 동작합니다.\\n사용할 실행 도구를 선택하면 Zebra가 필요한 범위만 설치한 뒤 gbrain 실행 준비를 이어갑니다.",
-                "gbrainはOpenClawまたはHermesを通じて動作します。\\n使用する実行ツールを選ぶと、Zebraが必要な範囲だけインストールしてgbrainの実行準備を続けます。",
-            ))
+    def npm_environment():
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+        return env
 
-    def tty_input(prompt):
-        try:
-            with open("/dev/tty", "r", encoding="utf-8", errors="replace") as tty_in:
-                print(prompt, end="", flush=True)
-                value = tty_in.readline()
-        except OSError:
-            raise RuntimeError("interactive_terminal_required")
-        if value == "":
-            raise RuntimeError("interactive_terminal_required")
-        return value.rstrip("\\n")
+    def npm_global_prefix():
+        result = run_process(["npm", "config", "get", "prefix"], env=npm_environment(), timeout=30)
+        if not result["ok"]:
+            return "", result
+        lines = [line.strip() for line in result.get("stdout", "").splitlines() if line.strip()]
+        prefix = lines[-1] if lines else ""
+        if prefix in {"undefined", "null"}:
+            prefix = ""
+        return prefix, result
 
-    def ask(prompt, default=""):
-        suffix = f" [{default}]" if default else ""
-        value = tty_input(f"{prompt}{suffix}: ").strip()
-        return value or default
+    def npm_prefix_supports_global_install(prefix):
+        if not prefix:
+            return False
+        expanded = Path(prefix).expanduser()
+        return (
+            path_writable_or_creatable(expanded / "bin") and
+            path_writable_or_creatable(expanded / "lib" / "node_modules")
+        )
 
-    def choose_runtime(detection):
-        options = runtime_options(detection)
-        print()
-        installed_notice(detection)
-        print()
-        for index, (_, label) in enumerate(options, start=1):
-            print(f"{index}. {label}")
-        print()
-        while True:
-            raw = ask(message(
-                "Select runtime",
-                "실행 도구 선택",
-                "実行ツールを選択",
-            )).lower()
-            for index, (runtime, _) in enumerate(options, start=1):
-                aliases = {str(index), runtime}
-                if runtime == "openclaw":
-                    aliases.add("openclo")
-                if raw in aliases:
-                    return runtime
-            print(message(
-                "Enter one of the option numbers above.",
-                "위 선택지 번호 중 하나를 입력하세요.",
-                "上の選択肢番号を入力してください。",
-            ))
+    def configure_user_npm_global_prefix():
+        local_prefix = home / ".local"
+        (local_prefix / "bin").mkdir(parents=True, exist_ok=True)
+        (local_prefix / "lib" / "node_modules").mkdir(parents=True, exist_ok=True)
+        prepend_path_once(str(local_prefix / "bin"))
+        result = run_process(
+            ["npm", "config", "set", "prefix", str(local_prefix)],
+            env=npm_environment(),
+            timeout=60,
+        )
+        record_attempt(
+            "install-runtime:openclaw:npm-prefix",
+            f"npm config set prefix {local_prefix}",
+            result,
+            recoverable=True,
+            blocking_reason="" if result["ok"] else "npm_prefix_config_failed",
+        )
+        return result
+
+    def install_openclaw_runtime():
+        prefix, prefix_result = npm_global_prefix()
+        if not prefix_result["ok"]:
+            return prefix_result
+        if not npm_prefix_supports_global_install(prefix):
+            prefix_result = configure_user_npm_global_prefix()
+            if not prefix_result["ok"]:
+                return prefix_result
+        prepend_path_once(str(home / ".local" / "bin"))
+        return run_process(["npm", "install", "-g", "openclaw"], env=npm_environment(), timeout=900)
 
     def install_runtime(runtime):
         if runtime == "openclaw":
@@ -817,7 +1885,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
                 "npm으로 OpenClaw CLI를 설치합니다...",
                 "npmでOpenClaw CLIをインストールします...",
             ))
-            return run_process(["npm", "install", "-g", "openclaw"], timeout=900)
+            return install_openclaw_runtime()
         print(message(
             "Installing Hermes CLI with the installer in minimal mode...",
             "installer로 Hermes CLI를 최소 모드로 설치합니다...",
@@ -832,67 +1900,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         ])
         return run_process(["/bin/bash", "-lc", script], env=env, timeout=1200)
 
-    def ensure_runtime_installed(runtime, detection):
-        if detection[runtime]["installed"]:
-            return detection[runtime]
-        name = runtime_display_name(runtime)
-        print(message(
-            f"{name} is not installed. Starting installation.",
-            f"{name}가 설치되어 있지 않아 설치를 시작합니다.",
-            f"{name}はインストールされていないため、インストールを開始します。",
-        ))
-        result = install_runtime(runtime)
-        if not result["ok"]:
-            print(result["stdout"])
-            print(result["stderr"], file=sys.stderr)
-            raise RuntimeError(f"{runtime}_install_failed")
-        refreshed = detect_runtime("openclaw" if runtime == "openclaw" else "hermes")
-        if not refreshed["installed"]:
-            tail = "\\n".join((result["stdout"] + "\\n" + result["stderr"]).splitlines()[-12:])
-            if tail:
-                print(tail)
-            print(message(
-                f"{runtime} was not found after installation. Checked candidates:",
-                f"설치 후 {runtime} 실행 파일을 찾지 못했습니다. 확인한 경로:",
-                f"インストール後に{runtime}実行ファイルを検出できませんでした。確認したパス:",
-            ), file=sys.stderr)
-            for candidate in refreshed.get("candidates", []):
-                print(f"- {candidate}", file=sys.stderr)
-            raise RuntimeError(f"{runtime}_install_not_detected")
-        return refreshed
-
     def runtime_display_name(runtime):
         return "OpenClaw" if runtime == "openclaw" else "Hermes"
-
-    def print_provider_intro(runtime):
-        name = runtime_display_name(runtime)
-        print()
-        print(message(
-            f"{name} is ready.",
-            f"{name} 준비가 끝났습니다.",
-            f"{name}の準備が完了しました。",
-        ))
-        print(message(
-            "Now choose how gbrain should connect to an LLM.",
-            "이제 gbrain이 LLM에 연결할 방식을 선택합니다.",
-            "次にgbrainがLLMへ接続する方法を選択します。",
-        ))
-
-    def choose_provider():
-        print()
-        for index, provider in enumerate(provider_choices, start=1):
-            env = provider.get("env", "")
-            if env:
-                has_env = bool(os.environ.get(env))
-                print(f"{index}. {provider['label']} ({env}{' set' if has_env else ''})")
-            else:
-                print(f"{index}. {provider['label']}")
-        while True:
-            raw = ask(message("Select LLM connection", "LLM 연결 방식 선택", "LLM接続方法を選択")).lower()
-            for index, provider in enumerate(provider_choices, start=1):
-                if raw in {str(index), provider["id"]}:
-                    return provider
-            print(message("Choose one option number.", "선택지 번호 중 하나를 입력하세요.", "選択肢番号を選んでください。"))
 
     def credential_for(provider, runtime):
         if provider.get("auth_type") == "oauth":
@@ -982,6 +1991,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
                 "stdout": verified.get("stdout", ""),
                 "stderr": verified.get("stderr", "") or "openai_codex_import_not_verified",
             }
+        if not has_interactive_tty():
+            return interactive_auth_required_result("hermes", provider, "hermes_openai_codex_auth_requires_tty")
         print(message(
             "OpenAI account login is required for Hermes. Continue the Hermes auth flow below.",
             "Hermes에서 OpenAI 계정 연동이 필요합니다. 아래 Hermes 인증 절차를 계속 진행하세요.",
@@ -1131,6 +2142,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             return {"ok": True, "code": 0, "stdout": "", "stderr": ""}
         status, logged_in = claude_cli_auth_status(env)
         if not logged_in:
+            if not has_interactive_tty():
+                return interactive_auth_required_result("openclaw", provider, "claude_cli_auth_login_requires_tty")
             print(message(
                 "Claude CLI login is required. Continue the Claude login flow below.",
                 "Claude CLI 로그인이 필요합니다. 아래 Claude 로그인 절차를 계속 진행하세요.",
@@ -1152,6 +2165,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "OpenClaw에 Claude CLI auth profile을 등록합니다...",
             "OpenClawにClaude CLI auth profileを登録します...",
         ))
+        if not has_interactive_tty():
+            return interactive_auth_required_result("openclaw", provider, "openclaw_claude_cli_registration_requires_tty")
         return run_interactive_process_until(
             [exe, "models", "auth", "login", "--provider", "anthropic", "--method", "cli", "--set-default"],
             lambda: openclaw_auth_profile_usable(exe, provider_id, credential),
@@ -1174,6 +2189,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "OpenClaw에 ChatGPT/Codex 계정 연동을 등록합니다...",
             "OpenClawにChatGPT/Codexアカウント連携を登録します...",
         ))
+        if not has_interactive_tty():
+            return interactive_auth_required_result("openclaw", provider, "openclaw_openai_oauth_requires_tty")
         return run_interactive_process_until(
             [exe, "models", "auth", "login", "--provider", "openai", "--method", "oauth", "--set-default"],
             lambda: openclaw_auth_profile_usable(exe, provider_id, credential),
@@ -1396,48 +2413,404 @@ public struct ZebraGBrainRuntimeOnboardingStore {
                 f"OpenClawに{provider['label']}の接続情報を設定します。",
             ))
 
-    def run_onboarding():
-        detection = detect_all()
-        runtime = choose_runtime(detection)
-        executable = ensure_runtime_installed(runtime, detection)
-        print_provider_intro(runtime)
-        provider = choose_provider()
-        print_provider_selection_notice(runtime, provider)
+    def recover_prerequisite(name):
+        if name == "clt":
+            result = run_process(["xcode-select", "--install"], timeout=30)
+            blocking = "clt_install_required"
+            record_attempt("recover-prerequisite:clt", "xcode-select --install", result, recoverable=True, blocking_reason=blocking)
+            state = load_state()
+            progress = state.setdefault("progress", {})
+            progress["waitingForUser"] = {
+                "section": "Recover common prerequisites",
+                "note": "Complete the macOS Command Line Tools installer, then rerun preflight.",
+                "createdAt": now(),
+            }
+            save_state(state)
+            print(json.dumps({"ok": result["ok"], "blockingReason": blocking, "result": redacted_result(result)}, indent=2, sort_keys=True))
+            return
+        if name == "bun":
+            script = "set -o pipefail; curl -fsSL https://bun.sh/install | bash"
+            result = run_process(["/bin/bash", "-lc", script], timeout=1200)
+            record_attempt("recover-prerequisite:bun", script, result, recoverable=True, blocking_reason="" if result["ok"] else "bun_install_failed")
+            if result["ok"]:
+                prepend_path_once(str(home / ".bun" / "bin"))
+            preflight = write_preflight()
+            print(json.dumps({"ok": result["ok"], "result": redacted_result(result), "preflight": preflight}, indent=2, sort_keys=True))
+            if not result["ok"]:
+                raise RuntimeError("bun_install_failed")
+            return
+        if name == "node":
+            result = recover_node_with_official_pkg()
+            print(json.dumps(result, indent=2, sort_keys=True))
+            if result.get("requiresUserAction"):
+                return
+            if not result.get("ok"):
+                raise RuntimeError(result.get("blockingReason") or "node_install_required")
+            return
+        raise RuntimeError(f"unsupported_prerequisite:{name}")
+
+    def recover_node_with_official_pkg():
+        node_pkg_url = os.environ.get("ZEBRA_NODE_PKG_URL", "").strip()
+        download_dir = state_path.parent / "downloads"
+        download_dir.mkdir(parents=True, exist_ok=True)
+        if not node_pkg_url:
+            try:
+                with urllib.request.urlopen("https://nodejs.org/dist/index.json", timeout=30) as response:
+                    releases = json.loads(response.read().decode("utf-8"))
+                release = next((item for item in releases if item.get("lts")), None)
+                version = release.get("version") if isinstance(release, dict) else ""
+                if not version:
+                    raise RuntimeError("node_lts_release_missing")
+                node_pkg_url = f"https://nodejs.org/dist/{version}/node-{version}.pkg"
+            except Exception as exc:
+                result = {"ok": False, "code": 1, "stdout": "", "stderr": f"node_index_fetch_failed: {exc}"}
+                record_attempt("recover-prerequisite:node", "fetch https://nodejs.org/dist/index.json", result, recoverable=True, blocking_reason="node_index_fetch_failed")
+                return {"ok": False, "blockingReason": "node_index_fetch_failed", "result": redacted_result(result)}
+        pkg_path = download_dir / "node.pkg"
+        result = run_process(["curl", "-fL", node_pkg_url, "-o", str(pkg_path)], timeout=1200)
+        if not result["ok"]:
+            record_attempt("recover-prerequisite:node", f"curl -fL {node_pkg_url} -o {pkg_path}", result, recoverable=True, blocking_reason="node_pkg_download_failed")
+            return {"ok": False, "blockingReason": "node_pkg_download_failed", "result": redacted_result(result)}
+        open_result = run_process(["open", str(pkg_path)], timeout=30)
+        if not open_result["ok"]:
+            record_attempt("recover-prerequisite:node", f"open {pkg_path}", open_result, recoverable=True, blocking_reason="node_pkg_open_failed")
+            return {
+                "ok": False,
+                "requiresUserAction": False,
+                "blockingReason": "node_pkg_open_failed",
+                "pkgPath": str(pkg_path),
+                "result": redacted_result(open_result),
+            }
+        record_attempt("recover-prerequisite:node", f"open {pkg_path}", open_result, recoverable=True, blocking_reason="node_pkg_install_required")
+        state = load_state()
+        progress = state.setdefault("progress", {})
+        progress["waitingForUser"] = {
+            "section": "Recover selected-runtime prerequisites",
+            "note": "Complete the official Node.js pkg installer, then rerun preflight.",
+            "createdAt": now(),
+        }
+        save_state(state)
+        return {
+            "ok": False,
+            "requiresUserAction": True,
+            "blockingReason": "node_pkg_install_required",
+            "pkgPath": str(pkg_path),
+            "result": redacted_result(open_result),
+        }
+
+    def install_runtime_command(runtime):
+        before = detect_runtime(runtime)
+        state = load_state()
+        state["schemaVersion"] = 1
+        selection = state.setdefault("selection", {})
+        selection["selectedRuntime"] = runtime
+        selection["updatedAt"] = now()
+        save_state(state)
+        if before.get("installed"):
+            print(json.dumps({"ok": True, "runtime": runtime, "detection": before, "installedAlready": True}, indent=2, sort_keys=True))
+            return
+        result = install_runtime(runtime)
+        record_attempt(f"install-runtime:{runtime}", "npm install -g openclaw" if runtime == "openclaw" else "hermes minimal installer", result, recoverable=True, blocking_reason="" if result["ok"] else f"{runtime}_install_failed")
+        after = detect_runtime(runtime)
+        output = {"ok": bool(result["ok"] and after.get("installed")), "runtime": runtime, "result": redacted_result(result), "detection": after}
+        print(json.dumps(output, indent=2, sort_keys=True))
+        if not output["ok"]:
+            raise RuntimeError(f"{runtime}_install_failed")
+
+    def configure_runtime_command(runtime, provider_id):
+        executable = executable_for_runtime(runtime)
+        provider = provider_by_id(provider_id)
         credential = credential_for(provider, runtime)
+        print_provider_selection_notice(runtime, provider)
         if runtime == "hermes":
             command_result = run_hermes_config(executable["path"], provider, credential)
         else:
             command_result = run_openclaw_config(executable["path"], provider, credential)
+        if command_result.get("requiresInteractiveAuth"):
+            state = write_interactive_auth_request(runtime, provider, credential, command_result)
+            print(json.dumps({
+                "ok": False,
+                "requiresInteractiveAuth": True,
+                "blockingReason": "interactive_auth_required",
+                "interactiveAuth": state.get("interactiveAuth"),
+                "selection": state.get("selection"),
+                "runtimeConfig": state.get("runtimeConfig"),
+            }, indent=2, sort_keys=True))
+            return
+        state = load_state()
+        state["schemaVersion"] = 1
+        state["selection"] = {
+            "selectedRuntime": runtime,
+            "selectedProvider": provider_id,
+            "runtimeProvider": provider_id_for_runtime(provider, runtime),
+            "runtimeModel": provider.get("hermes_model") if runtime == "hermes" else "",
+            "credential": non_secret_credential(credential),
+            "updatedAt": now(),
+        }
+        state["runtimeConfig"] = {
+            "configuredAt": now(),
+            "result": redacted_result(command_result, credential),
+        }
+        state.pop("interactiveAuth", None)
+        if not command_result["ok"]:
+            state["receipt"] = {
+                "complete": False,
+                "verifiedAt": now(),
+                "reasons": [f"{runtime}_config_failed"],
+            }
+        save_state(state)
         if not command_result["ok"]:
             print_command_failure(command_result, credential)
             raise RuntimeError(f"{runtime}_config_failed")
-        verification_result = verify_llm_call(runtime, executable, provider, credential)
-        write_receipt(runtime, executable, provider, credential, command_result, verification_result)
+        print(json.dumps({"ok": True, "selection": state["selection"], "runtimeConfig": state["runtimeConfig"]}, indent=2, sort_keys=True))
 
-    def print_status():
+    def interactive_auth_command(runtime, provider_id):
+        executable = executable_for_runtime(runtime)
+        provider = provider_by_id(provider_id)
+        credential = credential_for(provider, runtime)
+        if not has_interactive_tty():
+            result = interactive_auth_required_result(runtime, provider, "interactive_auth_command_requires_tty")
+            state = write_interactive_auth_request(runtime, provider, credential, result)
+            print(json.dumps({
+                "ok": False,
+                "requiresInteractiveAuth": True,
+                "blockingReason": "interactive_auth_command_requires_tty",
+                "interactiveAuth": state.get("interactiveAuth"),
+            }, indent=2, sort_keys=True))
+            raise RuntimeError("interactive_auth_command_requires_tty")
+
         state = load_state()
-        output = {
-            "statePath": str(state_path),
-            "detection": detect_all(),
-            "receipt": state.get("receipt"),
+        state["schemaVersion"] = 1
+        state["selection"] = {
+            "selectedRuntime": runtime,
+            "selectedProvider": provider_id,
+            "runtimeProvider": provider_id_for_runtime(provider, runtime),
+            "runtimeModel": provider.get("hermes_model") if runtime == "hermes" else "",
+            "credential": non_secret_credential(credential),
+            "updatedAt": now(),
         }
-        print(json.dumps(output, indent=2, sort_keys=True))
+        state["interactiveAuth"] = {
+            "status": "running",
+            "runtime": runtime,
+            "provider": provider_id,
+            "runtimeProvider": provider_id_for_runtime(provider, runtime),
+            "startedAt": now(),
+        }
+        save_state(state)
 
-    if command in {"run", ""}:
+        print_provider_selection_notice(runtime, provider)
+        if runtime == "hermes":
+            command_result = run_hermes_config(executable["path"], provider, credential)
+        else:
+            command_result = run_openclaw_config(executable["path"], provider, credential)
+
+        state = load_state()
+        state["schemaVersion"] = 1
+        state["runtimeConfig"] = {
+            "configuredAt": now(),
+            "result": redacted_result(command_result, credential),
+        }
+        if command_result["ok"]:
+            state["interactiveAuth"] = {
+                "status": "completed",
+                "runtime": runtime,
+                "provider": provider_id,
+                "runtimeProvider": provider_id_for_runtime(provider, runtime),
+                "completedAt": now(),
+            }
+            progress = state.setdefault("progress", {})
+            if progress.get("waitingForUser", {}).get("section") == "Configure selected runtime":
+                progress.pop("waitingForUser", None)
+            progress.pop("lastFailure", None)
+            save_state(state)
+            print(json.dumps({
+                "ok": True,
+                "interactiveAuth": state.get("interactiveAuth"),
+                "selection": state.get("selection"),
+                "runtimeConfig": state.get("runtimeConfig"),
+            }, indent=2, sort_keys=True))
+            return
+
+        state["interactiveAuth"] = {
+            "status": "failed",
+            "runtime": runtime,
+            "provider": provider_id,
+            "runtimeProvider": provider_id_for_runtime(provider, runtime),
+            "failedAt": now(),
+            "result": redacted_result(command_result, credential),
+        }
+        state["receipt"] = {
+            "complete": False,
+            "verifiedAt": now(),
+            "reasons": [f"{runtime}_config_failed"],
+        }
+        save_state(state)
+        print_command_failure(command_result, credential)
+        raise RuntimeError(f"{runtime}_config_failed")
+
+    def selected_provider_for_runtime(runtime, flags):
+        provider_id = flags.get("provider", "")
+        if provider_id:
+            return provider_by_id(provider_id)
+        state = load_state()
+        selection = state.get("selection") or {}
+        if selection.get("selectedRuntime") and selection.get("selectedRuntime") != runtime:
+            raise RuntimeError("selected_runtime_mismatch")
+        provider_id = selection.get("selectedProvider", "")
+        if not provider_id:
+            raise RuntimeError("selected_provider_missing")
+        return provider_by_id(provider_id)
+
+    def verify_runtime_command(runtime, flags):
+        executable = executable_for_runtime(runtime)
+        provider = selected_provider_for_runtime(runtime, flags)
+        credential = credential_for(provider, runtime)
         try:
-            run_onboarding()
-        except KeyboardInterrupt:
-            print("\\nCancelled.")
-            sys.exit(130)
+            verification_result = verify_llm_call(runtime, executable, provider, credential)
         except Exception as exc:
             state = load_state()
             state["schemaVersion"] = 1
+            state["runtimeVerification"] = {
+                "verifiedAt": now(),
+                "result": {"ok": False, "exitCode": 1, "stdoutTail": "", "stderrTail": str(exc)},
+            }
             state["receipt"] = {
                 "complete": False,
                 "verifiedAt": now(),
                 "reasons": [str(exc)],
             }
             save_state(state)
+            raise
+        state = load_state()
+        state["schemaVersion"] = 1
+        state["runtimeVerification"] = {
+            "verifiedAt": now(),
+            "result": redacted_result(verification_result, credential),
+        }
+        save_state(state)
+        print(json.dumps({"ok": True, "runtimeVerification": state["runtimeVerification"]}, indent=2, sort_keys=True))
+
+    def write_receipt_command():
+        state = load_state()
+        selection = state.get("selection") or {}
+        runtime = selection.get("selectedRuntime", "")
+        provider_id = selection.get("selectedProvider", "")
+        if not runtime:
+            raise RuntimeError("selected_runtime_missing")
+        if not provider_id:
+            raise RuntimeError("selected_provider_missing")
+        provider = provider_by_id(provider_id)
+        executable = executable_for_runtime(runtime)
+        config_result = ((state.get("runtimeConfig") or {}).get("result") or {})
+        verification_result = ((state.get("runtimeVerification") or {}).get("result") or {})
+        if not config_result.get("ok"):
+            raise RuntimeError("runtime_config_unverified")
+        if not verification_result.get("ok"):
+            raise RuntimeError("llm_call_unverified")
+        credential = selection.get("credential") or {}
+        write_receipt(runtime, executable, provider, credential, {"ok": True}, {"ok": True})
+
+    def print_run_guidance():
+        state = load_state()
+        output = {
+            "ok": True,
+            "mode": "agent_orchestrated",
+            "statePath": str(state_path),
+            "documentPath": os.environ.get("ZEBRA_GBRAIN_RUNTIME_DOC", ""),
+            "next": [
+                "Read the Step 2 instruction document.",
+                "Run zebra-gbrain-runtime-onboarding status --json.",
+                "Run zebra-gbrain-runtime-onboarding preflight --json.",
+                "Use report/preflight/recover/install/configure/verify/write-receipt commands; do not use an interactive run flow.",
+            ],
+            "progress": state.get("progress"),
+            "selection": state.get("selection"),
+            "interactiveAuth": state.get("interactiveAuth"),
+            "receipt": state.get("receipt"),
+        }
+        print(json.dumps(output, indent=2, sort_keys=True))
+
+    def print_status():
+        state = load_state()
+        output = {
+            "statePath": str(state_path),
+            "documentPath": os.environ.get("ZEBRA_GBRAIN_RUNTIME_DOC", ""),
+            "detection": detect_all(),
+            "preflight": state.get("preflight"),
+            "progress": state.get("progress"),
+            "selection": state.get("selection"),
+            "interactiveAuth": state.get("interactiveAuth"),
+            "runtimeConfig": state.get("runtimeConfig"),
+            "runtimeVerification": state.get("runtimeVerification"),
+            "receipt": state.get("receipt"),
+        }
+        print(json.dumps(output, indent=2, sort_keys=True))
+
+    if command in {"run", ""}:
+        print_run_guidance()
+    elif command == "preflight":
+        preflight = write_preflight()
+        print(json.dumps({"statePath": str(state_path), "preflight": preflight}, indent=2, sort_keys=True))
+    elif command == "report":
+        try:
+            report_progress(parse_flags(sys.argv[3:]))
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif command == "recover-prerequisite":
+        try:
+            target = sys.argv[3] if len(sys.argv) > 3 else ""
+            recover_prerequisite(target)
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif command == "install-runtime":
+        try:
+            runtime = sys.argv[3] if len(sys.argv) > 3 else ""
+            install_runtime_command(runtime)
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif command == "configure-runtime":
+        try:
+            runtime = sys.argv[3] if len(sys.argv) > 3 else ""
+            flags = parse_flags(sys.argv[4:])
+            provider_id = flags.get("provider", "")
+            if not provider_id:
+                raise RuntimeError("provider_missing")
+            configure_runtime_command(runtime, provider_id)
+        except KeyboardInterrupt:
+            print("\\nCancelled.", file=sys.stderr)
+            sys.exit(130)
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif command == "interactive-auth":
+        try:
+            runtime = sys.argv[3] if len(sys.argv) > 3 else ""
+            flags = parse_flags(sys.argv[4:])
+            provider_id = flags.get("provider", "")
+            if not provider_id:
+                raise RuntimeError("provider_missing")
+            interactive_auth_command(runtime, provider_id)
+        except KeyboardInterrupt:
+            print("\\nCancelled.", file=sys.stderr)
+            sys.exit(130)
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif command == "verify-runtime":
+        try:
+            runtime = sys.argv[3] if len(sys.argv) > 3 else ""
+            flags = parse_flags(sys.argv[4:])
+            verify_runtime_command(runtime, flags)
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif command == "write-receipt":
+        try:
+            write_receipt_command()
+        except Exception as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
     elif command in {"status", "detect"}:

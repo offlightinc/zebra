@@ -10,10 +10,13 @@ public enum MarkdownPillAgent: String, CaseIterable, Identifiable, Sendable {
     public static func defaultAgent(
         preferenceStore: ZebraAgentPreferenceStore = ZebraAgentPreferenceStore()
     ) -> MarkdownPillAgent {
-        guard let primaryAgent = preferenceStore.load().primaryAgent else {
-            return .codex
-        }
-        return MarkdownPillAgent(agentKind: primaryAgent)
+        primaryAgent(preferenceStore: preferenceStore) ?? .codex
+    }
+
+    public static func primaryAgent(
+        preferenceStore: ZebraAgentPreferenceStore = ZebraAgentPreferenceStore()
+    ) -> MarkdownPillAgent? {
+        preferenceStore.load().primaryAgent.map(MarkdownPillAgent.init(agentKind:))
     }
 
     public init(agentKind: ZebraAgentKind) {
@@ -50,6 +53,21 @@ public enum MarkdownPillAgent: String, CaseIterable, Identifiable, Sendable {
         case .codex: return "codex"
         case .claude: return "claude"
         case .antigravity: return "antigravity"
+        }
+    }
+
+    var displayName: String {
+        agentKind.displayName
+    }
+
+    var symbolName: String {
+        switch self {
+        case .codex:
+            return "terminal"
+        case .claude:
+            return "terminal"
+        case .antigravity:
+            return "sparkles"
         }
     }
 }
