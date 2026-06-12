@@ -26,6 +26,7 @@ struct ZebraSidebarBody: View {
     @Environment(\.zebra) private var zebra
     @State private var observedOnboardingCompletedStepIDs: Set<ZebraOnboardingChecklistStepID>?
     @State private var pendingGBrainRuntimeStartAfterAgentLaunch = false
+    @State private var pendingChainedGBrainRuntimeRunningAfterAgentLaunch = false
     @State private var launchedRuntimeInteractiveAuthRequestIDs: Set<String> = []
     @State private var lastRuntimeInteractiveAuthLaunchByKey: [String: Date] = [:]
     private static let runtimeInteractiveAuthAutoRetryInterval: TimeInterval = 120
@@ -78,6 +79,7 @@ struct ZebraSidebarBody: View {
             onboardingChecklistStore.deactivateCompletionWatching()
             observedOnboardingCompletedStepIDs = nil
             pendingGBrainRuntimeStartAfterAgentLaunch = false
+            pendingChainedGBrainRuntimeRunningAfterAgentLaunch = false
             launchedRuntimeInteractiveAuthRequestIDs = []
             lastRuntimeInteractiveAuthLaunchByKey = [:]
         }
@@ -261,6 +263,10 @@ struct ZebraSidebarBody: View {
             break
         }
         onboardingChecklistStore.cancelRunning(stepID: stepID)
+        if stepID == .agent {
+            pendingGBrainRuntimeStartAfterAgentLaunch = false
+            pendingChainedGBrainRuntimeRunningAfterAgentLaunch = false
+        }
     }
 
     private func startOnboardingChecklistStep(_ stepID: ZebraOnboardingChecklistStepID) {
@@ -284,7 +290,11 @@ struct ZebraSidebarBody: View {
             launchBegan = true
             onboardingChecklistStore.beginLaunch(stepID: stepID)
             if stepID == .agent {
-                pendingGBrainRuntimeStartAfterAgentLaunch = !launchPlan.launchesGBrainRuntimeInAgentTerminal
+                let launchesRuntimeInAgentTerminal = launchPlan.launchesGBrainRuntimeInAgentTerminal
+                pendingGBrainRuntimeStartAfterAgentLaunch = !launchesRuntimeInAgentTerminal
+                pendingChainedGBrainRuntimeRunningAfterAgentLaunch = launchesRuntimeInAgentTerminal
+            } else if stepID == .gbrainRuntime {
+                pendingChainedGBrainRuntimeRunningAfterAgentLaunch = false
             }
         }
         let agent = onboardingChecklistAgent(for: stepID)
@@ -347,6 +357,15 @@ struct ZebraSidebarBody: View {
             return
         }
         observedOnboardingCompletedStepIDs = completedStepIDs
+        if ZebraOnboardingChecklistStore.shouldBeginChainedRuntimeHandoff(
+            previousCompletedStepIDs: previousCompletedStepIDs,
+            currentCompletedStepIDs: completedStepIDs,
+            didLaunchRuntimeInAgentTerminal: pendingChainedGBrainRuntimeRunningAfterAgentLaunch
+        ) {
+            pendingChainedGBrainRuntimeRunningAfterAgentLaunch = false
+            beginChainedGBrainRuntimeRunningHandoff()
+            return
+        }
         guard let nextStep = ZebraOnboardingChecklistStore.automaticStepToStart(
             previousCompletedStepIDs: previousCompletedStepIDs,
             currentCompletedStepIDs: completedStepIDs,
@@ -357,10 +376,37 @@ struct ZebraSidebarBody: View {
                completedStepIDs.contains(.agent) {
                 pendingGBrainRuntimeStartAfterAgentLaunch = false
             }
+            if pendingChainedGBrainRuntimeRunningAfterAgentLaunch,
+               !previousCompletedStepIDs.contains(.agent),
+               completedStepIDs.contains(.agent) {
+                pendingChainedGBrainRuntimeRunningAfterAgentLaunch = false
+            }
             return
         }
         pendingGBrainRuntimeStartAfterAgentLaunch = false
+        pendingChainedGBrainRuntimeRunningAfterAgentLaunch = false
         startOnboardingChecklistStep(nextStep)
+    }
+
+    private func beginChainedGBrainRuntimeRunningHandoff() {
+        onboardingChecklistStore.beginLaunch(stepID: .gbrainRuntime)
+        guard let workspace = tabManager.selectedWorkspace,
+              let agentTerminals = zebra?.agentTerminals else {
+            return
+        }
+        agentTerminals.prune(validPanelIds: Set(workspace.panels.keys))
+        let registration = agentTerminals.reassignLatest(
+            from: .onboardingChecklist(.agent),
+            to: .onboardingChecklist(.gbrainRuntime),
+            panelIds: workspace.panels.keys
+        )
+        #if DEBUG
+        let panelPrefix = registration.map { String($0.panelId.uuidString.prefix(5)) } ?? "nil"
+        cmuxDebugLog(
+            "zebra.onboarding.chainedRuntime.handoff " +
+            "panel=\(panelPrefix)"
+        )
+        #endif
     }
 
     private func startRuntimeInteractiveAuthIfNeeded(

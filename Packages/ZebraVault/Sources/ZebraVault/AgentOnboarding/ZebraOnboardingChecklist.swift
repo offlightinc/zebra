@@ -192,6 +192,20 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         return .gbrainRuntime
     }
 
+    public static func shouldBeginChainedRuntimeHandoff(
+        previousCompletedStepIDs previous: Set<ZebraOnboardingChecklistStepID>,
+        currentCompletedStepIDs current: Set<ZebraOnboardingChecklistStepID>,
+        didLaunchRuntimeInAgentTerminal: Bool
+    ) -> Bool {
+        guard didLaunchRuntimeInAgentTerminal,
+              !previous.contains(.agent),
+              current.contains(.agent),
+              !current.contains(.gbrainRuntime) else {
+            return false
+        }
+        return true
+    }
+
     public func prefetchGBrainDocsIfNeeded() {
         didStartGBrainDocsPrefetch = true
     }

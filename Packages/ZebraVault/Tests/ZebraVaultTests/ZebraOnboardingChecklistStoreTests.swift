@@ -71,6 +71,54 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testChainedRuntimeHandoffMovesRunningStateToRuntimeWithoutCompletingIt() throws {
+        let root = try makeTemporaryDirectory()
+        let store = makeChecklistStore(homeURL: root)
+
+        store.beginLaunch(stepID: .agent)
+        let shouldHandoff = ZebraOnboardingChecklistStore.shouldBeginChainedRuntimeHandoff(
+            previousCompletedStepIDs: [],
+            currentCompletedStepIDs: [.agent],
+            didLaunchRuntimeInAgentTerminal: true
+        )
+
+        XCTAssertTrue(shouldHandoff)
+        if shouldHandoff {
+            store.beginLaunch(stepID: .gbrainRuntime)
+        }
+
+        XCTAssertEqual(store.runningStepID, .gbrainRuntime)
+        XCTAssertFalse(store.completedStepIDs.contains(.gbrainRuntime))
+        XCTAssertFalse(try XCTUnwrap(store.snapshots.first { $0.id == .agent }).isRunning)
+        XCTAssertTrue(try XCTUnwrap(store.snapshots.first { $0.id == .gbrainRuntime }).isRunning)
+    }
+
+    @MainActor
+    func testChainedRuntimeHandoffDoesNotBeginWithoutAgentCompletionOrWhenRuntimeComplete() {
+        XCTAssertFalse(
+            ZebraOnboardingChecklistStore.shouldBeginChainedRuntimeHandoff(
+                previousCompletedStepIDs: [],
+                currentCompletedStepIDs: [.agent],
+                didLaunchRuntimeInAgentTerminal: false
+            )
+        )
+        XCTAssertFalse(
+            ZebraOnboardingChecklistStore.shouldBeginChainedRuntimeHandoff(
+                previousCompletedStepIDs: [.agent],
+                currentCompletedStepIDs: [.agent],
+                didLaunchRuntimeInAgentTerminal: true
+            )
+        )
+        XCTAssertFalse(
+            ZebraOnboardingChecklistStore.shouldBeginChainedRuntimeHandoff(
+                previousCompletedStepIDs: [],
+                currentCompletedStepIDs: [.agent, .gbrainRuntime],
+                didLaunchRuntimeInAgentTerminal: true
+            )
+        )
+    }
+
+    @MainActor
     func testCompletedRuntimeReceiptCompletesRuntimeStepOnly() throws {
         let root = try makeTemporaryDirectory()
         let executable = try installFakeRuntime(root: root, name: "hermes")

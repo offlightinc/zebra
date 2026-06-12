@@ -82,6 +82,30 @@ public final class ZebraAgentTerminalRegistry {
             .agent
     }
 
+    @discardableResult
+    public func reassignLatest<S: Sequence>(
+        from source: ZebraAgentTerminalSource,
+        to newSource: ZebraAgentTerminalSource,
+        panelIds: S,
+        reassignedAt: Date = Date()
+    ) -> ZebraAgentTerminalRegistration? where S.Element == UUID {
+        let panelIdSet = Set(panelIds)
+        guard let registration = registrationsByPanelId.values
+            .filter({ panelIdSet.contains($0.panelId) })
+            .filter({ $0.source == source })
+            .max(by: { lhs, rhs in lhs.createdAt < rhs.createdAt }) else {
+            return nil
+        }
+        let updated = ZebraAgentTerminalRegistration(
+            panelId: registration.panelId,
+            source: newSource,
+            agent: registration.agent,
+            createdAt: reassignedAt
+        )
+        registrationsByPanelId[registration.panelId] = updated
+        return updated
+    }
+
     public func prune(validPanelIds: Set<UUID>) {
         registrationsByPanelId = registrationsByPanelId.filter { validPanelIds.contains($0.key) }
     }
