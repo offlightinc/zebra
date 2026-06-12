@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 @testable import ZebraVault
 
 final class ZebraOnboardingChecklistStoreTests: XCTestCase {
@@ -6,6 +7,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         super.setUp()
         UserDefaults.standard.removeObject(
             forKey: "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
+        )
+        UserDefaults.standard.removeObject(
+            forKey: "ZebraOnboardingChecklistStore.developmentIncompleteStepIDs"
         )
     }
 
@@ -142,6 +146,42 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         XCTAssertTrue(store.completedStepIDs.contains(.gbrainRuntime))
         XCTAssertFalse(store.completedStepIDs.contains(.gbrain))
+    }
+
+    @MainActor
+    func testDevelopmentToggleCanForceCompletedRuntimeStepIncomplete() throws {
+        let root = try makeTemporaryDirectory()
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        let runtimeStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try writeCompletedRuntimeState(
+            stateURL: runtimeStateURL,
+            runtime: "hermes",
+            executablePath: executable.path
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainRuntimeOnboardingStateURL: runtimeStateURL,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+
+        XCTAssertTrue(store.completedStepIDs.contains(.gbrainRuntime))
+
+        store.developmentToggleStepCompleted(.gbrainRuntime)
+
+        XCTAssertFalse(
+            store.completedStepIDs.contains(.gbrainRuntime),
+            "DEBUG manual toggle should be able to force a receipt-completed step back to incomplete."
+        )
+
+        store.developmentToggleStepCompleted(.gbrainRuntime)
+
+        XCTAssertTrue(store.completedStepIDs.contains(.gbrainRuntime))
     }
 
     func testSelectedRuntimeForGBrainSetupReadsCompletedReceipt() throws {
@@ -421,6 +461,128 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertNil(store.runningStepID)
         XCTAssertEqual(store.snapshots.first { $0.id == .gbrain }?.isRunning, false)
         XCTAssertEqual(store.snapshots.first { $0.id == .gbrain }?.showsStart, true)
+    }
+
+    @MainActor
+    func testGBrainSnapshotIncludesInlineSubstepsForCurrentSection() throws {
+        let root = try makeTemporaryDirectory()
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let agentStateURL = onboardingDirectory.appendingPathComponent("agent-cli-state.json", isDirectory: false)
+        let agentPreferenceURL = root
+            .appendingPathComponent("agent", isDirectory: true)
+            .appendingPathComponent("preferences.json", isDirectory: false)
+        let runtimeStateURL = onboardingDirectory.appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        try writeAgentReadinessState(onboardingDirectory: onboardingDirectory, agent: "codex", method: "path")
+        try writeAgentPreferences(agentPreferenceURL)
+        try writeCompletedRuntimeState(
+            stateURL: runtimeStateURL,
+            runtime: "hermes",
+            executablePath: executable.path
+        )
+        try writeGBrainProgressState(
+            stateURL: gbrainStateURL,
+            completedSections: ["Step 1: Install GBrain"],
+            nextSection: "Step 2: API Keys"
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            agentOnboardingStateURL: agentStateURL,
+            agentPreferenceURL: agentPreferenceURL,
+            gbrainRuntimeOnboardingStateURL: runtimeStateURL,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+        let beforeStart = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
+
+        XCTAssertTrue(beforeStart.isActive)
+        XCTAssertTrue(beforeStart.showsStart)
+        XCTAssertEqual(beforeStart.gbrainSubsteps, [])
+
+        store.beginLaunch(stepID: .gbrain)
+        store.cancelRunning(stepID: .gbrain)
+
+        let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
+        let prepare = try XCTUnwrap(gbrain.gbrainSubsteps.first { $0.title == "Check and clone GBrain repo" })
+        let install = try XCTUnwrap(gbrain.gbrainSubsteps.first { $0.title == "Step 1: Install GBrain" })
+        let credentials = try XCTUnwrap(gbrain.gbrainSubsteps.first { $0.title == "Step 2: API Keys" })
+        let future = try XCTUnwrap(gbrain.gbrainSubsteps.first { $0.title == "Step 3: Create the Brain" })
+
+        XCTAssertTrue(gbrain.isActive)
+        XCTAssertTrue(gbrain.showsStart)
+        XCTAssertEqual(gbrain.gbrainSubsteps.map(\.title), [
+            "Check and clone GBrain repo",
+            "Step 1: Install GBrain",
+            "Step 2: API Keys",
+            "Step 3: Create the Brain",
+        ])
+        XCTAssertTrue(prepare.isCompleted)
+        XCTAssertFalse(prepare.showsStart)
+        XCTAssertTrue(install.isCompleted)
+        XCTAssertFalse(install.showsStart)
+        XCTAssertTrue(credentials.isActive)
+        XCTAssertTrue(credentials.showsStart)
+        XCTAssertFalse(future.isCompleted)
+        XCTAssertFalse(future.isActive)
+        XCTAssertFalse(future.showsStart)
+    }
+
+    @MainActor
+    func testGBrainRefreshPublishesWhenOnlySubstepProgressChanges() throws {
+        let root = try makeTemporaryDirectory()
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let agentStateURL = onboardingDirectory.appendingPathComponent("agent-cli-state.json", isDirectory: false)
+        let agentPreferenceURL = root
+            .appendingPathComponent("agent", isDirectory: true)
+            .appendingPathComponent("preferences.json", isDirectory: false)
+        let runtimeStateURL = onboardingDirectory.appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        try writeAgentReadinessState(onboardingDirectory: onboardingDirectory, agent: "codex", method: "path")
+        try writeAgentPreferences(agentPreferenceURL)
+        try writeCompletedRuntimeState(
+            stateURL: runtimeStateURL,
+            runtime: "hermes",
+            executablePath: executable.path
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            agentOnboardingStateURL: agentStateURL,
+            agentPreferenceURL: agentPreferenceURL,
+            gbrainRuntimeOnboardingStateURL: runtimeStateURL,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+        store.beginLaunch(stepID: .gbrain)
+        store.cancelRunning(stepID: .gbrain)
+
+        var publishCount = 0
+        let cancellable = store.objectWillChange.sink {
+            publishCount += 1
+        }
+
+        try writeGBrainProgressState(
+            stateURL: gbrainStateURL,
+            completedSections: ["Step 1: Install GBrain"],
+            nextSection: "Step 2: API Keys"
+        )
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        XCTAssertGreaterThan(
+            publishCount,
+            0,
+            "GBrain progress changes should redraw substeps even when top-level completion stays unchanged."
+        )
+        let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
+        XCTAssertEqual(gbrain.gbrainSubsteps.map(\.title), [
+            "Check and clone GBrain repo",
+            "Step 1: Install GBrain",
+            "Step 2: API Keys",
+            "Step 3: Create the Brain",
+        ])
+        XCTAssertFalse(store.completedStepIDs.contains(.gbrain))
+        cancellable.cancel()
     }
 
     @MainActor
@@ -2062,6 +2224,59 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             atomically: true,
             encoding: .utf8
         )
+    }
+
+    private func writeAgentPreferences(_ url: URL) throws {
+        let preferences: [String: Any] = [
+            "schemaVersion": 1,
+            "primaryAgent": "codex",
+        ]
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: preferences, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func writeGBrainProgressState(
+        stateURL: URL,
+        completedSections: [String],
+        nextSection: String
+    ) throws {
+        let state: [String: Any] = [
+            "schemaVersion": 1,
+            "docsManifest": [
+                "generatedAt": "2026-06-12T00:00:00Z",
+                "sourceKind": "local",
+                "sourceRef": "test",
+                "files": [],
+                "installForAgentsSections": [
+                    [
+                        "title": "Step 1: Install GBrain",
+                        "hash": "step-1",
+                    ],
+                    [
+                        "title": "Step 2: API Keys",
+                        "hash": "step-2",
+                    ],
+                    [
+                        "title": "Step 3: Create the Brain",
+                        "hash": "step-3",
+                    ],
+                ],
+            ],
+            "progress": [
+                "completedSections": completedSections,
+                "nextSection": nextSection,
+            ],
+        ]
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: stateURL, options: .atomic)
     }
 
     private func writeCompletedRuntimeState(

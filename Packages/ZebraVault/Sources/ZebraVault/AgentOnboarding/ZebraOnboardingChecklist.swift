@@ -25,6 +25,7 @@ public struct ZebraOnboardingChecklistStepSnapshot: Identifiable, Equatable {
     public let isRunning: Bool
     public let showsStart: Bool
     public let wasStartedBefore: Bool
+    let gbrainSubsteps: [ZebraGBrainOnboardingSectionSnapshot]
 }
 
 @MainActor
@@ -84,6 +85,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private var didStartGBrainDocsPrefetch = false
 #if DEBUG
     private static let developmentCompletedStepIDsDefaultsKey = "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
+    private static let developmentIncompleteStepIDsDefaultsKey = "ZebraOnboardingChecklistStore.developmentIncompleteStepIDs"
     private static let developmentManuallyCompletableStepIDs: Set<ZebraOnboardingChecklistStepID> = [
         .gbrainRuntime,
         .gbrain,
@@ -92,6 +94,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         .goals,
     ]
     private var developmentCompletedStepIDs: Set<ZebraOnboardingChecklistStepID> = []
+    private var developmentIncompleteStepIDs: Set<ZebraOnboardingChecklistStepID> = []
 #endif
 #if os(macOS)
     private var completionWatchSources: [DispatchSourceFileSystemObject] = []
@@ -109,6 +112,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     @Published public private(set) var activeStepID: ZebraOnboardingChecklistStepID?
     @Published public private(set) var runningStepID: ZebraOnboardingChecklistStepID?
     @Published public private(set) var pendingRuntimeInteractiveAuthRequest: ZebraGBrainRuntimeOnboardingStore.InteractiveAuthRequest?
+    @Published private var gbrainSubstepSnapshotRevision = 0
 
     public init(
         fileManager: FileManager = .default,
@@ -147,6 +151,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         )
 #if DEBUG
         self.developmentCompletedStepIDs = Self.loadDevelopmentCompletedStepIDs()
+        self.developmentIncompleteStepIDs = Self.loadDevelopmentIncompleteStepIDs()
 #endif
         refreshDetectedCompletion()
         prefetchGBrainDocsIfNeeded()
@@ -211,17 +216,30 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     }
 
     public var snapshots: [ZebraOnboardingChecklistStepSnapshot] {
+        _ = gbrainSubstepSnapshotRevision
         let firstIncomplete = Self.steps.first { !completedStepIDs.contains($0.id) }?.id
         return Self.steps.map { step in
-            ZebraOnboardingChecklistStepSnapshot(
+            let showsStart = firstIncomplete == step.id && runningStepID != step.id
+            let wasStartedBefore = startedStepIDs.contains(step.id)
+            let shouldProjectGBrainSubsteps = step.id == .gbrain
+                && (runningStepID == .gbrain || wasStartedBefore)
+            let gbrainSubsteps = shouldProjectGBrainSubsteps
+                ? gbrainOnboardingStore.sectionSnapshotsFromCachedState(
+                    isParentRunning: runningStepID == .gbrain,
+                    showsStartForActiveSection: showsStart,
+                    wasStartedBefore: wasStartedBefore
+                )
+                : []
+            return ZebraOnboardingChecklistStepSnapshot(
                 id: step.id,
                 number: step.number,
                 isCompleted: completedStepIDs.contains(step.id),
                 isDevelopmentCompleted: isDevelopmentCompleted(step.id),
                 isActive: firstIncomplete == step.id,
                 isRunning: runningStepID == step.id,
-                showsStart: firstIncomplete == step.id && runningStepID != step.id,
-                wasStartedBefore: startedStepIDs.contains(step.id)
+                showsStart: showsStart,
+                wasStartedBefore: wasStartedBefore,
+                gbrainSubsteps: gbrainSubsteps
             )
         }
     }
@@ -278,12 +296,14 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     /// production builds that these steps are actually complete.
     public func developmentToggleStepCompleted(_ stepID: ZebraOnboardingChecklistStepID) {
         guard Self.developmentManuallyCompletableStepIDs.contains(stepID) else { return }
-        if developmentCompletedStepIDs.contains(stepID) {
+        if completedStepIDs.contains(stepID) {
             developmentCompletedStepIDs.remove(stepID)
+            developmentIncompleteStepIDs.insert(stepID)
         } else {
             developmentCompletedStepIDs.insert(stepID)
+            developmentIncompleteStepIDs.remove(stepID)
         }
-        saveDevelopmentCompletedStepIDs()
+        saveDevelopmentOverrideStepIDs()
         refreshDetectedCompletion()
     }
 #endif
@@ -318,6 +338,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             refreshRuntimeInteractiveAuthRequest()
             applyDetectedCompletion(for: .gbrainRuntime, result: runtimeCompletionResult())
         case .gbrain:
+            invalidateGBrainSubstepSnapshots()
             let cached = gbrainCompletionResultFromCachedReceipt(selectedVaultPath: selectedVaultPath)
             applyDetectedCompletion(
                 for: .gbrain,
@@ -399,7 +420,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             completed.insert(.email)
         }
 #if DEBUG
-        completed.formUnion(developmentCompletedStepIDs)
+        applyDevelopmentCompletionOverrides(to: &completed)
 #endif
 
         applyCompletedStepIDs(completed)
@@ -423,9 +444,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             completed.remove(stepID)
         }
 #if DEBUG
-        if developmentCompletedStepIDs.contains(stepID) {
-            completed.insert(stepID)
-        }
+        applyDevelopmentCompletionOverrides(to: &completed)
 #endif
         applyCompletedStepIDs(completed)
     }
@@ -441,6 +460,10 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         if completedStepIDs != completed {
             completedStepIDs = completed
         }
+    }
+
+    private func invalidateGBrainSubstepSnapshots() {
+        gbrainSubstepSnapshotRevision &+= 1
     }
 
     private func shouldMarkRuntimeCompleted(_ result: StepCompletionResult) -> Bool {
@@ -648,7 +671,15 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
 #if DEBUG
     private static func loadDevelopmentCompletedStepIDs() -> Set<ZebraOnboardingChecklistStepID> {
-        let rawValues = UserDefaults.standard.stringArray(forKey: developmentCompletedStepIDsDefaultsKey) ?? []
+        loadDevelopmentStepIDs(defaultsKey: developmentCompletedStepIDsDefaultsKey)
+    }
+
+    private static func loadDevelopmentIncompleteStepIDs() -> Set<ZebraOnboardingChecklistStepID> {
+        loadDevelopmentStepIDs(defaultsKey: developmentIncompleteStepIDsDefaultsKey)
+    }
+
+    private static func loadDevelopmentStepIDs(defaultsKey: String) -> Set<ZebraOnboardingChecklistStepID> {
+        let rawValues = UserDefaults.standard.stringArray(forKey: defaultsKey) ?? []
         return Set(
             rawValues
                 .compactMap(ZebraOnboardingChecklistStepID.init(rawValue:))
@@ -656,9 +687,22 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         )
     }
 
-    private func saveDevelopmentCompletedStepIDs() {
-        let rawValues = developmentCompletedStepIDs.map(\.rawValue).sorted()
-        UserDefaults.standard.set(rawValues, forKey: Self.developmentCompletedStepIDsDefaultsKey)
+    private func saveDevelopmentOverrideStepIDs() {
+        UserDefaults.standard.set(
+            developmentCompletedStepIDs.map(\.rawValue).sorted(),
+            forKey: Self.developmentCompletedStepIDsDefaultsKey
+        )
+        UserDefaults.standard.set(
+            developmentIncompleteStepIDs.map(\.rawValue).sorted(),
+            forKey: Self.developmentIncompleteStepIDsDefaultsKey
+        )
+    }
+
+    private func applyDevelopmentCompletionOverrides(
+        to completed: inout Set<ZebraOnboardingChecklistStepID>
+    ) {
+        completed.subtract(developmentIncompleteStepIDs)
+        completed.formUnion(developmentCompletedStepIDs)
     }
 #endif
 
@@ -1040,6 +1084,7 @@ public struct ZebraOnboardingChecklistCard: View {
     @ObservedObject private var store: ZebraOnboardingChecklistStore
     private let onStartStep: (ZebraOnboardingChecklistStepID) -> Void
     private let onStopStep: ((ZebraOnboardingChecklistStepID) -> Void)?
+    @State private var collapsedSubstepStepIDs: Set<ZebraOnboardingChecklistStepID> = []
 
     public init(
         store: ZebraOnboardingChecklistStore,
@@ -1061,6 +1106,8 @@ public struct ZebraOnboardingChecklistCard: View {
                             ZebraOnboardingChecklistRow(
                                 snapshot: snapshot,
                                 title: Self.title(for: snapshot.id),
+                                isSubstepListCollapsed: collapsedSubstepStepIDs.contains(snapshot.id),
+                                onToggleSubstepList: toggleSubstepListAction(for: snapshot),
                                 onStart: { onStartStep(snapshot.id) },
                                 onStop: onStopStep.map { callback in { callback(snapshot.id) } },
                                 onDevelopmentToggle: developmentToggleAction(for: snapshot.id)
@@ -1123,7 +1170,7 @@ public struct ZebraOnboardingChecklistCard: View {
         case .gbrain:
             return String(
                 localized: "brain.onboarding.checklist.step.gbrain",
-                defaultValue: "Check gbrain and link the vault/profile"
+                defaultValue: "Check GBrain and link the vault/profile"
             )
         case .adapter:
             return String(
@@ -1158,13 +1205,28 @@ public struct ZebraOnboardingChecklistCard: View {
         return nil
 #endif
     }
+
+    private func toggleSubstepListAction(
+        for snapshot: ZebraOnboardingChecklistStepSnapshot
+    ) -> (() -> Void)? {
+        guard !snapshot.gbrainSubsteps.isEmpty else { return nil }
+        return {
+            if collapsedSubstepStepIDs.contains(snapshot.id) {
+                collapsedSubstepStepIDs.remove(snapshot.id)
+            } else {
+                collapsedSubstepStepIDs.insert(snapshot.id)
+            }
+        }
+    }
 }
 
 private struct ZebraOnboardingChecklistRow: View {
-    private static let actionRowMinimumHeight: CGFloat = 34
+    private static let rowHeight: CGFloat = 26
 
     let snapshot: ZebraOnboardingChecklistStepSnapshot
     let title: String
+    let isSubstepListCollapsed: Bool
+    let onToggleSubstepList: (() -> Void)?
     let onStart: () -> Void
     let onStop: (() -> Void)?
     let onDevelopmentToggle: (() -> Void)?
@@ -1172,6 +1234,46 @@ private struct ZebraOnboardingChecklistRow: View {
     @State private var hovering = false
 
     var body: some View {
+        VStack(spacing: 0) {
+            mainRow
+            if showsExpandedGBrainSubsteps {
+                gbrainSubstepList
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier("ZebraOnboardingChecklistRow.\(snapshot.id.rawValue)")
+    }
+
+    private var mainRow: some View {
+        HStack(spacing: 9) {
+            toggleHitArea
+            Spacer(minLength: 0)
+
+            if shouldMoveStartToGBrainSubstep {
+                gbrainSubstepProgressBadge
+                substepListToggleButton
+            } else if snapshot.showsStart {
+                ZebraOnboardingChecklistStartButton(
+                    wasStartedBefore: snapshot.wasStartedBefore,
+                    accessibilityIdentifier: "ZebraOnboardingChecklistStartButton.\(snapshot.id.rawValue)",
+                    action: onStart
+                )
+            } else if canToggleSubstepList {
+                gbrainSubstepProgressBadge
+                substepListToggleButton
+            }
+
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .frame(minHeight: Self.rowHeight, alignment: .leading)
+        .contentShape(Rectangle())
+        .background(rowBackground)
+        .onHover { hovering = $0 }
+    }
+
+    private var toggleHitArea: some View {
         HStack(spacing: 9) {
             Text("\(snapshot.number)")
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
@@ -1179,7 +1281,16 @@ private struct ZebraOnboardingChecklistRow: View {
                 .foregroundColor(BVColor.fgFaint)
                 .frame(width: 15, alignment: .trailing)
 
-            statusIndicator
+            ZebraOnboardingChecklistStatusIndicator(
+                isRunning: snapshot.isRunning,
+                isCompleted: snapshot.isCompleted,
+                isDevelopmentCompleted: snapshot.isDevelopmentCompleted,
+                hovering: hovering,
+                onStop: onStop,
+                onDevelopmentToggle: nil,
+                developmentToggleHelp: developmentToggleHelp,
+                accessibilityIdentifier: "ZebraOnboardingChecklistDevelopmentToggleCheckbox.\(snapshot.id.rawValue)"
+            )
                 .frame(width: 13, height: 13)
 
             Text(title)
@@ -1188,105 +1299,96 @@ private struct ZebraOnboardingChecklistRow: View {
                 .strikethrough(snapshot.isCompleted, color: BVColor.fgMute.opacity(0.65))
                 .lineLimit(1)
                 .truncationMode(.tail)
-
-            Spacer(minLength: 0)
-
-            if snapshot.showsStart {
-                Button(action: onStart) {
-                    Text(snapshot.wasStartedBefore
-                        ? String(localized: "brain.onboarding.checklist.restart", defaultValue: "Restart")
-                        : String(localized: "brain.onboarding.checklist.start", defaultValue: "Start")
-                    )
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(ZebraOnboardingChecklistPalette.startText)
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(ZebraOnboardingChecklistPalette.accent)
-                        )
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("ZebraOnboardingChecklistStartButton.\(snapshot.id.rawValue)")
-            }
-
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .frame(minHeight: rowMinimumHeight, alignment: .leading)
         .contentShape(Rectangle())
-        .background(rowBackground)
-        .onHover { hovering = $0 }
-        .accessibilityLabel(title)
-        .accessibilityIdentifier("ZebraOnboardingChecklistRow.\(snapshot.id.rawValue)")
+        .onTapGesture {
+            guard !snapshot.isRunning else { return }
+            onDevelopmentToggle?()
+        }
+    }
+
+    private var showsGBrainSubsteps: Bool {
+        !snapshot.gbrainSubsteps.isEmpty
+            && (snapshot.isActive || snapshot.isRunning || snapshot.gbrainSubsteps.contains { $0.isActive })
+    }
+
+    private var showsExpandedGBrainSubsteps: Bool {
+        showsGBrainSubsteps && !isSubstepListCollapsed
+    }
+
+    private var shouldMoveStartToGBrainSubstep: Bool {
+        showsGBrainSubsteps && snapshot.gbrainSubsteps.contains { $0.showsStart || $0.isRunning }
+    }
+
+    private var canToggleSubstepList: Bool {
+        showsGBrainSubsteps && onToggleSubstepList != nil
+    }
+
+    private var gbrainSubstepList: some View {
+        VStack(spacing: 0) {
+            ForEach(snapshot.gbrainSubsteps) { substep in
+                ZebraOnboardingChecklistSubstepRow(
+                    snapshot: substep,
+                    onStart: onStart,
+                    onStop: onStop
+                )
+            }
+        }
+        .padding(.leading, 44)
+        .padding(.trailing, 12)
+        .padding(.bottom, 5)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(ZebraOnboardingChecklistPalette.substepGuide)
+                .frame(width: 1)
+                .padding(.leading, 36)
+                .padding(.vertical, 4)
+        }
+    }
+
+    private var gbrainSubstepProgressBadge: some View {
+        let completed = snapshot.gbrainSubsteps.filter(\.isCompleted).count
+        let total = snapshot.gbrainSubsteps.count
+        return Text("\(completed)/\(total)")
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .monospacedDigit()
+            .foregroundColor(ZebraOnboardingChecklistPalette.accent)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(ZebraOnboardingChecklistPalette.accentSoft)
+            )
+            .accessibilityHidden(true)
     }
 
     @ViewBuilder
-    private var statusIndicator: some View {
-        if snapshot.isRunning {
-            if hovering, let onStop {
-                Button(action: onStop) {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.system(size: 13))
-                        .foregroundColor(ZebraOnboardingChecklistPalette.accent)
-                }
-                .buttonStyle(.plain)
-                .frame(width: 13, height: 13)
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.45)
-                    .tint(ZebraOnboardingChecklistPalette.accent)
-                    .frame(width: 13, height: 13)
-            }
-        } else if snapshot.isCompleted {
-            if let onDevelopmentToggle, snapshot.isDevelopmentCompleted {
-                Button(action: onDevelopmentToggle) {
-                    completedCheckbox
-                        .frame(width: 13, height: 13)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(developmentToggleHelp)
-                .accessibilityLabel(developmentToggleHelp)
-                .accessibilityIdentifier("ZebraOnboardingChecklistDevelopmentToggleCheckbox.\(snapshot.id.rawValue)")
-            } else {
-                completedCheckbox
-                    .frame(width: 13, height: 13)
-            }
-        } else if let onDevelopmentToggle {
-            Button(action: onDevelopmentToggle) {
-                emptyCheckbox
-                    .frame(width: 13, height: 13)
+    private var substepListToggleButton: some View {
+        if let onToggleSubstepList, canToggleSubstepList {
+            Button(action: onToggleSubstepList) {
+                Image(systemName: isSubstepListCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(BVColor.fgFaint)
+                    .frame(width: 16, height: 16)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(developmentToggleHelp)
-            .accessibilityLabel(developmentToggleHelp)
-            .accessibilityIdentifier("ZebraOnboardingChecklistDevelopmentToggleCheckbox.\(snapshot.id.rawValue)")
-        } else {
-            emptyCheckbox
-                .frame(width: 13, height: 13)
+            .help(substepListToggleHelp)
+            .accessibilityLabel(substepListToggleHelp)
+            .accessibilityIdentifier("ZebraOnboardingChecklistSubstepToggle.\(snapshot.id.rawValue)")
         }
     }
 
-    private var completedCheckbox: some View {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(ZebraOnboardingChecklistPalette.accent)
-            .overlay(
-                Image(systemName: "checkmark")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundColor(.white)
+    private var substepListToggleHelp: String {
+        isSubstepListCollapsed
+            ? String(
+                localized: "brain.onboarding.checklist.expandSubsteps",
+                defaultValue: "Expand substeps"
             )
-    }
-
-    private var emptyCheckbox: some View {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .stroke(BVColor.fgGhost, lineWidth: 1.3)
-    }
-
-    private var rowMinimumHeight: CGFloat? {
-        snapshot.isActive || snapshot.isRunning ? Self.actionRowMinimumHeight : nil
+            : String(
+                localized: "brain.onboarding.checklist.collapseSubsteps",
+                defaultValue: "Collapse substeps"
+            )
     }
 
     private var developmentToggleHelp: String {
@@ -1309,6 +1411,165 @@ private struct ZebraOnboardingChecklistRow: View {
             return BVColor.bgHover
         }
         return .clear
+    }
+}
+
+private struct ZebraOnboardingChecklistSubstepRow: View {
+    let snapshot: ZebraGBrainOnboardingSectionSnapshot
+    let onStart: () -> Void
+    let onStop: (() -> Void)?
+
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ZebraOnboardingChecklistStatusIndicator(
+                isRunning: snapshot.isRunning,
+                isCompleted: snapshot.isCompleted,
+                isDevelopmentCompleted: false,
+                hovering: hovering,
+                onStop: onStop,
+                onDevelopmentToggle: nil,
+                developmentToggleHelp: "",
+                accessibilityIdentifier: nil
+            )
+            .frame(width: 12, height: 12)
+
+            Text(snapshot.title)
+                .font(.system(size: 11, weight: snapshot.isActive ? .semibold : .regular))
+                .foregroundColor(snapshot.isCompleted ? BVColor.fgMute : BVColor.fg)
+                .strikethrough(snapshot.isCompleted, color: BVColor.fgMute.opacity(0.65))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 0)
+
+            if snapshot.showsStart {
+                ZebraOnboardingChecklistStartButton(
+                    wasStartedBefore: snapshot.wasStartedBefore,
+                    accessibilityIdentifier: "ZebraOnboardingChecklistSubstepStartButton.\(snapshot.id)",
+                    action: onStart
+                )
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(minHeight: 28, alignment: .leading)
+        .contentShape(Rectangle())
+        .background(rowBackground)
+        .onHover { hovering = $0 }
+        .accessibilityLabel(snapshot.title)
+        .accessibilityIdentifier("ZebraOnboardingChecklistSubstepRow.\(snapshot.id)")
+    }
+
+    private var rowBackground: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(backgroundColor)
+    }
+
+    private var backgroundColor: Color {
+        if snapshot.isActive {
+            return ZebraOnboardingChecklistPalette.accentSoft
+        }
+        if hovering {
+            return BVColor.bgHover
+        }
+        return .clear
+    }
+}
+
+private struct ZebraOnboardingChecklistStatusIndicator: View {
+    let isRunning: Bool
+    let isCompleted: Bool
+    let isDevelopmentCompleted: Bool
+    let hovering: Bool
+    let onStop: (() -> Void)?
+    let onDevelopmentToggle: (() -> Void)?
+    let developmentToggleHelp: String
+    let accessibilityIdentifier: String?
+
+    var body: some View {
+        if isRunning {
+            if hovering, let onStop {
+                Button(action: onStop) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundColor(ZebraOnboardingChecklistPalette.accent)
+                }
+                .buttonStyle(.plain)
+                .frame(width: 13, height: 13)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.45)
+                    .tint(ZebraOnboardingChecklistPalette.accent)
+                    .frame(width: 13, height: 13)
+            }
+        } else if isCompleted {
+            if onDevelopmentToggle != nil {
+                developmentToggleButton(label: completedCheckbox)
+            } else {
+                completedCheckbox
+                    .frame(width: 13, height: 13)
+            }
+        } else if onDevelopmentToggle != nil {
+            developmentToggleButton(label: emptyCheckbox)
+        } else {
+            emptyCheckbox
+                .frame(width: 13, height: 13)
+        }
+    }
+
+    private func developmentToggleButton(label: some View) -> some View {
+        Button(action: { onDevelopmentToggle?() }) {
+            label
+                .frame(width: 13, height: 13)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(developmentToggleHelp)
+        .accessibilityLabel(developmentToggleHelp)
+        .accessibilityIdentifier(accessibilityIdentifier ?? "")
+    }
+
+    private var completedCheckbox: some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(ZebraOnboardingChecklistPalette.accent)
+            .overlay(
+                Image(systemName: "checkmark")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundColor(ZebraOnboardingChecklistPalette.startText)
+            )
+    }
+
+    private var emptyCheckbox: some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .stroke(BVColor.fgGhost, lineWidth: 1.3)
+    }
+}
+
+private struct ZebraOnboardingChecklistStartButton: View {
+    let wasStartedBefore: Bool
+    let accessibilityIdentifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(wasStartedBefore
+                ? String(localized: "brain.onboarding.checklist.restart", defaultValue: "Restart")
+                : String(localized: "brain.onboarding.checklist.start", defaultValue: "Start")
+            )
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(ZebraOnboardingChecklistPalette.startText)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(ZebraOnboardingChecklistPalette.accent)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 
@@ -1347,5 +1608,6 @@ private enum ZebraOnboardingChecklistPalette {
     static let progressTrack = BVColor.borderStrong
     static let accent = Color(nsColor: NSColor(srgbRed: 0x5a / 255.0, green: 0xa3 / 255.0, blue: 0x7f / 255.0, alpha: 1.0))
     static let accentSoft = accent.opacity(0.16)
+    static let substepGuide = accent.opacity(0.42)
     static let startText = BVColor.fgOnAccent
 }

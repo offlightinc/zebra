@@ -282,7 +282,15 @@ struct ZebraSidebarBody: View {
             for: stepID,
             selectedVaultPath: onboardingSelectedVaultPath,
             chainGBrainRuntimeAfterAgent: stepID == .agent
-        ) else { return }
+        ) else {
+            #if DEBUG
+            if stepID == .gbrain {
+                cmuxDebugLog("zebra.onboarding.step.gbrainLaunchPlanMissing fallback=gbrainRuntime")
+                startOnboardingChecklistStep(.gbrainRuntime)
+            }
+            #endif
+            return
+        }
         let startupLine = launchPlan.startupLine
         var launchBegan = false
         func beginLaunchIfNeeded() {

@@ -1,5 +1,16 @@
 import Foundation
 
+struct ZebraGBrainOnboardingSectionSnapshot: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let isCompleted: Bool
+    let isActive: Bool
+    let isWaitingForUser: Bool
+    let isRunning: Bool
+    let showsStart: Bool
+    let wasStartedBefore: Bool
+}
+
 public struct ZebraGBrainOnboardingStore {
     public struct LaunchContext {
         public let launchDirectory: String
@@ -247,6 +258,7 @@ public struct ZebraGBrainOnboardingStore {
     private static let pgliteBusyReason = "pglite_busy"
     private static let pgliteWasmRuntimeErrorReason = "pglite_wasm_runtime_error"
     private static let sourceProbeRuntimeErrorReason = "source_probe_runtime_error"
+    private static let prepareSourceRepoSectionID = "zebra-gbrain-prepare-source"
 
     private static let allowedTargetResolutionMethods: Set<String> = [
         "selected_vault",
@@ -314,17 +326,125 @@ public struct ZebraGBrainOnboardingStore {
         guard let sourceRepoPath = loadState()?.activeGBrainBinding?.sourceRepoPath else {
             return nil
         }
+        return validGBrainSourceRepoPath(sourceRepoPath)
+    }
+
+    func sectionSnapshotsFromCachedState(
+        isParentRunning: Bool,
+        showsStartForActiveSection: Bool,
+        wasStartedBefore: Bool
+    ) -> [ZebraGBrainOnboardingSectionSnapshot] {
+        guard let state = loadState() else {
+            return []
+        }
+        let sourcePrepared = state.activeGBrainBinding != nil || state.docsManifest != nil
+        let manifestSections = state.docsManifest?.installForAgentsSections ?? []
+        let sections = manifestSections.isEmpty
+            ? fallbackInstallForAgentsSectionsForPendingSourcePrepare(state: state)
+            : manifestSections
+        guard !sections.isEmpty else { return [] }
+
+        let completedSections = state.progress?.completedSections ?? []
+        let completedTitles = Set(completedSections)
+        let completedNormalizedTitles = Set(completedSections.map(Self.normalizedSectionTitle))
+        let waitingSection = nonEmpty(state.progress?.waitingForUser?.section)
+        let waitingNormalizedTitle = waitingSection.map(Self.normalizedSectionTitle)
+        let activeTitle = sourcePrepared
+            ? (waitingSection ?? nonEmpty(state.progress?.nextSection))
+            : nil
+        let activeNormalizedTitle = activeTitle.map(Self.normalizedSectionTitle)
+        let sourceIsActive = !sourcePrepared
+
+        let prepareSourceSnapshot = ZebraGBrainOnboardingSectionSnapshot(
+            id: Self.prepareSourceRepoSectionID,
+            title: Self.prepareSourceRepoSectionTitle(),
+            isCompleted: sourcePrepared,
+            isActive: sourceIsActive,
+            isWaitingForUser: false,
+            isRunning: isParentRunning && sourceIsActive,
+            showsStart: showsStartForActiveSection && sourceIsActive,
+            wasStartedBefore: wasStartedBefore
+        )
+
+        return [prepareSourceSnapshot] + sections.map { section in
+            let normalizedTitle = Self.normalizedSectionTitle(section.title)
+            let isCompleted = completedTitles.contains(section.title)
+                || completedNormalizedTitles.contains(normalizedTitle)
+            let isActive = activeTitle == section.title
+                || (activeNormalizedTitle != nil && activeNormalizedTitle == normalizedTitle)
+            let isWaitingForUser = waitingSection == section.title
+                || (waitingNormalizedTitle != nil && waitingNormalizedTitle == normalizedTitle)
+
+            return ZebraGBrainOnboardingSectionSnapshot(
+                id: section.hash.isEmpty ? section.title : section.hash,
+                title: section.title,
+                isCompleted: isCompleted,
+                isActive: isActive,
+                isWaitingForUser: isWaitingForUser,
+                isRunning: isParentRunning && isActive,
+                showsStart: sourcePrepared && showsStartForActiveSection && isActive,
+                wasStartedBefore: wasStartedBefore
+            )
+        }
+    }
+
+    private func fallbackInstallForAgentsSectionsForPendingSourcePrepare(state: State) -> [DocsSection] {
+        guard let sourceRepoPath = sourceRepoPathForPendingSourcePrepareProjection(state: state) else {
+            return []
+        }
+        let installForAgentsURL = URL(fileURLWithPath: sourceRepoPath, isDirectory: true)
+            .appendingPathComponent("INSTALL_FOR_AGENTS.md", isDirectory: false)
+        guard let markdown = try? String(contentsOf: installForAgentsURL, encoding: .utf8) else {
+            return []
+        }
+        return Self.installForAgentsSections(from: markdown)
+    }
+
+    private func sourceRepoPathForPendingSourcePrepareProjection(state: State) -> String? {
+        if let sourceRepoPath = state.activeGBrainBinding?.sourceRepoPath,
+           let validPath = validGBrainSourceRepoPath(sourceRepoPath) {
+            return validPath
+        }
+        if let defaultPath = nonEmpty(environment["ZEBRA_GBRAIN_SOURCE_REPO_DEFAULT"]),
+           let validPath = validGBrainSourceRepoPath(defaultPath) {
+            return validPath
+        }
+        let recommendedPath = (homeDirectoryPath as NSString).appendingPathComponent("gbrain")
+        return validGBrainSourceRepoPath(recommendedPath)
+    }
+
+    private func validGBrainSourceRepoPath(_ sourceRepoPath: String) -> String? {
         let standardized = Self.standardizedPath((sourceRepoPath as NSString).expandingTildeInPath)
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: standardized, isDirectory: &isDirectory),
               isDirectory.boolValue,
-              fileManager.fileExists(atPath: URL(fileURLWithPath: standardized, isDirectory: true).appendingPathComponent("package.json").path),
-              fileManager.fileExists(atPath: URL(fileURLWithPath: standardized, isDirectory: true).appendingPathComponent("INSTALL_FOR_AGENTS.md").path),
-              fileManager.fileExists(atPath: URL(fileURLWithPath: standardized, isDirectory: true).appendingPathComponent("skills", isDirectory: true).path, isDirectory: &isDirectory),
+              fileManager.fileExists(
+                atPath: URL(fileURLWithPath: standardized, isDirectory: true)
+                    .appendingPathComponent("package.json", isDirectory: false)
+                    .path
+              ),
+              fileManager.fileExists(
+                atPath: URL(fileURLWithPath: standardized, isDirectory: true)
+                    .appendingPathComponent("INSTALL_FOR_AGENTS.md", isDirectory: false)
+                    .path
+              ),
+              fileManager.fileExists(
+                atPath: URL(fileURLWithPath: standardized, isDirectory: true)
+                    .appendingPathComponent("skills", isDirectory: true)
+                    .path,
+                isDirectory: &isDirectory
+              ),
               isDirectory.boolValue else {
             return nil
         }
         return standardized
+    }
+
+    private static func prepareSourceRepoSectionTitle() -> String {
+        String(
+            localized: "brain.onboarding.gbrain.substep.prepareSource",
+            defaultValue: "Check and clone GBrain repo"
+        )
     }
 
     @discardableResult
@@ -879,6 +999,7 @@ public struct ZebraGBrainOnboardingStore {
 
         func finishCurrentSection() {
             guard let title = currentTitle else { return }
+            guard isInstallForAgentsChecklistSectionTitle(title) else { return }
             let body = currentLines.joined(separator: "\n")
             sections.append(DocsSection(title: title, hash: stableHash(body)))
         }
@@ -894,6 +1015,13 @@ public struct ZebraGBrainOnboardingStore {
         }
         finishCurrentSection()
         return sections
+    }
+
+    private static func isInstallForAgentsChecklistSectionTitle(_ title: String) -> Bool {
+        title.range(
+            of: #"^Step\s+[1-9](?:\.\d+)?\b"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
     }
 
     private func nextSection(in state: State, completedSections: [String]? = nil) -> String {
@@ -2021,6 +2149,7 @@ public struct ZebraGBrainOnboardingStore {
     import glob
     import json
     import os
+    import re
     import shutil
     import subprocess
     import sys
@@ -2188,6 +2317,8 @@ public struct ZebraGBrainOnboardingStore {
 
         def finish():
             if current_title is None:
+                return
+            if not re.match(r"^Step\\s+[1-9](?:\\.\\d+)?\\b", current_title, re.IGNORECASE):
                 return
             body = "\\n".join(current_lines)
             sections.append({"title": current_title, "hash": stable_hash(body)})
