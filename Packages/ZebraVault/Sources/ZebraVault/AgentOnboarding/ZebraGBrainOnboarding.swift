@@ -767,8 +767,9 @@ public struct ZebraGBrainOnboardingStore {
         [
             onboardingLanguage.firstVisibleGBrainSetupInstruction,
             "Do not run tools or read files before printing that line.",
-            "After printing it, read the complete setup packet at: \(setupPacketPath)",
-            "Then follow the setup packet exactly. The setup packet is authoritative for this GBrain setup run.",
+            "After printing it, read the current section instructions from the setup packet at: \(setupPacketPath)",
+            "Work only the current INSTALL_FOR_AGENTS.md section. When that section is complete, run `zebra-gbrain-onboarding report --status completed --section \"<section title>\"` and continue from the `nextPrompt` printed by that command.",
+            "The setup packet remains the authoritative reference for Zebra hard gates, but do not try to complete later sections until their prompt is printed.",
         ].joined(separator: " ")
     }
 
@@ -1646,12 +1647,15 @@ public struct ZebraGBrainOnboardingStore {
             .appendingPathComponent("bin", isDirectory: true)
         let url = directory.appendingPathComponent("zebra-gbrain-onboarding", isDirectory: false)
         let gbrainWrapperURL = directory.appendingPathComponent("gbrain", isDirectory: false)
+        let launchctlWrapperURL = directory.appendingPathComponent("launchctl", isDirectory: false)
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             try Self.helperScript.write(to: url, atomically: true, encoding: .utf8)
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
             try Self.gbrainWrapperScript.write(to: gbrainWrapperURL, atomically: true, encoding: .utf8)
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gbrainWrapperURL.path)
+            try Self.launchctlWrapperScript.write(to: launchctlWrapperURL, atomically: true, encoding: .utf8)
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launchctlWrapperURL.path)
             return url
         } catch {
             return nil
@@ -2171,11 +2175,18 @@ public struct ZebraGBrainOnboardingStore {
         "create_brain",
         "search_mode",
         "import_index",
+        "recurring_jobs",
         "verify",
     }
     known_roles = allowed_roles | {"non_role"}
     allowed_search_modes = {"conservative", "balanced", "tokenmax"}
     allowed_embedding_decisions = {"provider_key", "defer_embeddings"}
+    allowed_recurring_jobs_decisions = {
+        "defer",
+        "manual_scheduler",
+        "platform_scheduler_install",
+        "autopilot_install",
+    }
 
     def now():
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -2523,6 +2534,182 @@ public struct ZebraGBrainOnboardingStore {
         )
         return f"INSTALL_FOR_AGENTS.md `##` section manifest:\\n{lines}"
 
+    def prompt_file_safe_name(value):
+        safe = "".join(
+            character if character.isalnum() or character in "-_" else "-"
+            for character in str(value or "section")
+        ).strip("-_")
+        return safe[:96] or "section"
+
+    def next_prompt_directory(state):
+        run_id = state.get("currentRunId") or "gbrain-setup"
+        return os.path.join(
+            os.path.dirname(state_path),
+            "gbrain-step-prompts",
+            prompt_file_safe_name(run_id),
+        )
+
+    def write_next_prompt_file(state, section_title, prompt):
+        directory = next_prompt_directory(state)
+        os.makedirs(directory, exist_ok=True)
+        safe = prompt_file_safe_name(section_title)
+        path = os.path.join(directory, safe + ".md")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(prompt.rstrip() + "\\n")
+        os.chmod(path, 0o600)
+        return path
+
+    def section_titles_from_state(state):
+        return [
+            section.get("title") or ""
+            for section in parse_install_sections(state)
+            if section.get("title")
+        ]
+
+    def next_section_title(state):
+        progress = state.get("progress") or {}
+        completed = set(progress.get("completedSections") or [])
+        completed_normalized = {normalize_title(title) for title in completed}
+        for title in section_titles_from_state(state):
+            if title in completed or normalize_title(title) in completed_normalized:
+                continue
+            return title
+        return "verify"
+
+    def section_body_for_prompt(state, section_title):
+        entry, _ = section_entry(state, section_title)
+        return (entry.get("body") or section_title or "").strip()
+
+    def hard_gate_prompt_for_section(state, section_title):
+        role, _, _ = section_role(state, section_title, record=False)
+        completion_command = (
+            "`zebra-gbrain-onboarding report --status completed --section "
+            + json.dumps(section_title)
+            + " --recurring-jobs-decision <defer|manual_scheduler|platform_scheduler_install|autopilot_install>`"
+            if role == "recurring_jobs" else
+            "`zebra-gbrain-onboarding report --status completed --section "
+            + json.dumps(section_title)
+            + "`"
+        )
+        common = [
+            "Zebra section boundary rules:",
+            "- Work only this section. Do not start later INSTALL_FOR_AGENTS.md sections until Zebra prints their nextPrompt.",
+            "- Keep using the active GBrain source repo from `activeGBrainBinding.sourceRepoPath` for GBrain installation work.",
+            "- When this section is complete, run: " + completion_command + ".",
+            "- If Zebra rejects the report, fix the reported reason and do not continue to the next section.",
+        ]
+        if role == "install":
+            common.extend([
+                "",
+                "Install hard gates:",
+                "- Run GBrain installation from the active GBrain source repo.",
+                "- If the active source repo is Zebra's recommended `~/gbrain` path, run `bun install`, then `bun install -g .`, then verify `gbrain --version`.",
+                "- If the active source repo is not Zebra's recommended `~/gbrain` path, run `bun install`, then `bun link`, then verify `gbrain --version`.",
+                "- Do not use Zebra's PATH-provided `gbrain` wrapper or `bun src/cli.ts` as the completion verification.",
+                "- Do not run `bun upgrade` during Zebra onboarding.",
+            ])
+        elif role == "credentials":
+            common.extend([
+                "",
+                "Credential and embedding decision hard gates:",
+                "- Do not choose deferred/no-embedding mode unless the user explicitly chooses that path.",
+                "- After the user chooses provider keys or deferred/no-embedding mode, report this section with `--embedding-decision provider_key` or `--embedding-decision defer_embeddings`.",
+                "- Never write API key values to Zebra state.",
+            ])
+        elif role == "create_brain":
+            common.extend([
+                "",
+                "Step 3 topology / PGLite / target hard gates:",
+                "- In Step 3, do not run `gbrain init`, `gbrain init --pglite`, or Supabase/Postgres setup until the user has explicitly chosen topology.",
+                "- Ask the user to choose local PGLite or Supabase/Postgres before initialization.",
+                "- Do not run `gbrain init --pglite --no-embedding`, accept deferred embeddings, or otherwise disable embeddings until the user explicitly chooses that path.",
+                "- Ask for the brain repo target separately after topology is chosen and Step 3 init/doctor have run.",
+                "- Do not implicitly use the home directory or Zebra's onboarding work directory as the brain repo target.",
+                "- When Step 3 resolves a brain repo target, include `--target <brain repo path> --method <targetResolution.method>` on the completed report.",
+            ])
+        elif role == "search_mode":
+            common.extend([
+                "",
+                "Search mode hard gates:",
+                "- After the user chooses search mode, explicitly run `gbrain config set search.mode <mode>` even when it matches the default.",
+                "- Verify with `gbrain search modes` before reporting completion.",
+            ])
+        elif role == "import_index":
+            common.extend([
+                "",
+                "Import/index hard gates:",
+                "- Before import/embed/sync, ensure the resolved brain repo target is registered as a GBrain source.",
+                "- Verify `gbrain sources current --json` and `gbrain sources list --json` identify the same source id for the target path.",
+                "- Do not import the target into the implicit `default` source.",
+                "- Include `--source-id <source id>` on the completed report after the source probe verifies that source id for the target path.",
+            ])
+        elif role == "recurring_jobs":
+            common.extend([
+                "",
+                "Recurring jobs hard gates:",
+                "- Recurring jobs are persistent background changes, not prerequisites for import/index or final verify.",
+                "- Do not run `gbrain autopilot --install`, `gbrain autopilot install`, `launchctl`, `cron`, `crontab`, `systemd`, or scheduler installation/start commands until the user explicitly chooses that path.",
+                "- First run `zebra-gbrain-onboarding report --status waiting_for_user --section " + json.dumps(section_title) + " --reason recurring_jobs_decision --note \\\"Choose defer, manual_scheduler, platform_scheduler_install, or autopilot_install\\\"` and ask the user to choose.",
+                "- If the user chooses `defer`, do not install or start any background service; report completed with `--recurring-jobs-decision defer`.",
+                "- If the user chooses `manual_scheduler`, do not run scheduler commands; report completed with `--recurring-jobs-decision manual_scheduler`.",
+                "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run the autopilot install, then report completed with the same decision.",
+                "- If the user chooses `platform_scheduler_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision platform_scheduler_install`, then run only the approved scheduler install, then report completed with the same decision.",
+            ])
+        elif role == "verify":
+            common.extend([
+                "",
+                "Verify hard gates:",
+                "- Do not say setup is complete until `zebra-gbrain-onboarding verify` returns `complete: true`.",
+                "- Use `zebra-gbrain-onboarding verify --target <brain repo path> --source-id <source id> --method <targetResolution.method>`.",
+            ])
+        return "\\n".join(common)
+
+    def build_section_prompt(state, section_title, setup_packet_path=None):
+        if section_title == "verify":
+            return build_verify_prompt(state)
+        body = section_body_for_prompt(state, section_title)
+        packet_line = (
+            f"Reference setup packet: {setup_packet_path}"
+            if setup_packet_path else
+            "Reference setup packet: see the current Zebra GBrain setup packet if needed."
+        )
+        return "\\n\\n".join([
+            f"Zebra GBrain setup: current section is `{section_title}`.",
+            "Follow only the INSTALL_FOR_AGENTS.md section below. Do not continue to later sections until Zebra prints the next prompt.",
+            "INSTALL_FOR_AGENTS.md section body:",
+            body,
+            hard_gate_prompt_for_section(state, section_title),
+            packet_line,
+        ]).strip()
+
+    def build_verify_prompt(state):
+        receipt = state.get("receipt") or {}
+        progress = state.get("progress") or {}
+        targets = receipt.get("targets") or {}
+        target_key = progress.get("resolvedTargetKey") or receipt.get("primaryTargetKey")
+        target = targets.get(target_key) if target_key else None
+        target_path = (target or {}).get("vaultPath") or "<brain repo path>"
+        source_id = (target or {}).get("sourceId") or "<source id>"
+        method = ((target or {}).get("targetResolution") or progress.get("targetResolution") or {}).get("method") or "<targetResolution.method>"
+        return "\\n".join([
+            "Zebra GBrain setup: INSTALL_FOR_AGENTS.md sections are complete. Run final verification now.",
+            "",
+            "Do not say setup is complete until verify returns `complete: true`.",
+            f"Run: zebra-gbrain-onboarding verify --target {shell_quote(target_path)} --source-id {shell_quote(source_id)} --method {shell_quote(method)}",
+            "If a profile was selected, include `--profile-id <profile>`.",
+            "If verify fails, repair the reported reasons and rerun verify.",
+        ])
+
+    def next_prompt_payload(state):
+        section = next_section_title(state)
+        prompt = build_section_prompt(state, section)
+        path = write_next_prompt_file(state, section, prompt)
+        return {
+            "nextSection": section,
+            "nextPrompt": prompt,
+            "nextPromptPath": path,
+        }
+
     def waiting_display(progress):
         waiting = progress.get("waitingForUser") if progress else None
         if isinstance(waiting, dict):
@@ -2631,27 +2818,41 @@ public struct ZebraGBrainOnboardingStore {
         )
 
     def bootstrap_prompt(setup_packet_path):
+        state = load_state()
+        progress = state.get("progress") or {}
+        section = progress.get("nextSection") or next_section_title(state)
+        section_prompt = build_section_prompt(state, section, setup_packet_path=setup_packet_path)
         language = (os.environ.get("ZEBRA_ONBOARDING_LANGUAGE") or "en").lower()
         if language == "ko" or language.startswith("ko-"):
-            first_visible = "Your first visible response must be a brief Korean sentence telling the user that Zebra GBrain setup is starting, you are reading the setup packet now, and they should wait. Preserve `Zebra GBrain setup` and `setup packet` exactly."
+            first_visible = "Your first visible response must be a brief Korean sentence telling the user that Zebra GBrain setup is starting, you are reading the current section prompt now, and they should wait. Preserve `Zebra GBrain setup` and `section prompt` exactly."
         elif language == "ja" or language.startswith("ja-"):
-            first_visible = "Your first visible response must be a brief Japanese sentence telling the user that Zebra GBrain setup is starting, you are reading the setup packet now, and they should wait. Preserve `Zebra GBrain setup` and `setup packet` exactly."
+            first_visible = "Your first visible response must be a brief Japanese sentence telling the user that Zebra GBrain setup is starting, you are reading the current section prompt now, and they should wait. Preserve `Zebra GBrain setup` and `section prompt` exactly."
         else:
             first_visible = "Your first visible response must be exactly:\\nZebra GBrain setup is starting. I am reading the setup packet now. Please wait."
         return terminal_argument_prompt("\\n".join([
             first_visible,
             "Do not run tools or read files before printing that line.",
-            f"After printing it, read the complete setup packet at: {setup_packet_path}",
-            "Then follow the setup packet exactly. The setup packet is authoritative for this GBrain setup run.",
+            "After printing it, follow this current section prompt exactly:",
+            section_prompt,
+            "When this section is complete, run the report command shown in the section prompt and continue from its `nextPrompt` stdout.",
         ]))
 
-    def launcher_script_path(run_id):
+    def launcher_safe_run_id(run_id):
         safe = "".join(
             character if character.isalnum() or character in "-_" else "-"
             for character in str(run_id or "gbrain-setup")
         ).strip("-_") or "gbrain-setup"
+        return safe
+
+    def launcher_script_path(run_id):
+        safe = launcher_safe_run_id(run_id)
         directory = os.path.join(os.path.dirname(state_path), "gbrain-runtime-launchers")
         return os.path.join(directory, safe + ".sh")
+
+    def launcher_prompt_path(run_id):
+        safe = launcher_safe_run_id(run_id)
+        directory = os.path.join(os.path.dirname(state_path), "gbrain-runtime-launchers")
+        return os.path.join(directory, safe + ".prompt.txt")
 
     def write_runtime_launcher():
         flags = parse_flags(args)
@@ -2673,12 +2874,19 @@ public struct ZebraGBrainOnboardingStore {
             raise RuntimeError("active_source_repo_missing")
         prompt = bootstrap_prompt(setup_packet)
         path = launcher_script_path(run_id)
+        prompt_path = launcher_prompt_path(run_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(prompt_path, "w", encoding="utf-8") as handle:
+            handle.write(prompt.rstrip() + "\\n")
+        os.chmod(prompt_path, 0o600)
         lines = [
             "#!/bin/sh",
             "set -eu",
             'if [ -z "${ZEBRA_GBRAIN_SOURCE_REPO:-}" ]; then',
             '  eval "$(zebra-gbrain-onboarding active-source-env)"',
             "fi",
+            f"ZEBRA_GBRAIN_BOOTSTRAP_PROMPT_PATH={shell_quote(prompt_path)}",
+            'ZEBRA_GBRAIN_BOOTSTRAP_PROMPT=$(cat "$ZEBRA_GBRAIN_BOOTSTRAP_PROMPT_PATH")',
         ]
         if runtime == "openclaw":
             agent_id = flags.get("agent_id") or "zebra-gbrain-setup"
@@ -2686,16 +2894,15 @@ public struct ZebraGBrainOnboardingStore {
             lines.extend([
                 f"zebra-gbrain-onboarding prepare-openclaw-agent --executable {shell_quote(executable)} --agent-id {shell_quote(agent_id)}",
                 'cd "$ZEBRA_GBRAIN_SOURCE_REPO"',
-                f"exec {shell_quote(executable)} tui --local --session {shell_quote(session)} --message {shell_quote(prompt)}",
+                f"exec {shell_quote(executable)} tui --local --session {shell_quote(session)} --message \\\"$ZEBRA_GBRAIN_BOOTSTRAP_PROMPT\\\"",
             ])
         elif runtime == "hermes":
             lines.extend([
                 'cd "$ZEBRA_GBRAIN_SOURCE_REPO"',
-                f"exec {shell_quote(executable)} chat --tui --source zebra-gbrain-onboarding --query {shell_quote(prompt)}",
+                f"exec {shell_quote(executable)} chat --tui --source zebra-gbrain-onboarding --query \\\"$ZEBRA_GBRAIN_BOOTSTRAP_PROMPT\\\"",
             ])
         else:
             raise RuntimeError(f"unsupported_runtime:{runtime}")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as handle:
             handle.write("\\n".join(lines) + "\\n")
         os.chmod(path, 0o700)
@@ -3031,6 +3238,36 @@ public struct ZebraGBrainOnboardingStore {
             return "verify"
         return None
 
+    def recurring_jobs_title(title):
+        normalized = normalize_title(title)
+        return (
+            "recurring job" in normalized
+            or "recurring jobs" in normalized
+            or "scheduler" in normalized
+            or "autopilot" in normalized
+            or "background sync" in normalized
+            or "background job" in normalized
+            or "background service" in normalized
+            or "daemon" in normalized
+        )
+
+    def recurring_jobs_signature(body):
+        text = (body or "").lower()
+        return (
+            "gbrain autopilot --install" in text
+            or "autopilot --install" in text
+            or "gbrain autopilot install" in text
+            or "launchctl" in text
+            or "crontab" in text
+            or " cron " in (" " + text + " ")
+            or "systemd" in text
+            or " timer" in text
+            or "scheduler" in text
+            or "background service" in text
+            or "background job" in text
+            or "daemon" in text
+        )
+
     def non_role_title(title):
         normalized = normalize_title(title)
         return (
@@ -3038,7 +3275,6 @@ public struct ZebraGBrainOnboardingStore {
             or normalized.startswith("step 4 5 ")
             or normalized.startswith("step 5 ")
             or normalized.startswith("step 6 ")
-            or normalized.startswith("step 7 ")
             or normalized.startswith("step 8 ")
             or normalized == "upgrade"
             or normalized.startswith("upgrade ")
@@ -3066,6 +3302,8 @@ public struct ZebraGBrainOnboardingStore {
             and "gbrain search modes" in text
         ):
             return "search_mode"
+        if recurring_jobs_signature(body):
+            return "recurring_jobs"
         if "gbrain import" in text and "gbrain embed --stale" in text:
             return "import_index"
         if "docs/gbrain_verify.md" in text or "verification checks" in text:
@@ -3080,7 +3318,12 @@ public struct ZebraGBrainOnboardingStore {
         for section in sections:
             if section.get("orderIndex", 0) >= index:
                 continue
-            previous_roles.add(known_title_role(section.get("title")) or signature_role(section.get("body")) or "")
+            if recurring_jobs_title(section.get("title")) or recurring_jobs_signature(section.get("body")):
+                previous_roles.add("recurring_jobs")
+            elif non_role_title(section.get("title")):
+                previous_roles.add("")
+            else:
+                previous_roles.add(known_title_role(section.get("title")) or signature_role(section.get("body")) or "")
         if role == "search_mode":
             return "create_brain" in previous_roles
         if role == "import_index":
@@ -3096,7 +3339,10 @@ public struct ZebraGBrainOnboardingStore {
             if not entry.get("hash") or existing.get("sectionHash") == entry.get("hash"):
                 return existing.get("role"), existing.get("roleSource") or "known_hash", entry
 
-        if non_role_title(entry.get("title")):
+        if recurring_jobs_title(entry.get("title")) or recurring_jobs_signature(entry.get("body")):
+            role = "recurring_jobs"
+            source = "recurring_jobs_title" if recurring_jobs_title(entry.get("title")) else "recurring_jobs_signature"
+        elif non_role_title(entry.get("title")):
             role = "non_role"
             source = "non_role_title"
         else:
@@ -3124,7 +3370,7 @@ public struct ZebraGBrainOnboardingStore {
         if role not in allowed_roles:
             return False
         entry, _ = section_entry(state, section_title)
-        if not entry.get("hash") or non_role_title(entry.get("title")):
+        if not entry.get("hash") or (non_role_title(entry.get("title")) and role != "recurring_jobs"):
             return False
         key = role_key(entry, section_title)
         state.setdefault("sectionRoles", {})[key] = {
@@ -3207,6 +3453,27 @@ public struct ZebraGBrainOnboardingStore {
         decision = progress.get("embeddingDecision") or {}
         return decision.get("decision") in allowed_embedding_decisions
 
+    def recurring_jobs_decision_flags_present(flags):
+        return bool(flags.get("recurring_jobs_decision"))
+
+    def apply_recurring_jobs_decision(state, flags):
+        decision = flags.get("recurring_jobs_decision")
+        if not decision:
+            return None
+        if decision not in allowed_recurring_jobs_decisions:
+            return "invalid_recurring_jobs_decision"
+        progress = state.setdefault("progress", {})
+        progress["recurringJobsDecision"] = {
+            "decision": decision,
+            "confirmedAt": now(),
+        }
+        return None
+
+    def recurring_jobs_decision_recorded(state):
+        progress = state.get("progress") or {}
+        decision = progress.get("recurringJobsDecision") or {}
+        return decision.get("decision") in allowed_recurring_jobs_decisions
+
     def record_verified_source_id(state, flags):
         key, target_path, _, target_entry = resolved_target(state)
         if not key or not target_path or not target_entry:
@@ -3258,6 +3525,8 @@ public struct ZebraGBrainOnboardingStore {
     def allowed_waiting_reasons(role):
         if role == "create_brain":
             return ["topology_resolution", "brain_repo_target_resolution"]
+        if role == "recurring_jobs":
+            return ["recurring_jobs_decision"]
         return []
 
     def waiting_reason_guard_reason(role, requested_reason):
@@ -3547,6 +3816,8 @@ public struct ZebraGBrainOnboardingStore {
             set_waiting_for_user(progress, section, "brain_repo_target_resolution", "Resolve the GBrain brain repo target.")
         elif reason == "section_role_unknown":
             set_waiting_for_user(progress, section, "section_role_mapping_resolution", "Map this INSTALL_FOR_AGENTS section to a known Zebra role.")
+        elif reason == "recurring_jobs_decision_required":
+            set_waiting_for_user(progress, section, "recurring_jobs_decision", "Choose defer, manual_scheduler, platform_scheduler_install, or autopilot_install.")
         save_state(state)
         payload = {
             "ok": False,
@@ -3599,6 +3870,8 @@ public struct ZebraGBrainOnboardingStore {
                 source_reason = source_registration_guard_reason(state, flags)
                 if source_reason:
                     return source_reason
+        if role == "recurring_jobs" and status == "completed" and not recurring_jobs_decision_recorded(state):
+            return "recurring_jobs_decision_required"
         if role == "verify" and status == "completed" and not receipt_verify_complete(state):
             return "verify_incomplete"
         return None
@@ -3685,6 +3958,12 @@ public struct ZebraGBrainOnboardingStore {
             embedding_error = apply_embedding_decision(candidate_state, flags)
             if embedding_error:
                 reject_report(state, embedding_error, section, status)
+        if recurring_jobs_decision_flags_present(flags):
+            if not (role == "recurring_jobs" and status in {"started", "completed"}):
+                reject_report(state, "recurring_jobs_decision_flags_not_allowed", section, status)
+            recurring_jobs_error = apply_recurring_jobs_decision(candidate_state, flags)
+            if recurring_jobs_error:
+                reject_report(state, recurring_jobs_error, section, status)
         guard_reason = report_guard_reason(candidate_state, status, role, flags)
         if guard_reason:
             next_action = None
@@ -3697,6 +3976,8 @@ public struct ZebraGBrainOnboardingStore {
                 "onboarding_work_directory_target",
             }:
                 next_action = "report waiting_for_user for brain_repo_target_resolution"
+            elif guard_reason == "recurring_jobs_decision_required":
+                next_action = "report waiting_for_user for recurring_jobs_decision"
             reject_report(state, guard_reason, section, status, next_action=next_action)
         if role == "import_index" and status == "completed":
             source_record_error = record_verified_source_id(candidate_state, flags)
@@ -3705,12 +3986,13 @@ public struct ZebraGBrainOnboardingStore {
 
         state = candidate_state
         progress = state.setdefault("progress", {})
-        if section:
+        if section and status != "completed":
             progress["nextSection"] = section
         if status == "completed" and section:
             completed = progress.setdefault("completedSections", [])
             if section not in completed:
                 completed.append(section)
+            progress["nextSection"] = next_section_title(state)
         waiting_reason_value = None
         if status == "waiting_for_user":
             waiting_reason_value = flags.get("reason") or "user_input_required"
@@ -3723,8 +4005,10 @@ public struct ZebraGBrainOnboardingStore {
             progress.pop("lastFailure", None)
         progress["lastStatus"] = status
         progress["updatedAt"] = now()
-        save_state(state)
         payload = {"ok": True, "status": status, "section": section}
+        if status == "completed":
+            payload.update(next_prompt_payload(state))
+        save_state(state)
         if waiting_reason_value == "brain_repo_target_resolution":
             payload.update(target_resolution_next_action())
         print(json.dumps(payload, sort_keys=True))
@@ -4277,6 +4561,43 @@ public struct ZebraGBrainOnboardingStore {
       fi
     fi
 
+    zebra_recurring_jobs_decision() {
+      PYTHON_BIN="$(command -v python3 || true)"
+      if [ -z "$PYTHON_BIN" ]; then
+        return 0
+      fi
+      "$PYTHON_BIN" -c 'import json, os, sys
+    path = sys.argv[1]
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            state = json.load(handle)
+    except Exception:
+        state = {}
+    progress = state.get("progress") or {}
+    decision = progress.get("recurringJobsDecision") or {}
+    print(decision.get("decision") or "")' "$STATE" 2>/dev/null || true
+    }
+
+    zebra_gbrain_autopilot_install_requested() {
+      [ "${1:-}" = "autopilot" ] || return 1
+      shift || true
+      for arg in "$@"; do
+        if [ "$arg" = "--install" ] || [ "$arg" = "install" ]; then
+          return 0
+        fi
+      done
+      return 1
+    }
+
+    if zebra_gbrain_autopilot_install_requested "$@"; then
+      DECISION="$(zebra_recurring_jobs_decision)"
+      if [ "${ZEBRA_GBRAIN_ALLOW_RECURRING_JOBS_INSTALL:-}" != "1" ] && [ "$DECISION" != "autopilot_install" ]; then
+        echo "Zebra blocked 'gbrain autopilot --install': recurring_jobs_decision=autopilot_install is required before installing persistent background jobs." >&2
+        echo "Run: zebra-gbrain-onboarding report --status waiting_for_user --section \"<section title>\" --reason recurring_jobs_decision" >&2
+        exit 78
+      fi
+    fi
+
     if [ -n "$SOURCE_REPO" ]; then
       SOURCE_REPO="$(cd "$SOURCE_REPO" 2>/dev/null && pwd -P || printf '%s' "$SOURCE_REPO")"
       if [ -x "$SOURCE_REPO/node_modules/.bin/gbrain" ]; then
@@ -4309,6 +4630,84 @@ public struct ZebraGBrainOnboardingStore {
     IFS="$OLD_IFS"
 
     echo "gbrain executable is unavailable; run bun install from the active GBrain source repo first" >&2
+    exit 127
+    """
+
+    private static let launchctlWrapperScript = """
+    #!/bin/sh
+    set -eu
+
+    if [ -n "${ZEBRA_GBRAIN_STATE:-}" ]; then
+      STATE="$ZEBRA_GBRAIN_STATE"
+    elif [ -n "${HOME:-}" ]; then
+      STATE="$HOME/Library/Application Support/zebra/onboarding/gbrain-setup-state.json"
+    else
+      echo "ZEBRA_GBRAIN_STATE or HOME is required for launchctl wrapper" >&2
+      exit 1
+    fi
+
+    zebra_recurring_jobs_decision() {
+      PYTHON_BIN="$(command -v python3 || true)"
+      if [ -z "$PYTHON_BIN" ]; then
+        return 0
+      fi
+      "$PYTHON_BIN" -c 'import json, os, sys
+    path = sys.argv[1]
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            state = json.load(handle)
+    except Exception:
+        state = {}
+    progress = state.get("progress") or {}
+    decision = progress.get("recurringJobsDecision") or {}
+    print(decision.get("decision") or "")' "$STATE" 2>/dev/null || true
+    }
+
+    zebra_launchctl_requires_approval() {
+      case "${1:-}" in
+        load|bootstrap|enable|start)
+          return 0
+          ;;
+        *)
+          return 1
+          ;;
+      esac
+    }
+
+    if zebra_launchctl_requires_approval "$@"; then
+      DECISION="$(zebra_recurring_jobs_decision)"
+      if [ "${ZEBRA_GBRAIN_ALLOW_RECURRING_JOBS_INSTALL:-}" != "1" ] && [ "$DECISION" != "autopilot_install" ] && [ "$DECISION" != "platform_scheduler_install" ]; then
+        echo "Zebra blocked 'launchctl ${1:-}': recurring_jobs_decision=platform_scheduler_install or autopilot_install is required before installing persistent background jobs." >&2
+        echo "Run: zebra-gbrain-onboarding report --status waiting_for_user --section \"<section title>\" --reason recurring_jobs_decision" >&2
+        exit 78
+      fi
+    fi
+
+    SELF_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+    OLD_IFS="$IFS"
+    IFS=:
+    for dir in $PATH; do
+      IFS="$OLD_IFS"
+      [ -z "$dir" ] && dir=.
+      resolved_dir="$(cd "$dir" 2>/dev/null && pwd -P || true)"
+      if [ "$resolved_dir" = "$SELF_DIR" ]; then
+        IFS=:
+        continue
+      fi
+      if [ -x "$dir/launchctl" ]; then
+        exec "$dir/launchctl" "$@"
+      fi
+      IFS=:
+    done
+    IFS="$OLD_IFS"
+
+    if [ -x /bin/launchctl ]; then
+      exec /bin/launchctl "$@"
+    fi
+    if [ -x /usr/bin/launchctl ]; then
+      exec /usr/bin/launchctl "$@"
+    fi
+    echo "launchctl executable is unavailable" >&2
     exit 127
     """
 }

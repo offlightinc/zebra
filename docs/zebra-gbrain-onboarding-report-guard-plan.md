@@ -6,7 +6,7 @@
 
 Zebra GBrain 온보딩은 agent가 최신 `INSTALL_FOR_AGENTS.md` 원문을 읽고 설치를 진행하고, `zebra-gbrain-onboarding` helper가 진행 기록과 완료 검증을 담당하는 구조다. 이 문서는 agent가 brain repo target 확정 전 `Step 3.5`나 `Step 4`를 먼저 진행하는 문제를 막기 위한 report guard 설계를 정리한다.
 
-핵심 원칙은 두 가지다.
+핵심 원칙은 세 가지다.
 
 ```text
 Zebra가 아는 구간
@@ -16,6 +16,10 @@ Zebra가 모르는 구간
 -> agent가 원문을 읽고 role mapping을 제안할 수 있음
 -> helper는 그 판단을 기록하고 진행을 허용할 수 있음
 -> 단, final checked/receipt는 live verify 통과 전에는 허용하지 않음
+
+Zebra가 위험 행위로 아는 구간
+-> section 제목/번호가 바뀌어도 persistent background 변경은 별도 policy role로 막음
+-> 사용자 선택 없이는 launchd/cron/systemd/autopilot 설치를 실행하지 않음
 ```
 
 ## 배경
@@ -88,6 +92,7 @@ credentials
 create_brain
 search_mode
 import_index
+recurring_jobs
 verify
 non_role
 unknown
@@ -100,13 +105,14 @@ Step 0: If you are not Claude Code
 Step 4.5: Wire the Knowledge Graph
 Step 5: Load Skills
 Step 6: Identity (optional)
-Step 7: Recurring Jobs
 Step 8: Integrations
 Upgrade
 v0.42.0+ onboard surface (NEW)
 ```
 
 이 섹션들은 `gbrain embed --stale`, `gbrain doctor --json`, `gbrain config set search.mode`, `tokenmax` 같은 토큰을 재사용할 수 있다. 따라서 command signature가 일부 맞더라도 `non_role`로 먼저 흡수하고, `install/create_brain/search_mode/import_index` 같은 gate role을 부여하지 않는다.
+
+`Step 7: Recurring Jobs`는 checklist 필수 gate는 아니지만 `non_role`로 두지 않는다. 이 섹션은 `recurring_jobs` policy role이다. 이유는 이 섹션이 launchd/cron/systemd 같은 scheduler 설정이나 `gbrain autopilot --install`처럼 사용자의 machine에 지속 백그라운드 서비스를 설치/시작할 수 있기 때문이다. 문서 제목이 `Background Sync`, `Scheduler`, `Autopilot`, `Recurring Jobs` 등으로 바뀌거나 Step 번호가 이동해도, 본문에 persistent background 변경 신호가 있으면 `recurring_jobs`로 매핑한다.
 
 매핑 우선순위는 다음이다.
 
@@ -160,6 +166,14 @@ search_mode
 import_index
 -> gbrain import
 -> gbrain embed --stale
+
+recurring_jobs
+-> gbrain autopilot --install
+-> launchctl
+-> cron / crontab
+-> systemd / timer
+-> scheduler
+-> recurring / background service / daemon
 
 verify
 -> docs/GBRAIN_VERIFY.md
@@ -224,6 +238,13 @@ import_index completed
 -> source 등록 없음이면 거부
 -> target/source path 불일치면 거부
 
+recurring_jobs completed
+-> recurring_jobs_decision이 없으면 거부
+-> recurring_jobs_decision이 defer이면 persistent command 실행 없이 완료로 기록
+-> recurring_jobs_decision이 manual_scheduler이면 agent가 명령을 실행하지 않고 사용자 관리 설정으로 기록
+-> recurring_jobs_decision이 platform_scheduler_install이면 사용자가 agent 실행을 명시 승인한 scheduler 설치만 허용
+-> recurring_jobs_decision이 autopilot_install이면 승인된 `gbrain autopilot --install`만 허용
+
 verify completed
 -> verify complete true가 아니면 거부
 ```
@@ -233,6 +254,28 @@ verify completed
 `waitingForUser`가 설정된 상태에서는 체크리스트 자동 완료 판정이 `gbrain doctor`, `gbrain sources current`, `gbrain sources list` 같은 live probe를 반복 실행하면 안 된다. 사용자 결정을 기다리는 동안은 setup이 완료될 수 없으므로 즉시 incomplete를 반환한다. 또한 live verifier가 통과한 뒤 receipt를 갱신할 때는 `verifiedAt` 같은 timestamp만 바뀐 경우 state 파일을 다시 쓰지 않는다. 그렇지 않으면 state write -> file watcher refresh -> live verify -> state write 루프가 생겨 CPU/fseventsd 부하가 커진다.
 
 `--target`, `--method`, `--profile-id` 같은 target 확정용 flags는 `create_brain completed` report에서만 state/receipt에 반영한다. 다른 section report에 붙은 target flags는 target을 확정하지 않고 거부한다. `source-id`는 import/source 검증용 보조 입력으로만 사용할 수 있고, 단독으로 target을 확정하지 않는다.
+
+`--recurring-jobs-decision`은 `recurring_jobs started` 또는 `recurring_jobs completed` report에서만 허용한다. 허용 값은 다음과 같다.
+
+```text
+defer
+manual_scheduler
+platform_scheduler_install
+autopilot_install
+```
+
+`defer`는 기본/권장 경로다. recurring jobs는 유지보수 편의 기능이지 Step 4 import/index나 final verify의 prerequisite이 아니다. 따라서 사용자가 recurring jobs를 나중에 하겠다고 선택하면 Zebra는 persistent background 변경 없이 이 section을 handled로 기록할 수 있다. `manual_scheduler`는 사용자가 Zebra/agent 밖에서 직접 scheduler를 관리한다는 기록이며, agent는 launchd/cron/systemd 명령을 실행하지 않는다. `platform_scheduler_install`과 `autopilot_install`은 사용자가 agent에게 지속 변경 실행을 명시 승인한 경우에만 사용할 수 있다. 설치형 decision은 persistent command 실행 전에 `started --recurring-jobs-decision <value>`로 먼저 기록하고, 실행 후 `completed --recurring-jobs-decision <value>`로 닫는다.
+
+`recurring_jobs` role은 report guard만으로 끝내지 않는다. Zebra가 PATH에 주입하는 `gbrain` wrapper도 승인되지 않은 persistent command를 실행 전에 차단한다. 최소 차단 대상은 다음이다.
+
+```text
+gbrain autopilot --install
+gbrain autopilot install
+launchctl load/bootstrap/enable/start 계열 scheduler 설치/시작
+cron/crontab/systemd timer 등록 계열 명령
+```
+
+wrapper 차단은 문서 제목이나 prompt 준수 여부와 무관한 마지막 방어선이다. 승인 상태는 onboarding state의 `recurringJobsDecision` 또는 동일한 의미의 런타임 env로 확인한다. 승인되지 않은 명령은 non-zero로 종료하고, agent에게 `report waiting_for_user --reason recurring_jobs_decision`을 먼저 호출하라는 메시지를 반환한다.
 
 거부 시 helper는 report를 성공 상태로 기록하지 않는다.
 
@@ -266,6 +309,7 @@ brain_repo_target_resolution
 credential_resolution
 search_mode_resolution
 embedding_resolution
+recurring_jobs_decision
 section_role_mapping_resolution
 ```
 
@@ -278,6 +322,47 @@ unknown role completed
 -> helper가 agent-assisted mapping 요청 nextAction을 반환
 -> 최종 checked/receipt는 verify complete true로만 가능
 ```
+
+## Section Prompt Hard Gates
+
+setup packet과 section prompt는 같은 Zebra-owned hard gate 소스를 사용해야 한다. 여기서 "같은 소스"는 모든 hard gate 문구를 every section prompt에 그대로 덤프한다는 뜻이 아니다. hard gate를 한 policy registry에서 만들고, setup packet은 전체 overview를 담으며, section prompt는 현재 section에 필요한 gate만 조합한다는 뜻이다. `INSTALL_FOR_AGENTS.md` 본문은 최신 설치 기준이지만, Zebra 정책은 문서 본문보다 우선한다.
+
+```text
+Always-on section prompt gates
+-> later section 선행 금지
+-> active source repo 사용
+-> 현재 section 완료 시 report command 호출
+-> report가 반환한 nextPrompt 전에는 다음 section 시작 금지
+```
+
+section prompt는 다음 흐름으로 구성한다.
+
+```text
+1. Always-on section prompt gates
+2. current INSTALL_FOR_AGENTS section title/body
+3. current waitingForUser reason이 있으면 그 reason 전용 gate
+4. current section role 전용 hard gates
+5. current section body에서 감지된 위험 행위 전용 hard gates
+6. 완료 시 호출할 report command
+7. report가 반환하는 nextPrompt를 계속 따라가라는 지시
+```
+
+`recurring_jobs` section prompt는 추가로 다음 결정을 강제한다.
+
+```text
+1. persistent background 변경이라고 먼저 인식
+2. `gbrain autopilot --install`, launchd, cron, systemd, scheduler 명령 실행 금지
+3. `zebra-gbrain-onboarding report --status waiting_for_user --reason recurring_jobs_decision` 호출
+4. 사용자에게 선택지를 제시
+   - defer: 나중에 설정, 아무 persistent command도 실행하지 않음
+   - manual_scheduler: 사용자가 직접 관리, agent는 명령 실행하지 않음
+   - platform_scheduler_install: agent가 platform scheduler 설치 실행
+   - autopilot_install: agent가 `gbrain autopilot --install` 실행
+5. 선택이 `defer` 또는 `manual_scheduler`이면 `report --status completed --section ... --recurring-jobs-decision <value>` 호출
+6. 선택이 `platform_scheduler_install` 또는 `autopilot_install`이면 `report --status started --section ... --recurring-jobs-decision <value>`로 승인 기록 후 설치 명령 실행, 이후 `completed` report 호출
+```
+
+이 구조의 목적은 Step 번호나 제목 변경에 덜 취약하게 만드는 것이다. `INSTALL_FOR_AGENTS.md`가 업데이트되어 recurring jobs가 다른 섹션으로 이동해도, 본문에 persistent background 변경 signature가 있으면 같은 흐름을 탄다.
 
 ## 완료 검증과 체크리스트
 
@@ -326,7 +411,13 @@ target flags outside `create_brain completed` are rejected and do not mutate tar
 unknown role does not create trusted completed progress
 agent-assisted role mapping records roleSource=agent_judgment
 agent-assisted role mapping still respects concrete prerequisites
-Step 7 / Upgrade token reuse sections do not map to guarded roles
+Step 7 / recurring jobs maps to recurring_jobs and requires recurring_jobs_decision
+renamed recurring jobs section maps to recurring_jobs by persistent command signature
+recurring_jobs completed without decision is rejected
+recurring_jobs completed with defer records handled section without installing background services
+approved autopilot_install allows only the intended `gbrain autopilot --install` path
+unapproved `gbrain autopilot --install` through the wrapper exits non-zero
+Upgrade token reuse sections do not map to guarded roles
 ```
 
 Mapping tests:
@@ -363,6 +454,14 @@ brain_repo_target_resolution pending + unrelated section completed
 target flags on non-create_brain report
 -> rejected with target_flags_not_allowed
 -> resolvedTargetKey remains unset
+
+recurring_jobs nextPrompt
+-> includes Zebra global hard gates
+-> says persistent background changes require user choice
+-> tells agent to report waiting_for_user with recurring_jobs_decision before running scheduler/autopilot commands
+
+renamed section containing `gbrain autopilot --install`
+-> prompt/report path still uses recurring_jobs guard
 ```
 
 End-to-end smoke test:
@@ -386,4 +485,5 @@ assert verify can complete receipt
 - section title/hash는 GBrain 업데이트에 따라 바뀔 수 있으므로 guard는 exact string에만 의존하지 않는다.
 - deterministic mapping 실패 시 agent-assisted mapping을 허용한다.
 - agent-assisted mapping은 section role 해석에만 사용하고, 실제 설치 상태와 최종 완료 판정은 helper/verifier가 검증한다.
-- Step 7 recurring jobs와 Step 8 integrations는 제품 범위가 "full INSTALL_FOR_AGENTS completed"로 바뀌지 않는 한 최소 Zebra checklist checked 조건에는 포함하지 않는다.
+- Recurring jobs는 최소 Zebra checklist checked 조건에는 포함하지 않는다. 단, setup flow가 recurring jobs section까지 진행하는 경우에는 `recurring_jobs` policy role로 사용자 결정을 받아야 하며, decision 없이 persistent background 변경을 설치/시작하지 않는다.
+- Step 8 integrations는 제품 범위가 "full INSTALL_FOR_AGENTS completed"로 바뀌지 않는 한 최소 Zebra checklist checked 조건에는 포함하지 않는다.
