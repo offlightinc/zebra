@@ -5,6 +5,7 @@ struct TaskListView: View {
     let activePaths: Set<String>
     let onSelectFile: (String) -> Void
     @StateObject private var viewModel = TaskListViewModel()
+    @StateObject private var searchStore = TaskSearchStore()
     @State private var filterStep: TaskFilterPopoverStep?
     @State private var showMyOwnerMenu = false
 
@@ -15,15 +16,17 @@ struct TaskListView: View {
         // reassignments invalidated the view, but in-place mutations from
         // `replace()` did not.
         let tasksSnapshot = store.tasks
+        let searchActive = searchStore.hasQuery
+        let displayedSourceTasks = searchActive ? searchStore.results : tasksSnapshot
         return VStack(spacing: 0) {
-            collapseAllToolbar(tasks: tasksSnapshot)
+            collapseAllToolbar(tasks: displayedSourceTasks)
             TaskListToolbar(
                 groupBy: viewModel.groupBy,
                 sort: viewModel.sort,
                 sortDirection: viewModel.sortDirection,
                 myOwnerFilter: viewModel.myOwnerFilter,
                 existingFilterFields: Set(viewModel.filters.map(\.field)),
-                availableOwners: availableOwners,
+                availableOwners: availableOwners(from: displayedSourceTasks),
                 filterStep: $filterStep,
                 showMyOwnerMenu: $showMyOwnerMenu,
                 currentFilter: { field in
@@ -56,14 +59,16 @@ struct TaskListView: View {
             if !viewModel.filters.isEmpty {
                 chipRow
             }
-            listContent(tasks: tasksSnapshot)
+            listContent(tasks: displayedSourceTasks, baseTasks: tasksSnapshot, searchActive: searchActive)
         }
         .background(BVColor.bg)
         .onAppear {
             viewModel.bindPersistence(rootPath: store.rootPath)
+            searchStore.bind(tasksRootPath: store.rootPath)
         }
-        .onChange(of: store.rootPath) { newRootPath in
+        .onChange(of: store.rootPath) { _, newRootPath in
             viewModel.bindPersistence(rootPath: newRootPath)
+            searchStore.bind(tasksRootPath: newRootPath)
         }
     }
 
@@ -77,6 +82,7 @@ struct TaskListView: View {
         let allCollapsed = !groups.isEmpty && groups.allSatisfy { viewModel.collapsedSections.contains($0.key.raw) }
         let canCollapse = store.rootPath != nil && !groups.isEmpty && !allCollapsed
         return HStack(spacing: 0) {
+            taskSearchField
             Spacer(minLength: 0)
             Button {
                 viewModel.collapsedSections = Set(groups.map { $0.key.raw })
@@ -102,11 +108,59 @@ struct TaskListView: View {
         .frame(height: ZebraSidebarMetrics.firstRowTopOffset)
     }
 
+    private var taskSearchField: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(BVColor.fgFaint)
+                .frame(width: 12, height: 12)
+            TextField(
+                String(localized: "task.toolbar.search.placeholder", defaultValue: "Search tasks"),
+                text: $searchStore.query
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 11.5))
+            .foregroundColor(BVColor.fg)
+            .lineLimit(1)
+            if !searchStore.query.isEmpty {
+                Button {
+                    searchStore.query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundColor(BVColor.fgFaint)
+                        .frame(width: 12, height: 12)
+                }
+                .buttonStyle(.plain)
+                .safeHelp(String(localized: "task.toolbar.search.clear", defaultValue: "Clear search"))
+            } else if searchStore.isIndexing {
+                ProgressView()
+                    .controlSize(.mini)
+                    .scaleEffect(0.58)
+                    .frame(width: 12, height: 12)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .frame(maxWidth: 170)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(BVColor.bgInput)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(BVColor.border.opacity(0.85), lineWidth: 1)
+        )
+        .accessibilityIdentifier("TaskListToolbar.search")
+    }
+
     @ViewBuilder
-    private func listContent(tasks: [TaskItem]) -> some View {
+    private func listContent(tasks: [TaskItem], baseTasks: [TaskItem], searchActive: Bool) -> some View {
         if store.rootPath == nil {
             placeholder(String(localized: "task.list.empty.noVault", defaultValue: "No vault selected"))
-        } else if tasks.isEmpty && store.isScanning {
+        } else if searchActive {
+            searchListContent(tasks: tasks)
+        } else if baseTasks.isEmpty && store.isScanning {
             VStack {
                 Spacer()
                 ProgressView().controlSize(.small)
@@ -115,8 +169,32 @@ struct TaskListView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = store.lastError {
             placeholder(String(localized: "task.list.empty.error", defaultValue: "Failed to load: \(error)"))
-        } else if tasks.isEmpty {
+        } else if baseTasks.isEmpty {
             placeholder(String(localized: "task.list.empty.noTasks", defaultValue: "No tasks in vault"))
+        } else if viewModel.displayTasks(from: baseTasks).isEmpty {
+            placeholder(String(localized: "task.list.empty.noMatches", defaultValue: "No matching tasks"))
+        } else {
+            listScrollView(tasks: baseTasks)
+        }
+    }
+
+    @ViewBuilder
+    private func searchListContent(tasks: [TaskItem]) -> some View {
+        if let error = searchStore.lastError {
+            let format = String(localized: "task.list.empty.searchError", defaultValue: "Search failed: %@")
+            placeholder(String.localizedStringWithFormat(format, error))
+        } else if tasks.isEmpty && searchStore.isIndexing {
+            VStack(spacing: 8) {
+                Spacer()
+                ProgressView().controlSize(.small)
+                Text(String(localized: "task.list.empty.indexingSearch", defaultValue: "Indexing tasks..."))
+                    .font(.system(size: 12))
+                    .foregroundStyle(BVColor.fgMute)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if tasks.isEmpty {
+            placeholder(String(localized: "task.list.empty.noMatches", defaultValue: "No matching tasks"))
         } else if viewModel.displayTasks(from: tasks).isEmpty {
             placeholder(String(localized: "task.list.empty.noMatches", defaultValue: "No matching tasks"))
         } else {
@@ -137,8 +215,8 @@ struct TaskListView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var availableOwners: [String] {
-        Array(Set(store.tasks.compactMap(\.ownerSlug))).sorted()
+    private func availableOwners(from tasks: [TaskItem]) -> [String] {
+        Array(Set(tasks.compactMap(\.ownerSlug))).sorted()
     }
 
     private var chipRow: some View {
@@ -217,7 +295,9 @@ struct TaskListView: View {
         // Optimistic: snap the in-memory model immediately so the row icon
         // updates without waiting for the file-system round-trip. Watcher
         // reparse later reconciles (same value → no visible jump).
-        store.replace(task.with(status: .some(newStatus), unrecognizedStatusRaw: .some(nil)))
+        let updated = task.with(status: .some(newStatus), unrecognizedStatusRaw: .some(nil))
+        store.replace(updated)
+        searchStore.replace(updated)
         // status 변경은 brain convention 에 따라 status/updated/completed/
         // waiting_on + body Timeline 까지 한 묶음으로 처리. 다른 필드(priority/
         // due) 는 기존 단일-키 writeback 경로 유지.
@@ -234,7 +314,9 @@ struct TaskListView: View {
     }
 
     private func writePriority(task: TaskItem, newPriority: BrainPriority?) {
-        store.replace(task.with(priority: .some(newPriority)))
+        let updated = task.with(priority: .some(newPriority))
+        store.replace(updated)
+        searchStore.replace(updated)
         BrainStatusMutator.applyPropertyChange(
             at: task.absolutePath,
             field: "priority",
@@ -244,7 +326,9 @@ struct TaskListView: View {
     }
 
     private func writeDue(task: TaskItem, newDate: Date?) {
-        store.replace(task.with(dueDate: .some(newDate)))
+        let updated = task.with(dueDate: .some(newDate))
+        store.replace(updated)
+        searchStore.replace(updated)
         let oldSerialized = task.dueDate.map { BrainDateOnlyCodec.storageString(fromPickerDate: $0) }
         let newSerialized = newDate.map { BrainDateOnlyCodec.storageString(fromPickerDate: $0) }
         BrainStatusMutator.applyPropertyChange(

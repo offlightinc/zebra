@@ -88,7 +88,7 @@ public struct UnknownObject {
 
 // MARK: - Property value types
 
-public enum BrainTaskStatus: String, CaseIterable {
+public enum BrainTaskStatus: String, CaseIterable, Sendable {
     // brain-offlight task schema 의 7개 상태가 canonical:
     // backlog → todo → inprogress → blocked → waiting → done → canceled.
     //
@@ -134,7 +134,7 @@ public enum BrainTaskStatus: String, CaseIterable {
     }
 }
 
-public enum BrainPriority: String, CaseIterable {
+public enum BrainPriority: String, CaseIterable, Sendable {
     // HTML: none / urgent / high / medium / low. `none`은 nil로 표현하므로 enum엔
     // 4개만. legacy `normal`은 parser에서 .medium으로 읽고, writer는 "medium"으로 저장.
     case urgent, high, medium, low

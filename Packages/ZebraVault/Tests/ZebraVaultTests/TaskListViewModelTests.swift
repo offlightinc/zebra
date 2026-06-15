@@ -117,10 +117,61 @@ final class TaskListViewModelTests: XCTestCase {
         XCTAssertEqual(displayed.map(\.absolutePath), ["/tmp/soon.md", "/tmp/later.md"])
     }
 
+    @MainActor
+    func testSearchResultSnapshotsUseSameFilterSortAndGroupPipeline() {
+        let viewModel = TaskListViewModel()
+        viewModel.filters = [
+            TaskFilter(field: .owner, op: .is, values: ["han"]),
+            TaskFilter(field: .priority, op: .is, values: [BrainPriority.high.rawValue])
+        ]
+        viewModel.sort = .due
+        viewModel.sortDirection = .ascending
+
+        let searchResults = [
+            task(
+                path: "/tmp/search/other-owner.md",
+                title: "Needle Other Owner",
+                priority: .high,
+                owner: "lee",
+                due: "2026-06-17"
+            ),
+            task(
+                path: "/tmp/search/later.md",
+                title: "Needle Later",
+                priority: .high,
+                owner: "han",
+                due: "2026-06-20"
+            ),
+            task(
+                path: "/tmp/search/soon.md",
+                title: "Needle Soon",
+                priority: .high,
+                owner: "han",
+                due: "2026-06-18"
+            ),
+            task(
+                path: "/tmp/search/low.md",
+                title: "Needle Low",
+                priority: .low,
+                owner: "han",
+                due: "2026-06-16"
+            ),
+        ]
+
+        let displayed = viewModel.displayTasks(from: searchResults)
+        let groups = TaskListViewModel.groupTasks(displayed, by: .priority)
+
+        XCTAssertEqual(displayed.map(\.absolutePath), ["/tmp/search/soon.md", "/tmp/search/later.md"])
+        XCTAssertEqual(groups.map(\.key.raw), [BrainPriority.high.rawValue])
+        XCTAssertEqual(groups.first?.items.map(\.absolutePath), ["/tmp/search/soon.md", "/tmp/search/later.md"])
+    }
+
     private func task(
         path: String,
         title: String,
         status: BrainTaskStatus? = .todo,
+        priority: BrainPriority? = nil,
+        owner: String? = nil,
         due: String? = nil,
         created: String? = nil,
         updated: String? = nil
@@ -131,8 +182,8 @@ final class TaskListViewModelTests: XCTestCase {
             title: title,
             status: status,
             unrecognizedStatusRaw: nil,
-            priority: nil,
-            ownerSlug: nil,
+            priority: priority,
+            ownerSlug: owner,
             dueDate: due.flatMap { BrainDateOnlyCodec.date(fromStorageString: $0) },
             createdDate: created.flatMap { BrainDateOnlyCodec.date(fromStorageString: $0) },
             updatedDate: updated.flatMap { BrainDateOnlyCodec.date(fromStorageString: $0) },
