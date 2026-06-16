@@ -948,7 +948,6 @@ public enum ZebraOnboardingChecklistCommand {
         let prepareSourceRepoPrefix = [
             "zebra-gbrain-onboarding prepare-source-repo",
             "eval \"$(zebra-gbrain-onboarding active-source-env)\"",
-            "zebra-gbrain-onboarding write-setup-packet --path \(ZebraAgentLaunchCommand.shellQuote(launch.setupPacketPath))",
         ].joined(separator: " && ") + " && "
         let startupLine = gbrainSetupSelectedRuntimeCommand(
             launch: launch,
@@ -990,15 +989,14 @@ public enum ZebraOnboardingChecklistCommand {
         runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime
     ) -> String {
         let executable = ZebraAgentLaunchCommand.shellQuote(runtime.executablePath)
-        let setupPacket = ZebraAgentLaunchCommand.shellQuote(launch.setupPacketPath)
         let runId = ZebraAgentLaunchCommand.shellQuote(launch.runId)
         switch runtime.runtime {
         case "openclaw":
             let agentID = openClawAgentID(runId: launch.runId)
             let sessionKey = "agent:\(agentID):\(launch.runId)"
-            return "eval \"$(zebra-gbrain-onboarding write-runtime-launcher --runtime 'openclaw' --executable \(executable) --setup-packet \(setupPacket) --run-id \(runId) --agent-id \(ZebraAgentLaunchCommand.shellQuote(agentID)) --session \(ZebraAgentLaunchCommand.shellQuote(sessionKey)))\" && \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\"\r"
+            return "eval \"$(zebra-gbrain-onboarding write-runtime-launcher --runtime 'openclaw' --executable \(executable) --run-id \(runId) --agent-id \(ZebraAgentLaunchCommand.shellQuote(agentID)) --session \(ZebraAgentLaunchCommand.shellQuote(sessionKey)))\" && \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\"\r"
         case "hermes":
-            return "eval \"$(zebra-gbrain-onboarding write-runtime-launcher --runtime 'hermes' --executable \(executable) --setup-packet \(setupPacket) --run-id \(runId))\" && \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\"\r"
+            return "eval \"$(zebra-gbrain-onboarding write-runtime-launcher --runtime 'hermes' --executable \(executable) --run-id \(runId))\" && \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\"\r"
         default:
             return "echo 'Unsupported OpenClaw/Hermes runtime for GBrain setup: \(runtime.runtime)' >&2 && exit 1\r"
         }

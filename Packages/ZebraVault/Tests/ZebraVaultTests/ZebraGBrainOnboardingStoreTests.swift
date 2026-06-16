@@ -407,21 +407,9 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(launch.allowTrustedAutomation)
         XCTAssertFalse(launch.allowLaunchDirectoryTrust)
         XCTAssertTrue(launch.startupPrompt.contains("Zebra GBrain setup is starting"))
-        XCTAssertTrue(launch.startupPrompt.contains(launch.setupPacketPath))
+        XCTAssertTrue(launch.startupPrompt.contains("current section prompt"))
         XCTAssertFalse(launch.startupPrompt.contains("Do not implicitly use the home directory"))
-        let packet = try setupPacketContent(launch)
-        XCTAssertTrue(packet.contains("Do not implicitly use the home directory"))
-        XCTAssertTrue(packet.contains("When Step 3 is the current section"))
-        XCTAssertTrue(packet.contains("waitingForUser: none"))
-        XCTAssertFalse(packet.contains("waitingForUser: topology_resolution"))
-        XCTAssertFalse(packet.contains("Ask only for the Step 3 topology decision now"))
-        XCTAssertFalse(packet.contains("Do not ask for the brain repo target in this gate"))
-        XCTAssertFalse(packet.contains("Do not ask for Step 2 API keys in the topology prompt"))
-        XCTAssertTrue(packet.contains("Do not run `gbrain init --pglite --no-embedding`"))
-        XCTAssertTrue(packet.contains("provider key provided: set one of `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, or `VOYAGE_API_KEY`"))
-        XCTAssertTrue(packet.contains("defer embeddings: initialize with `gbrain init --pglite --no-embedding` now"))
-        XCTAssertFalse(packet.contains("Target-resolution timing"))
-        XCTAssertFalse(packet.contains("User decisions you must stop and ask for"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("gbrain-setup-packets").path))
         XCTAssertTrue(launch.shellEnvironmentPrefix.contains("ZEBRA_GBRAIN_STATE"))
         let progress = try progressObject(in: stateURL)
         XCTAssertNil(waitingForUserReason(in: progress))
@@ -444,11 +432,10 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertFalse(launch.startupPrompt.contains("\n"), launch.startupPrompt)
         XCTAssertFalse(launch.startupPrompt.contains("\r"), launch.startupPrompt)
         XCTAssertTrue(launch.startupPrompt.contains("Zebra GBrain setup"), launch.startupPrompt)
-        XCTAssertTrue(launch.startupPrompt.contains("setup packet"), launch.startupPrompt)
-        XCTAssertTrue(launch.startupPrompt.contains(launch.setupPacketPath), launch.startupPrompt)
+        XCTAssertTrue(launch.startupPrompt.contains("section prompt"), launch.startupPrompt)
     }
 
-    func testPrepareLaunchUsesKoreanAppLanguagePolicyInBootstrapAndPacket() throws {
+    func testPrepareLaunchUsesKoreanAppLanguagePolicyInBootstrap() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root.appendingPathComponent("state.json")
         let store = ZebraGBrainOnboardingStore(
@@ -460,21 +447,11 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
 
         let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
-        let packet = try setupPacketContent(launch)
 
         XCTAssertTrue(launch.startupPrompt.contains("Your first visible response must be a brief Korean sentence"))
-        XCTAssertTrue(launch.startupPrompt.contains("Preserve `Zebra GBrain setup` and `setup packet` exactly."))
+        XCTAssertTrue(launch.startupPrompt.contains("Preserve `Zebra GBrain setup` and `section prompt` exactly."))
         XCTAssertFalse(launch.startupPrompt.contains("Zebra GBrain setup을 시작합니다"))
         XCTAssertTrue(launch.startupPrompt.unicodeScalars.allSatisfy { $0.isASCII })
-        XCTAssertTrue(packet.contains("Use Zebra's app language (Korean) for user-facing prose."))
-        XCTAssertTrue(packet.contains("Preserve technical terms, domain terminology, product names, commands, identifiers, file paths, environment variables, API names, CLI flags, JSON keys, error codes, and quoted/source text in their original English spelling."))
-        XCTAssertTrue(packet.contains("provider key provided: `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, `VOYAGE_API_KEY` 중 하나를 environment에 설정한 뒤 계속합니다."))
-        XCTAssertTrue(packet.contains("defer embeddings: 지금 `gbrain init --pglite --no-embedding`으로 초기화합니다. embeddings는 나중에 설정할 수 있습니다."))
-        XCTAssertTrue(packet.contains("새 brain repo를 만듭니다 (recommended)"))
-        XCTAssertTrue(packet.contains("기존 markdown/brain repo path를 사용합니다"))
-        XCTAssertTrue(packet.contains("custom path에 새 brain repo를 만듭니다"))
-        XCTAssertFalse(packet.contains("provider key provided: set one of `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, or `VOYAGE_API_KEY`"))
-        XCTAssertFalse(packet.contains("Use Zebra's app language (English) for user-facing prose."))
     }
 
     func testOnboardingLanguageFallsBackToEnglishForUnsupportedLocale() {
@@ -510,32 +487,97 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             appPreferredLocalizations: ["en"],
             preferredLanguages: ["en"]
         )
-        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
+        let prepareResult = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: ["prepare-source-repo", "--path", sourceRepo.path]
+        )
+        XCTAssertEqual(prepareResult.exitCode, 0, "stdout:\n\(prepareResult.stdout)\nstderr:\n\(prepareResult.stderr)")
         try writeProgress(
             stateURL,
             completedSections: ["Step 1: Install GBrain", "Step 2: API Keys"],
             waitingForUser: "brain_repo_target_resolution",
             nextSection: "Step 3: Create the Brain"
         )
-
-        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let launcherResult = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: [
+                "write-runtime-launcher",
+                "--runtime", "hermes",
+                "--executable", "/tmp/hermes",
+                "--run-id", launch.runId,
+            ]
+        )
         let progress = try progressObject(in: stateURL)
-        let packet = try setupPacketContent(launch)
+        let prompt = try launcherPrompt(from: launcherResult.stdout)
         let recommendedBrainPath = root.appendingPathComponent("brain", isDirectory: true).path
 
+        XCTAssertEqual(launcherResult.exitCode, 0, "stdout:\n\(launcherResult.stdout)\nstderr:\n\(launcherResult.stderr)")
         XCTAssertTrue(launch.startupPrompt.contains("Zebra GBrain setup is starting"))
-        XCTAssertTrue(packet.contains("waitingForUser: brain_repo_target_resolution"))
-        XCTAssertTrue(packet.contains("Ask only for the Step 3 brain repo target now"))
-        XCTAssertTrue(packet.contains("1. Create a new brain repo at \(recommendedBrainPath) (recommended)"))
-        XCTAssertTrue(packet.contains("2. Use an existing markdown/brain repo path that the user provides"))
-        XCTAssertTrue(packet.contains("3. Create a new brain repo at a custom path"))
-        XCTAssertTrue(packet.contains("Do not present Zebra's onboarding work directory"))
-        XCTAssertTrue(packet.contains("Do not ask only as an open-ended"))
-        XCTAssertTrue(packet.contains("without asking for another yes/no confirmation"))
-        XCTAssertFalse(packet.contains("ask for yes/no confirmation before creating"))
-        XCTAssertFalse(packet.contains("Ask only for the Step 3 topology decision now"))
+        XCTAssertTrue(prompt.contains("Ask only for the Step 3 brain repo target now"), prompt)
+        XCTAssertTrue(prompt.contains("1. Create a new brain repo at \(recommendedBrainPath) (recommended)"), prompt)
+        XCTAssertTrue(prompt.contains("2. Use an existing markdown/brain repo path that the user provides"), prompt)
+        XCTAssertTrue(prompt.contains("3. Create a new brain repo at a custom path"), prompt)
+        XCTAssertTrue(prompt.contains("Do not present Zebra's onboarding work directory"), prompt)
+        XCTAssertTrue(prompt.contains("Do not silently choose `--no-embedding`"), prompt)
+        XCTAssertTrue(prompt.contains("without asking for another yes/no confirmation"), prompt)
+        XCTAssertFalse(prompt.contains("ask for yes/no confirmation before creating"), prompt)
+        XCTAssertFalse(prompt.contains("Ask only for the Step 3 topology decision now"), prompt)
         XCTAssertEqual(waitingForUserReason(in: progress), "brain_repo_target_resolution")
         XCTAssertEqual(progress["nextSection"] as? String, "Step 3: Create the Brain")
+    }
+
+    func testStep3PromptIncludesNumberedBrainRepoTargetOptionsBeforeWaitingState() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
+        let prepareResult = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: ["prepare-source-repo", "--path", sourceRepo.path]
+        )
+        XCTAssertEqual(prepareResult.exitCode, 0, "stdout:\n\(prepareResult.stdout)\nstderr:\n\(prepareResult.stderr)")
+        try writeProgress(
+            stateURL,
+            completedSections: ["Step 1: Install GBrain", "Step 2: API Keys"],
+            waitingForUser: nil,
+            nextSection: "Step 3: Create the Brain"
+        )
+        let launcherResult = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: [
+                "write-runtime-launcher",
+                "--runtime", "hermes",
+                "--executable", "/tmp/hermes",
+                "--run-id", launch.runId,
+            ]
+        )
+        let prompt = try launcherPrompt(from: launcherResult.stdout)
+        let recommendedBrainPath = root.appendingPathComponent("brain", isDirectory: true).path
+
+        XCTAssertEqual(launcherResult.exitCode, 0, "stdout:\n\(launcherResult.stdout)\nstderr:\n\(launcherResult.stderr)")
+        XCTAssertTrue(prompt.contains("When asking for the brain repo target, present exactly this numbered prompt to the user:"), prompt)
+        XCTAssertTrue(prompt.contains("Choose the brain repo target using one of these numbered options."), prompt)
+        XCTAssertTrue(prompt.contains("1. Create a new brain repo at \(recommendedBrainPath) (recommended)"), prompt)
+        XCTAssertTrue(prompt.contains("2. Use an existing markdown/brain repo path that the user provides"), prompt)
+        XCTAssertTrue(prompt.contains("3. Create a new brain repo at a custom path"), prompt)
+        XCTAssertTrue(prompt.contains("Interpret user choice 1 as the recommended path with targetResolution.method=user_created_repo."), prompt)
+        XCTAssertTrue(prompt.contains("Interpret user choice 2 as an existing repo path with targetResolution.method=user_existing_repo"), prompt)
+        XCTAssertTrue(prompt.contains("Interpret user choice 3 as a new custom repo path with targetResolution.method=user_created_repo"), prompt)
+        XCTAssertTrue(prompt.contains("Do not ask only as an open-ended path question"), prompt)
     }
 
     func testSectionSnapshotsReflectManifestProgressAndCurrentSection() throws {
@@ -818,7 +860,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(progress["nextSection"] as? String, "Step 1: Install GBrain")
     }
 
-    func testWriteSetupPacketUsesPreparedRecommendedHomeRepoAndRequiresGlobalLocalInstall() throws {
+    func testRuntimeLauncherPromptUsesPreparedRecommendedHomeRepoAndRequiresGlobalLocalInstall() throws {
         let root = try makeTemporaryDirectory()
         let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
         let stateURL = root.appendingPathComponent("state.json")
@@ -835,34 +877,30 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             path: root.path,
             arguments: ["prepare-source-repo", "--path", sourceRepo.path]
         )
-        let packetResult = try runHelper(
+        let launcherResult = try runHelper(
             stateURL: stateURL,
             path: root.path,
-            arguments: ["write-setup-packet", "--path", launch.setupPacketPath]
+            arguments: [
+                "write-runtime-launcher",
+                "--runtime", "hermes",
+                "--executable", "/tmp/hermes",
+                "--run-id", launch.runId,
+            ]
         )
 
         XCTAssertEqual(prepareResult.exitCode, 0, "stdout:\n\(prepareResult.stdout)\nstderr:\n\(prepareResult.stderr)")
-        XCTAssertEqual(packetResult.exitCode, 0, "stdout:\n\(packetResult.stdout)\nstderr:\n\(packetResult.stderr)")
-        let packet = try setupPacketContent(launch)
-        XCTAssertTrue(packet.contains("sourceRepoPath: \(sourceRepo.path)"), packet)
-        XCTAssertTrue(packet.contains("sourceRepoIsRecommended: true"), packet)
-        XCTAssertTrue(packet.contains("installMode: recommended_home_global"), packet)
-        XCTAssertTrue(packet.contains("`bun install`, then `bun install -g .`"), packet)
-        XCTAssertFalse(packet.contains("github:garrytan/gbrain"), packet)
-        XCTAssertTrue(packet.contains("===== BEGIN ZEBRA RUNTIME UPDATE (AUTHORITATIVE) ====="), packet)
-        XCTAssertTrue(packet.contains("For source repo, install mode, docs snapshot, next section, and waitingForUser, this block overrides older matching context below."), packet)
-        XCTAssertTrue(packet.contains("When Step 3 is the current section, before `gbrain init`, ask only for the topology decision."), packet)
-        XCTAssertTrue(packet.contains("Record the user's Step 2 embedding decision"), packet)
-        XCTAssertTrue(packet.contains("Before Step 4 import/embed/sync"), packet)
-        XCTAssertTrue(packet.contains("After the user chooses search mode"), packet)
-        XCTAssertTrue(packet.contains("If report rejects a section because the role is unknown"), packet)
-        XCTAssertTrue(packet.contains("User decision rule:"), packet)
-        let updateRange = try XCTUnwrap(packet.range(of: "===== BEGIN ZEBRA RUNTIME UPDATE (AUTHORITATIVE) ====="))
-        let fullPacketRange = try XCTUnwrap(packet.range(of: "You are Zebra's GBrain setup agent."))
-        XCTAssertLessThan(updateRange.lowerBound, fullPacketRange.lowerBound)
+        XCTAssertEqual(launcherResult.exitCode, 0, "stdout:\n\(launcherResult.stdout)\nstderr:\n\(launcherResult.stderr)")
+        let prompt = try launcherPrompt(from: launcherResult.stdout)
+        XCTAssertTrue(prompt.contains("Zebra GBrain setup: current section is `Step 1: Install GBrain`."), prompt)
+        XCTAssertTrue(prompt.contains("INSTALL_FOR_AGENTS.md section body:"), prompt)
+        XCTAssertTrue(prompt.contains("Zebra section boundary rules:"), prompt)
+        XCTAssertTrue(prompt.contains("Active GBrain source repo: \(sourceRepo.path)."), prompt)
+        XCTAssertTrue(prompt.contains("Zebra's recommended `~/gbrain` path"), prompt)
+        XCTAssertTrue(prompt.contains("`bun install`, then `bun install -g .`"), prompt)
+        XCTAssertFalse(prompt.contains("github:garrytan/gbrain"), prompt)
     }
 
-    func testWriteSetupPacketUsesBunLinkForCustomSourceRepo() throws {
+    func testRuntimeLauncherPromptUsesBunLinkForCustomSourceRepo() throws {
         let root = try makeTemporaryDirectory()
         let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "custom-gbrain")
         let stateURL = root.appendingPathComponent("state.json")
@@ -879,24 +917,25 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             path: root.path,
             arguments: ["prepare-source-repo", "--path", sourceRepo.path]
         )
-        let packetResult = try runHelper(
+        let launcherResult = try runHelper(
             stateURL: stateURL,
             path: root.path,
-            arguments: ["write-setup-packet", "--path", launch.setupPacketPath]
+            arguments: [
+                "write-runtime-launcher",
+                "--runtime", "hermes",
+                "--executable", "/tmp/hermes",
+                "--run-id", launch.runId,
+            ]
         )
 
         XCTAssertEqual(prepareResult.exitCode, 0, "stdout:\n\(prepareResult.stdout)\nstderr:\n\(prepareResult.stderr)")
-        XCTAssertEqual(packetResult.exitCode, 0, "stdout:\n\(packetResult.stdout)\nstderr:\n\(packetResult.stderr)")
-        let packet = try setupPacketContent(launch)
-        XCTAssertTrue(packet.contains("sourceRepoPath: \(sourceRepo.path)"), packet)
-        XCTAssertTrue(packet.contains("sourceRepoIsRecommended: false"), packet)
-        XCTAssertTrue(packet.contains("installMode: custom_source_repo_linked"), packet)
-        XCTAssertTrue(packet.contains("`bun install`, then `bun link`"), packet)
-        XCTAssertTrue(packet.contains("Step 1 must expose the active source repo through the user-visible `gbrain` command first"), packet)
-        let updateStart = try XCTUnwrap(packet.range(of: "===== BEGIN ZEBRA RUNTIME UPDATE (AUTHORITATIVE) ====="))
-        let updateEnd = try XCTUnwrap(packet.range(of: "===== END ZEBRA RUNTIME UPDATE ====="))
-        let updateBlock = String(packet[updateStart.lowerBound..<updateEnd.upperBound])
-        XCTAssertFalse(updateBlock.contains("`bun install`, then `bun install -g .`"), packet)
+        XCTAssertEqual(launcherResult.exitCode, 0, "stdout:\n\(launcherResult.stdout)\nstderr:\n\(launcherResult.stderr)")
+        let prompt = try launcherPrompt(from: launcherResult.stdout)
+        XCTAssertTrue(prompt.contains("Active GBrain source repo: \(sourceRepo.path)."), prompt)
+        XCTAssertTrue(prompt.contains("not Zebra's recommended `~/gbrain` path"), prompt)
+        XCTAssertTrue(prompt.contains("`bun install`, then `bun link`"), prompt)
+        XCTAssertTrue(prompt.contains("user-visible `gbrain` command"), prompt)
+        XCTAssertFalse(prompt.contains("`bun install`, then `bun install -g .`"), prompt)
     }
 
     func testWriteRuntimeLauncherMovesOpenClawPromptIntoLauncherScript() throws {
@@ -916,11 +955,6 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             path: root.path,
             arguments: ["prepare-source-repo", "--path", sourceRepo.path]
         )
-        let packetResult = try runHelper(
-            stateURL: stateURL,
-            path: root.path,
-            arguments: ["write-setup-packet", "--path", launch.setupPacketPath]
-        )
         let launcherResult = try runHelper(
             stateURL: stateURL,
             path: root.path,
@@ -929,7 +963,6 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "write-runtime-launcher",
                 "--runtime", "openclaw",
                 "--executable", "/tmp/openclaw",
-                "--setup-packet", launch.setupPacketPath,
                 "--run-id", launch.runId,
                 "--agent-id", "zebra-gbrain-setup-test",
                 "--session", "agent:zebra-gbrain-setup-test:\(launch.runId)",
@@ -937,7 +970,6 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(prepareResult.exitCode, 0, "stdout:\n\(prepareResult.stdout)\nstderr:\n\(prepareResult.stderr)")
-        XCTAssertEqual(packetResult.exitCode, 0, "stdout:\n\(packetResult.stdout)\nstderr:\n\(packetResult.stderr)")
         XCTAssertEqual(launcherResult.exitCode, 0, "stdout:\n\(launcherResult.stdout)\nstderr:\n\(launcherResult.stderr)")
         XCTAssertFalse(launcherResult.stdout.contains("Zebra GBrain setup"), launcherResult.stdout)
         let prefix = "export ZEBRA_GBRAIN_RUNTIME_LAUNCHER='"
@@ -964,8 +996,10 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(script.contains("exec '/tmp/openclaw' tui --local --session 'agent:zebra-gbrain-setup-test:\(launch.runId)' --message \"$ZEBRA_GBRAIN_BOOTSTRAP_PROMPT\""), script)
         XCTAssertFalse(script.contains("Zebra GBrain setup"), script)
         XCTAssertTrue(prompt.contains("Zebra GBrain setup"), prompt)
-        XCTAssertTrue(prompt.contains("setup packet"), prompt)
-        XCTAssertTrue(prompt.contains(launch.setupPacketPath), prompt)
+        XCTAssertTrue(prompt.contains("current section prompt"), prompt)
+        XCTAssertTrue(prompt.contains("Use Zebra's app language (Korean) for user-facing prose."), prompt)
+        XCTAssertTrue(prompt.contains("INSTALL_FOR_AGENTS.md section body:"), prompt)
+        XCTAssertTrue(prompt.contains("Zebra section boundary rules:"), prompt)
         XCTAssertEqual(syntaxCheck.exitCode, 0, "stdout:\n\(syntaxCheck.stdout)\nstderr:\n\(syntaxCheck.stderr)\nscript:\n\(script)")
     }
 
@@ -986,11 +1020,6 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             path: root.path,
             arguments: ["prepare-source-repo", "--path", sourceRepo.path]
         )
-        let packetResult = try runHelper(
-            stateURL: stateURL,
-            path: root.path,
-            arguments: ["write-setup-packet", "--path", launch.setupPacketPath]
-        )
         let launcherResult = try runHelper(
             stateURL: stateURL,
             path: root.path,
@@ -999,13 +1028,11 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "write-runtime-launcher",
                 "--runtime", "hermes",
                 "--executable", "/tmp/hermes",
-                "--setup-packet", launch.setupPacketPath,
                 "--run-id", launch.runId,
             ]
         )
 
         XCTAssertEqual(prepareResult.exitCode, 0, "stdout:\n\(prepareResult.stdout)\nstderr:\n\(prepareResult.stderr)")
-        XCTAssertEqual(packetResult.exitCode, 0, "stdout:\n\(packetResult.stdout)\nstderr:\n\(packetResult.stderr)")
         XCTAssertEqual(launcherResult.exitCode, 0, "stdout:\n\(launcherResult.stdout)\nstderr:\n\(launcherResult.stderr)")
         XCTAssertFalse(launcherResult.stdout.contains("Zebra GBrain setup"), launcherResult.stdout)
         let prefix = "export ZEBRA_GBRAIN_RUNTIME_LAUNCHER='"
@@ -1031,8 +1058,10 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(script.contains("exec '/tmp/hermes' chat --tui --source zebra-gbrain-onboarding --query \"$ZEBRA_GBRAIN_BOOTSTRAP_PROMPT\""), script)
         XCTAssertFalse(script.contains("Zebra GBrain setup"), script)
         XCTAssertTrue(prompt.contains("Zebra GBrain setup"), prompt)
-        XCTAssertTrue(prompt.contains("setup packet"), prompt)
-        XCTAssertTrue(prompt.contains(launch.setupPacketPath), prompt)
+        XCTAssertTrue(prompt.contains("current section prompt"), prompt)
+        XCTAssertTrue(prompt.contains("Use Zebra's app language (Korean) for user-facing prose."), prompt)
+        XCTAssertTrue(prompt.contains("INSTALL_FOR_AGENTS.md section body:"), prompt)
+        XCTAssertTrue(prompt.contains("Zebra section boundary rules:"), prompt)
         XCTAssertEqual(syntaxCheck.exitCode, 0, "stdout:\n\(syntaxCheck.stdout)\nstderr:\n\(syntaxCheck.stderr)\nscript:\n\(script)")
     }
 
@@ -1534,6 +1563,121 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(nextPrompt.contains("Ask for the brain repo target separately"), nextPrompt)
     }
 
+    func testReportCompletedForStep3RequiresNumberedSearchModePromptFromSectionBody() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 1: Install GBrain",
+            ]
+        )
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path, decision: "provider_key")
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["nextSection"] as? String, "Step 3.5: Confirm search mode with the user (DO NOT SKIP)")
+        XCTAssertTrue(nextPrompt.contains("extract the available option labels and descriptions from this INSTALL_FOR_AGENTS.md section body"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("present them to the user as a numbered list"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("If the section body expresses options inline"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("rewrite those labels into separate `1.`, `2.`, `3.` lines"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Preserve the section body's option labels, descriptions, and order"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Do not hardcode, add, remove, or rename search mode options if the section body changes"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Do not ask with an unnumbered comma-separated sentence"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Map the user's chosen number back to the exact selected mode label from the section body"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("1. conservative"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("2. balanced"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("3. tokenmax"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("gbrain config set search.mode <mode>"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("gbrain search modes"), nextPrompt)
+    }
+
+    func testReportCompletedForStep3CarriesExistingSearchModeChoiceIntoStep35Prompt() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path, searchMode: "conservative")
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 1: Install GBrain",
+            ]
+        )
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path, decision: "provider_key")
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", target.path,
+                "--method", "user_created_repo",
+                "--search-mode", "conservative",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+        let progress = try progressObject(in: stateURL)
+        let decision = try XCTUnwrap(progress["searchModeDecision"] as? [String: Any])
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["nextSection"] as? String, "Step 3.5: Confirm search mode with the user (DO NOT SKIP)")
+        XCTAssertEqual(decision["mode"] as? String, "conservative")
+        XCTAssertEqual(decision["sourceSection"] as? String, "Step 3: Create the Brain")
+        XCTAssertTrue(nextPrompt.contains("The user already chose search mode `conservative` during `Step 3: Create the Brain`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Do not ask the user to choose search mode again"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("gbrain config set search.mode conservative"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("gbrain search modes"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("If Zebra hard gates say the user already chose a mode earlier, do not ask again."), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("present them to the user as a numbered list"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("Ask only for Step 3 decisions that are not already resolved"), nextPrompt)
+    }
+
     func testReportCompletedBeforeRenamedRecurringJobsReturnsDecisionGatePrompt() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root, includeRenamedRecurringJobs: true)
@@ -1604,6 +1748,14 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
     func testReportCompletedForLastSectionReturnsVerifyPrompt() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
+        let installForAgentsURL = repo.appendingPathComponent("INSTALL_FOR_AGENTS.md")
+        let installForAgents = try String(contentsOf: installForAgentsURL, encoding: .utf8)
+        try (installForAgents + """
+
+        ## Upgrade
+
+        Upgrade existing installs.
+        """).write(to: installForAgentsURL, atomically: true, encoding: .utf8)
         let target = root.appendingPathComponent("brain", isDirectory: true)
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
@@ -1653,6 +1805,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding verify"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains(target.path), nextPrompt)
         XCTAssertFalse(nextPrompt.contains("## Step"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("Upgrade existing installs"), nextPrompt)
     }
 
     func testPrepareOpenClawAgentCreatesMissingAgentForActiveSourceRepo() throws {
@@ -2139,7 +2292,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(line.contains("-C \"$ZEBRA_GBRAIN_SOURCE_REPO\""), line)
     }
 
-    func testPrepareLaunchClearsStaleInitialTopologyGateFromPacketStatus() throws {
+    func testPrepareLaunchClearsStaleInitialTopologyGateFromProgress() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
         let stateURL = root.appendingPathComponent("state.json")
@@ -2158,15 +2311,11 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             nextSection: "Step 3: Create the Brain"
         )
 
-        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
         let progress = try progressObject(in: stateURL)
-        let packet = try setupPacketContent(launch)
 
         XCTAssertNil(waitingForUserReason(in: progress))
         XCTAssertEqual(progress["nextSection"] as? String, "Step 1: Install GBrain")
-        XCTAssertTrue(packet.contains("waitingForUser: none"))
-        XCTAssertFalse(packet.contains("waiting_for_user:topology_resolution"))
-        XCTAssertFalse(packet.contains("waitingForUser: topology_resolution"))
     }
 
     func testPrepareLaunchAddsDocsSnapshotManifest() throws {
@@ -2196,12 +2345,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
 
         let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
         let state = try String(contentsOf: stateURL, encoding: .utf8)
-        let packet = try setupPacketContent(launch)
 
         XCTAssertTrue(launch.startupPrompt.contains("Zebra GBrain setup is starting"))
-        XCTAssertTrue(packet.contains("GBrain docs snapshot:"))
-        XCTAssertTrue(packet.contains("Step 1: Install CLI"))
-        XCTAssertTrue(packet.contains("Step 3: Create the Brain"))
         XCTAssertTrue(state.contains("\"docsManifest\""))
         XCTAssertTrue(state.contains("\"docsSnapshotPath\""))
     }
@@ -2265,13 +2410,9 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
         )
 
-        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
-        let packet = try setupPacketContent(launch)
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
         let state = try String(contentsOf: stateURL, encoding: .utf8)
 
-        XCTAssertTrue(packet.contains("pending. The launch wrapper prepares the local GBrain source repo"))
-        XCTAssertFalse(packet.contains("path: \(snapshot.path)"))
-        XCTAssertFalse(packet.contains("cached-ref"))
         XCTAssertFalse(state.contains("\"docsSnapshotPath\""))
     }
 
@@ -2345,6 +2486,13 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains("brain_repo_target_unresolved"), "stdout: \(result.stdout) stderr: \(result.stderr)")
         XCTAssertEqual(waitingForUserReason(in: progress), "brain_repo_target_resolution")
         XCTAssertEqual(payload["nextAction"] as? String, "ask_user_for_brain_repo_target")
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+        XCTAssertTrue(nextPrompt.contains("Choose the brain repo target using one of these numbered options."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. Create a new brain repo"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. Use an existing markdown/brain repo path"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. Create a new brain repo at a custom path"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("--method"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("targetResolution.method"), nextPrompt)
         XCTAssertNotNil(payload["targetOptions"])
         XCTAssertEqual(progress["completedSections"] as? [String], [])
     }
@@ -2396,6 +2544,14 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
         XCTAssertEqual(waitingForUserReason(in: progress), "brain_repo_target_resolution")
         XCTAssertEqual(payload["nextAction"] as? String, "ask_user_for_brain_repo_target")
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+        XCTAssertEqual(payload["targetPrompt"] as? String, nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("brain repo target을 아래 번호 중 하나로 선택해 주세요"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. \(root.appendingPathComponent("brain", isDirectory: true).path)에 새 brain repo를 만듭니다"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. 사용자가 제공하는 기존 markdown/brain repo path를 사용합니다"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. custom path에 새 brain repo를 만듭니다"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("--method"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("targetResolution.method"), nextPrompt)
         XCTAssertEqual(options.count, 3)
         XCTAssertEqual(options.first?["path"] as? String, root.appendingPathComponent("brain", isDirectory: true).path)
         XCTAssertTrue((options.first?["description"] as? String)?.contains("새 brain repo를 만듭니다") == true)
@@ -3752,7 +3908,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             arguments: [
                 "report",
                 "--status", "completed",
-                "--section", "Step X: Retrieval Budget",
+                "--section", "Step 3.6: Retrieval Budget",
             ]
         )
         XCTAssertNotEqual(unknownResult.exitCode, 0)
@@ -3764,7 +3920,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             arguments: [
                 "report",
                 "--status", "mapped_role",
-                "--section", "Step X: Retrieval Budget",
+                "--section", "Step 3.6: Retrieval Budget",
                 "--role", "search_mode",
                 "--evidence", "agent read the section as search mode setup",
             ]
@@ -3775,7 +3931,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             arguments: [
                 "report",
                 "--status", "completed",
-                "--section", "Step X: Retrieval Budget",
+                "--section", "Step 3.6: Retrieval Budget",
             ]
         )
         let state = try stateObject(in: stateURL)
@@ -3891,7 +4047,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             arguments: [
                 "report",
                 "--status", "mapped_role",
-                "--section", "Step X: Retrieval Budget",
+                "--section", "Step 3.6: Retrieval Budget",
                 "--role", "search_mode",
                 "--evidence", "agent read the section as search mode setup",
             ]
@@ -3903,7 +4059,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             arguments: [
                 "report",
                 "--status", "completed",
-                "--section", "Step X: Retrieval Budget",
+                "--section", "Step 3.6: Retrieval Budget",
             ]
         )
         let importStart = try runHelper(
@@ -4056,10 +4212,6 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
-    private func setupPacketContent(_ launch: ZebraGBrainOnboardingStore.LaunchContext) throws -> String {
-        try String(contentsOfFile: launch.setupPacketPath, encoding: .utf8)
-    }
-
     private func bootstrapPromptPath(from launcherScript: String) throws -> String {
         let prefix = "ZEBRA_GBRAIN_BOOTSTRAP_PROMPT_PATH='"
         guard let line = launcherScript
@@ -4068,6 +4220,19 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             throw NSError(domain: "ZebraGBrainOnboardingStoreTests.promptPath", code: 1)
         }
         return String(line.dropFirst(prefix.count).dropLast())
+    }
+
+    private func launcherPrompt(from launcherStdout: String) throws -> String {
+        let prefix = "export ZEBRA_GBRAIN_RUNTIME_LAUNCHER='"
+        let launcherPath = String(
+            launcherStdout
+                .dropFirst(prefix.count)
+                .split(separator: "'", maxSplits: 1)
+                .first ?? ""
+        )
+        let script = try String(contentsOfFile: launcherPath, encoding: .utf8)
+        let promptPath = try bootstrapPromptPath(from: script)
+        return try String(contentsOfFile: promptPath, encoding: .utf8)
     }
 
     private struct HelperRunResult {
@@ -4239,7 +4404,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let searchModeSection = includeRenamedSearchMode
             ? """
 
-            ## Step X: Retrieval Budget
+            ## Step 3.6: Retrieval Budget
 
             Pick retrieval settings after the brain is created.
             """

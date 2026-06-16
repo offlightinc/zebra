@@ -314,7 +314,6 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let launch = ZebraGBrainOnboardingStore.LaunchContext(
             launchDirectory: "/tmp/zebra-gbrain-work",
             startupPrompt: "setup prompt",
-            setupPacketPath: "/tmp/zebra-gbrain-packet.md",
             runId: "gbrain-test-run",
             shellEnvironmentPrefix: "export ZEBRA_GBRAIN_STATE='/tmp/state.json' && ",
             allowTrustedAutomation: true,
@@ -332,10 +331,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         XCTAssertTrue(line.contains("zebra-gbrain-onboarding prepare-source-repo"), line)
         XCTAssertTrue(line.contains("eval \"$(zebra-gbrain-onboarding active-source-env)\""), line)
-        XCTAssertTrue(line.contains("zebra-gbrain-onboarding write-setup-packet --path '/tmp/zebra-gbrain-packet.md'"), line)
         XCTAssertTrue(line.contains("zebra-gbrain-onboarding write-runtime-launcher --runtime 'hermes'"), line)
         XCTAssertTrue(line.contains("--executable '/tmp/hermes'"), line)
-        XCTAssertTrue(line.contains("--setup-packet '/tmp/zebra-gbrain-packet.md'"), line)
         XCTAssertTrue(line.contains("&& \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""), line)
         XCTAssertFalse(line.contains("cd \"$ZEBRA_GBRAIN_SOURCE_REPO\" && '/tmp/hermes' chat"), line)
         XCTAssertFalse(line.contains("--query 'setup prompt'"), line)
@@ -343,12 +340,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(line.contains(" codex"), line)
         let prepareRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-source-repo"))
         let envRange = try XCTUnwrap(line.range(of: "eval \"$(zebra-gbrain-onboarding active-source-env)\""))
-        let packetRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-setup-packet"))
         let launcherRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-runtime-launcher"))
         let launchRange = try XCTUnwrap(line.range(of: "\"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""))
         XCTAssertLessThan(prepareRange.lowerBound, envRange.lowerBound)
-        XCTAssertLessThan(envRange.lowerBound, packetRange.lowerBound)
-        XCTAssertLessThan(packetRange.lowerBound, launcherRange.lowerBound)
+        XCTAssertLessThan(envRange.lowerBound, launcherRange.lowerBound)
         XCTAssertLessThan(launcherRange.lowerBound, launchRange.lowerBound)
     }
 
@@ -356,7 +351,6 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let launch = ZebraGBrainOnboardingStore.LaunchContext(
             launchDirectory: "/tmp/zebra-gbrain-work",
             startupPrompt: "setup prompt",
-            setupPacketPath: "/tmp/zebra-gbrain-packet.md",
             runId: "gbrain-ABCDEF12-3456-7890",
             shellEnvironmentPrefix: "export ZEBRA_GBRAIN_STATE='/tmp/state.json' && ",
             allowTrustedAutomation: true,
@@ -389,12 +383,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(line.contains(" codex"), line)
         let prepareRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-source-repo"))
         let envRange = try XCTUnwrap(line.range(of: "eval \"$(zebra-gbrain-onboarding active-source-env)\""))
-        let packetRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-setup-packet"))
         let launcherRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-runtime-launcher"))
         let launchRange = try XCTUnwrap(line.range(of: "\"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""))
         XCTAssertLessThan(prepareRange.lowerBound, envRange.lowerBound)
-        XCTAssertLessThan(envRange.lowerBound, packetRange.lowerBound)
-        XCTAssertLessThan(packetRange.lowerBound, launcherRange.lowerBound)
+        XCTAssertLessThan(envRange.lowerBound, launcherRange.lowerBound)
         XCTAssertLessThan(launcherRange.lowerBound, launchRange.lowerBound)
     }
 
@@ -402,7 +394,6 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let launch = ZebraGBrainOnboardingStore.LaunchContext(
             launchDirectory: "/tmp/zebra-gbrain-work",
             startupPrompt: "line one\n\nline two\r\nline three\rline four",
-            setupPacketPath: "/tmp/zebra-gbrain-packet.md",
             runId: "gbrain-test-run",
             shellEnvironmentPrefix: "export ZEBRA_GBRAIN_STATE='/tmp/state.json' && ",
             allowTrustedAutomation: true,

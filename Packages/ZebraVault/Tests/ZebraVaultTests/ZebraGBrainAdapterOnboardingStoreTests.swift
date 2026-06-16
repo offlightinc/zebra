@@ -2,7 +2,7 @@ import XCTest
 @testable import ZebraVault
 
 final class ZebraGBrainAdapterOnboardingStoreTests: XCTestCase {
-    func testPrepareLaunchRunsAdapterHelperWithoutSetupPacket() throws {
+    func testPrepareLaunchRunsAdapterHelperDirectly() throws {
         let root = try makeTemporaryDirectory()
         let vault = root.appendingPathComponent("brain", isDirectory: true)
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
@@ -24,7 +24,6 @@ final class ZebraGBrainAdapterOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(line.contains(" run"), line)
         XCTAssertTrue(line.contains("ZEBRA_GBRAIN_SETUP_STATE"), line)
         XCTAssertTrue(line.contains("ZEBRA_GBRAIN_ADAPTER_SELECTED_VAULT"), line)
-        XCTAssertFalse(line.contains("write-setup-packet"), line)
         XCTAssertFalse(line.contains("Help me install"), line)
     }
 

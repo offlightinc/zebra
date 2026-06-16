@@ -59,15 +59,15 @@ enum ZebraOnboardingLanguage: String, Equatable {
         case .en:
             return """
             Your first visible response must be exactly:
-            Zebra GBrain setup is starting. I am reading the setup packet now. Please wait.
+            Zebra GBrain setup is starting. I am reading the current section prompt now. Please wait.
             """
         case .ja:
             return """
-            Your first visible response must be a brief Japanese sentence telling the user that Zebra GBrain setup is starting, you are reading the setup packet now, and they should wait. Preserve `Zebra GBrain setup` and `setup packet` exactly.
+            Your first visible response must be a brief Japanese sentence telling the user that Zebra GBrain setup is starting, you are reading the current section prompt now, and they should wait. Preserve `Zebra GBrain setup` and `section prompt` exactly.
             """
         case .ko:
             return """
-            Your first visible response must be a brief Korean sentence telling the user that Zebra GBrain setup is starting, you are reading the setup packet now, and they should wait. Preserve `Zebra GBrain setup` and `setup packet` exactly.
+            Your first visible response must be a brief Korean sentence telling the user that Zebra GBrain setup is starting, you are reading the current section prompt now, and they should wait. Preserve `Zebra GBrain setup` and `section prompt` exactly.
             """
         }
     }
@@ -79,40 +79,6 @@ enum ZebraOnboardingLanguage: String, Equatable {
         """
     }
 
-    var embeddingProviderDecisionOptions: String {
-        switch self {
-        case .en:
-            return """
-            When an embedding provider decision is required, show only these two numbered options:
-              1. provider key provided: set one of `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, or `VOYAGE_API_KEY` in the environment, then continue.
-              2. defer embeddings: initialize with `gbrain init --pglite --no-embedding` now; embeddings can be configured later.
-            """
-        case .ja:
-            return """
-            When an embedding provider decision is required, show only these two numbered options in Japanese. Preserve `provider key provided`, `defer embeddings`, `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, `VOYAGE_API_KEY`, `environment`, `gbrain init --pglite --no-embedding`, and `embeddings` exactly:
-              1. provider key provided: `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, `VOYAGE_API_KEY`のいずれかをenvironmentに設定してから続行します。
-              2. defer embeddings: 今すぐ`gbrain init --pglite --no-embedding`で初期化します。embeddingsは後で設定できます。
-            """
-        case .ko:
-            return """
-            When an embedding provider decision is required, show only these two numbered options in Korean. Preserve `provider key provided`, `defer embeddings`, `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, `VOYAGE_API_KEY`, `environment`, `gbrain init --pglite --no-embedding`, and `embeddings` exactly:
-              1. provider key provided: `OPENAI_API_KEY`, `ZEROENTROPY_API_KEY`, `VOYAGE_API_KEY` 중 하나를 environment에 설정한 뒤 계속합니다.
-              2. defer embeddings: 지금 `gbrain init --pglite --no-embedding`으로 초기화합니다. embeddings는 나중에 설정할 수 있습니다.
-            """
-        }
-    }
-
-    var topologyDecisionPrompt: String {
-        switch self {
-        case .en:
-            return "Ask only for the Step 3 topology decision now: local PGLite or Supabase/Postgres."
-        case .ja:
-            return "Step 3 topology decisionだけを日本語で聞いてください: local PGLite または Supabase/Postgres。"
-        case .ko:
-            return "Step 3 topology decision만 한국어로 물어보세요: local PGLite 또는 Supabase/Postgres."
-        }
-    }
-
     var topologyDecisionNote: String {
         switch self {
         case .en:
@@ -121,40 +87,6 @@ enum ZebraOnboardingLanguage: String, Equatable {
             return "local PGLite または Supabase/Postgresを選択してください。"
         case .ko:
             return "local PGLite 또는 Supabase/Postgres를 선택하세요."
-        }
-    }
-
-    func brainRepoTargetOptions(recommendedPath: String) -> String {
-        switch self {
-        case .en:
-            return """
-            1. Create a new brain repo at \(recommendedPath) (recommended)
-            2. Use an existing markdown/brain repo path that the user provides
-            3. Create a new brain repo at a custom path
-            """
-        case .ja:
-            return """
-            1. \(recommendedPath)に新しいbrain repoを作成します (recommended)
-            2. ユーザーが指定する既存のmarkdown/brain repo pathを使用します
-            3. custom pathに新しいbrain repoを作成します
-            """
-        case .ko:
-            return """
-            1. \(recommendedPath)에 새 brain repo를 만듭니다 (recommended)
-            2. 사용자가 제공하는 기존 markdown/brain repo path를 사용합니다
-            3. custom path에 새 brain repo를 만듭니다
-            """
-        }
-    }
-
-    func brainRepoTargetFollowUp(recommendedPath: String) -> String {
-        switch self {
-        case .en:
-            return "If the user chooses 1, create \(recommendedPath) without asking for another yes/no confirmation. If the user chooses 2, ask for the full existing repo path. If the user chooses 3, ask for the full path to create, then create it without asking for another yes/no confirmation."
-        case .ja:
-            return "ユーザーが1を選んだら、追加のyes/no confirmationを求めずに\(recommendedPath)を作成します。2を選んだら既存repoのfull pathを聞きます。3を選んだら作成するfull pathを聞き、その後は追加のyes/no confirmationを求めずに作成します。"
-        case .ko:
-            return "사용자가 1을 선택하면 추가 yes/no confirmation 없이 \(recommendedPath)를 만듭니다. 2를 선택하면 기존 repo의 full path를 묻습니다. 3을 선택하면 만들 full path를 묻고, 그 뒤에는 추가 yes/no confirmation 없이 만듭니다."
         }
     }
 

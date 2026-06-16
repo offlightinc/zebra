@@ -383,8 +383,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     Step 2는 이 고정 Zebra-owned 문서를 authoritative workflow document로 사용한다.
 
-    Step 2용 run-specific setup packet은 만들지 않는다. Step 3는 active GBrain source
-    docs와 snapshot commit이 실행마다 달라질 수 있어서 run-specific packet이 필요하다.
+    Step 2용 run-specific prompt artifact는 만들지 않는다. Step 3는 active GBrain source
+    docs와 snapshot commit이 실행마다 달라질 수 있어서 section prompt를 실행마다 생성한다.
     Step 2에는 그런 외부 문서 snapshot 문제가 없다.
 
     현재 실행 context는 helper에서 가져온다:
