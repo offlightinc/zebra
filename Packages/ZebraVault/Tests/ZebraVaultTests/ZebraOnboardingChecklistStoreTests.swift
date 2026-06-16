@@ -1366,10 +1366,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(logText.contains("login --provider openai-codex"))
         XCTAssertFalse(logText.contains("auth add openai-codex"))
         XCTAssertTrue(logText.contains("config set model.provider openai-codex"))
-        XCTAssertTrue(logText.contains("config set model.default gpt-5.4"))
+        XCTAssertTrue(logText.contains("config set model.default gpt-5.5"))
         XCTAssertTrue(logText.contains("config set model.base_url https://chatgpt.com/backend-api/codex"))
         XCTAssertTrue(logText.contains("config set model.api_mode codex_responses"))
-        XCTAssertTrue(logText.contains("chat -q Reply with OK. Do not use tools. --provider openai-codex --model gpt-5.4"))
+        XCTAssertTrue(logText.contains("chat -q Reply with OK. Do not use tools. --provider openai-codex --model gpt-5.5"))
 
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
@@ -1377,7 +1377,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai-codex")
-        XCTAssertEqual(receipt["runtimeModel"] as? String, "gpt-5.4")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "gpt-5.5")
         XCTAssertEqual(receipt["keySource"] as? String, "agent-cli:codex-auth-status")
         XCTAssertEqual(receipt["keyEnvName"] as? String, "")
         XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "")
@@ -1757,10 +1757,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertFalse(logText.contains("login --provider openai-codex"))
         XCTAssertTrue(logText.contains("config set model.provider anthropic"))
-        XCTAssertTrue(logText.contains("config set model.default claude-sonnet-4-6"))
+        XCTAssertTrue(logText.contains("config set model.default claude-opus-4-8"))
         XCTAssertTrue(logText.contains("config set model.base_url https://api.anthropic.com"))
         XCTAssertTrue(logText.contains("config set model.api_mode anthropic_messages"))
-        XCTAssertTrue(logText.contains("chat -q Reply with OK. Do not use tools. --provider anthropic --model claude-sonnet-4-6"))
+        XCTAssertTrue(logText.contains("chat -q Reply with OK. Do not use tools. --provider anthropic --model claude-opus-4-8"))
 
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
@@ -1768,7 +1768,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "anthropic-claude-code")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "anthropic")
-        XCTAssertEqual(receipt["runtimeModel"] as? String, "claude-sonnet-4-6")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "claude-opus-4-8")
         XCTAssertEqual(receipt["keySource"] as? String, "agent-cli:claude-auth-status")
         XCTAssertEqual(receipt["keyEnvName"] as? String, "")
         XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "")
@@ -1949,7 +1949,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "anthropic-claude-code")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "anthropic")
-        XCTAssertEqual(receipt["runtimeModel"] as? String, "claude-sonnet-4-6")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "claude-opus-4-8")
         XCTAssertEqual(receipt["keySource"] as? String, "claude-code-credentials-file")
         XCTAssertEqual(receipt["keyEnvName"] as? String, "")
         XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "")
