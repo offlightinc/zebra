@@ -2289,6 +2289,67 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testIncompleteGBrainReceiptDoesNotRunLiveProbeFromChecklist() async throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let log = root.appendingPathComponent("gbrain-probe.log", isDirectory: false)
+        let executable = try installFakeGBrain(root: root, sourcePath: vault.path, log: log)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try writeIncompleteGBrainState(stateURL: stateURL, vaultPath: vault.path, executablePath: executable.path)
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainRuntimeOnboardingStateURL: root
+                .appendingPathComponent("onboarding", isDirectory: true)
+                .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false),
+            gbrainOnboardingStateURL: stateURL
+        )
+        store.syncExternalState(selectedVaultPath: vault.path)
+
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertFalse(store.completedStepIDs.contains(.gbrain))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: log.path),
+            "Incomplete receipts should remain incomplete until helper verify writes a complete receipt; the checklist must not run gbrain doctor/current/list."
+        )
+    }
+
+    @MainActor
+    func testGBrainStepRefreshDoesNotRunLiveProbeFromChecklist() async throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let log = root.appendingPathComponent("gbrain-probe.log", isDirectory: false)
+        let executable = try installFakeGBrain(root: root, sourcePath: vault.path, log: log)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try writeIncompleteGBrainState(stateURL: stateURL, vaultPath: vault.path, executablePath: executable.path)
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainRuntimeOnboardingStateURL: root
+                .appendingPathComponent("onboarding", isDirectory: true)
+                .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false),
+            gbrainOnboardingStateURL: stateURL
+        )
+        store.syncExternalState(selectedVaultPath: vault.path)
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertFalse(store.completedStepIDs.contains(.gbrain))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: log.path),
+            "A gbrain state-file refresh should not trigger app-side live verification."
+        )
+    }
+
+    @MainActor
     func testCompletedAdapterReceiptCompletesAdapterStep() throws {
         let root = try makeTemporaryDirectory()
         let vault = root.appendingPathComponent("brain", isDirectory: true)
@@ -2674,6 +2735,65 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 "confirmedAt": timestamp,
             ]
         }
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeIncompleteGBrainState(
+        stateURL: URL,
+        vaultPath: String,
+        executablePath: String
+    ) throws {
+        let targetKey = "vault:\(vaultPath)"
+        let timestamp = "2026-06-04T00:00:00Z"
+        let target: [String: Any] = [
+            "vaultPath": vaultPath,
+            "sourceId": "brain",
+            "gbrainExecutablePath": executablePath,
+            "doctorStatus": ["ok": false, "status": "failed"],
+            "sourcesCurrentResult": [
+                "ok": false,
+                "sourceId": "brain",
+                "localPath": vaultPath,
+                "status": "transient",
+                "reason": "pglite_busy",
+            ],
+            "searchProbeResult": ["ok": false, "status": "blocked"],
+            "verifiedAt": timestamp,
+            "complete": false,
+            "targetResolution": [
+                "method": "user_created_repo",
+                "confirmedAt": timestamp,
+            ],
+            "reasons": ["pglite_busy"],
+        ]
+        let state: [String: Any] = [
+            "schemaVersion": 1,
+            "progress": [
+                "resolvedTargetKey": targetKey,
+                "targetResolution": [
+                    "status": "failed",
+                    "method": "user_created_repo",
+                    "confirmedAt": timestamp,
+                ],
+            ],
+            "receipt": [
+                "globalReadiness": [
+                    "complete": false,
+                    "gbrainExecutablePath": executablePath,
+                    "doctorOk": false,
+                    "verifiedAt": timestamp,
+                ],
+                "primaryTargetKey": targetKey,
+                "targets": [
+                    targetKey: target,
+                ],
+            ],
+        ]
         try FileManager.default.createDirectory(
             at: stateURL.deletingLastPathComponent(),
             withIntermediateDirectories: true

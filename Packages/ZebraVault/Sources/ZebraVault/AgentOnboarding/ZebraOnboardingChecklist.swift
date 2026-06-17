@@ -80,8 +80,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private var launchGeneration = 0
     private var startedStepIDs: Set<ZebraOnboardingChecklistStepID> = []
     private var gbrainDocsPrefetchTask: Task<Bool, Never>?
-    private var gbrainCompletionRefreshTask: Task<Bool, Never>?
-    private var completionRefreshGeneration = 0
     private var didStartGBrainDocsPrefetch = false
 #if DEBUG
     private static let developmentCompletedStepIDsDefaultsKey = "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
@@ -159,7 +157,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     deinit {
         gbrainDocsPrefetchTask?.cancel()
-        gbrainCompletionRefreshTask?.cancel()
 #if os(macOS)
         completionRefreshWorkItem?.cancel()
         completionWatchSources.forEach { $0.cancel() }
@@ -309,8 +306,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 #endif
 
     public func refreshDetectedCompletion() {
-        completionRefreshGeneration += 1
-        let generation = completionRefreshGeneration
         let runtimeCompletion = runtimeCompletionResult()
         refreshRuntimeInteractiveAuthRequest()
         let cachedGBrainCompletion = gbrainCompletionResultFromCachedReceipt(
@@ -326,8 +321,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             gbrainAdapterCompleted: adapterCompletion.isComplete,
             emailCompleted: emailCompletionResult().isComplete
         )
-        guard shouldRefreshGBrainCompletionInBackground(cachedGBrainCompletion) else { return }
-        refreshGBrainCompletionInBackground(generation: generation)
     }
 
     public func refreshDetectedCompletion(for stepID: ZebraOnboardingChecklistStepID) {
@@ -344,9 +337,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                 for: .gbrain,
                 result: StepCompletionResult(isComplete: cached.isComplete, reasons: cached.reasons)
             )
-            guard shouldRefreshGBrainCompletionInBackground(cached) else { return }
-            completionRefreshGeneration += 1
-            refreshGBrainCompletionInBackground(generation: completionRefreshGeneration)
         case .adapter:
             applyDetectedCompletion(
                 for: .adapter,
@@ -356,42 +346,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             applyDetectedCompletion(for: .email, result: emailCompletionResult())
         case .ingest, .goals:
             break
-        }
-    }
-
-    private func shouldRefreshGBrainCompletionInBackground(
-        _ cachedGBrainCompletion: ZebraGBrainOnboardingStore.CompletionResult
-    ) -> Bool {
-        // The setup helper owns expensive live verification. Once it has written
-        // a complete receipt, the checklist should not keep probing PGLite.
-        !cachedGBrainCompletion.isComplete
-    }
-
-    private func refreshGBrainCompletionInBackground(generation: Int) {
-        guard gbrainCompletionRefreshTask == nil else { return }
-        let store = gbrainOnboardingStore
-        let selectedVaultPath = selectedVaultPath
-        let task = Task.detached(priority: .utility) {
-            store.isSetupCompleted(selectedVaultPath: selectedVaultPath)
-        }
-        gbrainCompletionRefreshTask = task
-        Task { @MainActor [weak self, task] in
-            let completed = await task.value
-            guard let self else { return }
-            self.gbrainCompletionRefreshTask = nil
-            guard self.completionRefreshGeneration == generation,
-                  self.selectedVaultPath == selectedVaultPath else {
-                self.refreshDetectedCompletion()
-                return
-            }
-            self.applyDetectedCompletion(
-                for: .gbrain,
-                result: StepCompletionResult(isComplete: completed, reasons: [])
-            )
-            self.applyDetectedCompletion(
-                for: .adapter,
-                result: self.adapterCompletionResult(selectedVaultPath: selectedVaultPath)
-            )
         }
     }
 

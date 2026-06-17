@@ -2538,7 +2538,7 @@ public struct ZebraGBrainOnboardingStore {
                 "- First run `zebra-gbrain-onboarding report --status waiting_for_user --section " + json.dumps(section_title) + " --reason recurring_jobs_decision --note \\\"Choose defer, manual_scheduler, platform_scheduler_install, or autopilot_install\\\"` and ask the user to choose.",
                 "- If the user chooses `defer`, do not install or start any background service; report completed with `--recurring-jobs-decision defer`.",
                 "- If the user chooses `manual_scheduler`, do not run scheduler commands; report completed with `--recurring-jobs-decision manual_scheduler`.",
-                "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run the autopilot install, then report completed with the same decision.",
+                "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run the autopilot install, then confirm `bun --version` succeeds in a launchd-style clean environment before reporting completed with the same decision.",
                 "- If the user chooses `platform_scheduler_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision platform_scheduler_install`, then run only the approved scheduler install, then report completed with the same decision.",
             ])
         elif role == "verify":
@@ -2547,6 +2547,7 @@ public struct ZebraGBrainOnboardingStore {
                 "Verify hard gates:",
                 "- Do not say setup is complete until `zebra-gbrain-onboarding verify` returns `complete: true`.",
                 "- Use `zebra-gbrain-onboarding verify --target <brain repo path> --source-id <source id> --method <targetResolution.method>`.",
+                "- `verify` automatically attempts cycle_freshness-only recovery once. If it still returns `complete: false`, inspect `reasons` and `doctorFailedChecks` and fix the named blockers before retrying verify.",
             ])
         return "\\n".join(common)
 
@@ -3263,10 +3264,40 @@ public struct ZebraGBrainOnboardingStore {
         }
         return None
 
-    def recurring_jobs_decision_recorded(state):
+    def recurring_jobs_decision_value(state):
         progress = state.get("progress") or {}
         decision = progress.get("recurringJobsDecision") or {}
-        return decision.get("decision") in allowed_recurring_jobs_decisions
+        value = decision.get("decision")
+        return value if value in allowed_recurring_jobs_decisions else None
+
+    def launchd_clean_path():
+        return "/usr/bin:/bin:/usr/sbin:/sbin"
+
+    def launchd_style_bun_guard_reason():
+        home = zebra_home_directory()
+        env = {
+            "HOME": home,
+            "PATH": launchd_clean_path(),
+        }
+        try:
+            result = subprocess.run(
+                ["/bin/zsh", "-c", "bun --version"],
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+        except FileNotFoundError:
+            return "bun_unusable_for_launchd_autopilot"
+        except Exception:
+            return "bun_unusable_for_launchd_autopilot"
+        if result.returncode == 0:
+            return None
+        combined = ((result.stdout or "") + "\\n" + (result.stderr or "")).lower()
+        if "command not found" in combined or "no such file" in combined or "not found" in combined:
+            return "bun_missing_for_launchd_autopilot"
+        return "bun_unusable_for_launchd_autopilot"
 
     def record_verified_source_id(state, flags):
         key, target_path, _, target_entry = resolved_target(state)
@@ -3666,8 +3697,14 @@ public struct ZebraGBrainOnboardingStore {
                 source_reason = source_registration_guard_reason(state, flags)
                 if source_reason:
                     return source_reason
-        if role == "recurring_jobs" and status == "completed" and not recurring_jobs_decision_recorded(state):
-            return "recurring_jobs_decision_required"
+        if role == "recurring_jobs" and status == "completed":
+            recurring_jobs_decision = recurring_jobs_decision_value(state)
+            if not recurring_jobs_decision:
+                return "recurring_jobs_decision_required"
+            if recurring_jobs_decision == "autopilot_install":
+                bun_reason = launchd_style_bun_guard_reason()
+                if bun_reason:
+                    return bun_reason
         if role == "verify" and status == "completed" and not receipt_verify_complete(state):
             return "verify_incomplete"
         return None
@@ -4117,6 +4154,7 @@ public struct ZebraGBrainOnboardingStore {
             "restored": None,
         }
         doctor_ok = False
+        doctor_failed_check_names = []
         doctor_transient = False
         source_probe = "transient"
         current_ok = False
@@ -4125,6 +4163,11 @@ public struct ZebraGBrainOnboardingStore {
         listed_local_path = None
         source_probe_reason = None
         source_probe_reasons = []
+        auto_recovery = {
+            "ran": False,
+            "command": "recover-cycle-freshness",
+            "status": "not_needed",
+        }
 
         if executable:
             autopilot, autopilot_warnings = quiesce_autopilot_for_verify(executable, target)
@@ -4142,6 +4185,7 @@ public struct ZebraGBrainOnboardingStore {
                     doctor_ok, _ = strict_doctor_result(result)
                     doctor_transient_reason = None if doctor_ok else transient_probe_reason((result.stderr or "") + "\\n" + (result.stdout or ""))
                     doctor_transient = doctor_transient_reason is not None
+                    doctor_failed_check_names = [] if doctor_ok or doctor_transient else doctor_failed_checks(result)
                     if doctor_transient_reason and doctor_transient_reason not in reasons:
                         reasons.append(doctor_transient_reason)
                     elif not doctor_ok:
@@ -4149,6 +4193,7 @@ public struct ZebraGBrainOnboardingStore {
                 except Exception as exc:
                     doctor_transient_reason = transient_probe_reason(str(exc))
                     doctor_transient = doctor_transient_reason is not None
+                    doctor_failed_check_names = [] if doctor_transient else ["doctor_failed"]
                     if doctor_transient_reason and doctor_transient_reason not in reasons:
                         reasons.append(doctor_transient_reason)
                     elif not doctor_transient:
@@ -4165,6 +4210,108 @@ public struct ZebraGBrainOnboardingStore {
                     for reason in source_probe_reasons:
                         if reason not in reasons:
                             reasons.append(reason)
+                if (
+                    (not doctor_ok)
+                    and (not doctor_transient)
+                    and doctor_failed_check_names == [CYCLE_FRESHNESS_CHECK_NAME]
+                ):
+                    non_doctor_reasons = [reason for reason in reasons if reason != "doctor_failed"]
+                    has_invocation_blocker = any(reason not in source_probe_reasons for reason in non_doctor_reasons)
+                    if has_invocation_blocker:
+                        auto_recovery = {
+                            "ran": False,
+                            "command": "recover-cycle-freshness",
+                            "status": "unsupported_doctor_failed_checks",
+                            "reason": "unsupported_doctor_failed_checks",
+                        }
+                    elif source_probe != "verified":
+                        auto_recovery = {
+                            "ran": False,
+                            "command": "recover-cycle-freshness",
+                            "status": "source_probe_not_verified",
+                            "reason": source_probe_reason or ("source_not_registered" if source_probe == "mismatch" else "source_probe_not_verified"),
+                        }
+                    else:
+                        auto_recovery = {
+                            "ran": True,
+                            "command": "recover-cycle-freshness",
+                            "status": "running",
+                        }
+                        dream_ok = False
+                        try:
+                            dream_result = subprocess.run(
+                                [executable, "dream", "--source", source_id],
+                                cwd=target,
+                                text=True,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                timeout=1800,
+                            )
+                            dream_ok = dream_result.returncode == 0
+                            if not dream_ok:
+                                auto_recovery["status"] = "dream_failed"
+                                if "dream_failed" not in reasons:
+                                    reasons.append("dream_failed")
+                        except subprocess.TimeoutExpired:
+                            auto_recovery["status"] = "dream_timeout"
+                            if "dream_timeout" not in reasons:
+                                reasons.append("dream_timeout")
+                        except Exception:
+                            auto_recovery["status"] = "dream_failed"
+                            if "dream_failed" not in reasons:
+                                reasons.append("dream_failed")
+                        if dream_ok:
+                            try:
+                                result = subprocess.run(
+                                    [executable, "doctor", "--json"],
+                                    cwd=target if target and os.path.isdir(target) else None,
+                                    text=True,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    timeout=45,
+                                )
+                                doctor_ok, _ = strict_doctor_result(result)
+                                doctor_transient_reason = None if doctor_ok else transient_probe_reason((result.stderr or "") + "\\n" + (result.stdout or ""))
+                                doctor_transient = doctor_transient_reason is not None
+                                doctor_failed_check_names = [] if doctor_ok or doctor_transient else doctor_failed_checks(result)
+                                if doctor_ok:
+                                    reasons = [reason for reason in reasons if reason != "doctor_failed"]
+                                    auto_recovery["status"] = "recovered"
+                                elif doctor_transient_reason:
+                                    auto_recovery["status"] = doctor_transient_reason
+                                    if doctor_transient_reason not in reasons:
+                                        reasons.append(doctor_transient_reason)
+                                    reasons = [reason for reason in reasons if reason != "doctor_failed"]
+                                else:
+                                    auto_recovery["status"] = "doctor_still_failed"
+                                    if "doctor_failed" not in reasons:
+                                        reasons.append("doctor_failed")
+                                source_probe, current_source_id, listed_local_path, source_probe_reason = source_probe_status(executable, target, source_id)
+                                current_ok = source_probe == "verified"
+                                list_ok = source_probe == "verified"
+                                source_probe_reasons = []
+                                if source_probe == "mismatch":
+                                    source_probe_reasons.append("source_not_registered")
+                                elif source_probe_reason:
+                                    source_probe_reasons.append(source_probe_reason)
+                                for reason in source_probe_reasons:
+                                    if reason not in reasons:
+                                        reasons.append(reason)
+                            except subprocess.TimeoutExpired:
+                                auto_recovery["status"] = "doctor_timeout"
+                                if "doctor_timeout" not in reasons:
+                                    reasons.append("doctor_timeout")
+                            except Exception:
+                                auto_recovery["status"] = "doctor_failed"
+                                if "doctor_failed" not in reasons:
+                                    reasons.append("doctor_failed")
+                elif (not doctor_ok) and (not doctor_transient) and doctor_failed_check_names:
+                    auto_recovery = {
+                        "ran": False,
+                        "command": "recover-cycle-freshness",
+                        "status": "unsupported_doctor_failed_checks",
+                        "reason": "unsupported_doctor_failed_checks",
+                    }
             finally:
                 warnings.extend(restore_autopilot_after_verify(executable, target, autopilot))
 
@@ -4213,6 +4360,8 @@ public struct ZebraGBrainOnboardingStore {
                 "reasons": [],
                 "warnings": warnings or [PGLITE_BUSY_REASON],
                 "doctorOk": doctor_ok,
+                "doctorFailedChecks": doctor_failed_check_names,
+                "autoRecovery": auto_recovery,
                 "sourceProbe": {
                     "ok": source_probe == "verified",
                     "status": source_probe,
@@ -4240,6 +4389,7 @@ public struct ZebraGBrainOnboardingStore {
                 "doctorStatus": {
                     "ok": doctor_ok,
                     "status": "ok" if doctor_ok else "failed",
+                    "failedChecks": doctor_failed_check_names,
                 },
                 "sourcesCurrentResult": {
                     "ok": current_ok and list_ok,
@@ -4254,6 +4404,8 @@ public struct ZebraGBrainOnboardingStore {
                 "complete": complete,
                 "status": status_value,
                 "warnings": warnings,
+                "doctorFailedChecks": doctor_failed_check_names,
+                "autoRecovery": auto_recovery,
                 "targetResolution": {
                     "method": method,
                     "confirmedAt": now(),
@@ -4290,6 +4442,8 @@ public struct ZebraGBrainOnboardingStore {
             "reasons": reasons,
             "warnings": warnings,
             "doctorOk": doctor_ok,
+            "doctorFailedChecks": doctor_failed_check_names,
+            "autoRecovery": auto_recovery,
             "sourceProbe": {
                 "ok": source_probe == "verified",
                 "status": source_probe,

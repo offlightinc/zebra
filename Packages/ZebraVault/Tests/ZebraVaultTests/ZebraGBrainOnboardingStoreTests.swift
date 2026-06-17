@@ -3650,7 +3650,215 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(globalReadiness["complete"] as? Bool, true)
     }
 
-    func testHelperVerifyKeepsCycleFreshnessAsStrictDoctorFailure() throws {
+    func testHelperVerifyAutoRecoversCycleFreshnessOnlyFailure() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let fake = try installFakeGBrainWithAutopilot(
+            root: root,
+            sourceId: "brain",
+            localPath: target.path,
+            cycleFreshnessUntilDream: true
+        )
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: target.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            complete: false
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": fake.bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            environment: ["HOME": root.path],
+            arguments: [
+                "verify",
+                "--target", target.path,
+                "--source-id", "brain",
+                "--method", "user_created_repo",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let payload = try helperPayload(result.stdout)
+        XCTAssertEqual(payload["complete"] as? Bool, true)
+        XCTAssertEqual(payload["doctorOk"] as? Bool, true)
+        XCTAssertEqual(payload["doctorFailedChecks"] as? [String], [])
+        let autoRecovery = try XCTUnwrap(payload["autoRecovery"] as? [String: Any])
+        XCTAssertEqual(autoRecovery["ran"] as? Bool, true)
+        XCTAssertEqual(autoRecovery["status"] as? String, "recovered")
+        let log = try String(contentsOf: fake.log, encoding: .utf8)
+        XCTAssertTrue(log.contains("gbrain dream --source brain"), log)
+        let receipt = try receiptTarget(in: stateURL, targetPath: target.path)
+        XCTAssertEqual(receipt["complete"] as? Bool, true)
+        XCTAssertEqual(receipt["reasons"] as? [String], [])
+        XCTAssertEqual(receipt["doctorFailedChecks"] as? [String], [])
+        let doctorStatus = try XCTUnwrap(receipt["doctorStatus"] as? [String: Any])
+        XCTAssertEqual(doctorStatus["status"] as? String, "ok")
+        XCTAssertEqual(doctorStatus["failedChecks"] as? [String], [])
+    }
+
+    func testHelperVerifyDoesNotDreamForUnexpectedDoctorBlocker() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let fake = try installFakeGBrainWithAutopilot(
+            root: root,
+            sourceId: "brain",
+            localPath: target.path,
+            cycleFreshnessUntilDream: true,
+            extraDoctorBlocker: true
+        )
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: target.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            complete: false
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": fake.bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            environment: ["HOME": root.path],
+            arguments: [
+                "verify",
+                "--target", target.path,
+                "--source-id", "brain",
+                "--method", "user_created_repo",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 1, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let payload = try helperPayload(result.stdout)
+        XCTAssertEqual(payload["doctorFailedChecks"] as? [String], ["cycle_freshness", "embedding_freshness"])
+        let autoRecovery = try XCTUnwrap(payload["autoRecovery"] as? [String: Any])
+        XCTAssertEqual(autoRecovery["ran"] as? Bool, false)
+        XCTAssertEqual(autoRecovery["status"] as? String, "unsupported_doctor_failed_checks")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fake.log.path))
+    }
+
+    func testHelperVerifyDoesNotDreamWhenVerifyInvocationHasAnotherBlocker() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let fake = try installFakeGBrainWithAutopilot(
+            root: root,
+            sourceId: "brain",
+            localPath: target.path,
+            cycleFreshnessUntilDream: true
+        )
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: target.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            complete: false
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": fake.bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            environment: ["HOME": root.path],
+            arguments: [
+                "verify",
+                "--target", target.path,
+                "--source-id", "brain",
+                "--method", "invalid_method",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 1, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let payload = try helperPayload(result.stdout)
+        XCTAssertEqual(payload["doctorFailedChecks"] as? [String], ["cycle_freshness"])
+        XCTAssertEqual(payload["reasons"] as? [String], ["target_confirmation_missing", "doctor_failed"])
+        let autoRecovery = try XCTUnwrap(payload["autoRecovery"] as? [String: Any])
+        XCTAssertEqual(autoRecovery["ran"] as? Bool, false)
+        XCTAssertEqual(autoRecovery["status"] as? String, "unsupported_doctor_failed_checks")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fake.log.path))
+    }
+
+    func testHelperVerifyDoesNotDreamWhenSourceProbeMismatches() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        let otherTarget = root.appendingPathComponent("other-brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: otherTarget, withIntermediateDirectories: true)
+        let fake = try installFakeGBrainWithAutopilot(
+            root: root,
+            sourceId: "brain",
+            localPath: target.path,
+            listedLocalPath: otherTarget.path,
+            cycleFreshnessUntilDream: true
+        )
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: target.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            complete: false
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": fake.bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            environment: ["HOME": root.path],
+            arguments: [
+                "verify",
+                "--target", target.path,
+                "--source-id", "brain",
+                "--method", "user_created_repo",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 1, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let payload = try helperPayload(result.stdout)
+        XCTAssertEqual(payload["doctorFailedChecks"] as? [String], ["cycle_freshness"])
+        let autoRecovery = try XCTUnwrap(payload["autoRecovery"] as? [String: Any])
+        XCTAssertEqual(autoRecovery["ran"] as? Bool, false)
+        XCTAssertEqual(autoRecovery["status"] as? String, "source_probe_not_verified")
+        XCTAssertEqual(autoRecovery["reason"] as? String, "source_not_registered")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fake.log.path))
+    }
+
+    func testHelperVerifyReportsDreamFailureDuringCycleFreshnessRecovery() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
         let target = root.appendingPathComponent("brain", isDirectory: true)
@@ -3684,12 +3892,13 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(result.exitCode, 1, "stdout: \(result.stdout) stderr: \(result.stderr)")
-        XCTAssertTrue(result.stdout.contains(#""complete": false"#), "stdout: \(result.stdout) stderr: \(result.stderr)")
-        let receipt = try receiptTarget(in: stateURL, targetPath: target.path)
-        XCTAssertEqual(receipt["complete"] as? Bool, false)
-        XCTAssertEqual(receipt["reasons"] as? [String], ["doctor_failed"])
-        let doctorStatus = try XCTUnwrap(receipt["doctorStatus"] as? [String: Any])
-        XCTAssertEqual(doctorStatus["status"] as? String, "failed")
+        let payload = try helperPayload(result.stdout)
+        XCTAssertEqual(payload["complete"] as? Bool, false)
+        XCTAssertEqual(payload["doctorFailedChecks"] as? [String], ["cycle_freshness"])
+        let autoRecovery = try XCTUnwrap(payload["autoRecovery"] as? [String: Any])
+        XCTAssertEqual(autoRecovery["ran"] as? Bool, true)
+        XCTAssertEqual(autoRecovery["status"] as? String, "dream_failed")
+        XCTAssertTrue((payload["reasons"] as? [String] ?? []).contains("dream_failed"))
     }
 
     func testReportGuardRejectsImportCompletionBeforeSearchModeCompletion() throws {
@@ -4015,6 +4224,60 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(importStart.stdout.contains("search_mode_not_completed"), "stdout: \(importStart.stdout) stderr: \(importStart.stderr)")
     }
 
+    func testReportGuardRejectsAutopilotInstallCompletionWhenLaunchdCannotRunBun() throws {
+        let fixture = try prepareAutopilotInstallCompletionGuardFixture()
+
+        let result = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 7: Recurring Jobs",
+                "--recurring-jobs-decision", "autopilot_install",
+            ]
+        )
+
+        XCTAssertNotEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("bun_missing_for_launchd_autopilot"), "stdout: \(result.stdout) stderr: \(result.stderr)")
+    }
+
+    func testReportGuardAllowsAutopilotInstallCompletionWhenLaunchdCanRunBun() throws {
+        let fixture = try prepareAutopilotInstallCompletionGuardFixture()
+        let bunBin = fixture.root
+            .appendingPathComponent(".bun", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bunBin, withIntermediateDirectories: true)
+        let bun = bunBin.appendingPathComponent("bun", isDirectory: false)
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo "1.0.0"
+          exit 0
+        fi
+        exit 64
+        """
+        .write(to: bun, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bun.path)
+        try """
+        export PATH="$HOME/.bun/bin:$PATH"
+        """
+        .write(to: fixture.root.appendingPathComponent(".zshenv", isDirectory: false), atomically: true, encoding: .utf8)
+
+        let result = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 7: Recurring Jobs",
+                "--recurring-jobs-decision", "autopilot_install",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+    }
+
     func testReportGuardRejectsAgentMappedSearchModeUntilConfigIsExplicitlySet() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root, includeRenamedSearchMode: true)
@@ -4239,6 +4502,51 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         var exitCode: Int32
         var stdout: String
         var stderr: String
+    }
+
+    private struct AutopilotInstallCompletionGuardFixture {
+        var root: URL
+        var stateURL: URL
+        var bin: URL
+    }
+
+    private func prepareAutopilotInstallCompletionGuardFixture() throws -> AutopilotInstallCompletionGuardFixture {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "started",
+                "--section", "Step 7: Recurring Jobs",
+                "--recurring-jobs-decision", "autopilot_install",
+            ]
+        )
+        return AutopilotInstallCompletionGuardFixture(root: root, stateURL: stateURL, bin: bin)
     }
 
     private func runHelper(
