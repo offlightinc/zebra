@@ -36,6 +36,9 @@ TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="0"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
+  if [[ -z "${RUN_OUTPUT:-}" && -n "${RUN_OUTPUT_FILE:-}" && -f "$RUN_OUTPUT_FILE" ]]; then
+    RUN_OUTPUT="$(cat "$RUN_OUTPUT_FILE")"
+  fi
   if [[ -n "${RUN_OUTPUT:-}" ]]; then
     printf '%s\n' "$RUN_OUTPUT" >&2
   fi
@@ -80,6 +83,7 @@ setup_case() {
   FAKE_RELEASE_FILE=""
   RUN_PID=""
   RUN_OUTPUT_FILE=""
+  RUN_OUTPUT=""
   CONTINUE_COMMAND_FILE=""
   TEST_ONBOARDING_LANGUAGE="en"
   TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="0"
@@ -417,6 +421,210 @@ printf 'unexpected curl args: %s\n' "\$*" >&2
 exit 22
 FAKE
   chmod +x "$HOME_DIR/.local/bin/curl"
+}
+
+write_fake_claude_npm() {
+  local source="$1"
+  local fail_install="${2:-0}"
+  local install_prefix="${3:-}"
+  cat > "$HOME_DIR/.local/bin/npm" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+install_prefix="$install_prefix"
+if [[ -z "\$install_prefix" ]]; then
+  install_prefix="\$HOME/.local"
+fi
+printf 'npm:%s\n' "\$*" >> "$CASE_DIR/npm.log"
+if [[ "\${1:-}" == "--version" ]]; then
+  printf '10.0.0\n'
+  exit 0
+fi
+if [[ "\${1:-}" == "config" && "\${2:-}" == "get" && "\${3:-}" == "prefix" ]]; then
+  printf '%s\n' "\$install_prefix"
+  exit 0
+fi
+if [[ "\${1:-}" == "config" && "\${2:-}" == "set" && "\${3:-}" == "prefix" ]]; then
+  exit 0
+fi
+if [[ "\${1:-}" == "install" && "\${2:-}" == "-g" && "\${3:-}" == "@anthropic-ai/claude-code" ]]; then
+  if [[ "$fail_install" == "1" ]]; then
+    printf 'simulated npm install failure\n' >&2
+    exit 64
+  fi
+  mkdir -p "\$install_prefix/bin"
+  cp "$source" "\$install_prefix/bin/claude"
+  chmod +x "\$install_prefix/bin/claude"
+  exit 0
+fi
+printf 'unexpected npm args: %s\n' "\$*" >&2
+exit 22
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/npm"
+}
+
+add_fake_claude_npm_fallback_installer() {
+  local source
+  mkdir -p "$CASE_DIR/install-source"
+  source="$CASE_DIR/install-source/claude"
+  write_fake_agent claude "$source"
+  cat > "$HOME_DIR/.local/bin/curl" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "\$*" >> "$CASE_DIR/curl.log"
+printf 'simulated claude official installer failure\n' >&2
+exit 56
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/curl"
+  write_fake_claude_npm "$source"
+  cat > "$HOME_DIR/.local/bin/brew" <<'FAKE'
+#!/usr/bin/env bash
+printf 'unexpected brew fallback\n' >&2
+exit 127
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/brew"
+}
+
+add_fake_claude_npm_custom_prefix_fallback_installer() {
+  local source prefix
+  mkdir -p "$CASE_DIR/install-source"
+  source="$CASE_DIR/install-source/claude"
+  prefix="$CASE_DIR/npm-prefix"
+  mkdir -p "$prefix/bin" "$prefix/lib/node_modules"
+  write_fake_agent claude "$source"
+  cat > "$HOME_DIR/.local/bin/curl" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "\$*" >> "$CASE_DIR/curl.log"
+printf 'simulated claude official installer failure\n' >&2
+exit 56
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/curl"
+  write_fake_claude_npm "$source" 0 "$prefix"
+  cat > "$HOME_DIR/.local/bin/brew" <<'FAKE'
+#!/usr/bin/env bash
+printf 'unexpected brew fallback\n' >&2
+exit 127
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/brew"
+}
+
+add_fake_claude_brew_fallback_installer() {
+  local source
+  mkdir -p "$CASE_DIR/install-source"
+  source="$CASE_DIR/install-source/claude"
+  write_fake_agent claude "$source"
+  cat > "$HOME_DIR/.local/bin/curl" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "\$*" >> "$CASE_DIR/curl.log"
+printf 'simulated claude official installer failure\n' >&2
+exit 56
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/curl"
+  write_fake_claude_npm "$source" 1
+  cat > "$HOME_DIR/.local/bin/brew" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'brew:%s\n' "\$*" >> "$CASE_DIR/brew.log"
+if [[ "\${1:-}" == "install" && "\${2:-}" == "--cask" && "\${3:-}" == "claude-code" ]]; then
+  mkdir -p "\$HOME/.local/bin"
+  cp "$source" "\$HOME/.local/bin/claude"
+  chmod +x "\$HOME/.local/bin/claude"
+  exit 0
+fi
+printf 'unexpected brew args: %s\n' "\$*" >&2
+exit 22
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/brew"
+}
+
+add_fake_claude_node_recovery_installer() {
+  local source
+  mkdir -p "$CASE_DIR/install-source" "$CASE_DIR/node"
+  source="$CASE_DIR/install-source/claude"
+  write_fake_agent claude "$source"
+  cat > "$HOME_DIR/.local/bin/curl" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "\$*" >> "$CASE_DIR/curl.log"
+for arg in "\$@"; do
+  case "\$arg" in
+    https://claude.ai/install.sh)
+      printf 'simulated claude official installer failure\n' >&2
+      exit 56
+      ;;
+    https://nodejs.org/dist/index.json)
+      printf '[{"version":"v22.11.0","lts":"Jod"}]\n'
+      exit 0
+      ;;
+  esac
+done
+output=""
+url=""
+while [[ "\$#" -gt 0 ]]; do
+  case "\$1" in
+    -o)
+      output="\${2:-}"
+      shift 2
+      ;;
+    http*)
+      url="\$1"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+case "\$url" in
+  https://nodejs.org/dist/v22.11.0/node-v22.11.0.pkg)
+    printf 'fake node pkg\n' > "\$output"
+    ;;
+  *)
+    printf 'unexpected curl url: %s\n' "\$url" >&2
+    exit 22
+    ;;
+esac
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/curl"
+  cat > "$HOME_DIR/.local/bin/open" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'open:%s\n' "\$*" >> "$CASE_DIR/open.log"
+cat > "$HOME_DIR/.local/bin/node" <<'NODE'
+#!/usr/bin/env bash
+printf 'v22.11.0\n'
+NODE
+chmod +x "$HOME_DIR/.local/bin/node"
+FAKE
+  cat >> "$HOME_DIR/.local/bin/open" <<FAKE
+cat > "$HOME_DIR/.local/bin/npm" <<'NPM'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "--version" ]]; then
+  printf '10.0.0\n'
+  exit 0
+fi
+if [[ "\${1:-}" == "config" && "\${2:-}" == "get" && "\${3:-}" == "prefix" ]]; then
+  printf '%s\n' "\$HOME/.local"
+  exit 0
+fi
+if [[ "\${1:-}" == "config" && "\${2:-}" == "set" && "\${3:-}" == "prefix" ]]; then
+  exit 0
+fi
+if [[ "\${1:-}" == "install" && "\${2:-}" == "-g" && "\${3:-}" == "@anthropic-ai/claude-code" ]]; then
+  mkdir -p "\$HOME/.local/bin"
+  cp "$source" "\$HOME/.local/bin/claude"
+  chmod +x "\$HOME/.local/bin/claude"
+  exit 0
+fi
+printf 'unexpected npm args: %s\n' "\$*" >&2
+exit 22
+NPM
+chmod +x "$HOME_DIR/.local/bin/npm"
+exit 0
+FAKE
+  chmod +x "$HOME_DIR/.local/bin/open"
 }
 
 set_ready_agents() {
@@ -894,6 +1102,131 @@ test_missing_claude_install_exposes_hidden_binary_to_new_shells() {
   assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "hidden claude state phase is complete"
 }
 
+test_missing_claude_install_uses_existing_npm_fallback() {
+  local primary pid i
+  setup_case claude-npm-fallback
+  add_fake_claude_npm_fallback_installer
+  set_ready_agents claude
+  hold_fake_agent
+
+  run_onboarding_async $'1\ny\n'
+
+  for i in {1..30}; do
+    primary="$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent 2>/dev/null || true)"
+    [[ "$primary" == "claude" && -f "$FAKE_HOLD_FILE" ]] && break
+    sleep 0.2
+  done
+
+  assert_eq "$primary" "claude" "npm fallback saves primary before interactive claude exits"
+  pid="$(cat "$FAKE_HOLD_FILE")"
+  kill -0 "$pid" 2>/dev/null || fail "npm fallback interactive claude should still be running after completion"
+
+  touch "$FAKE_RELEASE_FILE"
+  finish_onboarding_async
+
+  assert_eq "$RUN_STATUS" "0" "npm fallback onboarding status"
+  assert_contains "$RUN_OUTPUT" "Trying Claude Code official installer..." "npm fallback tries official first"
+  assert_contains "$RUN_OUTPUT" "Claude Code official installer did not complete. Trying fallbacks..." "npm fallback reports official failure"
+  assert_contains "$RUN_OUTPUT" "Trying Claude Code npm install with existing npm..." "npm fallback tries existing npm"
+  assert_contains "$RUN_OUTPUT" "Claude Code install succeeded via npm." "npm fallback reports success"
+  assert_not_contains "$RUN_OUTPUT" "Trying Claude Code Homebrew install" "npm fallback does not try brew after npm success"
+  assert_contains "$(cat "$CASE_DIR/npm.log")" "npm:install -g @anthropic-ai/claude-code" "npm fallback installs claude package"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "npm fallback state phase is complete"
+}
+
+test_missing_claude_install_finds_custom_npm_prefix_binary() {
+  local primary pid i expected_claude
+  setup_case claude-npm-custom-prefix
+  add_fake_claude_npm_custom_prefix_fallback_installer
+  set_ready_agents claude
+  hold_fake_agent
+
+  run_onboarding_async $'1\ny\n'
+
+  for i in {1..30}; do
+    primary="$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent 2>/dev/null || true)"
+    [[ "$primary" == "claude" && -f "$FAKE_HOLD_FILE" ]] && break
+    sleep 0.2
+  done
+
+  assert_eq "$primary" "claude" "custom npm prefix saves primary before interactive claude exits"
+  pid="$(cat "$FAKE_HOLD_FILE")"
+  kill -0 "$pid" 2>/dev/null || fail "custom npm prefix interactive claude should still be running after completion"
+
+  touch "$FAKE_RELEASE_FILE"
+  finish_onboarding_async
+
+  assert_eq "$RUN_STATUS" "0" "custom npm prefix onboarding status"
+  assert_contains "$RUN_OUTPUT" "Claude Code install succeeded via npm." "custom npm prefix reports npm success"
+  expected_claude="$(cd "$CASE_DIR/npm-prefix/bin" && pwd)/claude"
+  assert_contains "$RUN_OUTPUT" "$expected_claude" "custom npm prefix claude is discovered from prepended PATH"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "custom npm prefix state phase is complete"
+}
+
+test_missing_claude_install_uses_existing_brew_after_npm_failure() {
+  local primary pid i
+  setup_case claude-brew-fallback
+  add_fake_claude_brew_fallback_installer
+  set_ready_agents claude
+  hold_fake_agent
+
+  run_onboarding_async $'1\ny\n'
+
+  for i in {1..30}; do
+    primary="$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent 2>/dev/null || true)"
+    [[ "$primary" == "claude" && -f "$FAKE_HOLD_FILE" ]] && break
+    sleep 0.2
+  done
+
+  assert_eq "$primary" "claude" "brew fallback saves primary before interactive claude exits"
+  pid="$(cat "$FAKE_HOLD_FILE")"
+  kill -0 "$pid" 2>/dev/null || fail "brew fallback interactive claude should still be running after completion"
+
+  touch "$FAKE_RELEASE_FILE"
+  finish_onboarding_async
+
+  assert_eq "$RUN_STATUS" "0" "brew fallback onboarding status"
+  assert_contains "$RUN_OUTPUT" "Trying Claude Code npm install with existing npm..." "brew fallback tries npm first"
+  assert_contains "$RUN_OUTPUT" "Claude Code npm install did not complete." "brew fallback reports npm failure"
+  assert_contains "$RUN_OUTPUT" "Trying Claude Code Homebrew install with existing brew..." "brew fallback tries existing brew"
+  assert_contains "$RUN_OUTPUT" "Claude Code install succeeded via Homebrew." "brew fallback reports success"
+  assert_contains "$(cat "$CASE_DIR/brew.log")" "brew:install --cask claude-code" "brew fallback installs cask"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "brew fallback state phase is complete"
+}
+
+test_missing_claude_install_recovers_node_then_retries_npm() {
+  local primary pid i
+  setup_case claude-node-recovery
+  add_fake_claude_node_recovery_installer
+  set_ready_agents claude
+  hold_fake_agent
+
+  run_onboarding_async $'1\ny\n\n'
+
+  for i in {1..90}; do
+    primary="$(plist_raw "$APP_DIR/agent/preferences.json" primaryAgent 2>/dev/null || true)"
+    [[ "$primary" == "claude" && -f "$FAKE_HOLD_FILE" ]] && break
+    sleep 0.2
+  done
+
+  assert_eq "$primary" "claude" "node recovery saves primary before interactive claude exits"
+  pid="$(cat "$FAKE_HOLD_FILE")"
+  kill -0 "$pid" 2>/dev/null || fail "node recovery interactive claude should still be running after completion"
+
+  touch "$FAKE_RELEASE_FILE"
+  finish_onboarding_async
+
+  assert_eq "$RUN_STATUS" "0" "node recovery onboarding status"
+  assert_contains "$RUN_OUTPUT" "npm was not found. Skipping npm fallback." "node recovery skips missing npm first"
+  assert_contains "$RUN_OUTPUT" "brew was not found. Skipping Homebrew fallback." "node recovery skips missing brew"
+  assert_contains "$RUN_OUTPUT" "Zebra will install Node.js/npm with the official macOS pkg" "node recovery explains node pkg recovery"
+  assert_contains "$RUN_OUTPUT" "Node.js installer opened. Complete the installer, then return to this terminal and press Return." "node recovery waits for pkg completion"
+  assert_contains "$RUN_OUTPUT" "Node.js/npm verified. Retrying Claude Code npm install..." "node recovery verifies npm before retry"
+  assert_contains "$RUN_OUTPUT" "Claude Code install succeeded via npm." "node recovery reports npm success"
+  assert_contains "$(cat "$CASE_DIR/open.log")" "open:" "node recovery opens official pkg"
+  assert_eq "$(plist_raw "$STATE_FILE" phase)" "complete" "node recovery state phase is complete"
+}
+
 test_codex_status_probe_completes_onboarding() {
   setup_case codex-ready
   add_fake_agent codex
@@ -1180,6 +1513,10 @@ test_chained_step2_launches_selected_agent_without_readiness_watcher
 test_chained_step2_resume_agent_working_relaunches_command_file
 test_claude_status_probe_completes_onboarding
 test_missing_claude_install_exposes_hidden_binary_to_new_shells
+test_missing_claude_install_uses_existing_npm_fallback
+test_missing_claude_install_finds_custom_npm_prefix_binary
+test_missing_claude_install_uses_existing_brew_after_npm_failure
+test_missing_claude_install_recovers_node_then_retries_npm
 test_codex_status_probe_completes_onboarding
 test_codex_polling_completes_while_cli_is_still_running
 test_missing_codex_install_then_polling_completes

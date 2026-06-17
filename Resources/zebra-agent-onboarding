@@ -28,6 +28,7 @@ CLAUDE_POST_USABLE_AUTH_DELAY_SECONDS="${ZEBRA_AGENT_CLAUDE_POST_USABLE_AUTH_DEL
 CLAUDE_POST_USABLE_AUTH_RETRIES="${ZEBRA_AGENT_CLAUDE_POST_USABLE_AUTH_RETRIES:-3}"
 ONBOARDING_LANGUAGE="${ZEBRA_ONBOARDING_LANGUAGE:-}"
 CODEX_INSTALL_BIN_DIR="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
+NODE_PKG_URL="${ZEBRA_NODE_PKG_URL:-}"
 case "$STATUS_PROBE_TIMEOUT_SECONDS" in
   ''|*[!0-9]*) STATUS_PROBE_TIMEOUT_SECONDS=8 ;;
 esac
@@ -194,7 +195,22 @@ msg_en() {
     install_manual_command) printf '\nManual install command for %s:\n\n  %s\n\n' "$@" ;;
     install_not_run) printf '\nInstaller was not run.\n' "$@" ;;
     install_official_prompt) printf '\nZebra will run the installer command for %s:\n\n  %s\n\n' "$@" ;;
+    install_claude_chain_prompt) printf '\nZebra will try to install Claude Code.\n\n  1. Claude Code official installer\n  2. npm install if npm is already available\n  3. Homebrew install if Homebrew is already available\n  4. If those fail, install Node.js/npm with the official macOS pkg, then retry npm install\n\n' "$@" ;;
     install_shell_path_configured) printf 'Updated shell startup files so %s is available in new terminals.\n' "$@" ;;
+    install_claude_try_official) printf 'Trying Claude Code official installer...\n' "$@" ;;
+    install_claude_official_failed) printf 'Claude Code official installer did not complete. Trying fallbacks...\n' "$@" ;;
+    install_claude_try_npm) printf 'Trying Claude Code npm install with existing npm...\n' "$@" ;;
+    install_claude_skip_npm) printf 'npm was not found. Skipping npm fallback.\n' "$@" ;;
+    install_claude_npm_failed) printf 'Claude Code npm install did not complete.\n' "$@" ;;
+    install_claude_try_brew) printf 'Trying Claude Code Homebrew install with existing brew...\n' "$@" ;;
+    install_claude_skip_brew) printf 'brew was not found. Skipping Homebrew fallback.\n' "$@" ;;
+    install_claude_brew_failed) printf 'Claude Code Homebrew install did not complete.\n' "$@" ;;
+    install_claude_need_node) printf 'Claude Code install fallbacks did not complete. Zebra will install Node.js/npm with the official macOS pkg, then retry npm install.\n' "$@" ;;
+    install_claude_node_opened) printf 'Node.js installer opened. Complete the installer, then return to this terminal and press Return.' "$@" ;;
+    install_claude_node_verified) printf 'Node.js/npm verified. Retrying Claude Code npm install...\n' "$@" ;;
+    install_claude_node_failed) printf 'Zebra could not verify Node.js/npm after the installer.\n' "$@" ;;
+    install_npm_prefix_configuring) printf 'npm global install location is not writable. Zebra will use ~/.local for npm global installs...\n' "$@" ;;
+    install_method_succeeded) printf '%s install succeeded via %s.\n' "$@" ;;
     install_codex_try_official) printf 'Trying Codex official installer...\n' "$@" ;;
     install_codex_skip_official) printf 'Codex official installer did not complete. Trying fallbacks...\n' "$@" ;;
     install_codex_official_failed) printf 'Codex official installer did not complete. Trying fallbacks...\n' "$@" ;;
@@ -275,7 +291,22 @@ msg_ko() {
     install_manual_command) printf '\n%s manual install command:\n\n  %s\n\n' "$@" ;;
     install_not_run) printf '\ninstaller를 실행하지 않았습니다.\n' "$@" ;;
     install_official_prompt) printf '\nZebra가 %s installer command를 실행합니다:\n\n  %s\n\n' "$@" ;;
+    install_claude_chain_prompt) printf '\nZebra가 Claude Code install을 시도합니다.\n\n  1. Claude Code official installer\n  2. 기존 npm이 있으면 npm install\n  3. 기존 Homebrew가 있으면 Homebrew install\n  4. 그래도 실패하면 Node.js/npm을 설치한 뒤 npm install 재시도\n\n' "$@" ;;
     install_shell_path_configured) printf '새 터미널에서도 %s를 사용할 수 있도록 shell startup file을 업데이트했습니다.\n' "$@" ;;
+    install_claude_try_official) printf 'Claude Code official installer를 시도합니다...\n' "$@" ;;
+    install_claude_official_failed) printf 'Claude Code official installer가 완료되지 않았습니다. fallback을 시도합니다...\n' "$@" ;;
+    install_claude_try_npm) printf '기존 npm으로 Claude Code npm install을 시도합니다...\n' "$@" ;;
+    install_claude_skip_npm) printf 'npm을 찾지 못했습니다. npm fallback을 건너뜁니다.\n' "$@" ;;
+    install_claude_npm_failed) printf 'Claude Code npm install이 완료되지 않았습니다.\n' "$@" ;;
+    install_claude_try_brew) printf '기존 Homebrew로 Claude Code install을 시도합니다...\n' "$@" ;;
+    install_claude_skip_brew) printf 'brew를 찾지 못했습니다. Homebrew fallback을 건너뜁니다.\n' "$@" ;;
+    install_claude_brew_failed) printf 'Claude Code Homebrew install이 완료되지 않았습니다.\n' "$@" ;;
+    install_claude_need_node) printf 'Claude Code install fallback이 모두 완료되지 않았습니다. Zebra가 공식 Node.js macOS installer로 Node.js/npm을 설치한 뒤 npm install을 재시도합니다.\n' "$@" ;;
+    install_claude_node_opened) printf 'Node.js installer가 열렸습니다. 설치를 완료한 뒤 이 터미널로 돌아와 Return을 누르세요.' "$@" ;;
+    install_claude_node_verified) printf 'Node.js/npm을 확인했습니다. Claude Code npm install을 다시 시도합니다...\n' "$@" ;;
+    install_claude_node_failed) printf 'Node.js/npm을 아직 확인하지 못했습니다.\n' "$@" ;;
+    install_npm_prefix_configuring) printf 'npm global install 위치가 현재 사용자 권한으로 쓸 수 없습니다. Zebra가 ~/.local을 npm global install 위치로 설정합니다...\n' "$@" ;;
+    install_method_succeeded) printf '%s install이 %s 경로로 완료되었습니다.\n' "$@" ;;
     install_codex_try_official) printf 'Codex official installer를 시도합니다...\n' "$@" ;;
     install_codex_skip_official) printf 'Codex official installer가 완료되지 않았습니다. fallback을 시도합니다...\n' "$@" ;;
     install_codex_official_failed) printf 'Codex official installer가 완료되지 않았습니다. fallback을 시도합니다...\n' "$@" ;;
@@ -356,7 +387,22 @@ msg_ja() {
     install_manual_command) printf '\n%s manual install command:\n\n  %s\n\n' "$@" ;;
     install_not_run) printf '\ninstallerは実行されませんでした。\n' "$@" ;;
     install_official_prompt) printf '\nZebraが%s installer commandを実行します:\n\n  %s\n\n' "$@" ;;
+    install_claude_chain_prompt) printf '\nZebraがClaude Code installを試します。\n\n  1. Claude Code official installer\n  2. 既存のnpmがあればnpm install\n  3. 既存のHomebrewがあればHomebrew install\n  4. それでも失敗したらNode.js/npmをインストールしてnpm installを再試行\n\n' "$@" ;;
     install_shell_path_configured) printf '新しいターミナルでも%sを使えるようにshell startup fileを更新しました。\n' "$@" ;;
+    install_claude_try_official) printf 'Claude Code official installerを試します...\n' "$@" ;;
+    install_claude_official_failed) printf 'Claude Code official installerは完了しませんでした。fallbackを試します...\n' "$@" ;;
+    install_claude_try_npm) printf '既存のnpmでClaude Code npm installを試します...\n' "$@" ;;
+    install_claude_skip_npm) printf 'npmが見つかりません。npm fallbackをスキップします。\n' "$@" ;;
+    install_claude_npm_failed) printf 'Claude Code npm installは完了しませんでした。\n' "$@" ;;
+    install_claude_try_brew) printf '既存のHomebrewでClaude Code installを試します...\n' "$@" ;;
+    install_claude_skip_brew) printf 'brewが見つかりません。Homebrew fallbackをスキップします。\n' "$@" ;;
+    install_claude_brew_failed) printf 'Claude Code Homebrew installは完了しませんでした。\n' "$@" ;;
+    install_claude_need_node) printf 'Claude Code install fallbackはすべて完了しませんでした。Zebraが公式Node.js macOS installerでNode.js/npmをインストールし、npm installを再試行します。\n' "$@" ;;
+    install_claude_node_opened) printf 'Node.js installerが開きました。インストールを完了してから、このターミナルに戻ってReturnを押してください。' "$@" ;;
+    install_claude_node_verified) printf 'Node.js/npmを確認しました。Claude Code npm installを再試行します...\n' "$@" ;;
+    install_claude_node_failed) printf 'まだNode.js/npmを確認できませんでした。\n' "$@" ;;
+    install_npm_prefix_configuring) printf 'npm global install先に現在のユーザーで書き込めません。Zebraが~/.localをnpm global install先に設定します...\n' "$@" ;;
+    install_method_succeeded) printf '%s installが%s経由で完了しました。\n' "$@" ;;
     install_codex_try_official) printf 'Codex official installerを試します...\n' "$@" ;;
     install_codex_skip_official) printf 'Codex official installerは完了しませんでした。fallbackを試します...\n' "$@" ;;
     install_codex_official_failed) printf 'Codex official installerは完了しませんでした。fallbackを試します...\n' "$@" ;;
@@ -521,9 +567,16 @@ binary_name() {
 
 installer_command() {
   case "$1" in
-    claude) printf 'curl -fsSL https://claude.ai/install.sh | bash' ;;
+    claude) printf 'Claude Code install chain: official installer, existing npm, existing Homebrew, Node.js pkg recovery, npm retry' ;;
     codex) printf 'curl -fsSL https://chatgpt.com/codex/install.sh | sh; if that fails, use existing npm or brew; if neither is available, install the official GitHub Release binary' ;;
     antigravity) printf 'curl -fsSL https://antigravity.google/cli/install.sh | bash' ;;
+  esac
+}
+
+manual_install_command() {
+  case "$1" in
+    claude) printf 'Official installer:\n  curl -fsSL https://claude.ai/install.sh | bash\n\nnpm:\n  npm install -g @anthropic-ai/claude-code\n\nHomebrew:\n  brew install --cask claude-code\n\nVerify:\n  claude --version' ;;
+    *) installer_command "$1" ;;
   esac
 }
 
@@ -584,6 +637,104 @@ install_codex_from_github_release() {
   rm -rf "$tmpdir"
 }
 
+path_writable_or_creatable() {
+  local path="$1"
+  local current="$path"
+  while [[ ! -e "$current" ]]; do
+    local parent
+    parent="$(dirname "$current")"
+    if [[ "$parent" == "$current" ]]; then
+      return 1
+    fi
+    current="$parent"
+  done
+  [[ -w "$current" && -x "$current" ]]
+}
+
+npm_global_prefix() {
+  npm config get prefix 2>/dev/null | sed -n '1{s/[[:space:]]*$//;p;q;}'
+}
+
+npm_prepend_prefix_bin() {
+  local prefix="$1"
+  [[ -n "$prefix" ]] || return 0
+  export PATH="$prefix/bin:$PATH"
+}
+
+npm_prefix_supports_global_install() {
+  local prefix="$1"
+  [[ -n "$prefix" ]] || return 1
+  path_writable_or_creatable "$prefix/bin" \
+    && path_writable_or_creatable "$prefix/lib/node_modules"
+}
+
+configure_user_npm_global_prefix() {
+  local prefix="$HOME/.local"
+  msg install_npm_prefix_configuring
+  mkdir -p "$prefix/bin" "$prefix/lib/node_modules"
+  npm_prepend_prefix_bin "$prefix"
+  npm config set prefix "$prefix"
+}
+
+prepare_npm_global_install() {
+  local prefix
+  prefix="$(npm_global_prefix || true)"
+  if npm_prefix_supports_global_install "$prefix"; then
+    npm_prepend_prefix_bin "$prefix"
+    return 0
+  fi
+  configure_user_npm_global_prefix
+}
+
+install_claude_with_npm() {
+  prepare_npm_global_install || return 1
+  npm install -g @anthropic-ai/claude-code || return 1
+  agent_is_available_to_zebra claude && return 0
+  expose_hidden_agent_install claude
+}
+
+node_pkg_url_from_index() {
+  local index version
+  if [[ -n "$NODE_PKG_URL" ]]; then
+    printf '%s\n' "$NODE_PKG_URL"
+    return 0
+  fi
+  index="$(curl -fsSL https://nodejs.org/dist/index.json)" || return 1
+  version="$(
+    printf '%s' "$index" \
+      | tr '{' '\n' \
+      | awk '/"lts":("[^"]+"|true)/ {
+          version = $0
+          sub(/^.*"version"[[:space:]]*:[[:space:]]*"/, "", version)
+          sub(/".*$/, "", version)
+          if (version != $0 && version != "") {
+            print version
+            exit
+          }
+        }'
+  )"
+  [[ -n "$version" ]] || return 1
+  printf 'https://nodejs.org/dist/%s/node-%s.pkg\n' "$version" "$version"
+}
+
+recover_node_with_official_pkg() {
+  local pkg_url download_dir pkg_path
+  pkg_url="$(node_pkg_url_from_index)" || return 1
+  download_dir="$ONBOARDING_DIR/downloads"
+  mkdir -p "$download_dir"
+  pkg_path="$download_dir/node.pkg"
+  curl -fL "$pkg_url" -o "$pkg_path" || return 1
+  open "$pkg_path" || return 1
+  msg install_claude_node_opened
+  printf '\n'
+  read -r _ || true
+  export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+  command -v node >/dev/null 2>&1 || return 1
+  command -v npm >/dev/null 2>&1 || return 1
+  node --version >/dev/null 2>&1 || return 1
+  npm --version >/dev/null 2>&1 || return 1
+}
+
 agent_is_available_to_zebra() {
   local agent="$1"
   resolve_executable "$agent"
@@ -635,12 +786,59 @@ expose_hidden_agent_install() {
 
 run_claude_installer_chain() {
   set -o pipefail
+  msg install_claude_try_official
   if curl -fsSL https://claude.ai/install.sh | bash; then
     if agent_is_available_to_zebra claude; then
+      msg install_method_succeeded "$(display_name claude)" "official installer"
       return 0
     fi
-    expose_hidden_agent_install claude
+    if expose_hidden_agent_install claude; then
+      msg install_method_succeeded "$(display_name claude)" "official installer"
+      return 0
+    fi
   fi
+  msg install_claude_official_failed
+
+  if command -v npm >/dev/null 2>&1; then
+    msg install_claude_try_npm
+    if install_claude_with_npm; then
+      msg install_method_succeeded "$(display_name claude)" "npm"
+      return 0
+    fi
+    msg install_claude_npm_failed
+  else
+    msg install_claude_skip_npm
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    msg install_claude_try_brew
+    if brew install --cask claude-code; then
+      if agent_is_available_to_zebra claude; then
+        msg install_method_succeeded "$(display_name claude)" "Homebrew"
+        return 0
+      fi
+      if expose_hidden_agent_install claude; then
+        msg install_method_succeeded "$(display_name claude)" "Homebrew"
+        return 0
+      fi
+    fi
+    msg install_claude_brew_failed
+  else
+    msg install_claude_skip_brew
+  fi
+
+  msg install_claude_need_node
+  if recover_node_with_official_pkg; then
+    msg install_claude_node_verified
+    if install_claude_with_npm; then
+      msg install_method_succeeded "$(display_name claude)" "npm"
+      return 0
+    fi
+    msg install_claude_npm_failed
+  else
+    msg install_claude_node_failed
+  fi
+  return 1
 }
 
 run_codex_installer_chain() {
@@ -1592,7 +1790,11 @@ run_installer() {
   local command_label answer status extra
   command_label="$(installer_command "$agent")"
   INSTALL_RESULT=failed
-  msg install_official_prompt "$(display_name "$agent")" "$command_label"
+  if [[ "$agent" == "claude" ]]; then
+    msg install_claude_chain_prompt
+  else
+    msg install_official_prompt "$(display_name "$agent")" "$command_label"
+  fi
   msg run_installer_confirm
   read -r answer || answer=""
   case "$answer" in
@@ -1654,8 +1856,8 @@ run_installer() {
 
 install_failure_menu() {
   local agent="$1"
-  local command_label choice
-  command_label="$(installer_command "$agent")"
+  local manual_label choice
+  manual_label="$(manual_install_command "$agent")"
   INSTALL_FAILURE_ACTION=""
   while true; do
     msg install_failed_title "$(display_name "$agent")"
@@ -1676,7 +1878,7 @@ install_failure_menu() {
         return
         ;;
       3)
-        msg install_manual_command "$(display_name "$agent")" "$command_label"
+        msg install_manual_command "$(display_name "$agent")" "$manual_label"
         msg install_press_return
         read -r _ || true
         ;;
