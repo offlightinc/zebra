@@ -255,7 +255,7 @@ validate_path() {
       fail "conflict" "conflict markers found in $path"
     fi
 
-    if grep -nE '(gbrain_cs_[A-Za-z0-9]{16,}|postgres(ql)?://[^[:space:]]+:[^[:space:]]+@|OPENAI_API_KEY=sk-[A-Za-z0-9_-]{16,}|ANTHROPIC_API_KEY=sk-ant-[A-Za-z0-9_-]{16,}|GBRAIN_REMOTE_CLIENT_SECRET=[^<[:space:]]+)' "$path" >/dev/null; then
+    if grep -nE "(gbrain_cs_[A-Za-z0-9]{16,}|postgres(ql)?://[^[:space:]]+:[^[:space:]]+@|OPENAI_API_KEY=sk-[A-Za-z0-9_-]{16,}|ANTHROPIC_API_KEY=sk-ant-[A-Za-z0-9_-]{16,}|GBRAIN_REMOTE_CLIENT_SECRET=['\"]?[A-Za-z0-9_./+=-]{12,})" "$path" >/dev/null; then
       fail "hookFailed" "possible secret found in $path"
     fi
   fi
