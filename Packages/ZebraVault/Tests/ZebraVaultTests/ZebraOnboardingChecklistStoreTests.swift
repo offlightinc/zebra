@@ -1301,6 +1301,185 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(openClawLogText.contains("models auth login"))
     }
 
+    func testRuntimeHelperReusesCompletedOpenClawClaudeConfigWithoutOpeningAuthAgain() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(
+            withJSONObject: [
+                "schemaVersion": 1,
+                "selection": [
+                    "selectedRuntime": "openclaw",
+                    "selectedProvider": "anthropic-claude-code",
+                    "runtimeProvider": "claude-cli",
+                    "runtimeModel": "",
+                    "credential": ["source": "agent-cli:claude-auth-status"],
+                    "updatedAt": "2026-06-17T00:00:00Z",
+                ],
+                "interactiveAuth": [
+                    "status": "completed",
+                    "runtime": "openclaw",
+                    "provider": "anthropic-claude-code",
+                    "runtimeProvider": "claude-cli",
+                    "completedAt": "2026-06-17T00:00:01Z",
+                ],
+                "runtimeConfig": [
+                    "configuredAt": "2026-06-17T00:00:01Z",
+                    "result": ["ok": true, "exitCode": 0, "stdoutTail": "", "stderrTail": ""],
+                ],
+                "receipt": [
+                    "complete": false,
+                    "verifiedAt": "2026-06-17T00:00:00Z",
+                    "reasons": ["interactive_auth_required"],
+                ],
+            ],
+            options: [.prettyPrinted, .sortedKeys]
+        ).write(to: stateURL, options: .atomic)
+
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let openClawLog = root.appendingPathComponent("openclaw.log", isDirectory: false)
+        let claudeLog = root.appendingPathComponent("claude.log", isDirectory: false)
+        _ = try installFakeOpenClawRuntime(directory: fakeBin, log: openClawLog)
+        _ = try installFakeClaudeRuntime(directory: fakeBin, log: claudeLog, loggedIn: true)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let statusResult = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["status", "--json"],
+            environment: [
+                "PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            ]
+        )
+        XCTAssertEqual(statusResult.status, 0, "stdout:\n\(statusResult.stdout)\nstderr:\n\(statusResult.stderr)")
+        let statusPayloadStart = try XCTUnwrap(statusResult.stdout.firstIndex(of: "{"))
+        let statusPayload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(String(statusResult.stdout[statusPayloadStart...]).utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(statusPayload["nextRecommendedCommand"] as? String, "verify-runtime openclaw")
+
+        let configureResult = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["configure-runtime", "openclaw", "--provider", "claude-code"],
+            environment: [
+                "PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            ]
+        )
+        XCTAssertEqual(configureResult.status, 0, "stdout:\n\(configureResult.stdout)\nstderr:\n\(configureResult.stderr)")
+        let configurePayloadStart = try XCTUnwrap(configureResult.stdout.firstIndex(of: "{"))
+        let configurePayload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(String(configureResult.stdout[configurePayloadStart...]).utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(configurePayload["ok"] as? Bool, true)
+        XCTAssertEqual(configurePayload["reusedCompletedInteractiveAuth"] as? Bool, true)
+        XCTAssertEqual(configurePayload["nextRecommendedCommand"] as? String, "verify-runtime openclaw")
+
+        let openClawLogText = try String(contentsOf: openClawLog, encoding: .utf8)
+        XCTAssertTrue(openClawLogText.contains("--version"))
+        XCTAssertFalse(openClawLogText.contains("models status"))
+        XCTAssertFalse(openClawLogText.contains("models auth login"))
+        let claudeLogText = (try? String(contentsOf: claudeLog, encoding: .utf8)) ?? ""
+        XCTAssertFalse(claudeLogText.contains("auth status"))
+        XCTAssertFalse(claudeLogText.contains("auth login"))
+    }
+
+    func testRuntimeHelperClearsInteractiveAuthRequiredReceiptAfterInteractiveAuthSuccess() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to provide a TTY to runtime helper interactive-auth")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(
+            withJSONObject: [
+                "schemaVersion": 1,
+                "selection": [
+                    "selectedRuntime": "openclaw",
+                    "selectedProvider": "anthropic-claude-code",
+                    "runtimeProvider": "claude-cli",
+                    "runtimeModel": "",
+                    "credential": ["source": "agent-cli:claude-auth-status"],
+                    "updatedAt": "2026-06-17T00:00:00Z",
+                ],
+                "interactiveAuth": [
+                    "status": "required",
+                    "runtime": "openclaw",
+                    "provider": "anthropic-claude-code",
+                    "runtimeProvider": "claude-cli",
+                    "reason": "openclaw_claude_cli_registration_requires_tty",
+                    "requestedAt": "2026-06-17T00:00:00Z",
+                ],
+                "runtimeConfig": [
+                    "configuredAt": "2026-06-17T00:00:00Z",
+                    "result": [
+                        "ok": false,
+                        "exitCode": 0,
+                        "stdoutTail": "",
+                        "stderrTail": "openclaw_claude_cli_registration_requires_tty",
+                        "requiresInteractiveAuth": true,
+                        "blockingReason": "interactive_auth_required",
+                    ],
+                ],
+                "receipt": [
+                    "complete": false,
+                    "verifiedAt": "2026-06-17T00:00:00Z",
+                    "reasons": ["interactive_auth_required"],
+                ],
+            ],
+            options: [.prettyPrinted, .sortedKeys]
+        ).write(to: stateURL, options: .atomic)
+
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let openClawLog = root.appendingPathComponent("openclaw.log", isDirectory: false)
+        let claudeLog = root.appendingPathComponent("claude.log", isDirectory: false)
+        _ = try installFakeOpenClawRuntime(directory: fakeBin, log: openClawLog)
+        _ = try installFakeClaudeRuntime(directory: fakeBin, log: claudeLog, loggedIn: true)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let expectScript = root.appendingPathComponent("interactive-auth.expect", isDirectory: false)
+        let expectContent = """
+        set timeout 20
+        spawn env PATH=\(fakeBin.path):/usr/bin:/bin ZEBRA_GBRAIN_RUNTIME_STATE=\(stateURL.path) ZEBRA_GBRAIN_RUNTIME_HOME=\(root.path) FAKE_OPENCLAW_AUTH_READY=claude-cli \(launch.helperPath) interactive-auth openclaw --provider anthropic-claude-code
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """
+        try expectContent.write(to: expectScript, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectScript.path],
+            environment: [:]
+        )
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        XCTAssertNil(state["receipt"])
+        let interactiveAuth = try XCTUnwrap(state["interactiveAuth"] as? [String: Any])
+        XCTAssertEqual(interactiveAuth["status"] as? String, "completed")
+        let runtimeConfig = try XCTUnwrap(state["runtimeConfig"] as? [String: Any])
+        let runtimeConfigResult = try XCTUnwrap(runtimeConfig["result"] as? [String: Any])
+        XCTAssertEqual(runtimeConfigResult["ok"] as? Bool, true)
+    }
+
     @MainActor
     func testChecklistStorePublishesPendingRuntimeInteractiveAuthRequest() throws {
         let root = try makeTemporaryDirectory()

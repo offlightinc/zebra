@@ -599,8 +599,14 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     2. Claude Code 계정으로 로그인 (Claude Max plan + extra usage credits 필수)
     ```
 
-    사용자가 번호로 답하면 agent가 해당 provider id로 `configure-runtime <runtime>
-    --provider <provider-id>`를 호출한다.
+    사용자가 OpenClaw + Claude Code를 선택하면 agent는 다음 command를 그대로 호출한다:
+
+    ```bash
+    zebra-gbrain-runtime-onboarding configure-runtime openclaw --provider anthropic-claude-code
+    ```
+
+    그 외 선택지는 해당 provider id로 `configure-runtime <runtime> --provider
+    <provider-id>`를 호출한다.
 
     Secret 값은 Zebra state에 쓰면 안 된다. State에는 environment variable 이름,
     OAuth source, entered-key source label 같은 key source만 기록할 수 있다.
@@ -628,8 +634,10 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     ```
 
     Agent는 이 상태를 실패로 처리하지 않는다. 사용자가 real terminal에서
-    `interactive-auth`를 완료한 뒤, agent는 `status --json`, `configure-runtime`,
-    `verify-runtime`을 다시 호출해서 helper probe 결과로 완료 여부를 확인한다.
+    `interactive-auth`를 완료한 뒤에는 `configure-runtime`을 다시 호출하지 않는다.
+    먼저 `status --json`을 호출하고, `runtimeConfig.result.ok == true`이면 바로
+    `verify-runtime <runtime>`으로 넘어간다. `runtimeVerification.result.ok == true`이면
+    `write-receipt`를 호출한다.
 
     ### 6. Verify selected runtime
 
@@ -1101,7 +1109,14 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         })
         save_state(state)
 
+    def normalize_provider_id(provider_id):
+        aliases = {
+            "claude-code": "anthropic-claude-code",
+        }
+        return aliases.get(provider_id, provider_id)
+
     def provider_by_id(provider_id):
+        provider_id = normalize_provider_id(provider_id)
         for provider in provider_choices:
             if provider["id"] == provider_id:
                 return provider
@@ -1403,6 +1418,47 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         }
         save_state(state)
         return state
+
+    def completed_runtime_config_state(runtime, provider):
+        provider_id = provider.get("id", "")
+        state = load_state()
+        selection = state.get("selection") or {}
+        interactive_auth = state.get("interactiveAuth") or {}
+        runtime_config = state.get("runtimeConfig") or {}
+        config_result = runtime_config.get("result") or {}
+        if selection.get("selectedRuntime") != runtime:
+            return None
+        if selection.get("selectedProvider") != provider_id:
+            return None
+        if interactive_auth.get("status") != "completed":
+            return None
+        if interactive_auth.get("runtime") != runtime or interactive_auth.get("provider") != provider_id:
+            return None
+        if not config_result.get("ok"):
+            return None
+        return state
+
+    def next_recommended_command(state):
+        receipt = state.get("receipt") or {}
+        if receipt.get("complete"):
+            return ""
+        selection = state.get("selection") or {}
+        runtime = selection.get("selectedRuntime", "")
+        if not runtime:
+            return "preflight"
+        runtime_config_result = ((state.get("runtimeConfig") or {}).get("result") or {})
+        runtime_verification_result = ((state.get("runtimeVerification") or {}).get("result") or {})
+        interactive_auth = state.get("interactiveAuth") or {}
+        if interactive_auth.get("status") == "required":
+            return "status --json"
+        if runtime_config_result.get("ok") and runtime_verification_result.get("ok"):
+            return "write-receipt"
+        if runtime_config_result.get("ok"):
+            return f"verify-runtime {runtime}"
+        provider_id = selection.get("selectedProvider", "")
+        if provider_id:
+            return f"configure-runtime {runtime} --provider {provider_id}"
+        return f"configure-runtime {runtime}"
 
     def run_interactive_process(argv, *, env=None, timeout=600):
         try:
@@ -2549,8 +2605,20 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     def configure_runtime_command(runtime, provider_id):
         executable = executable_for_runtime(runtime)
+        provider_id = normalize_provider_id(provider_id)
         provider = provider_by_id(provider_id)
         credential = credential_for(provider, runtime)
+        completed_state = completed_runtime_config_state(runtime, provider)
+        if completed_state:
+            print(json.dumps({
+                "ok": True,
+                "selection": completed_state.get("selection"),
+                "runtimeConfig": completed_state.get("runtimeConfig"),
+                "interactiveAuth": completed_state.get("interactiveAuth"),
+                "reusedCompletedInteractiveAuth": True,
+                "nextRecommendedCommand": next_recommended_command(completed_state),
+            }, indent=2, sort_keys=True))
+            return
         print_provider_selection_notice(runtime, provider)
         if runtime == "hermes":
             command_result = run_hermes_config(executable["path"], provider, credential)
@@ -2565,6 +2633,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
                 "interactiveAuth": state.get("interactiveAuth"),
                 "selection": state.get("selection"),
                 "runtimeConfig": state.get("runtimeConfig"),
+                "nextRecommendedCommand": next_recommended_command(state),
             }, indent=2, sort_keys=True))
             return
         state = load_state()
@@ -2592,7 +2661,12 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         if not command_result["ok"]:
             print_command_failure(command_result, credential)
             raise RuntimeError(f"{runtime}_config_failed")
-        print(json.dumps({"ok": True, "selection": state["selection"], "runtimeConfig": state["runtimeConfig"]}, indent=2, sort_keys=True))
+        print(json.dumps({
+            "ok": True,
+            "selection": state["selection"],
+            "runtimeConfig": state["runtimeConfig"],
+            "nextRecommendedCommand": next_recommended_command(state),
+        }, indent=2, sort_keys=True))
 
     def interactive_auth_command(runtime, provider_id):
         executable = executable_for_runtime(runtime)
@@ -2652,12 +2726,14 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             if progress.get("waitingForUser", {}).get("section") == "Configure selected runtime":
                 progress.pop("waitingForUser", None)
             progress.pop("lastFailure", None)
+            state.pop("receipt", None)
             save_state(state)
             print(json.dumps({
                 "ok": True,
                 "interactiveAuth": state.get("interactiveAuth"),
                 "selection": state.get("selection"),
                 "runtimeConfig": state.get("runtimeConfig"),
+                "nextRecommendedCommand": next_recommended_command(state),
             }, indent=2, sort_keys=True))
             return
 
@@ -2679,7 +2755,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         raise RuntimeError(f"{runtime}_config_failed")
 
     def selected_provider_for_runtime(runtime, flags):
-        provider_id = flags.get("provider", "")
+        provider_id = normalize_provider_id(flags.get("provider", ""))
         if provider_id:
             return provider_by_id(provider_id)
         state = load_state()
@@ -2757,6 +2833,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "selection": state.get("selection"),
             "interactiveAuth": state.get("interactiveAuth"),
             "receipt": state.get("receipt"),
+            "nextRecommendedCommand": next_recommended_command(state),
         }
         print(json.dumps(output, indent=2, sort_keys=True))
 
@@ -2773,6 +2850,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "runtimeConfig": state.get("runtimeConfig"),
             "runtimeVerification": state.get("runtimeVerification"),
             "receipt": state.get("receipt"),
+            "nextRecommendedCommand": next_recommended_command(state),
         }
         print(json.dumps(output, indent=2, sort_keys=True))
 
@@ -2805,7 +2883,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         try:
             runtime = sys.argv[3] if len(sys.argv) > 3 else ""
             flags = parse_flags(sys.argv[4:])
-            provider_id = flags.get("provider", "")
+            provider_id = normalize_provider_id(flags.get("provider", ""))
             if not provider_id:
                 raise RuntimeError("provider_missing")
             configure_runtime_command(runtime, provider_id)
@@ -2819,7 +2897,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         try:
             runtime = sys.argv[3] if len(sys.argv) > 3 else ""
             flags = parse_flags(sys.argv[4:])
-            provider_id = flags.get("provider", "")
+            provider_id = normalize_provider_id(flags.get("provider", ""))
             if not provider_id:
                 raise RuntimeError("provider_missing")
             interactive_auth_command(runtime, provider_id)
