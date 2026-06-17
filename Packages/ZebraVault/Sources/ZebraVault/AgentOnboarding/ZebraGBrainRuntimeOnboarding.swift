@@ -616,6 +616,17 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     간격 안에서 다시 열지 않는다. Auth command가 성공하면 terminal은 자동 종료되고,
     실패하거나 취소되면 사용자가 원인을 확인할 수 있도록 terminal을 남긴다.
 
+    OpenClaw + Claude Code에서 `openclaw_claude_cli_registration_requires_tty`가 나오면,
+    Claude Code 계정 로그인이 필요한 상태가 아니다. Claude CLI 로그인은 이미 확인됐고,
+    OpenClaw가 그 로그인을 재사용하도록 등록하는 단계다. 이때는 다음처럼 안내한다:
+
+    ```text
+    OpenClaw가 Claude CLI 로그인을 재사용하도록 등록합니다.
+
+    새 터미널이 열려 자동 등록을 진행하고, 성공하면 자동으로 닫힙니다.
+    터미널이 닫히면 여기로 돌아와 완료됐다고 알려주세요.
+    ```
+
     Agent는 이 상태를 실패로 처리하지 않는다. 사용자가 real terminal에서
     `interactive-auth`를 완료한 뒤, agent는 `status --json`, `configure-runtime`,
     `verify-runtime`을 다시 호출해서 helper probe 결과로 완료 여부를 확인한다.
@@ -1331,6 +1342,25 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "interactiveAuthArgv": helper_command_argv(runtime, provider_id),
         }
 
+    def interactive_auth_waiting_note(runtime, provider, result):
+        provider_id = provider.get("id", "")
+        reason = result.get("stderr") or result.get("blockingReason") or "interactive_auth_required"
+        if (
+            runtime == "openclaw"
+            and provider_id == "anthropic-claude-code"
+            and reason == "openclaw_claude_cli_registration_requires_tty"
+        ):
+            return message(
+                "OpenClaw will register Claude CLI login reuse.\\n\\nA new terminal will open, run the registration automatically, and close when it succeeds. When the terminal closes, return here and say it is complete.",
+                "OpenClaw가 Claude CLI 로그인을 재사용하도록 등록합니다.\\n\\n새 터미널이 열려 자동 등록을 진행하고, 성공하면 자동으로 닫힙니다.\\n터미널이 닫히면 여기로 돌아와 완료됐다고 알려주세요.",
+                "OpenClawがClaude CLIログインを再利用するよう登録します。\\n\\n新しいターミナルが開いて自動登録を実行し、成功すると自動で閉じます。ターミナルが閉じたら、ここに戻って完了したことを知らせてください。",
+            )
+        return message(
+            "Run the interactive auth command in a real Zebra terminal, then rerun configure-runtime.",
+            "실제 Zebra 터미널에서 interactive auth command를 실행한 뒤 configure-runtime을 다시 실행하세요.",
+            "実際のZebraターミナルでinteractive auth commandを実行してから、configure-runtimeを再実行してください。",
+        )
+
     def write_interactive_auth_request(runtime, provider, credential, result):
         provider_id = provider.get("id", "")
         state = load_state()
@@ -1362,7 +1392,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         progress["currentSection"] = "Configure selected runtime"
         progress["waitingForUser"] = {
             "section": "Configure selected runtime",
-            "note": "Run the interactive auth command in a real Zebra terminal, then rerun configure-runtime.",
+            "note": interactive_auth_waiting_note(runtime, provider, result),
             "createdAt": now(),
         }
         progress.pop("lastFailure", None)

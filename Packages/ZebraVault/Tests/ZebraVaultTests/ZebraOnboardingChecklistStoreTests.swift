@@ -1154,12 +1154,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
             ]
         )
-        let payloadStart = try XCTUnwrap(result.stdout.firstIndex(of: "{"))
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let payloadStart = try XCTUnwrap(
+            result.stdout.firstIndex(of: "{"),
+            "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)"
+        )
         let payload = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(String(result.stdout[payloadStart...]).utf8)) as? [String: Any]
         )
 
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertEqual(payload["requiresInteractiveAuth"] as? Bool, true)
         XCTAssertEqual(payload["blockingReason"] as? String, "interactive_auth_required")
 
@@ -1206,12 +1209,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
             ]
         )
-        let payloadStart = try XCTUnwrap(result.stdout.firstIndex(of: "{"))
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let payloadStart = try XCTUnwrap(
+            result.stdout.firstIndex(of: "{"),
+            "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)"
+        )
         let payload = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(String(result.stdout[payloadStart...]).utf8)) as? [String: Any]
         )
 
-        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertEqual(payload["requiresInteractiveAuth"] as? Bool, true)
 
         let state = try XCTUnwrap(
@@ -1227,6 +1233,72 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let claudeLogText = try String(contentsOf: claudeLog, encoding: .utf8)
         XCTAssertTrue(claudeLogText.contains("auth status"))
         XCTAssertFalse(claudeLogText.contains("auth login"))
+    }
+
+    func testRuntimeHelperOpenClawClaudeRegistrationWithoutTTYUsesRegistrationGuidance() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let openClawLog = root.appendingPathComponent("openclaw.log", isDirectory: false)
+        let claudeLog = root.appendingPathComponent("claude.log", isDirectory: false)
+        _ = try installFakeOpenClawRuntime(directory: fakeBin, log: openClawLog)
+        _ = try installFakeClaudeRuntime(directory: fakeBin, log: claudeLog, loggedIn: true)
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["configure-runtime", "openclaw", "--provider", "anthropic-claude-code"],
+            environment: [
+                "PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+                "ZEBRA_ONBOARDING_LANGUAGE": "ko",
+            ]
+        )
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let payloadStart = try XCTUnwrap(
+            result.stdout.firstIndex(of: "{"),
+            "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)"
+        )
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(String(result.stdout[payloadStart...]).utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(payload["requiresInteractiveAuth"] as? Bool, true)
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let interactiveAuth = try XCTUnwrap(state["interactiveAuth"] as? [String: Any])
+        XCTAssertEqual(interactiveAuth["status"] as? String, "required")
+        XCTAssertEqual(interactiveAuth["runtime"] as? String, "openclaw")
+        XCTAssertEqual(interactiveAuth["provider"] as? String, "anthropic-claude-code")
+        XCTAssertEqual(interactiveAuth["reason"] as? String, "openclaw_claude_cli_registration_requires_tty")
+
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let waitingForUser = try XCTUnwrap(progress["waitingForUser"] as? [String: Any])
+        XCTAssertEqual(
+            waitingForUser["note"] as? String,
+            """
+            OpenClaw가 Claude CLI 로그인을 재사용하도록 등록합니다.
+
+            새 터미널이 열려 자동 등록을 진행하고, 성공하면 자동으로 닫힙니다.
+            터미널이 닫히면 여기로 돌아와 완료됐다고 알려주세요.
+            """
+        )
+
+        let claudeLogText = try String(contentsOf: claudeLog, encoding: .utf8)
+        XCTAssertTrue(claudeLogText.contains("auth status"))
+        XCTAssertFalse(claudeLogText.contains("auth login"))
+        let openClawLogText = try String(contentsOf: openClawLog, encoding: .utf8)
+        XCTAssertTrue(openClawLogText.contains("models status"))
+        XCTAssertFalse(openClawLogText.contains("models auth login"))
     }
 
     @MainActor
