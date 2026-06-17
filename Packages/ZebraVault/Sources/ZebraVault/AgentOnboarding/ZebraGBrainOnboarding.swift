@@ -2524,6 +2524,9 @@ public struct ZebraGBrainOnboardingStore {
             common.extend([
                 "",
                 "Import/index hard gates:",
+                "- Before import/embed/sync, verify the resolved brain repo target has an initial git commit.",
+                "- If Zebra rejects completion with `brain_repo_initial_commit_missing`, run `zebra-gbrain-onboarding create-initial-brain-commit --target <brain repo path>`.",
+                "- Then rerun import/sync and report completion again.",
                 "- Before import/embed/sync, ensure the resolved brain repo target is registered as a GBrain source.",
                 "- Verify `gbrain sources current --json` and `gbrain sources list --json` identify the same source id for the target path.",
                 "- Do not import the target into the implicit `default` source.",
@@ -3381,6 +3384,138 @@ public struct ZebraGBrainOnboardingStore {
             "bunVersionOk": True,
         }, sort_keys=True))
 
+    def is_git_repo_root(path):
+        try:
+            result = subprocess.run(
+                ["git", "-C", path, "rev-parse", "--show-toplevel"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+        except Exception:
+            return False
+        if result.returncode != 0:
+            return False
+        root = (result.stdout or "").strip()
+        return bool(root) and os.path.realpath(root) == os.path.realpath(path)
+
+    def git_has_status_entries(path):
+        try:
+            result = subprocess.run(
+                ["git", "-C", path, "status", "--porcelain", "--untracked-files=all"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+        except Exception:
+            return False
+        return result.returncode == 0 and bool((result.stdout or "").strip())
+
+    def create_initial_brain_commit():
+        flags = parse_flags(args)
+        target = flags.get("target") or flags.get("target_path")
+        if not target:
+            print(json.dumps({
+                "ok": False,
+                "reason": "brain_repo_target_missing",
+                "target": "",
+            }, sort_keys=True))
+            sys.exit(1)
+        target = os.path.abspath(os.path.expanduser(target))
+        if not os.path.isdir(target):
+            print(json.dumps({
+                "ok": False,
+                "reason": "brain_repo_target_missing",
+                "target": target,
+            }, sort_keys=True))
+            sys.exit(1)
+        if not is_git_repo_root(target):
+            print(json.dumps({
+                "ok": False,
+                "reason": "brain_repo_not_git_repo",
+                "target": target,
+            }, sort_keys=True))
+            sys.exit(1)
+        existing_commit = git_head_commit(target)
+        if existing_commit:
+            print(json.dumps({
+                "ok": True,
+                "status": "already_committed",
+                "target": target,
+                "commit": existing_commit,
+                "createdMarker": False,
+                "identityMode": "none",
+            }, sort_keys=True))
+            return
+
+        created_marker = False
+        if not git_has_status_entries(target):
+            marker_path = os.path.join(target, ".zebra-initialized")
+            with open(marker_path, "w", encoding="utf-8") as handle:
+                handle.write("Zebra initialized this brain repository so GBrain can sync from an initial git commit.\\n")
+            created_marker = True
+
+        add_result = subprocess.run(
+            ["git", "-C", target, "add", "."],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+        if add_result.returncode != 0:
+            print(json.dumps({
+                "ok": False,
+                "reason": "brain_repo_initial_commit_add_failed",
+                "target": target,
+                "stderr": (add_result.stderr or "").strip(),
+            }, sort_keys=True))
+            sys.exit(1)
+
+        commit_result = subprocess.run(
+            [
+                "git", "-C", target,
+                "-c", "user.name=Zebra Onboarding",
+                "-c", "user.email=zebra-onboarding@offlight.local",
+                "commit",
+                "-m", "Initialize brain repo for GBrain sync",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=60,
+        )
+        if commit_result.returncode != 0:
+            print(json.dumps({
+                "ok": False,
+                "reason": "brain_repo_initial_commit_failed",
+                "target": target,
+                "createdMarker": created_marker,
+                "identityMode": "inline_zebra",
+                "stderr": (commit_result.stderr or "").strip(),
+            }, sort_keys=True))
+            sys.exit(1)
+
+        commit = git_head_commit(target)
+        if not commit:
+            print(json.dumps({
+                "ok": False,
+                "reason": "brain_repo_initial_commit_verify_failed",
+                "target": target,
+                "createdMarker": created_marker,
+                "identityMode": "inline_zebra",
+            }, sort_keys=True))
+            sys.exit(1)
+        print(json.dumps({
+            "ok": True,
+            "status": "created",
+            "target": target,
+            "commit": commit,
+            "createdMarker": created_marker,
+            "identityMode": "inline_zebra",
+        }, sort_keys=True))
+
     def record_verified_source_id(state, flags):
         key, target_path, _, target_entry = resolved_target(state)
         if not key or not target_path or not target_entry:
@@ -3568,6 +3703,42 @@ public struct ZebraGBrainOnboardingStore {
             reasons.append("brain_repo_target_missing")
         return reasons
 
+    def git_head_commit(path):
+        if not path or not os.path.isdir(path):
+            return None
+        try:
+            result = subprocess.run(
+                ["git", "-C", path, "rev-parse", "--verify", "HEAD"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+        except Exception:
+            return None
+        if result.returncode != 0:
+            return None
+        return (result.stdout or "").strip() or None
+
+    def user_created_brain_repo_initial_commit_guard_reason(state):
+        _, target_path, method, _ = resolved_target(state)
+        if method != "user_created_repo":
+            return None
+        if not target_path or not os.path.isdir(target_path):
+            return None
+        target_path = os.path.abspath(os.path.expanduser(target_path))
+        if not is_git_repo_root(target_path):
+            return None
+        if git_head_commit(target_path):
+            return None
+        return "brain_repo_initial_commit_missing"
+
+    def create_initial_brain_commit_payload(target):
+        return {
+            "nextAction": "create_initial_brain_commit",
+            "suggestedCommand": "zebra-gbrain-onboarding create-initial-brain-commit --target " + shell_quote(target),
+        }
+
     def gbrain_version_ok():
         state = load_state()
         binding = state.get("activeGBrainBinding") or {}
@@ -3740,6 +3911,9 @@ public struct ZebraGBrainOnboardingStore {
             payload.update(target_resolution_next_action())
         elif reason == "bun_missing_for_launchd_autopilot":
             payload.update(launchd_bun_repair_payload(reason))
+        elif reason == "brain_repo_initial_commit_missing":
+            _, target_path, _, _ = resolved_target(state)
+            payload.update(create_initial_brain_commit_payload(target_path or "<brain repo path>"))
         elif next_action:
             payload["nextAction"] = next_action
         print(json.dumps(payload, sort_keys=True))
@@ -3778,6 +3952,9 @@ public struct ZebraGBrainOnboardingStore {
             if target_reasons:
                 return target_reasons[0]
             if status == "completed":
+                initial_commit_reason = user_created_brain_repo_initial_commit_guard_reason(state)
+                if initial_commit_reason:
+                    return initial_commit_reason
                 source_reason = source_registration_guard_reason(state, flags)
                 if source_reason:
                     return source_reason
@@ -4570,8 +4747,10 @@ public struct ZebraGBrainOnboardingStore {
         recover_cycle_freshness()
     elif command == "repair-launchd-bun-path":
         repair_launchd_bun_path()
+    elif command == "create-initial-brain-commit":
+        create_initial_brain_commit()
     else:
-        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|report|status|verify|recover-cycle-freshness|repair-launchd-bun-path> [options]", file=sys.stderr)
+        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|report|status|verify|recover-cycle-freshness|repair-launchd-bun-path|create-initial-brain-commit> [options]", file=sys.stderr)
         sys.exit(2)
     PY
     """

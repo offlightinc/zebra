@@ -2850,6 +2850,373 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains("source_not_registered"), "stdout: \(result.stdout) stderr: \(result.stderr)")
     }
 
+    func testReportGuardRejectsUserCreatedGitRepoWithoutInitialCommitBeforeImportCompletion() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try runGit(["init"], cwd: target)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3.5: Confirm search mode with the user (DO NOT SKIP)",
+            ]
+        )
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 4: Import and Index",
+                "--source-id", "brain",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+
+        XCTAssertNotEqual(result.exitCode, 0)
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["reason"] as? String, "brain_repo_initial_commit_missing")
+        XCTAssertEqual(payload["nextAction"] as? String, "create_initial_brain_commit")
+        XCTAssertEqual(
+            payload["suggestedCommand"] as? String,
+            "zebra-gbrain-onboarding create-initial-brain-commit --target '\(target.path)'"
+        )
+    }
+
+    func testInitialCommitHelperAllowsUserCreatedGitRepoImportCompletionAfterRepair() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try runGit(["init"], cwd: target)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3.5: Confirm search mode with the user (DO NOT SKIP)",
+            ]
+        )
+
+        let repair = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "create-initial-brain-commit",
+                "--target", target.path,
+            ]
+        )
+        let repairPayload = try helperPayload(repair.stdout)
+        let importReport = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 4: Import and Index",
+                "--source-id", "brain",
+            ]
+        )
+        let progress = try progressObject(in: stateURL)
+
+        XCTAssertEqual(repair.exitCode, 0, "stdout: \(repair.stdout) stderr: \(repair.stderr)")
+        XCTAssertEqual(repairPayload["status"] as? String, "created")
+        XCTAssertEqual(repairPayload["createdMarker"] as? Bool, true)
+        XCTAssertNotNil(try gitHeadCommit(in: target))
+        XCTAssertEqual(importReport.exitCode, 0, "stdout: \(importReport.stdout) stderr: \(importReport.stderr)")
+        XCTAssertTrue((progress["completedSections"] as? [String] ?? []).contains("Step 4: Import and Index"))
+    }
+
+    func testStep4PromptIncludesInitialCommitRepairFlow() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 1: Install GBrain",
+            ]
+        )
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3.5: Confirm search mode with the user (DO NOT SKIP)",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(
+            nextPrompt.contains("Before import/embed/sync, verify the resolved brain repo target has an initial git commit."),
+            nextPrompt
+        )
+        XCTAssertTrue(
+            nextPrompt.contains("If Zebra rejects completion with `brain_repo_initial_commit_missing`, run `zebra-gbrain-onboarding create-initial-brain-commit --target <brain repo path>`"),
+            nextPrompt
+        )
+        XCTAssertTrue(
+            nextPrompt.contains("Then rerun import/sync and report completion again."),
+            nextPrompt
+        )
+    }
+
+    func testInitialCommitHelperOnEmptyGitRepoCreatesMarkerCommit() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try runGit(["init"], cwd: target)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: [
+                "create-initial-brain-commit",
+                "--target", target.path,
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let marker = target.appendingPathComponent(".zebra-initialized", isDirectory: false)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(payload["status"] as? String, "created")
+        XCTAssertEqual(payload["createdMarker"] as? Bool, true)
+        XCTAssertEqual(payload["identityMode"] as? String, "inline_zebra")
+        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "Zebra initialized this brain repository so GBrain can sync from an initial git commit.\n")
+        XCTAssertNotNil(try gitHeadCommit(in: target))
+    }
+
+    func testInitialCommitHelperCommitsExistingFilesWithoutReadme() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try runGit(["init"], cwd: target)
+        try "hello\n".write(to: target.appendingPathComponent("notes.md"), atomically: true, encoding: .utf8)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: [
+                "create-initial-brain-commit",
+                "--target", target.path,
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertEqual(payload["status"] as? String, "created")
+        XCTAssertEqual(payload["createdMarker"] as? Bool, false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent("README.md").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent(".zebra-initialized").path))
+        XCTAssertEqual(try gitOutput(["show", "--name-only", "--format=", "HEAD"], cwd: target).trimmingCharacters(in: .whitespacesAndNewlines), "notes.md")
+    }
+
+    func testInitialCommitHelperOnRepoWithExistingHeadIsNoopSuccess() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try runGit(["init"], cwd: target)
+        try "hello\n".write(to: target.appendingPathComponent("notes.md"), atomically: true, encoding: .utf8)
+        try runGit(["add", "."], cwd: target)
+        try runGit([
+            "-c", "user.name=Zebra Test",
+            "-c", "user.email=zebra-test@example.com",
+            "commit",
+            "-m", "Existing commit",
+        ], cwd: target)
+        let existingHead = try XCTUnwrap(gitHeadCommit(in: target))
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: [
+                "create-initial-brain-commit",
+                "--target", target.path,
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertEqual(payload["status"] as? String, "already_committed")
+        XCTAssertEqual(payload["commit"] as? String, existingHead)
+        XCTAssertEqual(payload["createdMarker"] as? Bool, false)
+        XCTAssertEqual(payload["identityMode"] as? String, "none")
+        XCTAssertEqual(try gitOutput(["rev-list", "--count", "HEAD"], cwd: target).trimmingCharacters(in: .whitespacesAndNewlines), "1")
+    }
+
+    func testInitialCommitHelperFailsOnNonGitDirectoryWithoutMarker() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: [
+                "create-initial-brain-commit",
+                "--target", target.path,
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+
+        XCTAssertNotEqual(result.exitCode, 0)
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["reason"] as? String, "brain_repo_not_git_repo")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent(".zebra-initialized").path))
+    }
+
+    func testInitialCommitHelperUsesInlineIdentityWithoutWritingGitConfig() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        let isolatedHome = root.appendingPathComponent("isolated-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: isolatedHome, withIntermediateDirectories: true)
+        try runGit(["init"], cwd: target)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            environment: [
+                "HOME": isolatedHome.path,
+                "XDG_CONFIG_HOME": isolatedHome.appendingPathComponent(".config", isDirectory: true).path,
+            ],
+            arguments: [
+                "create-initial-brain-commit",
+                "--target", target.path,
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let identity = try gitOutput(["log", "-1", "--format=%an <%ae>|%cn <%ce>"], cwd: target)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let localConfig = try String(contentsOf: target.appendingPathComponent(".git/config"), encoding: .utf8)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertEqual(payload["identityMode"] as? String, "inline_zebra")
+        XCTAssertEqual(identity, "Zebra Onboarding <zebra-onboarding@offlight.local>|Zebra Onboarding <zebra-onboarding@offlight.local>")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: isolatedHome.appendingPathComponent(".gitconfig").path))
+        XCTAssertFalse(localConfig.contains("Zebra Onboarding"))
+        XCTAssertFalse(localConfig.contains("zebra-onboarding@offlight.local"))
+    }
+
     func testImportCompletionRecordsVerifiedSourceId() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
@@ -5030,6 +5397,45 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             XCTFail("git \(arguments.joined(separator: " ")) failed: \(stderrText)")
             throw NSError(domain: "ZebraGBrainOnboardingStoreTests.git", code: Int(process.terminationStatus))
         }
+    }
+
+    private func gitOutput(_ arguments: [String], cwd: URL) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        process.currentDirectoryURL = cwd
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if process.terminationStatus != 0 {
+            let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            XCTFail("git \(arguments.joined(separator: " ")) failed: \(stderrText)")
+            throw NSError(domain: "ZebraGBrainOnboardingStoreTests.git", code: Int(process.terminationStatus))
+        }
+        return stdoutText
+    }
+
+    private func gitHeadCommit(in cwd: URL) throws -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["rev-parse", "--verify", "HEAD"]
+        process.currentDirectoryURL = cwd
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            return nil
+        }
+        let text = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil
+            : text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func installFakeGBrain(
