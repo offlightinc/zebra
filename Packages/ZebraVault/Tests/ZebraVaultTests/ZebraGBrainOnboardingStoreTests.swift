@@ -4240,25 +4240,13 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
 
         XCTAssertNotEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
         XCTAssertTrue(result.stdout.contains("bun_missing_for_launchd_autopilot"), "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("repair_launchd_bun_path"), "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("repair-launchd-bun-path"), "stdout: \(result.stdout) stderr: \(result.stderr)")
     }
 
     func testReportGuardAllowsAutopilotInstallCompletionWhenLaunchdCanRunBun() throws {
         let fixture = try prepareAutopilotInstallCompletionGuardFixture()
-        let bunBin = fixture.root
-            .appendingPathComponent(".bun", isDirectory: true)
-            .appendingPathComponent("bin", isDirectory: true)
-        try FileManager.default.createDirectory(at: bunBin, withIntermediateDirectories: true)
-        let bun = bunBin.appendingPathComponent("bun", isDirectory: false)
-        try """
-        #!/bin/sh
-        if [ "$1" = "--version" ]; then
-          echo "1.0.0"
-          exit 0
-        fi
-        exit 64
-        """
-        .write(to: bun, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bun.path)
+        try installFakeLaunchdBun(home: fixture.root)
         try """
         export PATH="$HOME/.bun/bin:$PATH"
         """
@@ -4276,6 +4264,147 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+    }
+
+    func testRepairLaunchdBunPathAddsZshenvPathAndAllowsCompletion() throws {
+        let fixture = try prepareAutopilotInstallCompletionGuardFixture()
+        try installFakeLaunchdBun(home: fixture.root)
+        let before = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 7: Recurring Jobs",
+                "--recurring-jobs-decision", "autopilot_install",
+            ]
+        )
+
+        let repair = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: ["repair-launchd-bun-path"]
+        )
+        let after = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 7: Recurring Jobs",
+                "--recurring-jobs-decision", "autopilot_install",
+            ]
+        )
+        let zshenv = try String(
+            contentsOf: fixture.root.appendingPathComponent(".zshenv", isDirectory: false),
+            encoding: .utf8
+        )
+
+        XCTAssertNotEqual(before.exitCode, 0, "stdout: \(before.stdout) stderr: \(before.stderr)")
+        XCTAssertTrue(before.stdout.contains("bun_missing_for_launchd_autopilot"), "stdout: \(before.stdout) stderr: \(before.stderr)")
+        XCTAssertEqual(repair.exitCode, 0, "stdout: \(repair.stdout) stderr: \(repair.stderr)")
+        XCTAssertTrue(repair.stdout.contains(#""ok": true"#), "stdout: \(repair.stdout) stderr: \(repair.stderr)")
+        XCTAssertTrue(repair.stdout.contains(#""bunVersionOk": true"#), "stdout: \(repair.stdout) stderr: \(repair.stderr)")
+        XCTAssertTrue(zshenv.contains("Zebra GBrain launchd bun PATH"), zshenv)
+        XCTAssertTrue(zshenv.contains(#"export PATH="$HOME/.bun/bin:$PATH""#), zshenv)
+        XCTAssertEqual(after.exitCode, 0, "stdout: \(after.stdout) stderr: \(after.stderr)")
+    }
+
+    func testRepairLaunchdBunPathIsIdempotent() throws {
+        let fixture = try prepareAutopilotInstallCompletionGuardFixture()
+        try installFakeLaunchdBun(home: fixture.root)
+
+        let first = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: ["repair-launchd-bun-path"]
+        )
+        let second = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: ["repair-launchd-bun-path"]
+        )
+        let zshenv = try String(
+            contentsOf: fixture.root.appendingPathComponent(".zshenv", isDirectory: false),
+            encoding: .utf8
+        )
+        let markerCount = zshenv.components(separatedBy: "# >>> Zebra GBrain launchd bun PATH >>>").count - 1
+
+        XCTAssertEqual(first.exitCode, 0, "stdout: \(first.stdout) stderr: \(first.stderr)")
+        XCTAssertEqual(second.exitCode, 0, "stdout: \(second.stdout) stderr: \(second.stderr)")
+        XCTAssertEqual(markerCount, 1, zshenv)
+        XCTAssertTrue(second.stdout.contains(#""zshenvUpdated": false"#), "stdout: \(second.stdout) stderr: \(second.stderr)")
+    }
+
+    func testRepairLaunchdBunPathIgnoresCommentedBunPath() throws {
+        let fixture = try prepareAutopilotInstallCompletionGuardFixture()
+        try installFakeLaunchdBun(home: fixture.root)
+        let zshenvURL = fixture.root.appendingPathComponent(".zshenv", isDirectory: false)
+        try """
+        # export PATH="$HOME/.bun/bin:$PATH"
+        """
+        .write(to: zshenvURL, atomically: true, encoding: .utf8)
+
+        let repair = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: ["repair-launchd-bun-path"]
+        )
+        let completed = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 7: Recurring Jobs",
+                "--recurring-jobs-decision", "autopilot_install",
+            ]
+        )
+        let zshenv = try String(contentsOf: zshenvURL, encoding: .utf8)
+        let markerCount = zshenv.components(separatedBy: "# >>> Zebra GBrain launchd bun PATH >>>").count - 1
+
+        XCTAssertEqual(repair.exitCode, 0, "stdout: \(repair.stdout) stderr: \(repair.stderr)")
+        XCTAssertTrue(repair.stdout.contains(#""zshenvUpdated": true"#), "stdout: \(repair.stdout) stderr: \(repair.stderr)")
+        XCTAssertEqual(markerCount, 1, zshenv)
+        XCTAssertEqual(completed.exitCode, 0, "stdout: \(completed.stdout) stderr: \(completed.stderr)")
+    }
+
+    func testRepairLaunchdBunPathFailsWhenBunMissing() throws {
+        let fixture = try prepareAutopilotInstallCompletionGuardFixture()
+        let zshenv = fixture.root.appendingPathComponent(".zshenv", isDirectory: false)
+
+        let repair = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: ["repair-launchd-bun-path"]
+        )
+
+        XCTAssertNotEqual(repair.exitCode, 0, "stdout: \(repair.stdout) stderr: \(repair.stderr)")
+        XCTAssertTrue(repair.stdout.contains("bun_missing"), "stdout: \(repair.stdout) stderr: \(repair.stderr)")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: zshenv.path))
+    }
+
+    func testReportGuardRejectsAutopilotInstallCompletionWhenBunVersionFails() throws {
+        let fixture = try prepareAutopilotInstallCompletionGuardFixture()
+        try installFakeLaunchdBun(home: fixture.root, versionExitCode: 64)
+        try """
+        export PATH="$HOME/.bun/bin:$PATH"
+        """
+        .write(to: fixture.root.appendingPathComponent(".zshenv", isDirectory: false), atomically: true, encoding: .utf8)
+
+        let result = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 7: Recurring Jobs",
+                "--recurring-jobs-decision", "autopilot_install",
+            ]
+        )
+
+        XCTAssertNotEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("bun_unusable_for_launchd_autopilot"), "stdout: \(result.stdout) stderr: \(result.stderr)")
     }
 
     func testReportGuardRejectsAgentMappedSearchModeUntilConfigIsExplicitlySet() throws {
@@ -4547,6 +4676,27 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             ]
         )
         return AutopilotInstallCompletionGuardFixture(root: root, stateURL: stateURL, bin: bin)
+    }
+
+    private func installFakeLaunchdBun(
+        home: URL,
+        versionExitCode: Int = 0
+    ) throws {
+        let bunBin = home
+            .appendingPathComponent(".bun", isDirectory: true)
+            .appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bunBin, withIntermediateDirectories: true)
+        let bun = bunBin.appendingPathComponent("bun", isDirectory: false)
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo "1.0.0"
+          exit \(versionExitCode)
+        fi
+        exit 64
+        """
+        .write(to: bun, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bun.path)
     }
 
     private func runHelper(

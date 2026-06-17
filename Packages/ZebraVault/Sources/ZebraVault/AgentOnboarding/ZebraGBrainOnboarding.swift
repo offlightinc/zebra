@@ -2538,7 +2538,7 @@ public struct ZebraGBrainOnboardingStore {
                 "- First run `zebra-gbrain-onboarding report --status waiting_for_user --section " + json.dumps(section_title) + " --reason recurring_jobs_decision --note \\\"Choose defer, manual_scheduler, platform_scheduler_install, or autopilot_install\\\"` and ask the user to choose.",
                 "- If the user chooses `defer`, do not install or start any background service; report completed with `--recurring-jobs-decision defer`.",
                 "- If the user chooses `manual_scheduler`, do not run scheduler commands; report completed with `--recurring-jobs-decision manual_scheduler`.",
-                "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run the autopilot install, then confirm `bun --version` succeeds in a launchd-style clean environment before reporting completed with the same decision.",
+                "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run the autopilot install, then confirm `bun --version` succeeds in a launchd-style clean environment before reporting completed with the same decision. If completed is rejected with `bun_missing_for_launchd_autopilot`, run `zebra-gbrain-onboarding repair-launchd-bun-path`, then retry the completed report.",
                 "- If the user chooses `platform_scheduler_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision platform_scheduler_install`, then run only the approved scheduler install, then report completed with the same decision.",
             ])
         elif role == "verify":
@@ -3299,6 +3299,88 @@ public struct ZebraGBrainOnboardingStore {
             return "bun_missing_for_launchd_autopilot"
         return "bun_unusable_for_launchd_autopilot"
 
+    def launchd_bun_repair_payload(reason=None):
+        payload = {
+            "nextAction": "repair_launchd_bun_path",
+            "suggestedCommand": "zebra-gbrain-onboarding repair-launchd-bun-path",
+        }
+        if reason:
+            payload["repairReason"] = reason
+        return payload
+
+    def repair_launchd_bun_path():
+        home = zebra_home_directory()
+        bun_path = os.path.join(home, ".bun", "bin", "bun")
+        zshenv_path = os.path.join(home, ".zshenv")
+        block = "\\n".join([
+            "# >>> Zebra GBrain launchd bun PATH >>>",
+            'if [ -d "$HOME/.bun/bin" ]; then',
+            '  export PATH="$HOME/.bun/bin:$PATH"',
+            "fi",
+            "# <<< Zebra GBrain launchd bun PATH <<<",
+            "",
+        ])
+        if not os.path.isfile(bun_path) or not os.access(bun_path, os.X_OK):
+            print(json.dumps({
+                "ok": False,
+                "reason": "bun_missing",
+                "bunPath": bun_path,
+                "zshenvUpdated": False,
+                "bunVersionOk": False,
+            }, sort_keys=True))
+            sys.exit(1)
+        existing = ""
+        if os.path.exists(zshenv_path):
+            try:
+                with open(zshenv_path, "r", encoding="utf-8") as handle:
+                    existing = handle.read()
+            except Exception as exc:
+                print(json.dumps({
+                    "ok": False,
+                    "reason": "zshenv_read_failed",
+                    "error": str(exc),
+                    "zshenvPath": zshenv_path,
+                }, sort_keys=True))
+                sys.exit(1)
+        zshenv_updated = False
+        initial_bun_reason = launchd_style_bun_guard_reason()
+        if initial_bun_reason and "# >>> Zebra GBrain launchd bun PATH >>>" not in existing:
+            try:
+                os.makedirs(os.path.dirname(zshenv_path), exist_ok=True)
+                with open(zshenv_path, "a", encoding="utf-8") as handle:
+                    if existing and not existing.endswith("\\n"):
+                        handle.write("\\n")
+                    handle.write(block)
+                zshenv_updated = True
+            except Exception as exc:
+                print(json.dumps({
+                    "ok": False,
+                    "reason": "zshenv_write_failed",
+                    "error": str(exc),
+                    "zshenvPath": zshenv_path,
+                    "zshenvUpdated": False,
+                }, sort_keys=True))
+                sys.exit(1)
+        bun_reason = launchd_style_bun_guard_reason()
+        if bun_reason:
+            print(json.dumps({
+                "ok": False,
+                "reason": bun_reason,
+                "bunPath": bun_path,
+                "zshenvPath": zshenv_path,
+                "zshenvUpdated": zshenv_updated,
+                "bunVersionOk": False,
+            }, sort_keys=True))
+            sys.exit(1)
+        print(json.dumps({
+            "ok": True,
+            "status": "repaired" if zshenv_updated else "already_configured",
+            "bunPath": bun_path,
+            "zshenvPath": zshenv_path,
+            "zshenvUpdated": zshenv_updated,
+            "bunVersionOk": True,
+        }, sort_keys=True))
+
     def record_verified_source_id(state, flags):
         key, target_path, _, target_entry = resolved_target(state)
         if not key or not target_path or not target_entry:
@@ -3656,6 +3738,8 @@ public struct ZebraGBrainOnboardingStore {
             payload.update(extra_payload)
         if waiting_reason(progress.get("waitingForUser")) == "brain_repo_target_resolution":
             payload.update(target_resolution_next_action())
+        elif reason == "bun_missing_for_launchd_autopilot":
+            payload.update(launchd_bun_repair_payload(reason))
         elif next_action:
             payload["nextAction"] = next_action
         print(json.dumps(payload, sort_keys=True))
@@ -4484,8 +4568,10 @@ public struct ZebraGBrainOnboardingStore {
         verify()
     elif command == "recover-cycle-freshness":
         recover_cycle_freshness()
+    elif command == "repair-launchd-bun-path":
+        repair_launchd_bun_path()
     else:
-        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|report|status|verify|recover-cycle-freshness> [options]", file=sys.stderr)
+        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|report|status|verify|recover-cycle-freshness|repair-launchd-bun-path> [options]", file=sys.stderr)
         sys.exit(2)
     PY
     """
