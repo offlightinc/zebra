@@ -2541,7 +2541,9 @@ public struct ZebraGBrainOnboardingStore {
                 "- First run `zebra-gbrain-onboarding report --status waiting_for_user --section " + json.dumps(section_title) + " --reason recurring_jobs_decision --note \\\"Choose defer, manual_scheduler, platform_scheduler_install, or autopilot_install\\\"` and ask the user to choose.",
                 "- If the user chooses `defer`, do not install or start any background service; report completed with `--recurring-jobs-decision defer`.",
                 "- If the user chooses `manual_scheduler`, do not run scheduler commands; report completed with `--recurring-jobs-decision manual_scheduler`.",
-                "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run the autopilot install, then confirm `bun --version` succeeds in a launchd-style clean environment before reporting completed with the same decision. If completed is rejected with `bun_missing_for_launchd_autopilot`, run `zebra-gbrain-onboarding repair-launchd-bun-path`, then retry the completed report.",
+                "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run `zebra-gbrain-onboarding check-launchd-bun-path` before running the autopilot install.",
+                "- If `check-launchd-bun-path` reports `bun_missing_for_launchd_autopilot`, run `zebra-gbrain-onboarding repair-launchd-bun-path`, then rerun `zebra-gbrain-onboarding check-launchd-bun-path`.",
+                "- Only after `check-launchd-bun-path` returns ok, run the autopilot install, then report completed with `--recurring-jobs-decision autopilot_install`.",
                 "- If the user chooses `platform_scheduler_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision platform_scheduler_install`, then run only the approved scheduler install, then report completed with the same decision.",
             ])
         elif role == "verify":
@@ -3310,6 +3312,24 @@ public struct ZebraGBrainOnboardingStore {
         if reason:
             payload["repairReason"] = reason
         return payload
+
+    def check_launchd_bun_path():
+        reason = launchd_style_bun_guard_reason()
+        if reason:
+            payload = {
+                "ok": False,
+                "reason": reason,
+                "status": "failed",
+            }
+            if reason == "bun_missing_for_launchd_autopilot":
+                payload.update(launchd_bun_repair_payload(reason))
+            print(json.dumps(payload, sort_keys=True))
+            sys.exit(1)
+        print(json.dumps({
+            "ok": True,
+            "status": "ready",
+            "bunVersionOk": True,
+        }, sort_keys=True))
 
     def repair_launchd_bun_path():
         home = zebra_home_directory()
@@ -4745,12 +4765,14 @@ public struct ZebraGBrainOnboardingStore {
         verify()
     elif command == "recover-cycle-freshness":
         recover_cycle_freshness()
+    elif command == "check-launchd-bun-path":
+        check_launchd_bun_path()
     elif command == "repair-launchd-bun-path":
         repair_launchd_bun_path()
     elif command == "create-initial-brain-commit":
         create_initial_brain_commit()
     else:
-        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|report|status|verify|recover-cycle-freshness|repair-launchd-bun-path|create-initial-brain-commit> [options]", file=sys.stderr)
+        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|report|status|verify|recover-cycle-freshness|check-launchd-bun-path|repair-launchd-bun-path|create-initial-brain-commit> [options]", file=sys.stderr)
         sys.exit(2)
     PY
     """

@@ -1740,6 +1740,9 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(payload["nextSection"] as? String, "Step 8: Background Sync")
         XCTAssertTrue(nextPrompt.contains("Recurring jobs are persistent background changes"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("gbrain autopilot --install"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding check-launchd-bun-path"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("before running the autopilot install"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Only after `check-launchd-bun-path` returns ok"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("waiting_for_user"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("recurring_jobs_decision"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("--recurring-jobs-decision <defer|manual_scheduler|platform_scheduler_install|autopilot_install>"), nextPrompt)
@@ -4609,6 +4612,50 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains("bun_missing_for_launchd_autopilot"), "stdout: \(result.stdout) stderr: \(result.stderr)")
         XCTAssertTrue(result.stdout.contains("repair_launchd_bun_path"), "stdout: \(result.stdout) stderr: \(result.stderr)")
         XCTAssertTrue(result.stdout.contains("repair-launchd-bun-path"), "stdout: \(result.stdout) stderr: \(result.stderr)")
+    }
+
+    func testCheckLaunchdBunPathFailsBeforeAutopilotInstallWhenLaunchdCannotRunBun() throws {
+        let fixture = try prepareAutopilotInstallCompletionGuardFixture()
+
+        let result = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: ["check-launchd-bun-path"]
+        )
+
+        XCTAssertNotEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains(#""ok": false"#), "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("bun_missing_for_launchd_autopilot"), "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("repair_launchd_bun_path"), "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("repair-launchd-bun-path"), "stdout: \(result.stdout) stderr: \(result.stderr)")
+    }
+
+    func testCheckLaunchdBunPathPassesAfterRepairBeforeAutopilotInstall() throws {
+        let fixture = try prepareAutopilotInstallCompletionGuardFixture()
+        try installFakeLaunchdBun(home: fixture.root)
+
+        let before = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: ["check-launchd-bun-path"]
+        )
+        let repair = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: ["repair-launchd-bun-path"]
+        )
+        let after = try runHelper(
+            stateURL: fixture.stateURL,
+            path: fixture.bin.path,
+            arguments: ["check-launchd-bun-path"]
+        )
+
+        XCTAssertNotEqual(before.exitCode, 0, "stdout: \(before.stdout) stderr: \(before.stderr)")
+        XCTAssertTrue(before.stdout.contains("bun_missing_for_launchd_autopilot"), "stdout: \(before.stdout) stderr: \(before.stderr)")
+        XCTAssertEqual(repair.exitCode, 0, "stdout: \(repair.stdout) stderr: \(repair.stderr)")
+        XCTAssertEqual(after.exitCode, 0, "stdout: \(after.stdout) stderr: \(after.stderr)")
+        XCTAssertTrue(after.stdout.contains(#""status": "ready"#), "stdout: \(after.stdout) stderr: \(after.stderr)")
+        XCTAssertTrue(after.stdout.contains(#""bunVersionOk": true"#), "stdout: \(after.stdout) stderr: \(after.stderr)")
     }
 
     func testReportGuardAllowsAutopilotInstallCompletionWhenLaunchdCanRunBun() throws {
