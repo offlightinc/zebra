@@ -340,7 +340,7 @@ public struct ZebraGBrainOnboardingStore {
         let manifestSections = state.docsManifest?.installForAgentsSections ?? []
         let sections = manifestSections.isEmpty
             ? fallbackInstallForAgentsSectionsForPendingSourcePrepare(state: state)
-            : manifestSections
+            : Self.enabledInstallForAgentsSections(manifestSections)
         guard !sections.isEmpty else { return [] }
 
         let completedSections = state.progress?.completedSections ?? []
@@ -857,6 +857,7 @@ public struct ZebraGBrainOnboardingStore {
         func finishCurrentSection() {
             guard let title = currentTitle else { return }
             guard isInstallForAgentsChecklistSectionTitle(title) else { return }
+            guard !isDisabledInstallForAgentsChecklistSectionTitle(title) else { return }
             let body = currentLines.joined(separator: "\n")
             sections.append(DocsSection(title: title, hash: stableHash(body)))
         }
@@ -881,13 +882,26 @@ public struct ZebraGBrainOnboardingStore {
         ) != nil
     }
 
+    private static func isDisabledInstallForAgentsChecklistSectionTitle(_ title: String) -> Bool {
+        let normalized = normalizedSectionTitle(title)
+        return normalized.starts(with: "step 6 ")
+            || normalized == "step 6"
+            || normalized.starts(with: "step 7 ")
+            || normalized == "step 7"
+    }
+
+    private static func enabledInstallForAgentsSections(_ sections: [DocsSection]) -> [DocsSection] {
+        sections.filter { !isDisabledInstallForAgentsChecklistSectionTitle($0.title) }
+    }
+
     private func nextSection(in state: State, completedSections: [String]? = nil) -> String {
         let completed = Set(completedSections ?? state.progress?.completedSections ?? [])
         guard let sections = state.docsManifest?.installForAgentsSections,
               !sections.isEmpty else {
             return "Step 1: Install GBrain"
         }
-        return sections.first { !completed.contains($0.title) }?.title ?? "verify"
+        return Self.enabledInstallForAgentsSections(sections)
+            .first { !completed.contains($0.title) }?.title ?? "verify"
     }
 
     private func unresolvedInitialStep3Decision(
@@ -2061,6 +2075,8 @@ public struct ZebraGBrainOnboardingStore {
                 return
             if not re.match(r"^Step\\s+[1-9](?:\\.\\d+)?\\b", current_title, re.IGNORECASE):
                 return
+            if disabled_install_for_agents_section_title(current_title):
+                return
             body = "\\n".join(current_lines)
             sections.append({"title": current_title, "hash": stable_hash(body)})
 
@@ -2073,6 +2089,10 @@ public struct ZebraGBrainOnboardingStore {
                 current_lines.append(line)
         finish()
         return sections
+
+    def disabled_install_for_agents_section_title(title):
+        normalized = normalize_title(title)
+        return normalized == "step 6" or normalized.startswith("step 6 ") or normalized == "step 7" or normalized.startswith("step 7 ")
 
     def docs_manifest_fingerprint(manifest):
         if not manifest:
@@ -2297,6 +2317,8 @@ public struct ZebraGBrainOnboardingStore {
         for index, section in enumerate(sections):
             title = section.get("title") or ""
             if not title:
+                continue
+            if disabled_install_for_agents_section_title(title):
                 continue
             body = bodies.get(title)
             if body is None:
@@ -2618,6 +2640,8 @@ public struct ZebraGBrainOnboardingStore {
         state = load_state()
         progress = state.get("progress") or {}
         section = progress.get("nextSection") or next_section_title(state)
+        if disabled_install_for_agents_section_title(section):
+            section = next_section_title(state)
         section_prompt = build_section_prompt(state, section)
         language = (os.environ.get("ZEBRA_ONBOARDING_LANGUAGE") or "en").lower()
         if language == "ko" or language.startswith("ko-"):

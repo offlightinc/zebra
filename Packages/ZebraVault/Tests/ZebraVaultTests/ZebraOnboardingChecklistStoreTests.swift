@@ -31,9 +31,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         XCTAssertEqual(
             store.snapshots.map { $0.id },
-            [.agent, .gbrainRuntime, .gbrain, .adapter, .email, .ingest, .goals]
+            [.agent, .gbrainRuntime, .gbrain, .adapter, .email]
         )
-        XCTAssertEqual(store.snapshots.map { $0.number }, [1, 2, 3, 4, 5, 6, 7])
+        XCTAssertEqual(store.snapshots.map { $0.number }, [1, 2, 3, 4, 5])
     }
 
     @MainActor

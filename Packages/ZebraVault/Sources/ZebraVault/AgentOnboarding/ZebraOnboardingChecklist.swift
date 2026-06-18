@@ -60,9 +60,10 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         StepDefinition(id: .gbrain,        number: 3, staleTimeout: 15 * 60),
         StepDefinition(id: .adapter,       number: 4, staleTimeout: 5 * 60),
         StepDefinition(id: .email,         number: 5, staleTimeout: 5 * 60),
-        StepDefinition(id: .ingest,        number: 6, staleTimeout: 5 * 60),
-        StepDefinition(id: .goals,         number: 7, staleTimeout: 5 * 60),
+        // StepDefinition(id: .ingest,        number: 6, staleTimeout: 5 * 60),
+        // StepDefinition(id: .goals,         number: 7, staleTimeout: 5 * 60),
     ]
+    private static let enabledStepIDs = Set(steps.map(\.id))
 
     private let fileManager: FileManager
     private let homeDirectoryPath: String
@@ -169,7 +170,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     }
 
     public var completedCount: Int {
-        completedStepIDs.count
+        completedStepIDs.intersection(Self.enabledStepIDs).count
     }
 
     public var progressFraction: Double {
@@ -409,15 +410,16 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     }
 
     private func applyCompletedStepIDs(_ completed: Set<ZebraOnboardingChecklistStepID>) {
-        if let runningStepID, completed.contains(runningStepID) {
+        let enabledCompleted = completed.intersection(Self.enabledStepIDs)
+        if let runningStepID, enabledCompleted.contains(runningStepID) {
             self.runningStepID = nil
         }
         if runningStepID == .gbrain,
            gbrainOnboardingStore.hasSourceRepoPrepareAbortMarker() {
             self.runningStepID = nil
         }
-        if completedStepIDs != completed {
-            completedStepIDs = completed
+        if completedStepIDs != enabledCompleted {
+            completedStepIDs = enabledCompleted
         }
     }
 
