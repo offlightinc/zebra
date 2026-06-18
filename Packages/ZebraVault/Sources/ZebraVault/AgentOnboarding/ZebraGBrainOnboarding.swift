@@ -1394,14 +1394,11 @@ public struct ZebraGBrainOnboardingStore {
             .deletingLastPathComponent()
             .appendingPathComponent("bin", isDirectory: true)
         let url = directory.appendingPathComponent("zebra-gbrain-onboarding", isDirectory: false)
-        let gbrainWrapperURL = directory.appendingPathComponent("gbrain", isDirectory: false)
         let launchctlWrapperURL = directory.appendingPathComponent("launchctl", isDirectory: false)
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             try Self.helperScript.write(to: url, atomically: true, encoding: .utf8)
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-            try Self.gbrainWrapperScript.write(to: gbrainWrapperURL, atomically: true, encoding: .utf8)
-            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gbrainWrapperURL.path)
             try Self.launchctlWrapperScript.write(to: launchctlWrapperURL, atomically: true, encoding: .utf8)
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launchctlWrapperURL.path)
             return url
@@ -2466,7 +2463,7 @@ public struct ZebraGBrainOnboardingStore {
                 f"- Active GBrain source repo: {source_repo}.",
                 "- Run GBrain installation from the active GBrain source repo.",
                 install_rule,
-                "- Do not use Zebra's PATH-provided `gbrain` wrapper or `bun src/cli.ts` as the completion verification; Step 1 must expose the active source repo through the user-visible `gbrain` command first.",
+                "- Do not use `zebra-gbrain-onboarding run-gbrain -- --version` or `bun src/cli.ts --version` as the completion verification; Step 1 must expose the active source repo through the user-visible `gbrain` command first.",
                 "- Do not run `bun upgrade` during Zebra onboarding.",
             ])
         elif role == "credentials":
@@ -2541,9 +2538,9 @@ public struct ZebraGBrainOnboardingStore {
                 "- First run `zebra-gbrain-onboarding report --status waiting_for_user --section " + json.dumps(section_title) + " --reason recurring_jobs_decision --note \\\"Choose defer, manual_scheduler, platform_scheduler_install, or autopilot_install\\\"` and ask the user to choose.",
                 "- If the user chooses `defer`, do not install or start any background service; report completed with `--recurring-jobs-decision defer`.",
                 "- If the user chooses `manual_scheduler`, do not run scheduler commands; report completed with `--recurring-jobs-decision manual_scheduler`.",
-                "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run `zebra-gbrain-onboarding check-launchd-bun-path` before running the autopilot install.",
+                "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run `zebra-gbrain-onboarding check-launchd-bun-path` before running `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo <brain repo path>`.",
                 "- If `check-launchd-bun-path` reports `bun_missing_for_launchd_autopilot`, run `zebra-gbrain-onboarding repair-launchd-bun-path`, then rerun `zebra-gbrain-onboarding check-launchd-bun-path`.",
-                "- Only after `check-launchd-bun-path` returns ok, run the autopilot install, then report completed with `--recurring-jobs-decision autopilot_install`.",
+                "- Only after `check-launchd-bun-path` returns ok, run `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo <brain repo path>`, then report completed with `--recurring-jobs-decision autopilot_install`.",
                 "- If the user chooses `platform_scheduler_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision platform_scheduler_install`, then run only the approved scheduler install, then report completed with the same decision.",
             ])
         elif role == "verify":
@@ -2777,10 +2774,59 @@ public struct ZebraGBrainOnboardingStore {
         for candidate in glob.glob(os.path.expanduser("~/.gbrain-profiles/*/gbrain-*")):
             if os.access(candidate, os.X_OK):
                 return candidate
-        wrapper = gbrain_wrapper_path()
-        if os.access(wrapper, os.X_OK):
-            return wrapper
         return None
+
+    def run_gbrain():
+        forwarded_args = list(args)
+        if forwarded_args and forwarded_args[0] == "--":
+            forwarded_args = forwarded_args[1:]
+
+        state = load_state()
+        source_repo = (state.get("activeGBrainBinding") or {}).get("sourceRepoPath")
+        if not source_repo:
+            print("active GBrain source repo binding is missing", file=sys.stderr)
+            sys.exit(127)
+        source_repo = os.path.abspath(os.path.expanduser(source_repo))
+        if not os.path.isdir(source_repo):
+            print("active GBrain source repo is missing: " + source_repo, file=sys.stderr)
+            sys.exit(127)
+
+        if (
+            forwarded_args
+            and forwarded_args[0] == "autopilot"
+            and any(arg in {"--install", "install"} for arg in forwarded_args[1:])
+        ):
+            decision = recurring_jobs_decision_value(state)
+            if os.environ.get("ZEBRA_GBRAIN_ALLOW_RECURRING_JOBS_INSTALL") != "1" and decision != "autopilot_install":
+                print("Zebra blocked 'gbrain autopilot --install': recurring_jobs_decision=autopilot_install is required before installing persistent background jobs.", file=sys.stderr)
+                print("Run: zebra-gbrain-onboarding report --status waiting_for_user --section \\\"<section title>\\\" --reason recurring_jobs_decision", file=sys.stderr)
+                sys.exit(78)
+
+        candidates = [
+            [os.path.join(source_repo, "node_modules", ".bin", "gbrain")],
+            [os.path.join(source_repo, "bin", "gbrain")],
+        ]
+        bun = shutil.which("bun")
+        if bun and os.path.isfile(os.path.join(source_repo, "src", "cli.ts")):
+            candidates.append([bun, os.path.join(source_repo, "src", "cli.ts")])
+
+        for prefix in candidates:
+            executable = prefix[0]
+            if len(prefix) == 1 and not os.access(executable, os.X_OK):
+                continue
+            if len(prefix) > 1 and not os.path.isfile(prefix[1]):
+                continue
+            try:
+                result = subprocess.run(prefix + forwarded_args, cwd=source_repo)
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                print("failed to run active GBrain source CLI: " + str(exc), file=sys.stderr)
+                sys.exit(1)
+            sys.exit(result.returncode)
+
+        print("active GBrain source CLI is unavailable; run bun install from the active GBrain source repo first", file=sys.stderr)
+        sys.exit(127)
 
     def run_json(argv, cwd=None, timeout=30):
         try:
@@ -4757,6 +4803,8 @@ public struct ZebraGBrainOnboardingStore {
         except Exception as exc:
             print(json.dumps({"ok": False, "reason": str(exc)}, sort_keys=True))
             sys.exit(1)
+    elif command == "run-gbrain":
+        run_gbrain()
     elif command == "report":
         report()
     elif command == "status":
@@ -4772,102 +4820,9 @@ public struct ZebraGBrainOnboardingStore {
     elif command == "create-initial-brain-commit":
         create_initial_brain_commit()
     else:
-        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|report|status|verify|recover-cycle-freshness|check-launchd-bun-path|repair-launchd-bun-path|create-initial-brain-commit> [options]", file=sys.stderr)
+        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|run-gbrain|report|status|verify|recover-cycle-freshness|check-launchd-bun-path|repair-launchd-bun-path|create-initial-brain-commit> [options]", file=sys.stderr)
         sys.exit(2)
     PY
-    """
-
-    private static let gbrainWrapperScript = """
-    #!/bin/sh
-    set -eu
-
-    if [ -n "${ZEBRA_GBRAIN_STATE:-}" ]; then
-      STATE="$ZEBRA_GBRAIN_STATE"
-    elif [ -n "${HOME:-}" ]; then
-      STATE="$HOME/Library/Application Support/zebra/onboarding/gbrain-setup-state.json"
-    else
-      echo "ZEBRA_GBRAIN_STATE or HOME is required for gbrain wrapper" >&2
-      exit 1
-    fi
-
-    SOURCE_REPO="${ZEBRA_GBRAIN_SOURCE_REPO:-}"
-    if [ -z "$SOURCE_REPO" ]; then
-      PYTHON_BIN="$(command -v python3 || true)"
-      if [ -n "$PYTHON_BIN" ]; then
-        SOURCE_REPO="$("$PYTHON_BIN" -c 'import json, os, sys; state = json.load(open(sys.argv[1], "r", encoding="utf-8")) if os.path.exists(sys.argv[1]) else {}; path = (state.get("activeGBrainBinding") or {}).get("sourceRepoPath"); print(os.path.abspath(os.path.expanduser(path)) if path else "")' "$STATE" || true)"
-      fi
-    fi
-
-    zebra_recurring_jobs_decision() {
-      PYTHON_BIN="$(command -v python3 || true)"
-      if [ -z "$PYTHON_BIN" ]; then
-        return 0
-      fi
-      "$PYTHON_BIN" -c 'import json, os, sys
-    path = sys.argv[1]
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            state = json.load(handle)
-    except Exception:
-        state = {}
-    progress = state.get("progress") or {}
-    decision = progress.get("recurringJobsDecision") or {}
-    print(decision.get("decision") or "")' "$STATE" 2>/dev/null || true
-    }
-
-    zebra_gbrain_autopilot_install_requested() {
-      [ "${1:-}" = "autopilot" ] || return 1
-      shift || true
-      for arg in "$@"; do
-        if [ "$arg" = "--install" ] || [ "$arg" = "install" ]; then
-          return 0
-        fi
-      done
-      return 1
-    }
-
-    if zebra_gbrain_autopilot_install_requested "$@"; then
-      DECISION="$(zebra_recurring_jobs_decision)"
-      if [ "${ZEBRA_GBRAIN_ALLOW_RECURRING_JOBS_INSTALL:-}" != "1" ] && [ "$DECISION" != "autopilot_install" ]; then
-        echo "Zebra blocked 'gbrain autopilot --install': recurring_jobs_decision=autopilot_install is required before installing persistent background jobs." >&2
-        echo "Run: zebra-gbrain-onboarding report --status waiting_for_user --section \"<section title>\" --reason recurring_jobs_decision" >&2
-        exit 78
-      fi
-    fi
-
-    if [ -n "$SOURCE_REPO" ]; then
-      SOURCE_REPO="$(cd "$SOURCE_REPO" 2>/dev/null && pwd -P || printf '%s' "$SOURCE_REPO")"
-      if [ -x "$SOURCE_REPO/node_modules/.bin/gbrain" ]; then
-        exec "$SOURCE_REPO/node_modules/.bin/gbrain" "$@"
-      fi
-      if [ -x "$SOURCE_REPO/bin/gbrain" ]; then
-        exec "$SOURCE_REPO/bin/gbrain" "$@"
-      fi
-      if [ -f "$SOURCE_REPO/src/cli.ts" ]; then
-        exec bun "$SOURCE_REPO/src/cli.ts" "$@"
-      fi
-    fi
-
-    SELF_DIR="$(cd "$(dirname "$0")" && pwd -P)"
-    OLD_IFS="$IFS"
-    IFS=:
-    for dir in $PATH; do
-      IFS="$OLD_IFS"
-      [ -z "$dir" ] && dir=.
-      resolved_dir="$(cd "$dir" 2>/dev/null && pwd -P || true)"
-      if [ "$resolved_dir" = "$SELF_DIR" ]; then
-        IFS=:
-        continue
-      fi
-      if [ -x "$dir/gbrain" ]; then
-        exec "$dir/gbrain" "$@"
-      fi
-      IFS=:
-    done
-    IFS="$OLD_IFS"
-
-    echo "gbrain executable is unavailable; run bun install from the active GBrain source repo first" >&2
-    exit 127
     """
 
     private static let launchctlWrapperScript = """
