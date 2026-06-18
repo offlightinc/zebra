@@ -145,6 +145,7 @@ final class ZebraEmailListStore: ObservableObject {
     // Seed from the last persisted state so the first frame after relaunch
     // doesn't flash the "Gmail 연결" CTA while waiting for status to come back.
     @Published private(set) var isConnected: Bool
+    @Published private(set) var hasVerifiedConnection = false
     // isLoading = 모든 in-flight 작업 (DB read, connect, manual sync) 의 합집합.
     // 빈 list placeholder ("불러오는 중") 분기 같은 곳에 쓰임.
     @Published private(set) var isLoading = false
@@ -360,6 +361,7 @@ final class ZebraEmailListStore: ObservableObject {
 
     private func recordConnected(_ value: Bool) {
         isConnected = value
+        hasVerifiedConnection = value
         UserDefaults.standard.set(value, forKey: Self.lastConnectedKey)
         if value {
             startPeriodicSyncIfNeeded()

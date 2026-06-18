@@ -126,4 +126,15 @@ enum ZebraOnboardingLanguage: String, Equatable {
             """
         }
     }
+
+    var clawvisorEmailConnectionIntro: String {
+        switch self {
+        case .en:
+            return "Zebra securely connects Gmail, Calendar, and Contacts access through Clawvisor. After setup, Zebra can load your email, read the message content you need, and run user-approved actions within the Clawvisor task permissions. Follow the steps below."
+        case .ja:
+            return "ZebraはClawvisorを通じてGmail、Calendar、Contactsへのアクセス権限を安全に接続します。連携が完了すると、Zebraはメールを読み込み、必要なメール本文を読み、ユーザーが承認した操作をClawvisor task権限の範囲内で実行できます。以下の手順に従って進めてください。"
+        case .ko:
+            return "Zebra는 Clawvisor를 통해 Gmail, Calendar, Contacts 접근 권한을 안전하게 연결합니다. 연동이 끝나면 Zebra가 이메일을 불러오고, 필요한 메일 내용을 읽고, 사용자가 승인한 작업을 Clawvisor task 권한 안에서 실행할 수 있습니다. 아래 순서대로 진행하세요."
+        }
+    }
 }

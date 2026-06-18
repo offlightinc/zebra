@@ -77,6 +77,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private let gbrainAdapterOnboardingStateURL: URL
     private var selectedVaultPath: String?
     private var emailConnectionRepairState: ZebraEmailConnectionRepairState?
+    private var emailConnectionVerified = false
     private var launchGeneration = 0
     private var startedStepIDs: Set<ZebraOnboardingChecklistStepID> = []
     private var gbrainDocsPrefetchTask: Task<Bool, Never>?
@@ -243,15 +244,19 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     public func syncExternalState(
         selectedVaultPath: String?,
-        emailConnectionRepairState: ZebraEmailConnectionRepairState? = nil
+        emailConnectionRepairState: ZebraEmailConnectionRepairState? = nil,
+        emailConnectionVerified: Bool = false
     ) {
         let validVaultPath = Self.validDirectoryPath(
             selectedVaultPath,
             fileManager: fileManager
         )
-        if self.selectedVaultPath != validVaultPath || self.emailConnectionRepairState != emailConnectionRepairState {
+        if self.selectedVaultPath != validVaultPath
+            || self.emailConnectionRepairState != emailConnectionRepairState
+            || self.emailConnectionVerified != emailConnectionVerified {
             self.selectedVaultPath = validVaultPath
             self.emailConnectionRepairState = emailConnectionRepairState
+            self.emailConnectionVerified = emailConnectionVerified
         }
         refreshDetectedCompletion()
         prefetchGBrainDocsIfNeeded()
@@ -669,6 +674,9 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     }
 
     private var isClawvisorEmailConfigured: Bool {
+        guard emailConnectionVerified else {
+            return false
+        }
         guard let raw = try? String(contentsOf: clawvisorEmailEnvURL, encoding: .utf8) else {
             return false
         }

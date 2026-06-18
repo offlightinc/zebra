@@ -350,6 +350,8 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
 
         XCTAssertTrue(line.contains("cd '\(cwd.path)' && codex -C '\(cwd.path)'"))
         XCTAssertTrue(line.contains("-c 'projects.\"\(cwd.path)\".trust_level=\"trusted\"'"))
+        XCTAssertTrue(line.contains("--ask-for-approval on-request"))
+        XCTAssertTrue(line.contains("'approvals_reviewer=\"auto_review\"'"))
         XCTAssertTrue(line.contains("using Codex"))
         XCTAssertTrue(line.contains("CLAWVISOR_TASK_ID"))
         XCTAssertTrue(line.contains("https://app.clawvisor.com/login"))
@@ -371,15 +373,38 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(line.contains("dangerously-bypass"))
     }
 
+    func testClawvisorClaudeOnboardingLaunchUsesSessionAutoPermission() throws {
+        let cwd = try makeTemporaryDirectory()
+
+        let line = ZebraClawvisorOnboardingCommand.shellStartupLine(
+            agent: .claude,
+            launchDirectory: cwd.path
+        )
+
+        XCTAssertTrue(line.contains("cd '\(cwd.path)' && claude --permission-mode auto --append-system-prompt"))
+        XCTAssertTrue(line.contains("CLAWVISOR_TASK_ID"))
+        XCTAssertTrue(line.contains("https://app.clawvisor.com/login"))
+        XCTAssertFalse(line.contains("dangerously-bypass"))
+    }
+
     func testClawvisorEmailPromptInjectsLocalizedConnectionSteps() {
         let korean = ZebraClawvisorOnboardingCommand.gbrainAgentSystemPrompt(
             agentDisplayName: "Codex",
             language: .ko
         )
+        XCTAssertTrue(korean.contains("Zebra는 Clawvisor를 통해 Gmail, Calendar, Contacts 접근 권한을 안전하게 연결합니다."))
+        XCTAssertTrue(korean.contains("아래 순서대로 진행하세요."))
         XCTAssertTrue(korean.contains("1. https://app.clawvisor.com/login 을 열고 Google로 sign up 또는 sign in 하세요."))
         XCTAssertTrue(korean.contains("2. Clawvisor에서 왼쪽 sidebar의 Agents를 열고 GBrain을 선택한 뒤 Create GBrain agent를 클릭하세요."))
         XCTAssertTrue(korean.contains("3. Google service authorization과 task approval을 이어서 진행하세요."))
         XCTAssertTrue(korean.contains("4. 마지막 Env vars step에 도달하면 세 줄의 export env lines를 이 터미널에 그대로 붙여넣으세요."))
+        XCTAssertLessThan(
+            korean.range(of: "Zebra는 Clawvisor를 통해")!.lowerBound,
+            korean.range(of: "1. https://app.clawvisor.com/login")!.lowerBound
+        )
+        XCTAssertTrue(korean.contains("zebra-clawvisor-email-onboarding verify-connection"))
+        XCTAssertTrue(korean.contains("Do not search the web for Clawvisor API docs"))
+        XCTAssertFalse(korean.contains("GET $CLAWVISOR_URL/api/tasks/$CLAWVISOR_TASK_ID"))
         XCTAssertTrue(korean.contains("use concise Korean prose"))
         XCTAssertFalse(korean.contains("read the setup packet"))
         XCTAssertFalse(korean.contains("authoritative setup packet"))
@@ -388,6 +413,8 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
             agentDisplayName: "Codex",
             language: .en
         )
+        XCTAssertTrue(english.contains("Zebra securely connects Gmail, Calendar, and Contacts access through Clawvisor."))
+        XCTAssertTrue(english.contains("Follow the steps below."))
         XCTAssertTrue(english.contains("1. Open https://app.clawvisor.com/login and sign up or sign in with Google."))
         XCTAssertTrue(english.contains("2. In Clawvisor, use the left sidebar to open Agents, choose GBrain, and click Create GBrain agent."))
         XCTAssertTrue(english.contains("3. Continue through Google service authorization and task approval."))
@@ -520,6 +547,8 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(setupPacket.contains("3. Continue through Google service authorization"))
         XCTAssertTrue(setupPacket.contains("4. When Clawvisor reaches the final Env vars step"))
         XCTAssertTrue(setupPacket.contains("CLAWVISOR_TASK_ID"))
+        XCTAssertTrue(setupPacket.contains("zebra-clawvisor-email-onboarding verify-connection"))
+        XCTAssertFalse(setupPacket.contains("GET $CLAWVISOR_URL/api/tasks/$CLAWVISOR_TASK_ID"))
         XCTAssertFalse(setupPacket.contains("OpenClaw integration guide"))
         XCTAssertFalse(setupPacket.contains("On your first response, run `zebra-clawvisor-email-onboarding status`"))
         XCTAssertFalse(setupPacket.contains("zebra-clawvisor-email-onboarding status"))

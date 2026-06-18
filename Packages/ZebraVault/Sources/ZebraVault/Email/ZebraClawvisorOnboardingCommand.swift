@@ -265,10 +265,12 @@ public enum ZebraClawvisorOnboardingCommand {
             if let trustOverride = codexFolderTrustOverride(for: resolvedCwd) {
                 parts.append("-c \(shellQuote(trustOverride))")
             }
+            parts.append("--ask-for-approval on-request")
+            parts.append("-c \(shellQuote("approvals_reviewer=\"auto_review\""))")
             parts.append(shellQuote(visiblePrompt))
             return parts.joined(separator: " ")
         case .claude:
-            return "cd \(shellQuote(resolvedCwd)) && \(pathPrefix)claude --append-system-prompt \(shellQuote(systemPrompt)) \(shellQuote(userPrompt))"
+            return "cd \(shellQuote(resolvedCwd)) && \(pathPrefix)claude --permission-mode auto --append-system-prompt \(shellQuote(systemPrompt)) \(shellQuote(userPrompt))"
         case .antigravity:
             return "cd \(shellQuote(resolvedCwd)) && \(pathPrefix)agy --prompt-interactive --add-dir \(shellQuote(resolvedCwd)) \(shellQuote(visiblePrompt))"
         }
@@ -556,6 +558,10 @@ public enum ZebraClawvisorOnboardingCommand {
     import json
     import os
     import sys
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    import uuid
     from datetime import datetime, timezone
     from pathlib import Path
 
@@ -591,28 +597,134 @@ public enum ZebraClawvisorOnboardingCommand {
             return default
         return args[index + 1]
 
-    def verify_env():
+    def strip_optional_quotes(value):
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            return value[1:-1]
+        return value
+
+    def dotenv_values():
         env_path = Path.home() / ".gbrain" / ".env"
+        values = {}
+        raw = env_path.read_text(encoding="utf-8")
+        for line in raw.splitlines():
+            text = line.strip()
+            if not text or text.startswith("#") or "=" not in text:
+                continue
+            if text.startswith("export "):
+                text = text[len("export "):].lstrip()
+            key, value = text.split("=", 1)
+            key = key.strip()
+            if key:
+                values[key] = strip_optional_quotes(value)
+        return env_path, values
+
+    def merged_env():
+        try:
+            env_path, values = dotenv_values()
+        except Exception:
+            env_path = Path.home() / ".gbrain" / ".env"
+            values = {}
+        merged = dict(os.environ)
+        for key, value in values.items():
+            if not merged.get(key):
+                merged[key] = value
+        return env_path, merged
+
+    def verify_env():
+        env_path, env = merged_env()
         required = [
             "CLAWVISOR_URL",
             "CLAWVISOR_AGENT_TOKEN",
             "CLAWVISOR_TASK_ID",
         ]
-        try:
-            raw = env_path.read_text(encoding="utf-8")
-        except Exception:
-            print(json.dumps({"ok": False, "missing": required, "path": str(env_path)}, sort_keys=True))
-            return 1
-        present = set()
-        for line in raw.splitlines():
-            if "=" not in line or line.lstrip().startswith("#"):
-                continue
-            key, value = line.split("=", 1)
-            if key.strip() in required and value.strip():
-                present.add(key.strip())
-        missing = [key for key in required if key not in present]
+        missing = [key for key in required if not env.get(key, "").strip()]
         print(json.dumps({"ok": not missing, "missing": missing, "path": str(env_path)}, sort_keys=True))
         return 0 if not missing else 1
+
+    def request_json(method, url, token, body=None):
+        data = None
+        headers = {"Authorization": "Bearer " + token}
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                raw = response.read().decode("utf-8")
+                return response.status, json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as error:
+            raw = error.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception:
+                payload = {"error": raw}
+            return error.code, payload
+
+    def is_gmail_service(service):
+        service = (service or "").strip()
+        return service == "google.gmail" or service.startswith("google.gmail:")
+
+    def gmail_service_from_task(value):
+        if isinstance(value, dict):
+            service = value.get("service")
+            if isinstance(service, str) and is_gmail_service(service):
+                return service
+            actions = value.get("authorized_actions")
+            if isinstance(actions, list):
+                for action in actions:
+                    service = gmail_service_from_task(action)
+                    if service:
+                        return service
+            for key in ("task", "data", "result"):
+                service = gmail_service_from_task(value.get(key))
+                if service:
+                    return service
+        if isinstance(value, list):
+            for item in value:
+                service = gmail_service_from_task(item)
+                if service:
+                    return service
+        return ""
+
+    def verify_connection():
+        env_path, env = merged_env()
+        required = ["CLAWVISOR_URL", "CLAWVISOR_AGENT_TOKEN", "CLAWVISOR_TASK_ID"]
+        missing = [key for key in required if not env.get(key, "").strip()]
+        if missing:
+            print(json.dumps({"ok": False, "stage": "env", "missing": missing, "path": str(env_path)}, sort_keys=True))
+            return 1
+        base_url = env["CLAWVISOR_URL"].strip().rstrip("/")
+        token = env["CLAWVISOR_AGENT_TOKEN"].strip()
+        task_id = env["CLAWVISOR_TASK_ID"].strip()
+        task_url = base_url + "/api/tasks/" + urllib.parse.quote(task_id, safe="")
+        status, task = request_json("GET", task_url, token)
+        if status < 200 or status >= 300:
+            print(json.dumps({"ok": False, "stage": "task", "status": status, "response": task}, sort_keys=True))
+            return 1
+        service = gmail_service_from_task(task)
+        if not service:
+            print(json.dumps({"ok": False, "stage": "task", "reason": "no authorized google.gmail service"}, sort_keys=True))
+            return 1
+        gateway_body = {
+            "task_id": task_id,
+            "session_id": str(uuid.uuid4()),
+            "service": service,
+            "action": "list_messages",
+            "params": {"query": "newer_than:7d", "max_results": 1},
+            "reason": "Verify Zebra can read Gmail through the approved Clawvisor task before marking email integration complete.",
+        }
+        gateway_url = base_url + "/api/gateway/request?wait=true"
+        status, gateway = request_json("POST", gateway_url, token, gateway_body)
+        if status < 200 or status >= 300:
+            print(json.dumps({"ok": False, "stage": "gateway", "status": status, "service": service, "response": gateway}, sort_keys=True))
+            return 1
+        gateway_status = gateway.get("status") if isinstance(gateway, dict) else None
+        if gateway_status and gateway_status not in ("executed", "approved", "completed", "success"):
+            print(json.dumps({"ok": False, "stage": "gateway", "status": gateway_status, "service": service, "response": gateway}, sort_keys=True))
+            return 1
+        print(json.dumps({"ok": True, "service": service, "taskId": task_id}, sort_keys=True))
+        return 0
 
     if command == "status":
         print(json.dumps(load_state(), indent=2, sort_keys=True))
@@ -620,6 +732,9 @@ public enum ZebraClawvisorOnboardingCommand {
 
     if command == "verify-env":
         raise SystemExit(verify_env())
+
+    if command == "verify-connection":
+        raise SystemExit(verify_connection())
 
     if command == "report":
         status = option("status")
@@ -657,8 +772,11 @@ session.
 
 Your job is to guide the user through Clawvisor's **Connect an Agent →
 GBrain** flow and then complete the local setup yourself. The user-facing
-instruction must be a numbered list with exactly these four user-facing steps
-in Zebra's app language:
+instruction must start with this short paragraph in Zebra's app language:
+
+\(language.clawvisorEmailConnectionIntro)
+
+Immediately after that paragraph, show this numbered list:
 
 \(language.clawvisorEmailConnectionSteps)
 
@@ -682,15 +800,10 @@ When the user pastes the env lines:
   2. Upsert only those three canonical keys into Zebra's env file while
      preserving unrelated lines, then restrict the file permissions.
   3. Run `zebra-clawvisor-email-onboarding verify-env`.
-  4. Verify the Clawvisor task yourself with:
-
-         GET $CLAWVISOR_URL/api/tasks/$CLAWVISOR_TASK_ID
-         Authorization: Bearer $CLAWVISOR_AGENT_TOKEN
-
-     The task response must contain at least one authorized service whose
-     value is `google.gmail` or starts with `google.gmail:`.
-  5. Run a lightweight Gmail read/search through Clawvisor gateway using
-     that Gmail service and the same `CLAWVISOR_TASK_ID`.
+  4. Run `zebra-clawvisor-email-onboarding verify-connection`.
+     This helper performs the Clawvisor task lookup and Gmail gateway smoke
+     check for you. Do not search the web for Clawvisor API docs and do not
+     hand-write curl calls for this verification.
 
 Only after all checks pass, say briefly that Zebra email integration is
 complete and stop. Zebra watches the env file and reloads on its own; do

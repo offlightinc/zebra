@@ -2406,7 +2406,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testEmailStepCompletesFromClawvisorEnv() throws {
+    func testEmailStepDoesNotCompleteFromClawvisorEnvBeforeVerifiedConnection() throws {
         let root = try makeTemporaryDirectory()
         try writeClawvisorEnv(
             """
@@ -2419,11 +2419,32 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         let store = makeChecklistStore(homeURL: root)
 
+        XCTAssertFalse(store.completedStepIDs.contains(.email))
+    }
+
+    @MainActor
+    func testEmailStepCompletesFromClawvisorEnvAfterVerifiedConnection() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=https://app.clawvisor.com
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            CLAWVISOR_TASK_ID=task_test
+            """,
+            homeURL: root
+        )
+
+        let store = makeChecklistStore(homeURL: root)
+        store.syncExternalState(
+            selectedVaultPath: nil,
+            emailConnectionVerified: true
+        )
+
         XCTAssertTrue(store.completedStepIDs.contains(.email))
     }
 
     @MainActor
-    func testEmailStepCompletesFromExportedClawvisorEnv() throws {
+    func testEmailStepCompletesFromExportedClawvisorEnvAfterVerifiedConnection() throws {
         let root = try makeTemporaryDirectory()
         try writeClawvisorEnv(
             """
@@ -2435,6 +2456,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
 
         let store = makeChecklistStore(homeURL: root)
+        store.syncExternalState(
+            selectedVaultPath: nil,
+            emailConnectionVerified: true
+        )
 
         XCTAssertTrue(store.completedStepIDs.contains(.email))
     }
@@ -2454,7 +2479,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         store.syncExternalState(
             selectedVaultPath: nil,
-            emailConnectionRepairState: ZebraEmailConnectionRepairState(kind: .taskPendingApproval)
+            emailConnectionRepairState: ZebraEmailConnectionRepairState(kind: .taskPendingApproval),
+            emailConnectionVerified: true
         )
 
         XCTAssertFalse(store.completedStepIDs.contains(.email))

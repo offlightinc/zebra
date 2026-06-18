@@ -95,6 +95,9 @@ struct ZebraSidebarBody: View {
         .onChange(of: emailListStore.isConnected) { _ in
             refreshOnboardingChecklist()
         }
+        .onChange(of: emailListStore.hasVerifiedConnection) { _ in
+            refreshOnboardingChecklist()
+        }
         .onChange(of: emailListStore.connectionRepairState) { _ in
             refreshOnboardingChecklist()
         }
@@ -577,7 +580,8 @@ struct ZebraSidebarBody: View {
     private func refreshOnboardingChecklist() {
         onboardingChecklistStore.syncExternalState(
             selectedVaultPath: onboardingSelectedVaultPath,
-            emailConnectionRepairState: emailListStore.connectionRepairState
+            emailConnectionRepairState: emailListStore.connectionRepairState,
+            emailConnectionVerified: emailListStore.hasVerifiedConnection
         )
     }
 
