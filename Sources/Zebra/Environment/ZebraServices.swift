@@ -398,14 +398,7 @@ final class ZebraEmailListStore: ObservableObject {
     }
 
     private func shouldProvisionStandingTask(for state: ZebraEmailConnectionRepairState) -> Bool {
-        switch state.kind {
-        case .configurationMissing:
-            return state.detail?.contains("CLAWVISOR_GMAIL_TASK_ID") == true
-        case .taskExpired, .taskUnavailable:
-            return true
-        case .taskPendingApproval, .authorizationFailed, .provisioning, .provisioningFailed:
-            return false
-        }
+        false
     }
 
     private func provisionStandingTaskIfNeeded() {

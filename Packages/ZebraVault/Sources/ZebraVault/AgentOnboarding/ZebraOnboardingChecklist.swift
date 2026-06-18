@@ -675,14 +675,24 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         let requiredKeys = [
             "CLAWVISOR_URL",
             "CLAWVISOR_AGENT_TOKEN",
-            "CLAWVISOR_GMAIL_TASK_ID",
-            "ZEBRA_CLAWVISOR_GMAIL_ACCOUNT",
+            "CLAWVISOR_TASK_ID",
         ]
         return requiredKeys.allSatisfy { key in
             raw.split(separator: "\n").contains { line in
-                String(line).trimmingCharacters(in: .whitespaces).hasPrefix("\(key)=")
+                Self.dotEnvKey(in: String(line)) == key
             }
         }
+    }
+
+    private static func dotEnvKey(in line: String) -> String? {
+        var text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !text.hasPrefix("#") else { return nil }
+        if text.hasPrefix("export ") {
+            text = String(text.dropFirst("export ".count))
+        }
+        guard let equals = text.firstIndex(of: "=") else { return nil }
+        let key = String(text[..<equals]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return key.isEmpty ? nil : key
     }
 
     private var clawvisorEmailEnvURL: URL {

@@ -117,13 +117,22 @@ public actor ZebraClawvisorEmailClient {
 
     private let session: URLSession
     private let fileManager: FileManager
+    private let environmentReader: @Sendable () -> [String: String]
+    private let dotEnvReader: @Sendable () -> [String: String]
     private var database: OpaquePointer?
     private var databaseInitialized = false
     private var cachedConfig: ClawvisorConfig?
 
-    public init(session: URLSession = .shared, fileManager: FileManager = .default) {
+    public init(
+        session: URLSession = .shared,
+        fileManager: FileManager = .default,
+        environmentReader: @escaping @Sendable () -> [String: String] = { ProcessInfo.processInfo.environment },
+        dotEnvReader: (@Sendable () -> [String: String])? = nil
+    ) {
         self.session = session
         self.fileManager = fileManager
+        self.environmentReader = environmentReader
+        self.dotEnvReader = dotEnvReader ?? { Self.readDotEnv() }
     }
 
     /// Forces the next config-dependent call to re-read `~/.gbrain/.env`.
@@ -136,87 +145,9 @@ public actor ZebraClawvisorEmailClient {
 
     @discardableResult
     public func provisionStandingGmailTask() async throws -> ZebraClawvisorStandingTaskProvisioningResult {
-        let config = try loadProvisioningConfig()
-        let service = "google.gmail:\(config.accountEmail)"
-        let body: [String: Any] = [
-            "purpose": "Zebra desktop email client: continuous inbox sync, read message bodies on user open, draft and send replies on user submit, and archive messages on user action.",
-            "lifetime": "standing",
-            "authorized_actions": [
-                [
-                    "service": service,
-                    "action": "list_messages",
-                    "auto_execute": true,
-                    "expected_use": "List recent Gmail messages to keep Zebra's inbox sidebar in sync.",
-                ],
-                [
-                    "service": service,
-                    "action": "get_message",
-                    "auto_execute": true,
-                    "expected_use": "Read message bodies when the user opens an email in Zebra.",
-                ],
-                [
-                    "service": service,
-                    "action": "get_thread",
-                    "auto_execute": true,
-                    "expected_use": "Read Gmail thread messages when the user opens a conversation in Zebra.",
-                ],
-                [
-                    "service": service,
-                    "action": "get_attachment",
-                    "auto_execute": true,
-                    "expected_use": "Fetch Gmail attachments when the user opens an attached file in Zebra.",
-                ],
-                [
-                    "service": service,
-                    "action": "create_draft",
-                    "auto_execute": true,
-                    "expected_use": "Create Gmail reply drafts from explicit user actions in Zebra.",
-                ],
-                [
-                    "service": service,
-                    "action": "send_message",
-                    "auto_execute": true,
-                    "expected_use": "Send Gmail messages only after the user explicitly submits them in Zebra.",
-                ],
-                [
-                    "service": service,
-                    "action": "archive_message",
-                    "auto_execute": true,
-                    "expected_use": "Archive Gmail messages when the user triggers archive in Zebra.",
-                ],
-            ],
-        ]
-        let bodyData = try JSONSerialization.data(withJSONObject: body, options: [])
-        guard let url = URL(string: config.url.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/tasks") else {
-            throw ZebraClawvisorEmailClientError.notConfigured("bad CLAWVISOR_URL")
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(config.agentToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = bodyData
-
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw ZebraClawvisorEmailClientError.gateway(error.localizedDescription)
-        }
-        guard let http = response as? HTTPURLResponse else {
-            throw ZebraClawvisorEmailClientError.gateway("non-HTTP response")
-        }
-        let json = try decodeJSONObject(data)
-        guard (200..<300).contains(http.statusCode) else {
-            throw ZebraClawvisorEmailClientError.gateway(Self.errorSummary(json, status: http.statusCode))
-        }
-        guard let taskId = Self.taskId(from: json) else {
-            throw ZebraClawvisorEmailClientError.malformedResponse("no task id in task creation response")
-        }
-        try Self.upsertDotEnv(values: ["CLAWVISOR_GMAIL_TASK_ID": taskId])
-        cachedConfig = nil
-        return ZebraClawvisorStandingTaskProvisioningResult(taskId: taskId)
+        throw ZebraClawvisorEmailClientError.notConfigured(
+            "missing CLAWVISOR_TASK_ID from the Clawvisor GBrain agent flow"
+        )
     }
 
     deinit {
@@ -226,17 +157,18 @@ public actor ZebraClawvisorEmailClient {
     }
 
     public func status() async throws -> ZebraEmailStatus {
-        let config = try loadConfig()
+        let config = try await loadConfig()
+        try await verifyGmailGateway(config: config)
         return ZebraEmailStatus(
             connected: true,
-            email: config.accountEmail,
+            email: config.accountEmail.isEmpty ? nil : config.accountEmail,
             lastSyncedAt: try lastSyncedAt()
         )
     }
 
     @discardableResult
     public func syncRecentInbox() async throws -> Int {
-        let config = try loadConfig()
+        let config = try await loadConfig()
         let previousSync = try lastSyncedAt()
         let afterDate = Self.syncQueryStartDate(lastSyncedAt: previousSync)
         let queryDate = Self.formatGmailQueryDate(afterDate)
@@ -268,7 +200,7 @@ public actor ZebraClawvisorEmailClient {
         let candidates = try loadThreads(limit: limit)
         guard !candidates.isEmpty else { return 0 }
 
-        let config = try loadConfig()
+        let config = try await loadConfig()
         var fetched = 0
         for thread in candidates {
             let cached = try loadMessages(threadId: thread.id)
@@ -291,14 +223,14 @@ public actor ZebraClawvisorEmailClient {
                 return EmailThreadDetail(
                     threadId: threadId,
                     providerThreadId: try? loadStoredThreadId(forLookupId: threadId),
-                    accountEmail: (try? loadConfig().accountEmail).flatMap { $0.isEmpty ? nil : $0 },
+                    accountEmail: (try? await loadConfig().accountEmail).flatMap { $0.isEmpty ? nil : $0 },
                     cached: true,
                     messages: cached
                 )
             }
         }
 
-        let config = try loadConfig()
+        let config = try await loadConfig()
         let rows = try await fetchThreadMessages(config: config, threadId: threadId)
         try upsertMessages(rows, threadId: threadId)
         let saved = try loadMessages(threadId: threadId)
@@ -322,7 +254,7 @@ public actor ZebraClawvisorEmailClient {
         providerThreadId: String?,
         messageIds: [String]
     ) async throws {
-        let config = try loadConfig()
+        let config = try await loadConfig()
         let normalizedProviderThreadId = providerThreadId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let providerThreadId = normalizedProviderThreadId?.isEmpty == false ? normalizedProviderThreadId : nil
 
@@ -385,7 +317,7 @@ public actor ZebraClawvisorEmailClient {
             throw ZebraClawvisorEmailClientError.sqlite("email draft is not active")
         }
 
-        let config = try loadConfig()
+        let config = try await loadConfig()
         var params: [String: Any] = [
             "to": draft.toRecipients.joined(separator: ", "),
             "subject": draft.subject,
@@ -553,17 +485,14 @@ public actor ZebraClawvisorEmailClient {
         requestId: String? = nil,
         reason: String
     ) async throws -> Any {
-        var body: [String: Any] = [
-            "task_id": config.taskId,
-            "session_id": UUID().uuidString,
-            "service": "google.gmail:\(config.accountEmail)",
-            "action": action,
-            "params": params,
-            "reason": reason,
-        ]
-        if let requestId {
-            body["request_id"] = requestId
-        }
+        let body = Self.gatewayRequestBody(
+            taskId: config.taskId,
+            gmailService: config.gmailService,
+            action: action,
+            params: params,
+            requestId: requestId,
+            reason: reason
+        )
         let bodyData = try JSONSerialization.data(withJSONObject: body, options: [])
         guard let url = URL(string: config.url.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/gateway/request?wait=true") else {
             throw ZebraClawvisorEmailClientError.notConfigured("bad CLAWVISOR_URL")
@@ -606,39 +535,69 @@ public actor ZebraClawvisorEmailClient {
         return json
     }
 
-    private func loadConfig() throws -> ClawvisorConfig {
+    private func verifyGmailGateway(config: ClawvisorConfig) async throws {
+        _ = try await invoke(
+            config: config,
+            action: "list_messages",
+            params: [
+                "query": "newer_than:7d",
+                "max_results": 1,
+            ],
+            reason: "Verify Zebra can read Gmail through the approved Clawvisor task before marking email integration complete."
+        )
+    }
+
+    private func loadConfig() async throws -> ClawvisorConfig {
         if let cachedConfig {
             return cachedConfig
         }
-        var env = ProcessInfo.processInfo.environment
-        for (key, value) in Self.readDotEnv() where env[key]?.isEmpty ?? true {
+        var env = environmentReader()
+        for (key, value) in dotEnvReader() where env[key]?.isEmpty ?? true {
             env[key] = value
         }
         let url = env["CLAWVISOR_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = env["CLAWVISOR_AGENT_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let taskId = env["CLAWVISOR_GMAIL_TASK_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let accountEmail = env["ZEBRA_CLAWVISOR_GMAIL_ACCOUNT"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? "dan@offlight.work"
+        let taskId = env["CLAWVISOR_TASK_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !url.isEmpty else { throw ZebraClawvisorEmailClientError.notConfigured("missing CLAWVISOR_URL") }
         guard !token.isEmpty else { throw ZebraClawvisorEmailClientError.notConfigured("missing CLAWVISOR_AGENT_TOKEN") }
-        guard !taskId.isEmpty else { throw ZebraClawvisorEmailClientError.notConfigured("missing CLAWVISOR_GMAIL_TASK_ID") }
-        let config = ClawvisorConfig(url: url, agentToken: token, taskId: taskId, accountEmail: accountEmail)
+        guard !taskId.isEmpty else { throw ZebraClawvisorEmailClientError.notConfigured("missing CLAWVISOR_TASK_ID") }
+        let task = try await fetchTask(url: url, token: token, taskId: taskId)
+        guard let gmailService = Self.gmailService(fromTaskJSON: task) else {
+            throw ZebraClawvisorEmailClientError.notConfigured("CLAWVISOR_TASK_ID has no authorized google.gmail service")
+        }
+        let config = ClawvisorConfig(
+            url: url,
+            agentToken: token,
+            taskId: taskId,
+            gmailService: gmailService,
+            accountEmail: Self.accountEmail(fromGmailService: gmailService)
+        )
         cachedConfig = config
         return config
     }
 
-    private func loadProvisioningConfig() throws -> ClawvisorProvisioningConfig {
-        var env = ProcessInfo.processInfo.environment
-        for (key, value) in Self.readDotEnv() where env[key]?.isEmpty ?? true {
-            env[key] = value
+    private func fetchTask(url: String, token: String, taskId: String) async throws -> Any {
+        guard let endpoint = URL(string: url.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/tasks/\(taskId)") else {
+            throw ZebraClawvisorEmailClientError.notConfigured("bad CLAWVISOR_URL")
         }
-        let url = env["CLAWVISOR_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let token = env["CLAWVISOR_AGENT_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let accountEmail = env["ZEBRA_CLAWVISOR_GMAIL_ACCOUNT"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !url.isEmpty else { throw ZebraClawvisorEmailClientError.notConfigured("missing CLAWVISOR_URL") }
-        guard !token.isEmpty else { throw ZebraClawvisorEmailClientError.notConfigured("missing CLAWVISOR_AGENT_TOKEN") }
-        guard !accountEmail.isEmpty else { throw ZebraClawvisorEmailClientError.notConfigured("missing ZEBRA_CLAWVISOR_GMAIL_ACCOUNT") }
-        return ClawvisorProvisioningConfig(url: url, agentToken: token, accountEmail: accountEmail)
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw ZebraClawvisorEmailClientError.gateway(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw ZebraClawvisorEmailClientError.gateway("non-HTTP response")
+        }
+        let json = try decodeJSONObject(data)
+        guard (200..<300).contains(http.statusCode) else {
+            throw ZebraClawvisorEmailClientError.gateway(Self.errorSummary(json, status: http.statusCode))
+        }
+        return json
     }
 }
 
@@ -647,12 +606,7 @@ private extension ZebraClawvisorEmailClient {
         let url: String
         let agentToken: String
         let taskId: String
-        let accountEmail: String
-    }
-
-    struct ClawvisorProvisioningConfig: Sendable {
-        let url: String
-        let agentToken: String
+        let gmailService: String
         let accountEmail: String
     }
 
@@ -811,6 +765,28 @@ private extension ZebraClawvisorEmailClient {
         return "HTTP \(status)"
     }
 
+    static func gatewayRequestBody(
+        taskId: String,
+        gmailService: String,
+        action: String,
+        params: [String: Any],
+        requestId: String?,
+        reason: String
+    ) -> [String: Any] {
+        var body: [String: Any] = [
+            "task_id": taskId,
+            "session_id": UUID().uuidString,
+            "service": gmailService,
+            "action": action,
+            "params": params,
+            "reason": reason,
+        ]
+        if let requestId {
+            body["request_id"] = requestId
+        }
+        return body
+    }
+
     static func taskId(from json: Any) -> String? {
         guard let dict = json as? [String: Any] else { return nil }
         for key in ["task_id", "id"] {
@@ -826,6 +802,47 @@ private extension ZebraClawvisorEmailClient {
             }
         }
         return nil
+    }
+
+    static func gmailService(fromTaskJSON json: Any) -> String? {
+        if let dict = json as? [String: Any] {
+            if let service = dict["service"] as? String,
+               isGmailService(service) {
+                return service
+            }
+            if let actions = dict["authorized_actions"] as? [[String: Any]] {
+                for action in actions {
+                    guard let service = action["service"] as? String,
+                          isGmailService(service) else { continue }
+                    return service
+                }
+            }
+            for key in ["task", "data", "result"] {
+                if let nested = dict[key],
+                   let service = gmailService(fromTaskJSON: nested) {
+                    return service
+                }
+            }
+        }
+        if let array = json as? [Any] {
+            for item in array {
+                if let service = gmailService(fromTaskJSON: item) {
+                    return service
+                }
+            }
+        }
+        return nil
+    }
+
+    static func isGmailService(_ service: String) -> Bool {
+        let trimmed = service.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == "google.gmail" || trimmed.hasPrefix("google.gmail:")
+    }
+
+    static func accountEmail(fromGmailService service: String) -> String {
+        let trimmed = service.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("google.gmail:") else { return "" }
+        return String(trimmed.dropFirst("google.gmail:".count))
     }
 
     func normalizedListMessages(from response: Any, accountEmail: String) throws -> [NormalizedMessage] {

@@ -351,9 +351,50 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(line.contains("cd '\(cwd.path)' && codex -C '\(cwd.path)'"))
         XCTAssertTrue(line.contains("-c 'projects.\"\(cwd.path)\".trust_level=\"trusted\"'"))
         XCTAssertTrue(line.contains("using Codex"))
-        XCTAssertTrue(line.contains("CLAWVISOR_GMAIL_TASK_ID"))
+        XCTAssertTrue(line.contains("CLAWVISOR_TASK_ID"))
+        XCTAssertTrue(line.contains("https://app.clawvisor.com/login"))
+        XCTAssertTrue(line.contains("Create GBrain agent"))
+        XCTAssertTrue(line.contains("1. Open https://app.clawvisor.com/login"))
+        XCTAssertTrue(line.contains("2. In Clawvisor"))
+        XCTAssertTrue(line.contains("3. Continue through Google service authorization"))
+        XCTAssertTrue(line.contains("4. When Clawvisor reaches the final Env vars step"))
+        XCTAssertFalse(line.contains("authoritative setup packet"))
+        XCTAssertFalse(line.contains("read the setup packet"))
+        XCTAssertFalse(line.contains("setup packet is at"))
+        XCTAssertFalse(line.contains("zebra-clawvisor-email-onboarding status"))
+        XCTAssertFalse(line.contains("On your first response, run"))
+        XCTAssertFalse(line.contains("waitingForUser"))
+        XCTAssertFalse(line.contains("nextSection"))
+        XCTAssertFalse(line.contains("CLAWVISOR_GMAIL_TASK_ID"))
+        XCTAssertFalse(line.contains("ZEBRA_CLAWVISOR_GMAIL_ACCOUNT"))
         XCTAssertFalse(line.contains("claude --append-system-prompt"))
         XCTAssertFalse(line.contains("dangerously-bypass"))
+    }
+
+    func testClawvisorEmailPromptInjectsLocalizedConnectionSteps() {
+        let korean = ZebraClawvisorOnboardingCommand.gbrainAgentSystemPrompt(
+            agentDisplayName: "Codex",
+            language: .ko
+        )
+        XCTAssertTrue(korean.contains("1. https://app.clawvisor.com/login 을 열고 Google로 sign up 또는 sign in 하세요."))
+        XCTAssertTrue(korean.contains("2. Clawvisor에서 왼쪽 sidebar의 Agents를 열고 GBrain을 선택한 뒤 Create GBrain agent를 클릭하세요."))
+        XCTAssertTrue(korean.contains("3. Google service authorization과 task approval을 이어서 진행하세요."))
+        XCTAssertTrue(korean.contains("4. 마지막 Env vars step에 도달하면 세 줄의 export env lines를 이 터미널에 그대로 붙여넣으세요."))
+        XCTAssertTrue(korean.contains("use concise Korean prose"))
+        XCTAssertFalse(korean.contains("read the setup packet"))
+        XCTAssertFalse(korean.contains("authoritative setup packet"))
+
+        let english = ZebraClawvisorOnboardingCommand.gbrainAgentSystemPrompt(
+            agentDisplayName: "Codex",
+            language: .en
+        )
+        XCTAssertTrue(english.contains("1. Open https://app.clawvisor.com/login and sign up or sign in with Google."))
+        XCTAssertTrue(english.contains("2. In Clawvisor, use the left sidebar to open Agents, choose GBrain, and click Create GBrain agent."))
+        XCTAssertTrue(english.contains("3. Continue through Google service authorization and task approval."))
+        XCTAssertTrue(english.contains("4. When Clawvisor reaches the final Env vars step, paste the three exported env lines into this terminal."))
+        XCTAssertTrue(english.contains("use concise English prose"))
+        XCTAssertFalse(english.contains("read the setup packet"))
+        XCTAssertFalse(english.contains("authoritative setup packet"))
     }
 
     func testClawvisorCodexOnboardingPersistsFolderTrust() throws {
@@ -415,7 +456,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(plan.startupLine.contains("codex"))
     }
 
-    func testClawvisorEmailFlowKindUsesOpenClawRuntimeOverPrimaryAgent() {
+    func testClawvisorEmailFlowKindIgnoresRuntimeSelection() {
         let runtime = ZebraGBrainRuntimeOnboardingStore.SelectedRuntime(
             runtime: "openclaw",
             executablePath: "/tmp/openclaw"
@@ -423,11 +464,11 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
 
         XCTAssertEqual(
             ZebraClawvisorOnboardingCommand.resolveFlowKind(agent: .claude, selectedRuntime: runtime),
-            .openClaw
+            .claudeCode
         )
         XCTAssertEqual(
             ZebraClawvisorOnboardingCommand.resolveFlowKind(agent: .codex, selectedRuntime: runtime),
-            .openClaw
+            .genericAgent
         )
     }
 
@@ -467,18 +508,41 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
 
         let setupPacketPath = try XCTUnwrap(plan.setupPacketPath)
         let setupPacket = try String(contentsOfFile: setupPacketPath, encoding: .utf8)
-        XCTAssertEqual(plan.flowKind, .openClaw)
-        XCTAssertTrue(setupPacket.contains("Clawvisor email flow kind: openClaw"))
+        XCTAssertEqual(plan.flowKind, .genericAgent)
+        XCTAssertTrue(setupPacket.contains("Clawvisor email flow kind: genericAgent"))
         XCTAssertTrue(setupPacket.contains("GBrain runtime receipt: openclaw"))
-        XCTAssertTrue(setupPacket.contains("OpenClaw integration"))
-        XCTAssertTrue(plan.startupLine.contains("zebra-clawvisor-email-onboarding"))
-        XCTAssertTrue(plan.startupLine.contains(setupPacketPath))
+        XCTAssertTrue(setupPacket.contains("https://app.clawvisor.com/login"))
+        XCTAssertTrue(setupPacket.contains("sign up or sign in with Google"))
+        XCTAssertTrue(setupPacket.contains("1. Open https://app.clawvisor.com/login"))
+        XCTAssertTrue(setupPacket.contains("2. In Clawvisor"))
+        XCTAssertTrue(setupPacket.contains("open Agents, choose"))
+        XCTAssertTrue(setupPacket.contains("GBrain, and click Create GBrain agent"))
+        XCTAssertTrue(setupPacket.contains("3. Continue through Google service authorization"))
+        XCTAssertTrue(setupPacket.contains("4. When Clawvisor reaches the final Env vars step"))
+        XCTAssertTrue(setupPacket.contains("CLAWVISOR_TASK_ID"))
+        XCTAssertFalse(setupPacket.contains("OpenClaw integration guide"))
+        XCTAssertFalse(setupPacket.contains("On your first response, run `zebra-clawvisor-email-onboarding status`"))
+        XCTAssertFalse(setupPacket.contains("zebra-clawvisor-email-onboarding status"))
+        XCTAssertFalse(setupPacket.contains("continue from `waitingForUser`"))
+        XCTAssertFalse(setupPacket.contains("waitingForUser"))
+        XCTAssertFalse(setupPacket.contains("`nextSection`"))
+        XCTAssertFalse(setupPacket.contains("nextSection"))
+        XCTAssertFalse(setupPacket.contains("## Progress Reporting"))
+        XCTAssertFalse(setupPacket.contains("report --status started"))
+        XCTAssertFalse(setupPacket.contains("CLAWVISOR_GMAIL_TASK_ID"))
+        XCTAssertFalse(setupPacket.contains("ZEBRA_CLAWVISOR_GMAIL_ACCOUNT"))
+        XCTAssertFalse(plan.startupLine.contains("zebra-clawvisor-email-onboarding status"))
+        XCTAssertFalse(plan.startupLine.contains("authoritative setup packet"))
+        XCTAssertFalse(plan.startupLine.contains("read the setup packet"))
+        XCTAssertFalse(plan.startupLine.contains("setup packet is at"))
+        XCTAssertFalse(plan.startupLine.contains("waitingForUser"))
+        XCTAssertFalse(plan.startupLine.contains("nextSection"))
 
         let stateData = try Data(contentsOf: URL(fileURLWithPath: plan.statePath))
         let state = try XCTUnwrap(JSONSerialization.jsonObject(with: stateData) as? [String: Any])
         XCTAssertEqual(state["primaryAgent"] as? String, "codex")
         XCTAssertEqual(state["selectedRuntime"] as? String, "openclaw")
-        XCTAssertEqual(state["flowKind"] as? String, "openClaw")
+        XCTAssertEqual(state["flowKind"] as? String, "genericAgent")
         XCTAssertEqual(state["completedSections"] as? [String], [])
 
         XCTAssertEqual(try octalPermissions(atPath: setupPacketPath), 0o600)
@@ -525,7 +589,22 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
 
         XCTAssertTrue(line.contains("cd '\(cwd.path)' && agy --prompt-interactive --add-dir '\(cwd.path)'"))
         XCTAssertTrue(line.contains("using Antigravity"))
-        XCTAssertTrue(line.contains("CLAWVISOR_GMAIL_TASK_ID"))
+        XCTAssertTrue(line.contains("CLAWVISOR_TASK_ID"))
+        XCTAssertTrue(line.contains("https://app.clawvisor.com/login"))
+        XCTAssertTrue(line.contains("Create GBrain agent"))
+        XCTAssertTrue(line.contains("1. Open https://app.clawvisor.com/login"))
+        XCTAssertTrue(line.contains("2. In Clawvisor"))
+        XCTAssertTrue(line.contains("3. Continue through Google service authorization"))
+        XCTAssertTrue(line.contains("4. When Clawvisor reaches the final Env vars step"))
+        XCTAssertFalse(line.contains("authoritative setup packet"))
+        XCTAssertFalse(line.contains("read the setup packet"))
+        XCTAssertFalse(line.contains("setup packet is at"))
+        XCTAssertFalse(line.contains("zebra-clawvisor-email-onboarding status"))
+        XCTAssertFalse(line.contains("On your first response, run"))
+        XCTAssertFalse(line.contains("waitingForUser"))
+        XCTAssertFalse(line.contains("nextSection"))
+        XCTAssertFalse(line.contains("CLAWVISOR_GMAIL_TASK_ID"))
+        XCTAssertFalse(line.contains("ZEBRA_CLAWVISOR_GMAIL_ACCOUNT"))
         XCTAssertFalse(line.contains("claude --append-system-prompt"))
     }
 

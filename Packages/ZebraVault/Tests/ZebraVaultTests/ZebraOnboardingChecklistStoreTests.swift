@@ -2412,8 +2412,24 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             """
             CLAWVISOR_URL=https://app.clawvisor.com
             CLAWVISOR_AGENT_TOKEN=cvis_test
-            CLAWVISOR_GMAIL_TASK_ID=task_test
-            ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=test@example.com
+            CLAWVISOR_TASK_ID=task_test
+            """,
+            homeURL: root
+        )
+
+        let store = makeChecklistStore(homeURL: root)
+
+        XCTAssertTrue(store.completedStepIDs.contains(.email))
+    }
+
+    @MainActor
+    func testEmailStepCompletesFromExportedClawvisorEnv() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            export CLAWVISOR_URL="https://app.clawvisor.com"
+            export CLAWVISOR_AGENT_TOKEN="cvis_test"
+            export CLAWVISOR_TASK_ID="task_test"
             """,
             homeURL: root
         )
@@ -2430,8 +2446,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             """
             CLAWVISOR_URL=https://app.clawvisor.com
             CLAWVISOR_AGENT_TOKEN=cvis_test
-            CLAWVISOR_GMAIL_TASK_ID=task_test
-            ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=test@example.com
+            CLAWVISOR_TASK_ID=task_test
             """,
             homeURL: root
         )
@@ -2452,7 +2467,6 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             """
             CLAWVISOR_URL=https://app.clawvisor.com
             CLAWVISOR_AGENT_TOKEN=cvis_test
-            ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=test@example.com
             """,
             homeURL: root
         )
@@ -2463,13 +2477,14 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testEmailStepDoesNotCompleteWhenGmailAccountIsMissing() throws {
+    func testEmailStepDoesNotCompleteFromOldClawvisorGmailTaskEnvOnly() throws {
         let root = try makeTemporaryDirectory()
         try writeClawvisorEnv(
             """
             CLAWVISOR_URL=https://app.clawvisor.com
             CLAWVISOR_AGENT_TOKEN=cvis_test
             CLAWVISOR_GMAIL_TASK_ID=task_test
+            ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=test@example.com
             """,
             homeURL: root
         )

@@ -1,8 +1,8 @@
 import Foundation
 
 /// Builds the shell command that drops the user into their primary agent
-/// with a prompt that walks them through Clawvisor sign-up and writing
-/// `~/.gbrain/.env`. Used by the email sidebar's "Connect" CTA and the
+/// with a prompt that walks them through the Clawvisor GBrain env handoff.
+/// Used by the email sidebar's "Connect" CTA and the
 /// onboarding checklist email step so the flow lives inside an agent terminal
 /// instead of a separate Settings form.
 ///
@@ -13,7 +13,6 @@ public enum ZebraClawvisorOnboardingCommand {
     public enum FlowKind: String, Equatable, Sendable {
         case claudeCode
         case genericAgent
-        case openClaw
     }
 
     public struct LaunchPlan {
@@ -76,9 +75,6 @@ public enum ZebraClawvisorOnboardingCommand {
         agent: MarkdownPillAgent,
         selectedRuntime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime?
     ) -> FlowKind {
-        if selectedRuntime?.runtime == "openclaw" {
-            return .openClaw
-        }
         if agent == .claude {
             return .claudeCode
         }
@@ -180,21 +176,20 @@ public enum ZebraClawvisorOnboardingCommand {
     static func systemPrompt(
         flowKind: FlowKind,
         agent: MarkdownPillAgent,
-        setupPacketPath: String?
+        setupPacketPath: String?,
+        language: ZebraOnboardingLanguage = .current()
     ) -> String {
-        let language = ZebraOnboardingLanguage.current()
         let languagePrefix = "\(language.promptPolicy)\n\n\(language.clawvisorFlowPresentationInstruction)"
-        if let setupPacketPath {
+        if setupPacketPath != nil {
             return """
             \(languagePrefix)
 
-            You are Zebra's Clawvisor email onboarding helper. The authoritative setup packet is at:
-            \(setupPacketPath)
+            \(setupPacketContent(flowKind: flowKind, agent: agent, selectedRuntime: nil, completedSections: [], nextSection: nil, waitingForUser: nil, lastFailure: nil, language: language))
 
-            On your first response, run `zebra-clawvisor-email-onboarding status`, read the complete setup packet, and continue from the recorded `waitingForUser` or `nextSection`. If the state file is missing or contradictory, infer the safest next action from the setup packet and request only concrete missing values such as a token, task id, Gmail account, or copied dashboard command. Use `zebra-clawvisor-email-onboarding report` after each section changes state.
+            Internal note: do not mention local files or local onboarding state to the user. Start by giving the numbered Clawvisor connection instructions.
             """
         }
-        return "\(languagePrefix)\n\n\(setupPacketContent(flowKind: flowKind, agent: agent, selectedRuntime: nil, completedSections: [], nextSection: firstSectionTitle(flowKind: flowKind), waitingForUser: nil, lastFailure: nil))"
+        return "\(languagePrefix)\n\n\(setupPacketContent(flowKind: flowKind, agent: agent, selectedRuntime: nil, completedSections: [], nextSection: firstSectionTitle(flowKind: flowKind), waitingForUser: nil, lastFailure: nil, language: language))"
     }
 
     static func setupPacketContent(
@@ -204,7 +199,8 @@ public enum ZebraClawvisorOnboardingCommand {
         completedSections: [String],
         nextSection: String?,
         waitingForUser: String?,
-        lastFailure: String?
+        lastFailure: String?,
+        language: ZebraOnboardingLanguage = .current()
     ) -> String {
         let targetDescription: String
         switch flowKind {
@@ -212,41 +208,24 @@ public enum ZebraClawvisorOnboardingCommand {
             targetDescription = "Claude Code"
         case .genericAgent:
             targetDescription = "\(agent.agentKind.displayName) via the Clawvisor generic agent flow"
-        case .openClaw:
-            targetDescription = "OpenClaw integration, guided from \(agent.agentKind.displayName)"
         }
         return """
-        # Zebra Clawvisor Email Onboarding Packet
+        # Zebra Clawvisor Email Onboarding Instructions
 
-        This packet is the authoritative instruction for the current Zebra email onboarding run.
+        These are the instructions for the current Zebra email onboarding run.
 
         - Primary terminal agent: \(agent.agentKind.displayName)
         - GBrain runtime receipt: \(selectedRuntime?.runtime ?? "none")
         - Clawvisor email flow kind: \(flowKind.rawValue)
         - Clawvisor integration target: \(targetDescription)
-        - Completion source of truth: `~/.gbrain/.env` plus Zebra's email repair state
-        - Required env target: `~/.gbrain/.env`
-        - Completed sections: \(completedSections.isEmpty ? "none" : completedSections.joined(separator: ", "))
-        - Next section: \(nextSection ?? "not recorded")
-        - Waiting for user: \(waitingForUser ?? "none")
-        - Last failure: \(lastFailure ?? "none")
+        - Completion source of truth: canonical Clawvisor env plus Zebra's email repair state
+        - Required env keys: `CLAWVISOR_URL`, `CLAWVISOR_AGENT_TOKEN`, `CLAWVISOR_TASK_ID`
 
-        ## Progress Reporting
+        ## Important behavior
 
-        Report progress with:
+        This is not a state-tracked onboarding wizard. Do not inspect local onboarding progress before instructing the user, and do not infer the user's current Clawvisor UI step. Use the instructions below as a setup guide, and only perform verification after the user pastes the three env lines.
 
-        ```sh
-        zebra-clawvisor-email-onboarding report --status started --section "<section title>"
-        zebra-clawvisor-email-onboarding report --status completed --section "<section title>"
-        zebra-clawvisor-email-onboarding report --status waiting_for_user --section "<section title>" --note "<what is needed>"
-        zebra-clawvisor-email-onboarding report --status failed --section "<section title>" --note "<reason>"
-        zebra-clawvisor-email-onboarding status
-        zebra-clawvisor-email-onboarding verify-env
-        ```
-
-        Do not store Clawvisor tokens, Gmail tokens, callback secrets, or other secrets in the state file.
-
-        \(flowInstructions(flowKind: flowKind, agent: agent))
+        \(flowInstructions(flowKind: flowKind, agent: agent, language: language))
         """
     }
 
@@ -446,7 +425,8 @@ public enum ZebraClawvisorOnboardingCommand {
             completedSections: completedSections,
             nextSection: nextSection,
             waitingForUser: existingState?.waitingForUser,
-            lastFailure: existingState?.lastFailure
+            lastFailure: existingState?.lastFailure,
+            language: .current()
         )
         let packetURL = writeSetupPacket(
             packet,
@@ -537,20 +517,18 @@ public enum ZebraClawvisorOnboardingCommand {
     private static func firstSectionTitle(flowKind: FlowKind) -> String {
         switch flowKind {
         case .claudeCode, .genericAgent:
-            return "Sign up for Clawvisor Cloud and connect Gmail"
-        case .openClaw:
-            return "Prepare the OpenClaw Clawvisor integration"
+            return "Connect GBrain in Clawvisor and paste the three env lines"
         }
     }
 
-    private static func flowInstructions(flowKind: FlowKind, agent: MarkdownPillAgent) -> String {
+    private static func flowInstructions(
+        flowKind: FlowKind,
+        agent: MarkdownPillAgent,
+        language: ZebraOnboardingLanguage
+    ) -> String {
         switch flowKind {
-        case .claudeCode:
-            return claudeCodeSystemPrompt
-        case .genericAgent:
-            return genericAgentSystemPrompt(agentDisplayName: agent.agentKind.displayName)
-        case .openClaw:
-            return openClawSystemPrompt(agentDisplayName: agent.agentKind.displayName)
+        case .claudeCode, .genericAgent:
+            return gbrainAgentSystemPrompt(agentDisplayName: agent.agentKind.displayName, language: language)
         }
     }
 
@@ -618,8 +596,7 @@ public enum ZebraClawvisorOnboardingCommand {
         required = [
             "CLAWVISOR_URL",
             "CLAWVISOR_AGENT_TOKEN",
-            "CLAWVISOR_GMAIL_TASK_ID",
-            "ZEBRA_CLAWVISOR_GMAIL_ACCOUNT",
+            "CLAWVISOR_TASK_ID",
         ]
         try:
             raw = env_path.read_text(encoding="utf-8")
@@ -669,323 +646,64 @@ public enum ZebraClawvisorOnboardingCommand {
     PY
     """
 
-    /// System prompt for the Claude Code flow specifically. Mirrors the
-    /// "Connect an agent → Claude Code" tab on the Clawvisor dashboard:
-    /// curl-download the setup skill, run `/clawvisor-setup`, approve the
-    /// pending connection, then mirror the credentials into `~/.gbrain/.env`
-    /// so Zebra's desktop email client can read them.
-    static let claudeCodeSystemPrompt: String = """
-You are Zebra's Clawvisor onboarding helper. The user just clicked
-"Gmail 연결" in Zebra's email sidebar and was dropped into this Claude
-Code session.
-
-The flow:
-
-  1. **Sign up for Clawvisor Cloud** — https://app.clawvisor.com/login
-     (free trial, no credit card required). In the dashboard's left
-     sidebar (Overview, Get Started, Tasks, Accounts, Policy, Agents,
-     Activity, Settings, Billing), have the user click **"Get
-     Started"**.
-
-  2. **Connect a service → Gmail.** On the Get Started page the first
-     card is "Connect a service". Have the user link their Gmail (and
-     optionally Google Calendar) there. Clawvisor stores the
-     credentials in its own vault; agents never see them directly.
-
-  3. **Connect an agent → Claude Code.** On the same Get Started
-     page, the second card is "Connect an agent". The user clicks
-     **"Claude Code"** (this onboarding session itself is Claude
-     Code, so that's the right tab). Clawvisor opens an Agents page
-     with a one-line `curl` command under "Install the setup
-     command" — the URL inside that curl carries a `user_id` unique
-     to the user. The full line looks like:
-
-         curl -sf "https://app.clawvisor.com/skill/clawvisor-setup.md?user_id=<UUID>" \\
-           --create-dirs -o ~/.claude/commands/clawvisor-setup.md
-
-     Tell the user to copy that exact line off their own Agents page
-     and paste it into THIS terminal, then run it. Do not invent the
-     `user_id` — only the user can read the personalized line off
-     their dashboard.
-
-  4. **Run `/clawvisor-setup`** in this Claude Code session (note
-     the order: `clawvisor` then `setup`). Claude walks the user
-     through registering as an agent, configuring the environment,
-     and verifying the connection. If you see "No commands match",
-     step 3 didn't land the file in `~/.claude/commands/` yet — go
-     re-run the curl line.
-
-  5. **Approve the connection in the dashboard.** During the
-     `/clawvisor-setup` flow Claude Code sends a connection request
-     to Clawvisor. Tell the user to switch to the dashboard's Agents
-     page and approve it in the **"Pending Connections"** section.
-     After approval, `/clawvisor-setup` finishes automatically and
-     runs a smoke test.
-
-  6. **Create Zebra's standing Gmail task.** Zebra's inbox sync is
-     an ongoing workflow, not a 30-minute session task. When you
-     create the Clawvisor task whose id Zebra will store, call
-     `POST /api/tasks` with `"lifetime": "standing"` and do not set
-     `expires_in_seconds`. The standing task remains active until the
-     user revokes it from the Clawvisor dashboard.
-
-\(standingGmailTaskInstructions())
-
-     The read actions, draft creation, archive, and `send_message` may
-     auto-execute because Zebra itself is the user-visible approval
-     surface. Zebra only calls `send_message` after the user explicitly
-     submits the draft in the app, so Clawvisor should not require a
-     second per-request approval. The task id returned by this standing
-     task is the value for `CLAWVISOR_GMAIL_TASK_ID` in the next step.
-
-  7. **Write the credentials into `~/.gbrain/.env`** (NOT
-     `~/.claude/settings.json`). The Clawvisor setup skill suggests
-     writing the agent token to `~/.claude/settings.json` so Claude
-     Code itself can call Clawvisor APIs. **That path is not what
-     Zebra needs.** Zebra's desktop email client is a separate Swift
-     process that reads ONLY `~/.gbrain/.env` — it does not look at
-     `~/.claude/settings.json` and never will, because the two
-     processes are independent.
-
-     If `/clawvisor-setup` tries to edit `~/.claude/settings.json`
-     and gets blocked (auto mode or otherwise), don't troubleshoot
-     that path — it isn't where Zebra reads from. Just write the
-     same credentials into `~/.gbrain/.env` instead:
-
-         CLAWVISOR_URL=https://app.clawvisor.com
-         CLAWVISOR_AGENT_TOKEN=<the cvis_... token from /clawvisor-setup>
-         CLAWVISOR_GMAIL_TASK_ID=<the standing Gmail task id from step 6>
-         ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=<the user's Gmail address>
-
-     Preserve any other lines already in `~/.gbrain/.env` — only
-     touch these four keys. Then `chmod 600 ~/.gbrain/.env`.
-
-     If the setup flow only reported a token (no separate task id),
-     ask the user to read the task id off the Tasks page of the
-     Clawvisor dashboard. Never invent values.
-
-When `~/.gbrain/.env` is written, the onboarding is complete — say so
-briefly and stop. Zebra's email sidebar watches that file and reloads
-on its own; do NOT tell the user to switch tabs or click an inbox
-refresh button.
-
-Style:
-  • On the first response, run `zebra-clawvisor-email-onboarding status`,
-    read the setup packet, and continue from `waitingForUser` or
-    `nextSection`. If the state file is missing or contradictory, infer
-    the safest next action from the setup packet and request only
-    concrete missing values such as a token, task id, Gmail account, or
-    copied dashboard command.
-  • Don't re-explain steps already listed in `completedSections`.
-  • After the first response, use one short paragraph + a single question
-    per turn. Follow the language policy above for user-facing prose.
-  • Never fabricate URLs, agent install commands, slash command
-    names, or `user_id` values. The `curl` line in step 3 carries
-    a personalized `user_id` — only the user can read it off their
-    own Agents page in the dashboard.
-  • The slash command name is `/clawvisor-setup`, not
-    `/setup-clawvisor`. Do not invert the order.
-  • If install or registration fails, have the user re-open the
-    dashboard's Agents page and re-copy the curl line rather than
-    improvising a fix.
-"""
-
-    static func genericAgentSystemPrompt(agentDisplayName: String) -> String {
+    static func gbrainAgentSystemPrompt(
+        agentDisplayName: String,
+        language: ZebraOnboardingLanguage = .current()
+    ) -> String {
         """
 You are Zebra's Clawvisor onboarding helper. The user just clicked
 "Gmail 연결" in Zebra and was dropped into this \(agentDisplayName)
 session.
 
-Your job is to help the user connect Gmail to Zebra through Clawvisor.
-Do not install Claude-only slash commands. Use Clawvisor's generic
-agent flow: verify or obtain `CLAWVISOR_URL`, create or obtain an
-agent token, create Zebra's standing Gmail task, then write the final
-values into `~/.gbrain/.env`.
+Your job is to guide the user through Clawvisor's **Connect an Agent →
+GBrain** flow and then complete the local setup yourself. The user-facing
+instruction must be a numbered list with exactly these four user-facing steps
+in Zebra's app language:
 
-The flow:
+\(language.clawvisorEmailConnectionSteps)
 
-  1. **Sign up for Clawvisor Cloud** — https://app.clawvisor.com/login
-     (free trial, no credit card required). Have the user connect
-     Gmail from the dashboard before creating Zebra's task.
+Those three canonical env vars are:
 
-  2. **Create or obtain an agent token.** If the user has a local
-     Clawvisor CLI/server, follow the generic agent guide:
+    export CLAWVISOR_URL="https://app.clawvisor.com"
+    export CLAWVISOR_AGENT_TOKEN="cvis_..."
+    export CLAWVISOR_TASK_ID="..."
 
-         clawvisor agent create zebra-\(agentDisplayName.lowercased()) --replace --json
+Do not ask for a Gmail account. Do not ask for a separate Gmail task id.
+Do not show the user any local file path, chmod instruction, or file-editing
+procedure. Persisting the env values is your job, not the user's.
+Do not ask where the user is in the Clawvisor flow, and do not claim to know
+their current Clawvisor step. If the user asks what to click next, answer from
+the flow above.
 
-     If the user is using Clawvisor Cloud, have them create or copy an
-     agent token from the dashboard's Agents page. Never invent tokens.
-     The token is shown only once, so ask the user to copy it carefully.
+When the user pastes the env lines:
 
-  3. **Verify the generic agent connection.** Set:
+  1. Parse exactly `CLAWVISOR_URL`, `CLAWVISOR_AGENT_TOKEN`, and
+     `CLAWVISOR_TASK_ID`. Ignore old Zebra-only keys if they appear.
+  2. Upsert only those three canonical keys into Zebra's env file while
+     preserving unrelated lines, then restrict the file permissions.
+  3. Run `zebra-clawvisor-email-onboarding verify-env`.
+  4. Verify the Clawvisor task yourself with:
 
-         CLAWVISOR_URL=https://app.clawvisor.com
-         CLAWVISOR_AGENT_TOKEN=<the user's agent token>
+         GET $CLAWVISOR_URL/api/tasks/$CLAWVISOR_TASK_ID
+         Authorization: Bearer $CLAWVISOR_AGENT_TOKEN
 
-     If the user is self-hosting or using a local server, use their
-     actual Clawvisor URL instead. Verify with:
+     The task response must contain at least one authorized service whose
+     value is `google.gmail` or starts with `google.gmail:`.
+  5. Run a lightweight Gmail read/search through Clawvisor gateway using
+     that Gmail service and the same `CLAWVISOR_TASK_ID`.
 
-         curl -sf -H "Authorization: Bearer $CLAWVISOR_AGENT_TOKEN" \\
-           "$CLAWVISOR_URL/api/skill/catalog" | head -20
-
-     A 401 means the token is invalid. A connection failure means the
-     URL is wrong or Clawvisor is not running.
-
-  4. **Create Zebra's standing Gmail task.** Zebra's inbox sync is an
-     ongoing workflow, not a 30-minute session task. Create the task
-     with `"lifetime": "standing"` and do not set
-     `expires_in_seconds`.
-
-\(standingGmailTaskInstructions())
-
-     The returned task id is `CLAWVISOR_GMAIL_TASK_ID`.
-
-  5. **Write the credentials into `~/.gbrain/.env`.** Zebra reads this
-     file directly:
-
-         CLAWVISOR_URL=<Clawvisor URL>
-         CLAWVISOR_AGENT_TOKEN=<agent token>
-         CLAWVISOR_GMAIL_TASK_ID=<standing Gmail task id>
-         ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=<the user's Gmail address>
-
-     Preserve any other lines already in `~/.gbrain/.env` and run
-     `chmod 600 ~/.gbrain/.env`.
-
-When `~/.gbrain/.env` is written, the onboarding is complete. Say so
-briefly and stop. Zebra's email sidebar watches that file and reloads
-on its own; do not tell the user to switch tabs or click refresh.
+Only after all checks pass, say briefly that Zebra email integration is
+complete and stop. Zebra watches the env file and reloads on its own; do
+not tell the user to edit files, switch tabs, or manually refresh.
 
 Style:
-  • On the first response, run `zebra-clawvisor-email-onboarding status`,
-    read the setup packet, and continue from `waitingForUser` or
-    `nextSection`. If the state file is missing or contradictory, infer
-    the safest next action from the setup packet and request only
-    concrete missing values such as a token, task id, Gmail account, or
-    copied dashboard command.
-  • After the first response, use one short paragraph + a single
-    question per turn. Korean is fine; the user's UI is Korean.
-  • Never fabricate URLs, tokens, task ids, Gmail accounts, or install
-    commands. Ask the user to copy values from their Clawvisor dashboard
-    or local Clawvisor CLI output.
+  • On the first response, immediately give the setup instruction above. Do
+    not inspect local onboarding progress first.
+  • After the first response, use concise \(language.displayName) prose plus
+    one concrete question or instruction per turn.
+  • Never fabricate URLs, tokens, task ids, or Gmail services. If any
+    verification fails, report the exact failing check and ask the user to
+    revisit the matching Clawvisor step.
 """
-    }
-
-    static func openClawSystemPrompt(agentDisplayName: String) -> String {
-        """
-You are Zebra's Clawvisor onboarding helper. The user just clicked
-"Gmail 연결" in Zebra and was dropped into this \(agentDisplayName)
-session.
-
-Your job is to guide the user through the Clawvisor OpenClaw integration
-target. \(agentDisplayName) is only the terminal agent explaining and
-driving the setup; do not treat it as the Clawvisor integration target.
-
-The flow:
-
-  1. **Open the Clawvisor OpenClaw integration guide.** Use the user's
-     local copy if available, otherwise have them refer to:
-     https://github.com/clawvisor/clawvisor/blob/main/docs/INTEGRATE_OPENCLAW.md
-
-  2. **Install the Clawvisor pieces into OpenClaw.** Follow the guide's
-     OpenClaw skill, webhook extension, callback, and environment setup.
-     Do not install Claude-only slash commands for this flow.
-
-  3. **Connect Gmail in Clawvisor.** Have the user connect Gmail through
-     Clawvisor so the standing task can authorize Gmail read, draft,
-     send, archive, thread, and attachment actions.
-
-  4. **Create Zebra's standing Gmail task.** Zebra's inbox sync is an
-     ongoing workflow, not a 30-minute session task. Create the task
-     with `"lifetime": "standing"` and do not set
-     `expires_in_seconds`.
-
-\(standingGmailTaskInstructions())
-
-  5. **Write Zebra's desktop env file.** Even though the integration
-     target is OpenClaw, Zebra still reads only this file:
-
-         CLAWVISOR_URL=<Clawvisor URL>
-         CLAWVISOR_AGENT_TOKEN=<agent token>
-         CLAWVISOR_GMAIL_TASK_ID=<standing Gmail task id>
-         ZEBRA_CLAWVISOR_GMAIL_ACCOUNT=<the user's Gmail address>
-
-     Preserve any other lines already in `~/.gbrain/.env` and run
-     `chmod 600 ~/.gbrain/.env`.
-
-When `~/.gbrain/.env` is written, the onboarding is complete. Say so
-briefly and stop. Zebra's email sidebar watches that file and reloads
-on its own; do not tell the user to switch tabs or click refresh.
-
-Style:
-  • On the first response, run `zebra-clawvisor-email-onboarding status`,
-    read the setup packet, and continue from `waitingForUser` or
-    `nextSection`. If the state file is missing or contradictory, infer
-    the safest next action from the setup packet and request only
-    concrete missing values such as a token, task id, Gmail account, or
-    copied dashboard command.
-  • Keep reminding yourself that OpenClaw is the Clawvisor integration
-    target, while \(agentDisplayName) is the guide in this terminal.
-  • Never fabricate URLs, tokens, task ids, Gmail accounts, callback
-    secrets, or install commands.
-"""
-    }
-
-    private static func standingGmailTaskInstructions() -> String {
-        return """
-     Use this scope exactly, replacing `<account>` with the user's
-     Gmail address:
-
-         curl -s -X POST "$CLAWVISOR_URL/api/tasks?wait=true" \\
-           -H "Authorization: Bearer $CLAWVISOR_AGENT_TOKEN" \\
-           -H "Content-Type: application/json" \\
-           -d '{
-             "purpose": "Zebra desktop email client: continuous inbox sync, read message bodies on user open, draft and send replies on user submit, archive on user action",
-             "lifetime": "standing",
-             "authorized_actions": [
-               {
-                 "service": "google.gmail:<account>",
-                 "action": "list_messages",
-                 "auto_execute": true,
-                 "expected_use": "List recent Gmail messages so Zebra can keep the inbox sidebar in sync"
-               },
-               {
-                 "service": "google.gmail:<account>",
-                 "action": "get_message",
-                 "auto_execute": true,
-                 "expected_use": "Read one selected Gmail message when the user opens it in Zebra"
-               },
-               {
-                 "service": "google.gmail:<account>",
-                 "action": "get_thread",
-                 "auto_execute": true,
-                 "expected_use": "Read a selected Gmail thread so Zebra can show the conversation"
-               },
-               {
-                 "service": "google.gmail:<account>",
-                 "action": "get_attachment",
-                 "auto_execute": true,
-                 "expected_use": "Fetch an attachment only when the user opens it from a message in Zebra"
-               },
-               {
-                 "service": "google.gmail:<account>",
-                 "action": "create_draft",
-                 "auto_execute": true,
-                 "expected_use": "Create or update a Gmail draft from text the user composed in Zebra"
-               },
-               {
-                 "service": "google.gmail:<account>",
-                 "action": "send_message",
-                 "auto_execute": true,
-                 "expected_use": "Send a Gmail reply only after the user explicitly submits it in Zebra"
-               },
-               {
-                 "service": "google.gmail:<account>",
-                 "action": "archive_message",
-                 "auto_execute": true,
-                 "expected_use": "Archive a Gmail message only when the user triggers archive in Zebra"
-               }
-             ]
-           }'
-    """
     }
 }
