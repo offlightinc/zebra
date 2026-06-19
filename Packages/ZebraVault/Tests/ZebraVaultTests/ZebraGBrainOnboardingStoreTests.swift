@@ -1668,9 +1668,56 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(payload["nextSection"] as? String, "Step 3: Create the Brain")
         XCTAssertTrue(nextPrompt.contains("Run `gbrain init`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("do not run `gbrain init`, `gbrain init --pglite`, or Supabase/Postgres setup until the user has explicitly chosen topology"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("Ask the user to choose local PGLite or Supabase/Postgres"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. PGLite (recommended)"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. Postgres"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. Supabase"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("--topology <pglite|postgres|supabase>"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("Do not run `gbrain init --pglite --no-embedding`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("Ask for the brain repo target separately"), nextPrompt)
+    }
+
+    func testReportCompletedForStep2ReturnsKoreanStep3TopologyOptionsWhenLanguageIsKorean() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: root.appendingPathComponent("brain").path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path],
+            appPreferredLocalizations: ["ko"],
+            preferredLanguages: ["ko"]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeProgress(
+            stateURL,
+            completedSections: ["Step 1: Install GBrain"],
+            waitingForUser: nil,
+            nextSection: "Step 2: API Keys"
+        )
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            languageCode: "ko",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 2: API Keys",
+                "--embedding-decision", "provider_key",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["nextSection"] as? String, "Step 3: Create the Brain")
+        XCTAssertTrue(nextPrompt.contains("Step 3 database topology를 아래 번호 중 하나로 선택해 주세요"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. PGLite (recommended) — 로컬 embedded Postgres입니다"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. Postgres — 기존 Postgres database를 사용합니다"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. Supabase — hosted 또는 큰 brain을 위한 managed Postgres입니다"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("--topology <pglite|postgres|supabase>"), nextPrompt)
     }
 
     func testReportCompletedForStep3RequiresNumberedSearchModePromptFromSectionBody() throws {
@@ -1707,6 +1754,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -1765,6 +1813,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
                 "--search-mode", "conservative",
@@ -1819,6 +1868,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -1849,6 +1899,12 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertEqual(payload["nextSection"] as? String, "Step 8: Background Sync")
         XCTAssertTrue(nextPrompt.contains("Recurring jobs are persistent background changes"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Step 3 topology is `pglite`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended)"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("OpenClaw: OpenClaw cron"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Hermes: `/cron add`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("1. GBrain autopilot (recommended)"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("gbrain autopilot --install"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding run-gbrain -- autopilot --install"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding check-launchd-bun-path"), nextPrompt)
@@ -1857,6 +1913,312 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(nextPrompt.contains("waiting_for_user"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("recurring_jobs_decision"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("--recurring-jobs-decision <defer|manual_scheduler|platform_scheduler_install|autopilot_install>"), nextPrompt)
+    }
+
+    func testRecurringJobsPromptRecommendsAutopilotForPostgresAndSupabase() throws {
+        for topology in ["postgres", "supabase"] {
+            let root = try makeTemporaryDirectory()
+            let repo = try writeGuardDocs(root: root, includeCanonicalRecurringJobs: true)
+            let target = root.appendingPathComponent("brain", isDirectory: true)
+            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+            let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+            let stateURL = root.appendingPathComponent("state.json")
+            let store = ZebraGBrainOnboardingStore(
+                stateURL: stateURL,
+                homeDirectoryPath: root.path,
+                gbrainDocsRepoURL: repo,
+                environment: ["PATH": bin.path]
+            )
+            _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+            _ = try runHelper(
+                stateURL: stateURL,
+                path: bin.path,
+                arguments: [
+                    "report",
+                    "--status", "completed",
+                    "--section", "Step 1: Install GBrain",
+                ]
+            )
+            _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path, decision: "provider_key")
+            _ = try runHelper(
+                stateURL: stateURL,
+                path: bin.path,
+                arguments: [
+                    "report",
+                    "--status", "completed",
+                    "--section", "Step 3: Create the Brain",
+                    "--topology", topology,
+                    "--target", target.path,
+                    "--method", "user_created_repo",
+                ]
+            )
+            _ = try runHelper(
+                stateURL: stateURL,
+                path: bin.path,
+                arguments: [
+                    "report",
+                    "--status", "completed",
+                    "--section", "Step 3.5: Confirm search mode with the user (DO NOT SKIP)",
+                ]
+            )
+
+            let result = try runHelper(
+                stateURL: stateURL,
+                path: bin.path,
+                arguments: [
+                    "report",
+                    "--status", "completed",
+                    "--section", "Step 4: Import and Index",
+                    "--source-id", "brain",
+                ]
+            )
+            let payload = try helperPayload(result.stdout)
+            let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+
+            XCTAssertEqual(result.exitCode, 0, "topology=\(topology) stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+            XCTAssertEqual(payload["nextSection"] as? String, "Step 7: Recurring Jobs")
+            XCTAssertTrue(nextPrompt.contains("Step 3 topology is `\(topology)`"), nextPrompt)
+            XCTAssertTrue(nextPrompt.contains("1. GBrain autopilot (recommended)"), nextPrompt)
+            XCTAssertTrue(nextPrompt.contains("2. Platform scheduler"), nextPrompt)
+            XCTAssertTrue(nextPrompt.contains("3. System scheduler"), nextPrompt)
+            XCTAssertFalse(nextPrompt.contains("1. Platform scheduler (recommended)"), nextPrompt)
+        }
+    }
+
+    func testRecurringJobsPromptRecommendsPlatformSchedulerForPGLiteStep7() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root, includeCanonicalRecurringJobs: true)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 1: Install GBrain",
+            ]
+        )
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path, decision: "provider_key")
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3.5: Confirm search mode with the user (DO NOT SKIP)",
+            ]
+        )
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 4: Import and Index",
+                "--source-id", "brain",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["nextSection"] as? String, "Step 7: Recurring Jobs")
+        XCTAssertTrue(nextPrompt.contains("Step 3 topology is `pglite`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended)"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("OpenClaw: OpenClaw cron"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Hermes: `/cron add`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. System scheduler"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("1. GBrain autopilot (recommended)"), nextPrompt)
+    }
+
+    func testRecurringJobsPromptUsesKoreanForPGLiteRecommendationWhenLanguageIsKorean() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root, includeCanonicalRecurringJobs: true)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path],
+            appPreferredLocalizations: ["ko"],
+            preferredLanguages: ["ko"]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            languageCode: "ko",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 1: Install GBrain",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            languageCode: "ko",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 2: API Keys",
+                "--embedding-decision", "provider_key",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            languageCode: "ko",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            languageCode: "ko",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3.5: Confirm search mode with the user (DO NOT SKIP)",
+            ]
+        )
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            languageCode: "ko",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 4: Import and Index",
+                "--source-id", "brain",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["nextSection"] as? String, "Step 7: Recurring Jobs")
+        XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended) — 선택한 agent의 scheduler를 사용합니다"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("OpenClaw: OpenClaw cron"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Hermes: `/cron add`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot — 안정적인 agent scheduler가 없을 때 사용합니다"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. System scheduler — launchd/crontab/external cron. 고급 설정입니다"), nextPrompt)
+    }
+
+    func testRecurringJobsPromptUsesKoreanForPostgresRecommendationWhenLanguageIsKorean() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root, includeCanonicalRecurringJobs: true)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path],
+            appPreferredLocalizations: ["ko"],
+            preferredLanguages: ["ko"]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            languageCode: "ko",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 1: Install GBrain",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            languageCode: "ko",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 2: API Keys",
+                "--embedding-decision", "provider_key",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            languageCode: "ko",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--topology", "postgres",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            languageCode: "ko",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3.5: Confirm search mode with the user (DO NOT SKIP)",
+            ]
+        )
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            languageCode: "ko",
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 4: Import and Index",
+                "--source-id", "brain",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["nextSection"] as? String, "Step 7: Recurring Jobs")
+        XCTAssertTrue(nextPrompt.contains("1. GBrain autopilot (recommended) — hosted 또는 durable database setup에 맞는 built-in daemon입니다"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. Platform scheduler — 사용자의 agent platform이 이미 recurring jobs를 맡고 있을 때만 사용합니다"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. System scheduler — launchd/crontab/Railway cron/external cron. 고급 배포용입니다"), nextPrompt)
     }
 
     func testReportCompletedForLastSectionReturnsVerifyPrompt() throws {
@@ -2571,6 +2933,79 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(progress["nextSection"] as? String, "Step 1: Install CLI")
     }
 
+    func testReportGuardRejectsCreateBrainCompletionWithoutTopology() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let progress = try progressObject(in: stateURL)
+
+        XCTAssertNotEqual(result.exitCode, 0)
+        XCTAssertEqual(payload["reason"] as? String, "topology_decision_required")
+        XCTAssertNil(progress["topologyDecision"])
+        XCTAssertFalse((progress["completedSections"] as? [String] ?? []).contains("Step 3: Create the Brain"))
+    }
+
+    func testReportGuardRejectsCreateBrainCompletionWithInvalidTopology() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--topology", "sqlite",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let progress = try progressObject(in: stateURL)
+
+        XCTAssertNotEqual(result.exitCode, 0)
+        XCTAssertEqual(payload["reason"] as? String, "invalid_topology_decision")
+        XCTAssertNil(progress["topologyDecision"])
+        XCTAssertFalse((progress["completedSections"] as? [String] ?? []).contains("Step 3: Create the Brain"))
+    }
+
     func testReportGuardRejectsCreateBrainCompletionWithoutTarget() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
@@ -2591,6 +3026,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
             ]
         )
         let payload = try helperPayload(result.stdout)
@@ -2701,6 +3137,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", workBrain.path,
                 "--method", "user_created_repo",
             ]
@@ -2712,6 +3149,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", root.path,
                 "--method", "user_created_repo",
             ]
@@ -2723,6 +3161,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", root.path,
                 "--method", "user_confirmed_home",
             ]
@@ -2766,15 +3205,18 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
         )
         let progress = try progressObject(in: stateURL)
         let targetResolution = try XCTUnwrap(progress["targetResolution"] as? [String: Any])
+        let topologyDecision = try XCTUnwrap(progress["topologyDecision"] as? [String: Any])
 
         XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
         XCTAssertTrue((progress["completedSections"] as? [String] ?? []).contains("Step 3: Create the Brain"))
+        XCTAssertEqual(topologyDecision["topology"] as? String, "pglite")
         XCTAssertEqual(targetResolution["method"] as? String, "user_created_repo")
         XCTAssertEqual(progress["resolvedTargetKey"] as? String, "vault:\(target.path)")
     }
@@ -2802,6 +3244,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -2835,6 +3278,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -2890,6 +3334,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -2935,6 +3380,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
                 "--source-id", "brain",
@@ -2987,6 +3433,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -3046,6 +3493,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -3122,6 +3570,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -3353,6 +3802,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -3409,6 +3859,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
                 "--source-id", "brain",
@@ -4404,6 +4855,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
                 "--source-id", "brain",
@@ -4587,6 +5039,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -4654,6 +5107,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -4954,6 +5408,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -5186,6 +5641,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "report",
                 "--status", "completed",
                 "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
                 "--target", target.path,
                 "--method", "user_created_repo",
             ]
@@ -5380,7 +5836,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         root: URL,
         includeRenamedSearchMode: Bool = false,
         includeTokenReuseNonRoleSections: Bool = false,
-        includeRenamedRecurringJobs: Bool = false
+        includeRenamedRecurringJobs: Bool = false,
+        includeCanonicalRecurringJobs: Bool = false
     ) throws -> URL {
         let repo = root.appendingPathComponent("gbrain-docs-source", isDirectory: true)
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
@@ -5422,6 +5879,14 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             Or use `gbrain autopilot --install --repo ~/brain`.
             """
             : ""
+        let canonicalRecurringJobsSection = includeCanonicalRecurringJobs
+            ? """
+
+            ## Step 7: Recurring Jobs
+
+            Set up using your platform's scheduler, or use `gbrain autopilot --install`.
+            """
+            : ""
         try """
         # Install
 
@@ -5447,6 +5912,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         Run `gbrain import ~/brain/ --no-embed`.
         Run `gbrain embed --stale`.
         \(recurringJobsSection)
+        \(canonicalRecurringJobsSection)
 
         ## Step 9: Verify
 

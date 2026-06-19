@@ -886,8 +886,6 @@ public struct ZebraGBrainOnboardingStore {
         let normalized = normalizedSectionTitle(title)
         return normalized.starts(with: "step 6 ")
             || normalized == "step 6"
-            || normalized.starts(with: "step 7 ")
-            || normalized == "step 7"
     }
 
     private static func enabledInstallForAgentsSections(_ sections: [DocsSection]) -> [DocsSection] {
@@ -1925,6 +1923,7 @@ public struct ZebraGBrainOnboardingStore {
     known_roles = allowed_roles | {"non_role"}
     allowed_search_modes = {"conservative", "balanced", "tokenmax"}
     allowed_embedding_decisions = {"provider_key", "defer_embeddings"}
+    allowed_topology_decisions = {"pglite", "postgres", "supabase"}
     allowed_recurring_jobs_decisions = {
         "defer",
         "manual_scheduler",
@@ -2092,7 +2091,7 @@ public struct ZebraGBrainOnboardingStore {
 
     def disabled_install_for_agents_section_title(title):
         normalized = normalize_title(title)
-        return normalized == "step 6" or normalized.startswith("step 6 ") or normalized == "step 7" or normalized.startswith("step 7 ")
+        return normalized == "step 6" or normalized.startswith("step 6 ")
 
     def docs_manifest_fingerprint(manifest):
         if not manifest:
@@ -2405,6 +2404,112 @@ public struct ZebraGBrainOnboardingStore {
             options,
         ])
 
+    def topology_decision_options_text():
+        language = onboarding_language()
+        if language == "ko":
+            return "\\n".join([
+                "1. PGLite (recommended) — 로컬 embedded Postgres입니다. 서버가 필요 없고 첫 설치에 가장 적합합니다.",
+                "2. Postgres — 기존 Postgres database를 사용합니다.",
+                "3. Supabase — hosted 또는 큰 brain을 위한 managed Postgres입니다.",
+            ])
+        if language == "ja":
+            return "\\n".join([
+                "1. PGLite (recommended) — ローカルembedded Postgresです。サーバー不要で初回セットアップに最適です。",
+                "2. Postgres — 既存のPostgres databaseを使用します。",
+                "3. Supabase — hostedまたは大きなbrain向けのmanaged Postgresです。",
+            ])
+        return "\\n".join([
+            "1. PGLite (recommended) — local embedded Postgres, no server, best first install.",
+            "2. Postgres — use an existing Postgres database.",
+            "3. Supabase — managed Postgres for hosted or larger brains.",
+        ])
+
+    def topology_decision_prompt_text():
+        language = onboarding_language()
+        if language == "ko":
+            return "\\n".join([
+                "Step 3 database topology를 아래 번호 중 하나로 선택해 주세요:",
+                topology_decision_options_text(),
+            ])
+        if language == "ja":
+            return "\\n".join([
+                "Step 3 database topologyは次の番号から選んでください:",
+                topology_decision_options_text(),
+            ])
+        return "\\n".join([
+            "Choose the Step 3 database topology using exactly these numbered options:",
+            topology_decision_options_text(),
+        ])
+
+    def recurring_jobs_options_text(state):
+        language = onboarding_language()
+        topology = topology_decision_value(state)
+        if topology == "pglite":
+            if language == "ko":
+                return "\\n".join([
+                    "1. Platform scheduler (recommended) — 선택한 agent의 scheduler를 사용합니다.",
+                    "   OpenClaw: OpenClaw cron.",
+                    "   Hermes: `/cron add`.",
+                    "2. GBrain autopilot — 안정적인 agent scheduler가 없을 때 사용합니다.",
+                    "3. System scheduler — launchd/crontab/external cron. 고급 설정입니다.",
+                ])
+            if language == "ja":
+                return "\\n".join([
+                    "1. Platform scheduler (recommended) — 選択したagentのschedulerを使用します。",
+                    "   OpenClaw: OpenClaw cron.",
+                    "   Hermes: `/cron add`.",
+                    "2. GBrain autopilot — 信頼できるagent schedulerがない場合に使用します。",
+                    "3. System scheduler — launchd/crontab/external cron。高度な設定です。",
+                ])
+            return "\\n".join([
+                "1. Platform scheduler (recommended) — use the selected agent's scheduler.",
+                "   OpenClaw: OpenClaw cron.",
+                "   Hermes: `/cron add`.",
+                "2. GBrain autopilot — use `gbrain autopilot --install` if there is no reliable agent scheduler.",
+                "3. System scheduler — launchd/crontab/external cron for advanced setups.",
+            ])
+        if topology in {"postgres", "supabase"}:
+            if language == "ko":
+                return "\\n".join([
+                    "1. GBrain autopilot (recommended) — hosted 또는 durable database setup에 맞는 built-in daemon입니다.",
+                    "2. Platform scheduler — 사용자의 agent platform이 이미 recurring jobs를 맡고 있을 때만 사용합니다.",
+                    "3. System scheduler — launchd/crontab/Railway cron/external cron. 고급 배포용입니다.",
+                ])
+            if language == "ja":
+                return "\\n".join([
+                    "1. GBrain autopilot (recommended) — hostedまたはdurable database setup向けのbuilt-in daemonです。",
+                    "2. Platform scheduler — ユーザーのagent platformがすでにrecurring jobsを管理している場合のみ使用します。",
+                    "3. System scheduler — launchd/crontab/Railway cron/external cron。高度なdeploy向けです。",
+                ])
+            return "\\n".join([
+                "1. GBrain autopilot (recommended) — built-in daemon for hosted or durable database setups.",
+                "2. Platform scheduler — use only if the user's agent platform already owns recurring jobs.",
+                "3. System scheduler — launchd/crontab/Railway cron/external cron for advanced deployments.",
+            ])
+        if language == "ko":
+            return "\\n".join([
+                "1. Platform scheduler — 선택한 agent의 scheduler를 사용합니다.",
+                "   OpenClaw: OpenClaw cron.",
+                "   Hermes: `/cron add`.",
+                "2. GBrain autopilot — `gbrain autopilot --install`을 사용합니다.",
+                "3. System scheduler — launchd/crontab/Railway cron/external cron. 고급 배포용입니다.",
+            ])
+        if language == "ja":
+            return "\\n".join([
+                "1. Platform scheduler — 選択したagentのschedulerを使用します。",
+                "   OpenClaw: OpenClaw cron.",
+                "   Hermes: `/cron add`.",
+                "2. GBrain autopilot — `gbrain autopilot --install`を使用します。",
+                "3. System scheduler — launchd/crontab/Railway cron/external cron。高度なdeploy向けです。",
+            ])
+        return "\\n".join([
+            "1. Platform scheduler — use the selected agent's scheduler.",
+            "   OpenClaw: OpenClaw cron.",
+            "   Hermes: `/cron add`.",
+            "2. GBrain autopilot — use `gbrain autopilot --install`.",
+            "3. System scheduler — launchd/crontab/Railway cron/external cron for advanced deployments.",
+        ])
+
     def user_decision_gate_prompt(state, section_title):
         progress = state.get("progress") or {}
         waiting = progress.get("waitingForUser")
@@ -2413,7 +2518,8 @@ public struct ZebraGBrainOnboardingStore {
         if reason == "topology_resolution":
             return "\\n".join([
                 "Current user-decision gate:",
-                "Ask only for the Step 3 topology decision now: local PGLite or Supabase/Postgres.",
+                "Ask only for the Step 3 topology decision now. Present exactly this numbered prompt to the user:",
+                topology_decision_prompt_text(),
                 "Do not ask for the brain repo target in this gate. Ask for that later, after topology is chosen and Step 3 init/doctor have run.",
                 "Do not ask for Step 2 API keys in the topology prompt. However, if a Step 3 command needs an embedding provider or offers `--no-embedding`/deferred embeddings, stop and show only the two embedding provider decision options from Zebra hard gates.",
             ])
@@ -2502,7 +2608,11 @@ public struct ZebraGBrainOnboardingStore {
                 "",
                 "Step 3 topology / PGLite / target hard gates:",
                 "- In Step 3, do not run `gbrain init`, `gbrain init --pglite`, or Supabase/Postgres setup until the user has explicitly chosen topology.",
-                "- Ask the user to choose local PGLite or Supabase/Postgres before initialization.",
+                "- Ask the user to choose database topology before initialization. Present exactly this numbered prompt to the user:",
+                topology_decision_prompt_text(),
+                "- Interpret user choice 1 as topology=pglite and run `gbrain init --pglite`.",
+                "- Interpret user choice 2 as topology=postgres and configure the existing Postgres database before `gbrain doctor --json`.",
+                "- Interpret user choice 3 as topology=supabase and configure Supabase before `gbrain doctor --json`.",
                 "- Do not run `gbrain init --pglite --no-embedding`, accept deferred embeddings, or otherwise disable embeddings until the user explicitly chooses that path.",
                 "- Ask for the brain repo target separately after topology is chosen and Step 3 init/doctor have run.",
                 "- When asking for the brain repo target, present exactly this numbered prompt to the user:",
@@ -2512,7 +2622,7 @@ public struct ZebraGBrainOnboardingStore {
                 "- Interpret user choice 3 as a new custom repo path with targetResolution.method=user_created_repo; ask for the path if the user provides only the number.",
                 "- Do not ask only as an open-ended path question.",
                 "- Do not implicitly use the home directory or Zebra's onboarding work directory as the brain repo target.",
-                "- When Step 3 resolves a brain repo target, include `--target <brain repo path> --method <targetResolution.method>` on the completed report.",
+                "- When Step 3 resolves a brain repo target, include `--topology <pglite|postgres|supabase> --target <brain repo path> --method <targetResolution.method>` on the completed report.",
                 "- If a Step 3 command asks the user to choose search mode before Step 3.5, include `--search-mode <mode>` on the Step 3 completed report so Zebra will not ask the same question again in Step 3.5.",
             ])
         elif role == "search_mode":
@@ -2556,6 +2666,9 @@ public struct ZebraGBrainOnboardingStore {
                 "",
                 "Recurring jobs hard gates:",
                 "- Recurring jobs are persistent background changes, not prerequisites for import/index or final verify.",
+                f"- Step 3 topology is `{topology_decision_value(state) or 'unknown'}`.",
+                "- Ask the user to choose recurring-job runner using exactly these numbered options:",
+                recurring_jobs_options_text(state),
                 "- Do not run `gbrain autopilot --install`, `gbrain autopilot install`, `launchctl`, `cron`, `crontab`, `systemd`, or scheduler installation/start commands until the user explicitly chooses that path.",
                 "- First run `zebra-gbrain-onboarding report --status waiting_for_user --section " + json.dumps(section_title) + " --reason recurring_jobs_decision --note \\\"Choose defer, manual_scheduler, platform_scheduler_install, or autopilot_install\\\"` and ask the user to choose.",
                 "- If the user chooses `defer`, do not install or start any background service; report completed with `--recurring-jobs-decision defer`.",
@@ -3298,6 +3411,28 @@ public struct ZebraGBrainOnboardingStore {
         decision = progress.get("embeddingDecision") or {}
         return decision.get("decision") in allowed_embedding_decisions
 
+    def topology_decision_flags_present(flags):
+        return bool(flags.get("topology"))
+
+    def apply_topology_decision(state, flags):
+        topology = (flags.get("topology") or "").strip().lower()
+        if not topology:
+            return None
+        if topology not in allowed_topology_decisions:
+            return "invalid_topology_decision"
+        progress = state.setdefault("progress", {})
+        progress["topologyDecision"] = {
+            "topology": topology,
+            "confirmedAt": now(),
+        }
+        return None
+
+    def topology_decision_value(state):
+        progress = state.get("progress") or {}
+        decision = progress.get("topologyDecision") or {}
+        topology = decision.get("topology")
+        return topology if topology in allowed_topology_decisions else None
+
     def search_mode_decision_flags_present(flags):
         return bool(flags.get("search_mode"))
 
@@ -4021,6 +4156,8 @@ public struct ZebraGBrainOnboardingStore {
         if role == "credentials" and status == "completed" and not embedding_decision_recorded(state):
             return "embedding_decision_required"
         if role == "create_brain" and status == "completed":
+            if not topology_decision_value(state):
+                return "topology_decision_required"
             if target_reasons:
                 return target_reasons[0]
             if not embedding_decision_recorded(state):
@@ -4142,6 +4279,12 @@ public struct ZebraGBrainOnboardingStore {
             embedding_error = apply_embedding_decision(candidate_state, flags)
             if embedding_error:
                 reject_report(state, embedding_error, section, status)
+        if topology_decision_flags_present(flags):
+            if not (role == "create_brain" and status == "completed"):
+                reject_report(state, "topology_decision_flags_not_allowed", section, status)
+            topology_error = apply_topology_decision(candidate_state, flags)
+            if topology_error:
+                reject_report(state, topology_error, section, status)
         if search_mode_decision_flags_present(flags):
             if not (role in {"create_brain", "search_mode"} and status == "completed"):
                 reject_report(state, "search_mode_flags_not_allowed", section, status)
