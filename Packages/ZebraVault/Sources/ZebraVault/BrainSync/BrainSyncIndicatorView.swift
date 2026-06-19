@@ -18,16 +18,6 @@ public struct BrainSyncIndicatorView: View {
     /// cmux app module 의 caller 가 terminal split + agent CLI 실행을 wire up.
     public var onFailureAgentSelect: ((MarkdownPillAgent, Date, BrainSyncService.Failure) -> Void)?
 
-    // Two hover detectors so that the tooltip area itself can keep the
-    // popover open. SwiftUI's `.onHover` only fires within a view's layout
-    // frame; the tooltip is `.offset`-ed above the indicator so its frame
-    // stays in the indicator's row. Without a second detector on the tooltip
-    // itself, the moment the mouse leaves the indicator's row the hover
-    // goes false and the popover vanishes — exactly the bug the user hit.
-    @State private var buttonHovering = false
-    @State private var tooltipHovering = false
-    private var hovering: Bool { buttonHovering || tooltipHovering }
-
     public init(
         service: BrainSyncService,
         onFailureAgentSelect: ((MarkdownPillAgent, Date, BrainSyncService.Failure) -> Void)? = nil
@@ -37,61 +27,19 @@ public struct BrainSyncIndicatorView: View {
     }
 
     public var body: some View {
-        Button(action: handleClick) {
-            HStack(spacing: 6) {
-                dot
-                Text(label)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundColor(labelColor)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
-            .frame(height: 24)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(hovering ? BVColor.bgHover : Color.clear)
+        BrainStatusPillChrome(
+            label: label,
+            isSpinning: service.isSyncing,
+            dotColor: dotColor,
+            labelColor: labelColor,
+            isDisabled: service.isSyncing,
+            accessibilityIdentifier: "BrainSyncIndicator",
+            action: handleClick
+        ) {
+            BrainSyncTooltipView(
+                service: service,
+                onFailureAgentSelect: onFailureAgentSelect
             )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(service.isSyncing)
-        .padding(.vertical, 5)
-        .contentShape(Rectangle())
-        .fixedSize(horizontal: true, vertical: false)
-        .onHover { buttonHovering = $0 }
-        // Tooltip overlay — button padding-top(5) + button(24) + padding-bottom(5)
-        // = 34pt 구조. 디자인 spec: tooltip bottom 이 button top 위 10pt 에 정렬.
-        // View bottom 으로부터 위로 (padding-bottom 5 + button 24 + gap 10) = 39pt.
-        .overlay(alignment: .bottomTrailing) {
-            if hovering {
-                BrainSyncTooltipView(
-                    service: service,
-                    onFailureAgentSelect: onFailureAgentSelect
-                )
-                    .offset(y: -39)
-                    .onHover { tooltipHovering = $0 }
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeOut(duration: 0.12), value: hovering)
-        .accessibilityIdentifier("BrainSyncIndicator")
-        .accessibilityLabel(label)
-    }
-
-    @ViewBuilder
-    private var dot: some View {
-        if service.isSyncing {
-            Image(systemName: "arrow.triangle.2.circlepath")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(BVColor.syncAmber)
-                .rotationEffect(.degrees(spinAngle))
-                .onAppear { startSpin() }
-                .onDisappear { stopSpin() }
-        } else {
-            Circle()
-                .fill(dotColor)
-                .frame(width: 7, height: 7)
         }
     }
 
@@ -136,26 +84,5 @@ public struct BrainSyncIndicatorView: View {
         guard !service.isSyncing else { return }
         if case .failed? = service.state { return }
         service.triggerSync()
-    }
-
-    // MARK: - Spin animation
-
-    @State private var spinAngle: Double = 0
-    @State private var spinTimer: Timer?
-
-    private func startSpin() {
-        stopSpin()
-        let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in
-            DispatchQueue.main.async {
-                spinAngle = (spinAngle + 12).truncatingRemainder(dividingBy: 360)
-            }
-        }
-        RunLoop.current.add(timer, forMode: .common)
-        spinTimer = timer
-    }
-
-    private func stopSpin() {
-        spinTimer?.invalidate()
-        spinTimer = nil
     }
 }

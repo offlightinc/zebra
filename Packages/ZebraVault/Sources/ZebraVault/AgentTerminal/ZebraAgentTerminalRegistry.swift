@@ -6,6 +6,7 @@ public enum ZebraAgentTerminalSource: Hashable, Sendable {
     case emailThread(String)
     case clawvisorOnboarding
     case brainSyncFailure
+    case brainSaveFailure
     case onboardingChecklist(ZebraOnboardingChecklistStepID)
 }
 

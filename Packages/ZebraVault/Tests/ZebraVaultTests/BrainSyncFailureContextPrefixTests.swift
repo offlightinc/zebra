@@ -3,6 +3,48 @@ import XCTest
 @testable import ZebraVault
 
 final class BrainSyncFailureContextPrefixTests: XCTestCase {
+    func testSaveFailurePrefixUsesGBrainRuntimeInspectCommands() {
+        let output = BrainSaveFailureContextPrefix.build(
+            vaultPath: "/tmp/missing-\(UUID().uuidString)",
+            failure: BrainSaveFailure(source: .gbrainStatus, message: "GBrain queue has failed or dead jobs"),
+            failedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        XCTAssertTrue(output.contains("=== Zebra brain save failure ==="))
+        XCTAssertTrue(output.contains("Reason: gbrainStatus"))
+        XCTAssertTrue(output.contains("Detail: GBrain queue has failed or dead jobs"))
+        XCTAssertTrue(output.contains("- gbrain status --json"))
+        XCTAssertTrue(output.contains("failed/dead queue entries"))
+        XCTAssertFalse(output.contains("brainsync.log"))
+        XCTAssertFalse(output.contains("Zebra brain sync failure"))
+    }
+
+    func testSaveFailurePrefixUsesOpenClawInspectCommands() {
+        let output = BrainSaveFailureContextPrefix.build(
+            vaultPath: "/tmp/missing-\(UUID().uuidString)",
+            failure: BrainSaveFailure(source: .openClawCron, message: "OpenClaw cron error"),
+            failedAt: nil
+        )
+
+        XCTAssertTrue(output.contains("Reason: openClawCron"))
+        XCTAssertTrue(output.contains("- openclaw cron list --json"))
+        XCTAssertTrue(output.contains("OpenClaw cron reported a GBrain save failure"))
+        XCTAssertFalse(output.contains("tail -80 ~/Library/Logs/zebra/brainsync.log"))
+    }
+
+    func testSaveFailurePrefixUsesHermesInspectCommands() {
+        let output = BrainSaveFailureContextPrefix.build(
+            vaultPath: "/tmp/missing-\(UUID().uuidString)",
+            failure: BrainSaveFailure(source: .hermesCron, message: "Hermes job error"),
+            failedAt: nil
+        )
+
+        XCTAssertTrue(output.contains("Reason: hermesCron"))
+        XCTAssertTrue(output.contains("- cat ~/.hermes/cron/jobs.json"))
+        XCTAssertTrue(output.contains("Hermes cron reported a GBrain save failure"))
+        XCTAssertFalse(output.contains("brainsync.log"))
+    }
+
     func testBuildRedactsCredentialUserInfoFromOriginRemote() throws {
         let repo = try makeGitRepo()
         try runGit(

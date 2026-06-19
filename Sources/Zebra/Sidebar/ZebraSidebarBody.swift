@@ -21,7 +21,7 @@ struct ZebraSidebarBody: View {
     @EnvironmentObject var goalsViewState: GoalsViewState
     @EnvironmentObject var emailListStore: ZebraEmailListStore
     @EnvironmentObject var emailDetailStore: ZebraEmailDetailStore
-    @EnvironmentObject var brainSyncService: BrainSyncService
+    @EnvironmentObject var brainSaveStatusService: BrainSaveStatusService
     @EnvironmentObject var onboardingChecklistStore: ZebraOnboardingChecklistStore
     @Environment(\.zebra) private var zebra
     @State private var observedOnboardingCompletedStepIDs: Set<ZebraOnboardingChecklistStepID>?
@@ -120,11 +120,41 @@ struct ZebraSidebarBody: View {
     private var footer: some View {
         VerticalTabsSidebarFooter(
             vaultState: vaultState,
-            brainSync: brainSyncService,
+            brainSaveStatus: brainSaveStatusService,
             onSendFeedback: slots.onSendFeedback,
-            onBrainSyncFailureAgent: { agent, failedAt, failure in
-                startBrainSyncFailureAgent(agent: agent, failedAt: failedAt, failure: failure)
+            onBrainSaveFailureAgent: { agent, failedAt, failure in
+                startBrainSaveFailureAgent(agent: agent, failedAt: failedAt, failure: failure)
             }
+        )
+    }
+
+    /// Save failure reason 일 때 사용자가 Resolve with AI 를 누르면 호출.
+    /// Agent/GBrain save status 는 primary agent CLI 를 실행하고, 첫 prompt 에
+    /// GBrain/OpenClaw/Hermes 중심의 failure context 를 주입한다.
+    private func startBrainSaveFailureAgent(
+        agent: MarkdownPillAgent,
+        failedAt: Date?,
+        failure: BrainSaveFailure
+    ) {
+        guard let workspace = tabManager.selectedWorkspace else { return }
+        guard let vaultPath = vaultState.selectedVaultPath, !vaultPath.isEmpty else { return }
+        _ = MarkdownChatPillCommand.prepareLaunchEnvironmentForBrainSaveFailure(
+            agent: agent,
+            vaultPath: vaultPath
+        )
+        let startupLine = MarkdownChatPillCommand.shellStartupLineForBrainSaveFailure(
+            agent: agent,
+            vaultPath: vaultPath,
+            failure: failure,
+            failedAt: failedAt
+        )
+        guard let agentTerminals = zebra?.agentTerminals else { return }
+        workspace.openZebraAgentTerminal(
+            startupLine: startupLine,
+            source: .brainSaveFailure,
+            agent: agent,
+            anchor: .focusAnchored,
+            markedBy: agentTerminals
         )
     }
 

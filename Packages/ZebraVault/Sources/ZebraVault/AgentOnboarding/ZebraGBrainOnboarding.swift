@@ -2448,23 +2448,23 @@ public struct ZebraGBrainOnboardingStore {
             if language == "ko":
                 return "\\n".join([
                     "1. Platform scheduler (recommended) — 선택한 agent의 scheduler를 사용합니다.",
-                    "   OpenClaw: OpenClaw cron.",
-                    "   Hermes: `/cron add`.",
+                    "   OpenClaw: `openclaw cron add` 또는 `openclaw cron create`.",
+                    "   Hermes: `hermes cron create` 또는 `hermes cron add`.",
                     "2. GBrain autopilot — 안정적인 agent scheduler가 없을 때 사용합니다.",
                     "3. System scheduler — launchd/crontab/external cron. 고급 설정입니다.",
                 ])
             if language == "ja":
                 return "\\n".join([
                     "1. Platform scheduler (recommended) — 選択したagentのschedulerを使用します。",
-                    "   OpenClaw: OpenClaw cron.",
-                    "   Hermes: `/cron add`.",
+                    "   OpenClaw: `openclaw cron add` or `openclaw cron create`.",
+                    "   Hermes: `hermes cron create` or `hermes cron add`.",
                     "2. GBrain autopilot — 信頼できるagent schedulerがない場合に使用します。",
                     "3. System scheduler — launchd/crontab/external cron。高度な設定です。",
                 ])
             return "\\n".join([
                 "1. Platform scheduler (recommended) — use the selected agent's scheduler.",
-                "   OpenClaw: OpenClaw cron.",
-                "   Hermes: `/cron add`.",
+                "   OpenClaw: `openclaw cron add` or `openclaw cron create`.",
+                "   Hermes: `hermes cron create` or `hermes cron add`.",
                 "2. GBrain autopilot — use `gbrain autopilot --install` if there is no reliable agent scheduler.",
                 "3. System scheduler — launchd/crontab/external cron for advanced setups.",
             ])
@@ -2489,23 +2489,23 @@ public struct ZebraGBrainOnboardingStore {
         if language == "ko":
             return "\\n".join([
                 "1. Platform scheduler — 선택한 agent의 scheduler를 사용합니다.",
-                "   OpenClaw: OpenClaw cron.",
-                "   Hermes: `/cron add`.",
+                "   OpenClaw: `openclaw cron add` 또는 `openclaw cron create`.",
+                "   Hermes: `hermes cron create` 또는 `hermes cron add`.",
                 "2. GBrain autopilot — `gbrain autopilot --install`을 사용합니다.",
                 "3. System scheduler — launchd/crontab/Railway cron/external cron. 고급 배포용입니다.",
             ])
         if language == "ja":
             return "\\n".join([
                 "1. Platform scheduler — 選択したagentのschedulerを使用します。",
-                "   OpenClaw: OpenClaw cron.",
-                "   Hermes: `/cron add`.",
+                "   OpenClaw: `openclaw cron add` or `openclaw cron create`.",
+                "   Hermes: `hermes cron create` or `hermes cron add`.",
                 "2. GBrain autopilot — `gbrain autopilot --install`を使用します。",
                 "3. System scheduler — launchd/crontab/Railway cron/external cron。高度なdeploy向けです。",
             ])
         return "\\n".join([
             "1. Platform scheduler — use the selected agent's scheduler.",
-            "   OpenClaw: OpenClaw cron.",
-            "   Hermes: `/cron add`.",
+            "   OpenClaw: `openclaw cron add` or `openclaw cron create`.",
+            "   Hermes: `hermes cron create` or `hermes cron add`.",
             "2. GBrain autopilot — use `gbrain autopilot --install`.",
             "3. System scheduler — launchd/crontab/Railway cron/external cron for advanced deployments.",
         ])
@@ -2676,7 +2676,12 @@ public struct ZebraGBrainOnboardingStore {
                 "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run `zebra-gbrain-onboarding check-launchd-bun-path` before running `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo <brain repo path>`.",
                 "- If `check-launchd-bun-path` reports `bun_missing_for_launchd_autopilot`, run `zebra-gbrain-onboarding repair-launchd-bun-path`, then rerun `zebra-gbrain-onboarding check-launchd-bun-path`.",
                 "- Only after `check-launchd-bun-path` returns ok, run `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo <brain repo path>`, then report completed with `--recurring-jobs-decision autopilot_install`.",
-                "- If the user chooses `platform_scheduler_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision platform_scheduler_install`, then run only the approved scheduler install, then report completed with the same decision.",
+                "- If the user chooses `platform_scheduler_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision platform_scheduler_install`, then run `zebra-gbrain-onboarding prepare-platform-scheduler` to install/start only the selected runtime's scheduler service.",
+                "- Do not run `openclaw gateway install`, `openclaw gateway start`, `hermes gateway install`, or `hermes gateway start` directly; use `zebra-gbrain-onboarding prepare-platform-scheduler` so Zebra can verify Step 7 approval first.",
+                "- After `prepare-platform-scheduler` returns ok, create the recurring job using the selected runtime scheduler only.",
+                "- For OpenClaw, use this shape and keep `--no-deliver`: `openclaw cron create --name \\\"GBrain save\\\" --every 15m --session isolated --message \\\"Run: gbrain sync --repo '<brain repo path>' --yes, then run: gbrain status. If sync reports thin-client/not-routable, run: gbrain remote ping. Do not send any chat message.\\\" --no-deliver --json`.",
+                "- For Hermes, omit `--deliver` so Hermes uses its default local delivery: `hermes cron create \\\"every 15m\\\" \\\"Run: gbrain sync --repo '<brain repo path>' --yes, then run: gbrain status. If sync reports thin-client/not-routable, run: gbrain remote ping. Do not send any chat message.\\\" --name \\\"GBrain save\\\" --workdir \\\"<brain repo path>\\\"`.",
+                "- After the runtime cron job is created, report completed with `--recurring-jobs-decision platform_scheduler_install`.",
             ])
         elif role == "verify":
             common.extend([
@@ -3479,6 +3484,130 @@ public struct ZebraGBrainOnboardingStore {
         decision = progress.get("recurringJobsDecision") or {}
         value = decision.get("decision")
         return value if value in allowed_recurring_jobs_decisions else None
+
+    def gbrain_runtime_state_path():
+        explicit = os.environ.get("ZEBRA_GBRAIN_RUNTIME_STATE")
+        if explicit:
+            return os.path.abspath(os.path.expanduser(explicit))
+        return os.path.join(os.path.dirname(state_path), "gbrain-runtime-state.json")
+
+    def selected_runtime_receipt():
+        runtime_state_path = gbrain_runtime_state_path()
+        try:
+            with open(runtime_state_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception:
+            raise RuntimeError("selected_runtime_receipt_missing")
+        receipt = payload.get("receipt") or {}
+        if receipt.get("complete") is not True:
+            raise RuntimeError("selected_runtime_receipt_incomplete")
+        runtime = receipt.get("runtime")
+        if runtime not in {"openclaw", "hermes"}:
+            raise RuntimeError("selected_runtime_missing")
+        executable = receipt.get("executablePath")
+        if not executable:
+            raise RuntimeError("selected_runtime_executable_missing")
+        executable = os.path.abspath(os.path.expanduser(executable))
+        if not os.access(executable, os.X_OK):
+            raise RuntimeError("selected_runtime_executable_missing")
+        return {
+            "runtime": runtime,
+            "executablePath": executable,
+            "statePath": runtime_state_path,
+        }
+
+    def run_platform_scheduler_command(argv, timeout=120):
+        try:
+            result = subprocess.run(
+                argv,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+            )
+            return {
+                "ok": result.returncode == 0,
+                "code": result.returncode,
+                "stdoutTail": (result.stdout or "")[-2000:],
+                "stderrTail": (result.stderr or "")[-2000:],
+            }
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "ok": False,
+                "code": 124,
+                "stdoutTail": (exc.stdout or "")[-2000:] if isinstance(exc.stdout, str) else "",
+                "stderrTail": (exc.stderr or "")[-2000:] if isinstance(exc.stderr, str) else "timeout",
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "code": 1,
+                "stdoutTail": "",
+                "stderrTail": str(exc),
+            }
+
+    def platform_scheduler_status(runtime, executable):
+        if runtime == "openclaw":
+            return run_platform_scheduler_command(
+                [executable, "gateway", "status", "--json", "--require-rpc", "--timeout", "5000"],
+                timeout=20,
+            )
+        return run_platform_scheduler_command([executable, "gateway", "status"], timeout=20)
+
+    def prepare_platform_scheduler():
+        state = load_state()
+        decision = recurring_jobs_decision_value(state)
+        if os.environ.get("ZEBRA_GBRAIN_ALLOW_RECURRING_JOBS_INSTALL") != "1" and decision != "platform_scheduler_install":
+            print("Zebra blocked platform scheduler preparation: recurring_jobs_decision=platform_scheduler_install is required before installing or starting runtime scheduler services.", file=sys.stderr)
+            print("Run: zebra-gbrain-onboarding report --status waiting_for_user --section \\\"<section title>\\\" --reason recurring_jobs_decision", file=sys.stderr)
+            sys.exit(78)
+
+        runtime_receipt = selected_runtime_receipt()
+        runtime = runtime_receipt["runtime"]
+        executable = runtime_receipt["executablePath"]
+        status_before = platform_scheduler_status(runtime, executable)
+        install_result = None
+        start_result = None
+        status_after = status_before
+        if not status_before["ok"]:
+            if runtime == "openclaw":
+                install_result = run_platform_scheduler_command([executable, "gateway", "install", "--json"], timeout=180)
+                if install_result["ok"]:
+                    start_result = run_platform_scheduler_command([executable, "gateway", "start"], timeout=60)
+            else:
+                install_result = run_platform_scheduler_command([executable, "gateway", "install"], timeout=180)
+                if install_result["ok"]:
+                    start_result = run_platform_scheduler_command([executable, "gateway", "start"], timeout=60)
+            status_after = platform_scheduler_status(runtime, executable)
+
+        ready = bool(status_before["ok"] or status_after["ok"])
+        state = load_state()
+        progress = state.setdefault("progress", {})
+        progress["platformScheduler"] = {
+            "runtime": runtime,
+            "executablePath": executable,
+            "ready": ready,
+            "alreadyRunning": bool(status_before["ok"]),
+            "preparedAt": now(),
+        }
+        if ready:
+            progress.pop("lastFailure", None)
+        else:
+            progress["lastFailure"] = "platform_scheduler_prepare_failed"
+        save_state(state)
+
+        print(json.dumps({
+            "ok": ready,
+            "runtime": runtime,
+            "executablePath": executable,
+            "statusBefore": status_before,
+            "install": install_result,
+            "start": start_result,
+            "statusAfter": status_after,
+            "nextRecommendedAction": "create runtime cron job" if ready else "inspect runtime gateway install/start output",
+        }, sort_keys=True))
+        if not ready:
+            sys.exit(1)
 
     def launchd_clean_path():
         return "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -4412,6 +4541,8 @@ public struct ZebraGBrainOnboardingStore {
             "restored": None,
         }
         warnings = []
+        if recurring_jobs_decision_value(load_state()) != "autopilot_install":
+            return payload, warnings
         if not executable or not target or not os.path.isdir(target):
             return payload, warnings
         if not target_uses_local_pglite():
@@ -4980,6 +5111,12 @@ public struct ZebraGBrainOnboardingStore {
         verify()
     elif command == "recover-cycle-freshness":
         recover_cycle_freshness()
+    elif command == "prepare-platform-scheduler":
+        try:
+            prepare_platform_scheduler()
+        except Exception as exc:
+            print(json.dumps({"ok": False, "reason": str(exc)}, sort_keys=True))
+            sys.exit(1)
     elif command == "check-launchd-bun-path":
         check_launchd_bun_path()
     elif command == "repair-launchd-bun-path":
@@ -4987,7 +5124,7 @@ public struct ZebraGBrainOnboardingStore {
     elif command == "create-initial-brain-commit":
         create_initial_brain_commit()
     else:
-        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|run-gbrain|report|status|verify|recover-cycle-freshness|check-launchd-bun-path|repair-launchd-bun-path|create-initial-brain-commit> [options]", file=sys.stderr)
+        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|run-gbrain|report|status|verify|recover-cycle-freshness|prepare-platform-scheduler|check-launchd-bun-path|repair-launchd-bun-path|create-initial-brain-commit> [options]", file=sys.stderr)
         sys.exit(2)
     PY
     """

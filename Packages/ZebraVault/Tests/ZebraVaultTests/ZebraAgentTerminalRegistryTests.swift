@@ -68,6 +68,34 @@ final class ZebraAgentTerminalRegistryTests: XCTestCase {
         )
     }
 
+    func testBrainSaveFailureSourceIsSeparateFromBrainSyncFailureSource() {
+        let registry = ZebraAgentTerminalRegistry()
+        let syncPanelId = UUID()
+        let savePanelId = UUID()
+
+        registry.mark(
+            panelId: syncPanelId,
+            source: .brainSyncFailure,
+            agent: .claude,
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        registry.mark(
+            panelId: savePanelId,
+            source: .brainSaveFailure,
+            agent: .codex,
+            createdAt: Date(timeIntervalSince1970: 20)
+        )
+
+        XCTAssertEqual(
+            registry.latestAgent(for: .brainSyncFailure, panelIds: [syncPanelId, savePanelId]),
+            .claude
+        )
+        XCTAssertEqual(
+            registry.latestAgent(for: .brainSaveFailure, panelIds: [syncPanelId, savePanelId]),
+            .codex
+        )
+    }
+
     func testReassignLatestMovesNewestMatchingTerminalToNewSource() {
         let registry = ZebraAgentTerminalRegistry()
         let oldAgentPanelId = UUID()

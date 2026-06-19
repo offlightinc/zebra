@@ -29,7 +29,10 @@ struct ZebraServices {
     let goalsViewState: GoalsViewState
     let email: ZebraEmailListStore
     let emailDetail: ZebraEmailDetailStore
-    let brainSync: BrainSyncService
+    // Legacy direct sync service intentionally not constructed while the
+    // sidebar footer is backed by agent/GBrain save status.
+    // let brainSync: BrainSyncService
+    let brainSaveStatus: BrainSaveStatusService
     let onboardingChecklist: ZebraOnboardingChecklistStore
 
     /// Per-panel side-car controllers for markdown panels. Owner of all
@@ -52,12 +55,14 @@ struct ZebraServices {
         MinimalModeSidebarTitlebarControlsMetrics.extraLeadingInset =
             VerticalTabsSidebarModeRail.fixedWidth
         let vault = VerticalTabsSidebarVaultState()
-        let brainSync = BrainSyncService()
-        // sync target 이 사용자 vault 선택을 따라가도록 publisher sink.
-        // start() 가 NSApplication.willTerminate observer 도 자체 등록하므로
-        // cmux upstream AppDelegate 는 안 만짐.
-        brainSync.attachVaultSource(vault)
-        brainSync.start()
+        let brainSaveStatus = BrainSaveStatusService()
+        // Legacy direct sync path remains in ZebraVault for future
+        // multi-device/person sync work, but the app no longer constructs or
+        // injects BrainSyncService while agent/GBrain save status owns the
+        // sidebar footer.
+        // let brainSync = BrainSyncService()
+        // brainSync.attachVaultSource(vault)
+        brainSaveStatus.start()
         let email = ZebraEmailListStore()
         let agentTerminals = ZebraAgentTerminalRegistry()
         let emailDetail = ZebraEmailDetailStore(
@@ -84,7 +89,8 @@ struct ZebraServices {
             goalsViewState: GoalsViewState(),
             email: email,
             emailDetail: emailDetail,
-            brainSync: brainSync,
+            // brainSync: brainSync,
+            brainSaveStatus: brainSaveStatus,
             onboardingChecklist: ZebraOnboardingChecklistStore(),
             panelControllers: MarkdownPanelControllerRegistry(),
             agentTerminals: agentTerminals
@@ -118,7 +124,8 @@ struct ZebraServices {
             .environmentObject(goalsViewState)
             .environmentObject(email)
             .environmentObject(emailDetail)
-            .environmentObject(brainSync)
+            // .environmentObject(brainSync)
+            .environmentObject(brainSaveStatus)
             .environmentObject(onboardingChecklist)
     }
 }

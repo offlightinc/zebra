@@ -7,42 +7,21 @@ struct BrainSyncTooltipView: View {
     @ObservedObject var service: BrainSyncService
     var onFailureAgentSelect: ((MarkdownPillAgent, Date, BrainSyncService.Failure) -> Void)?
 
-    private static let popoverWidth: CGFloat = 240
-    private static let cornerRadius: CGFloat = 6
-
     @State private var now = Date()
     @State private var ticker: Timer?
 
     var body: some View {
-        VStack(alignment: .center, spacing: 0) {
-            header
-            Divider()
-                .background(BrainSyncResolvePopoverPalette.divider)
-                .padding(.vertical, 6)
-            actionRegion
+        BrainStatusTooltipChrome(accessibilityIdentifier: "BrainSyncTooltip") {
+            VStack(alignment: .center, spacing: 0) {
+                header
+                Divider()
+                    .background(BrainSyncResolvePopoverPalette.divider)
+                    .padding(.vertical, 6)
+                actionRegion
+            }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(width: Self.popoverWidth, alignment: .center)
-        .fixedSize(horizontal: false, vertical: true)
-        .background(popoverBackground)
-        .overlay(
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .stroke(BVColor.borderStrong, lineWidth: 1)
-        )
-        .shadow(color: BVColor.shadow, radius: 12, x: 0, y: 8)
-        .accessibilityIdentifier("BrainSyncTooltip")
         .onAppear(perform: startTicker)
         .onDisappear(perform: stopTicker)
-    }
-
-    private var popoverBackground: some View {
-        RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-            .fill(.ultraThinMaterial)
-            .overlay(
-                RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                    .fill(BVColor.bgFloating)
-            )
     }
 
     private var header: some View {
@@ -106,7 +85,7 @@ struct BrainSyncTooltipView: View {
                         Capsule()
                             .fill(BrainSyncResolvePopoverPalette.progressTrack)
                         Capsule()
-                            .fill(BrainSyncResolvePopoverPalette.accent)
+                            .fill(BVColor.accent)
                             .frame(width: proxy.size.width * progressFraction)
                     }
                 }
@@ -118,19 +97,12 @@ struct BrainSyncTooltipView: View {
     }
 
     private func resolveRegion(_ failedState: (at: Date, failure: BrainSyncService.Failure)) -> some View {
-        Button(action: {
+        BrainStatusResolveButton(
+            action: {
             onFailureAgentSelect?(MarkdownPillAgent.defaultAgent(), failedState.at, failedState.failure)
-        }) {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundColor(BrainSyncResolvePopoverPalette.accent)
-                Text(String(localized: "brainSync.action.resolveWithAI", defaultValue: "Resolve with AI"))
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(BrainSyncResolvePillButtonStyle())
-        .disabled(onFailureAgentSelect == nil)
+            },
+            isDisabled: onFailureAgentSelect == nil
+        )
     }
 
     private var syncNowButton: some View {
@@ -143,7 +115,7 @@ struct BrainSyncTooltipView: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(BrainSyncResolvePillButtonStyle())
+        .buttonStyle(BrainStatusResolvePillButtonStyle())
         .disabled(service.isSyncing)
     }
 
@@ -202,7 +174,7 @@ struct BrainSyncTooltipView: View {
         case nil: date = nil
         }
         guard let date else { return "--" }
-        return Self.format(timeAgo: date, now: now)
+        return BrainStatusRelativeTimeFormatter.format(timeAgo: date, now: now, style: .brainSync)
     }
 
     private var countdownLabel: String {
@@ -234,53 +206,6 @@ struct BrainSyncTooltipView: View {
         ticker = nil
     }
 
-    /// `Xm ago` / `Xh ago` / `yesterday` / absolute date.
-    static func format(timeAgo date: Date, now: Date = Date()) -> String {
-        let seconds = max(0, now.timeIntervalSince(date))
-        if seconds < 60 {
-            return String(localized: "brainSync.time.justNow", defaultValue: "just now")
-        }
-        let minutes = Int(seconds / 60)
-        if minutes < 60 {
-            return String(format: "%dm ago", minutes)
-        }
-        let hours = Int(seconds / 3600)
-        if hours < 24 {
-            return String(format: "%dh ago", hours)
-        }
-        let days = Int(seconds / 86_400)
-        if days < 2 {
-            return String(localized: "brainSync.time.yesterday", defaultValue: "yesterday")
-        }
-        if days < 7 {
-            return String(format: "%dd ago", days)
-        }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .none
-        return formatter.string(from: date)
-    }
-}
-
-private struct BrainSyncResolvePillButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 11.5, weight: .semibold))
-            .foregroundColor(BrainSyncResolvePopoverPalette.primaryText)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity)
-            .background(
-                Capsule()
-                    .fill(configuration.isPressed ? BrainSyncResolvePopoverPalette.buttonPressed : Color.clear)
-            )
-            .overlay(
-                Capsule()
-                    .stroke(BrainSyncResolvePopoverPalette.buttonBorder, lineWidth: 1)
-            )
-            .contentShape(Capsule())
-            .offset(y: configuration.isPressed ? 0.5 : 0)
-    }
 }
 
 private enum BrainSyncResolvePopoverPalette {
@@ -288,9 +213,6 @@ private enum BrainSyncResolvePopoverPalette {
     static let failureTitle = BVColor.syncRedLabel
     static let secondaryText = BVColor.fgMute
     static let primaryText = BVColor.fg
-    static let accent = BVColor.accent
-    static let buttonBorder = BVColor.borderStrong
-    static let buttonPressed = BVColor.bgHover
     static let progressTrack = BVColor.borderStrong
 }
 

@@ -1384,6 +1384,155 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(forwardedArgs.contains("load \(plist.path)"), forwardedArgs)
     }
 
+    func testPreparePlatformSchedulerBlocksUntilPlatformSchedulerDecision() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let fake = try writeFakePlatformRuntime(root: root, runtime: "openclaw")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeRuntimeReceipt(stateURL: stateURL, runtime: "openclaw", executable: fake.executable)
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            arguments: ["prepare-platform-scheduler"]
+        )
+
+        XCTAssertEqual(result.exitCode, 78, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stderr.contains("recurring_jobs_decision=platform_scheduler_install"), result.stderr)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fake.log.path))
+    }
+
+    func testPreparePlatformSchedulerInstallsAndStartsOpenClawGatewayAfterDecision() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let fake = try writeFakePlatformRuntime(root: root, runtime: "openclaw")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeRuntimeReceipt(stateURL: stateURL, runtime: "openclaw", executable: fake.executable)
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "platform_scheduler_install")
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            arguments: ["prepare-platform-scheduler"]
+        )
+        let payload = try helperPayload(result.stdout)
+        let state = try stateObject(in: stateURL)
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let platformScheduler = try XCTUnwrap(progress["platformScheduler"] as? [String: Any])
+        let log = try String(contentsOf: fake.log, encoding: .utf8)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["runtime"] as? String, "openclaw")
+        XCTAssertEqual(platformScheduler["ready"] as? Bool, true)
+        XCTAssertEqual(platformScheduler["alreadyRunning"] as? Bool, false)
+        XCTAssertTrue(log.contains("openclaw gateway status --json --require-rpc --timeout 5000"), log)
+        XCTAssertTrue(log.contains("openclaw gateway install --json"), log)
+        XCTAssertTrue(log.contains("openclaw gateway start"), log)
+    }
+
+    func testPreparePlatformSchedulerInstallsAndStartsHermesGatewayAfterDecision() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let fake = try writeFakePlatformRuntime(root: root, runtime: "hermes")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeRuntimeReceipt(stateURL: stateURL, runtime: "hermes", executable: fake.executable)
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "platform_scheduler_install")
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            arguments: ["prepare-platform-scheduler"]
+        )
+        let payload = try helperPayload(result.stdout)
+        let state = try stateObject(in: stateURL)
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let platformScheduler = try XCTUnwrap(progress["platformScheduler"] as? [String: Any])
+        let log = try String(contentsOf: fake.log, encoding: .utf8)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["runtime"] as? String, "hermes")
+        XCTAssertEqual(platformScheduler["ready"] as? Bool, true)
+        XCTAssertEqual(platformScheduler["alreadyRunning"] as? Bool, false)
+        XCTAssertTrue(log.contains("hermes gateway status"), log)
+        XCTAssertTrue(log.contains("hermes gateway install"), log)
+        XCTAssertTrue(log.contains("hermes gateway start"), log)
+    }
+
+    func testPreparePlatformSchedulerSkipsInstallWhenGatewayAlreadyRunning() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let fake = try writeFakePlatformRuntime(root: root, runtime: "openclaw", initialStatus: "running")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeRuntimeReceipt(stateURL: stateURL, runtime: "openclaw", executable: fake.executable)
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "platform_scheduler_install")
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            arguments: ["prepare-platform-scheduler"]
+        )
+        let state = try stateObject(in: stateURL)
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let platformScheduler = try XCTUnwrap(progress["platformScheduler"] as? [String: Any])
+        let log = try String(contentsOf: fake.log, encoding: .utf8)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(platformScheduler["alreadyRunning"] as? Bool, true)
+        XCTAssertFalse(log.contains("gateway install"), log)
+        XCTAssertFalse(log.contains("gateway start"), log)
+    }
+
+    func testPreparePlatformSchedulerRecordsFailureWhenGatewayDoesNotBecomeReady() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let fake = try writeFakePlatformRuntime(root: root, runtime: "openclaw", initialStatus: "always-fail")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeRuntimeReceipt(stateURL: stateURL, runtime: "openclaw", executable: fake.executable)
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "platform_scheduler_install")
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            arguments: ["prepare-platform-scheduler"]
+        )
+        let state = try stateObject(in: stateURL)
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let platformScheduler = try XCTUnwrap(progress["platformScheduler"] as? [String: Any])
+        let log = try String(contentsOf: fake.log, encoding: .utf8)
+
+        XCTAssertNotEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(progress["lastFailure"] as? String, "platform_scheduler_prepare_failed")
+        XCTAssertEqual(platformScheduler["ready"] as? Bool, false)
+        XCTAssertTrue(result.stdout.contains("statusAfter"), result.stdout)
+        XCTAssertTrue(log.contains("openclaw gateway install --json"), log)
+        XCTAssertTrue(log.contains("openclaw gateway start"), log)
+    }
+
     func testRecommendedHomeInstallReportRequiresGlobalGBrainNotWrapperFallback() throws {
         let root = try makeTemporaryDirectory()
         let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
@@ -1901,12 +2050,19 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(nextPrompt.contains("Recurring jobs are persistent background changes"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("Step 3 topology is `pglite`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended)"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("OpenClaw: OpenClaw cron"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("Hermes: `/cron add`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("OpenClaw: `openclaw cron add`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Hermes: `hermes cron create`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot"), nextPrompt)
         XCTAssertFalse(nextPrompt.contains("1. GBrain autopilot (recommended)"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("gbrain autopilot --install"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding run-gbrain -- autopilot --install"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding prepare-platform-scheduler"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("openclaw cron create --name \"GBrain save\" --every 15m"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("--no-deliver --json"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("hermes cron create \"every 15m\""), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("omit `--deliver`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("gbrain sync --repo '<brain repo path>' --yes"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("gbrain remote ping"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding check-launchd-bun-path"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("before running `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo <brain repo path>`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("Only after `check-launchd-bun-path` returns ok"), nextPrompt)
@@ -2048,8 +2204,13 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(payload["nextSection"] as? String, "Step 7: Recurring Jobs")
         XCTAssertTrue(nextPrompt.contains("Step 3 topology is `pglite`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended)"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("OpenClaw: OpenClaw cron"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("Hermes: `/cron add`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("OpenClaw: `openclaw cron add`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Hermes: `hermes cron create`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding prepare-platform-scheduler"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("openclaw cron create --name \"GBrain save\" --every 15m"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("--no-deliver --json"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("hermes cron create \"every 15m\""), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("omit `--deliver`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("3. System scheduler"), nextPrompt)
         XCTAssertFalse(nextPrompt.contains("1. GBrain autopilot (recommended)"), nextPrompt)
@@ -2133,8 +2294,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertEqual(payload["nextSection"] as? String, "Step 7: Recurring Jobs")
         XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended) — 선택한 agent의 scheduler를 사용합니다"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("OpenClaw: OpenClaw cron"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("Hermes: `/cron add`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("OpenClaw: `openclaw cron add`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Hermes: `hermes cron create`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot — 안정적인 agent scheduler가 없을 때 사용합니다"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("3. System scheduler — launchd/crontab/external cron. 고급 설정입니다"), nextPrompt)
     }
@@ -4143,6 +4304,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": fake.bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "autopilot_install")
 
         let result = try runHelper(
             stateURL: stateURL,
@@ -4204,6 +4366,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": fake.bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "autopilot_install")
 
         let result = try runHelper(
             stateURL: stateURL,
@@ -4218,6 +4381,49 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains(#""wasRunning": false"#), "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fake.log.path))
+    }
+
+    func testHelperVerifyDoesNotQuiesceAutopilotForPlatformSchedulerDecision() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let fake = try installFakeGBrainWithAutopilot(root: root, sourceId: "brain", localPath: target.path)
+        try installLocalPGLiteAutopilotFixture(root: root)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeState(
+            stateURL,
+            targetPath: target.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            complete: false,
+            sourceVerification: true
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": fake.bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "platform_scheduler_install")
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            environment: ["HOME": root.path],
+            arguments: [
+                "verify",
+                "--target", target.path,
+                "--source-id", "brain",
+                "--method", "user_created_repo",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertTrue(result.stdout.contains(#""pausedForVerify": false"#), "stdout: \(result.stdout) stderr: \(result.stderr)")
         XCTAssertTrue(result.stdout.contains(#""wasRunning": false"#), "stdout: \(result.stdout) stderr: \(result.stderr)")
         XCTAssertFalse(FileManager.default.fileExists(atPath: fake.log.path))
     }
@@ -4267,6 +4473,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": fake.bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "autopilot_install")
 
         let result = try runHelper(
             stateURL: stateURL,
@@ -4329,6 +4536,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": fake.bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "autopilot_install")
 
         let result = try runHelper(
             stateURL: stateURL,
@@ -4391,6 +4599,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": fake.bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "autopilot_install")
 
         let result = try runHelper(
             stateURL: stateURL,
@@ -4438,6 +4647,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             environment: ["PATH": fake.bin.path]
         )
         _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "autopilot_install")
 
         let result = try runHelper(
             stateURL: stateURL,
@@ -5536,6 +5746,50 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         try updated.write(to: stateURL, options: .atomic)
     }
 
+    private func writeRuntimeReceipt(stateURL: URL, runtime: String, executable: URL) throws {
+        let runtimeStateURL = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let json = """
+        {
+          "schemaVersion": 1,
+          "receipt": {
+            "complete": true,
+            "runtime": "\(runtime)",
+            "executablePath": "\(executable.path)",
+            "version": "test",
+            "provider": "test",
+            "keySource": "test",
+            "checks": {
+              "credentials": true,
+              "runtimeConfigCommand": true,
+              "llmCall": true
+            },
+            "reasons": []
+          }
+        }
+        """
+        try json.write(to: runtimeStateURL, atomically: true, encoding: .utf8)
+    }
+
+    private func recordRecurringJobsDecision(
+        stateURL: URL,
+        path: String,
+        decision: String,
+        section: String = "Step 7: Recurring Jobs"
+    ) throws -> HelperRunResult {
+        try runHelper(
+            stateURL: stateURL,
+            path: path,
+            arguments: [
+                "report",
+                "--status", "started",
+                "--section", section,
+                "--recurring-jobs-decision", decision,
+            ]
+        )
+    }
+
     private func receiptTarget(in stateURL: URL, targetPath: String) throws -> [String: Any] {
         let data = try Data(contentsOf: stateURL)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -6004,6 +6258,67 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             ofItemAtPath: executable.path
         )
         return (executable, log)
+    }
+
+    private func writeFakePlatformRuntime(
+        root: URL,
+        runtime: String,
+        initialStatus: String = "stopped"
+    ) throws -> (bin: URL, executable: URL, log: URL) {
+        let bin = root.appendingPathComponent("fake-\(runtime)-platform-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let executable = bin.appendingPathComponent(runtime, isDirectory: false)
+        let log = root.appendingPathComponent("\(runtime)-platform.log", isDirectory: false)
+        let ready = root.appendingPathComponent("\(runtime)-gateway-ready", isDirectory: false)
+        let statusBlock: String
+        switch initialStatus {
+        case "running":
+            statusBlock = """
+              if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
+                echo '{"ready":true}'
+                exit 0
+              fi
+            """
+        case "always-fail":
+            statusBlock = """
+              if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
+                echo '{"ready":false}'
+                exit 1
+              fi
+            """
+        default:
+            statusBlock = """
+              if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
+                if [ -f '\(ready.path)' ]; then
+                  echo '{"ready":true}'
+                  exit 0
+                fi
+                echo '{"ready":false}'
+                exit 1
+              fi
+            """
+        }
+        try """
+        #!/bin/sh
+        set -eu
+        printf '\(runtime) %s\\n' "$*" >> '\(log.path)'
+        \(statusBlock)
+        if [ "$1" = "gateway" ] && [ "$2" = "install" ]; then
+          exit 0
+        fi
+        if [ "$1" = "gateway" ] && [ "$2" = "start" ]; then
+          touch '\(ready.path)'
+          exit 0
+        fi
+        echo "unexpected \(runtime) args: $*" >&2
+        exit 64
+        """
+        .write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o755))],
+            ofItemAtPath: executable.path
+        )
+        return (bin, executable, log)
     }
 
     private func runGit(_ arguments: [String], cwd: URL) throws {

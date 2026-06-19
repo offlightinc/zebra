@@ -149,6 +149,13 @@ public enum MarkdownChatPillCommand {
         prepareLaunchEnvironmentForBrainSyncFailure(agent: agent, vaultPath: vaultPath)
     }
 
+    public static func prepareLaunchEnvironmentForBrainSaveFailure(
+        agent: MarkdownPillAgent,
+        vaultPath: String
+    ) -> Bool {
+        prepareLaunchEnvironmentForBrainSyncFailure(agent: agent, vaultPath: vaultPath)
+    }
+
     /// Brain-sync failure 전용 entry. ChatPill 의 `invocation` 을 재사용해 agent
     /// CLI 명령을 만들되 prefix 는 짧은 failure summary + inspect commands 만
     /// 포함한다. 로그/파일 본문은 prefix 에 inline 하지 않고 agent 가 기존 파일을
@@ -167,6 +174,21 @@ public enum MarkdownChatPillCommand {
             reason: reason,
             rawReasonId: rawReasonId,
             detail: detail,
+            failedAt: failedAt
+        )
+        return "\(invocation(agent: agent, cwd: vaultPath, trustEligible: true, contextPrefix: failurePrefix, prompt: userPrompt))\r"
+    }
+
+    public static func shellStartupLineForBrainSaveFailure(
+        agent: MarkdownPillAgent,
+        vaultPath: String,
+        failure: BrainSaveFailure,
+        failedAt: Date?,
+        userPrompt: String = ""
+    ) -> String {
+        let failurePrefix = BrainSaveFailureContextPrefix.build(
+            vaultPath: vaultPath,
+            failure: failure,
             failedAt: failedAt
         )
         return "\(invocation(agent: agent, cwd: vaultPath, trustEligible: true, contextPrefix: failurePrefix, prompt: userPrompt))\r"
