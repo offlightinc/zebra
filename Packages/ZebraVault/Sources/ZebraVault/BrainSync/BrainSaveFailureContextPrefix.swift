@@ -34,6 +34,10 @@ public enum BrainSaveFailureContextPrefix {
             return """
             Hermes cron reported a GBrain save failure. Inspect the Hermes cron jobs file and recent GBrain status. Treat Hermes as the scheduler/runtime layer and avoid applying git-sync recovery steps unless GBrain status points to a repository problem.
             """
+        case .missingCronJob:
+            return """
+            Zebra could not find a GBrain save cron job for the selected vault. Inspect the selected vault path and the configured runtime scheduler, then create or repair a job that runs `gbrain sync --repo <selected vault path> --yes` only after user approval for persistent background jobs.
+            """
         case .unavailable:
             return """
             Zebra could not read GBrain save status. Verify whether GBrain is installed and configured before treating this as data loss or a failed save.
@@ -55,6 +59,9 @@ public enum BrainSaveFailureContextPrefix {
         case .hermesCron:
             commands.append("cat ~/.hermes/cron/jobs.json")
             commands.append("jq '.jobs[]? | select((.name // .command // .description // \"\") | test(\"gbrain\"; \"i\"))' ~/.hermes/cron/jobs.json")
+        case .missingCronJob:
+            commands.append("openclaw cron list --json")
+            commands.append("cat ~/.hermes/cron/jobs.json")
         case .unavailable:
             commands.append("command -v gbrain")
             commands.append("gbrain --help")

@@ -62,7 +62,6 @@ struct ZebraServices {
         // sidebar footer.
         // let brainSync = BrainSyncService()
         // brainSync.attachVaultSource(vault)
-        brainSaveStatus.start()
         let email = ZebraEmailListStore()
         let agentTerminals = ZebraAgentTerminalRegistry()
         let emailDetail = ZebraEmailDetailStore(

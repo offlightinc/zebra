@@ -328,6 +328,17 @@ public struct ZebraGBrainOnboardingStore {
         return validGBrainSourceRepoPath(sourceRepoPath)
     }
 
+    public func nextSectionIsImportIndexFromCachedState() -> Bool {
+        guard let state = loadState(),
+              let nextSection = nonEmpty(state.progress?.nextSection) else {
+            return false
+        }
+        let normalized = Self.normalizedSectionTitle(nextSection)
+        return normalized.contains("step 4")
+            && normalized.contains("import")
+            && normalized.contains("index")
+    }
+
     func sectionSnapshotsFromCachedState(
         isParentRunning: Bool,
         showsStartForActiveSection: Bool,
@@ -555,6 +566,22 @@ public struct ZebraGBrainOnboardingStore {
             return CompletionResult(isComplete: false, reasons: reasons)
         }
         return CompletionResult(isComplete: true, reasons: [])
+    }
+
+    public func resolvedBrainRepoTargetPath() -> String? {
+        guard let state = loadState(),
+              let receipt = state.receipt,
+              let targets = receipt.targets,
+              !targets.isEmpty else {
+            return nil
+        }
+        let key = state.progress?.resolvedTargetKey ?? receipt.primaryTargetKey
+        guard let key,
+              let target = targets[key],
+              let vaultPath = standardizedExistingDirectoryPath(target.vaultPath) else {
+            return nil
+        }
+        return vaultPath
     }
 
     private func activeRunRequiresImportIndexCompletion(in state: State) -> Bool {
@@ -2662,25 +2689,30 @@ public struct ZebraGBrainOnboardingStore {
                 "- Include `--source-id <source id>` on the completed report after the source probe verifies that source id for the target path.",
             ])
         elif role == "recurring_jobs":
+            recurring_target_key, recurring_target_path, _, _ = resolved_target(state)
+            recurring_repo = recurring_target_path or "<brain repo path>"
+            recurring_repo_arg = shell_quote(recurring_repo) if recurring_target_path else "<brain repo path>"
             common.extend([
                 "",
                 "Recurring jobs hard gates:",
                 "- Recurring jobs are persistent background changes, not prerequisites for import/index or final verify.",
                 f"- Step 3 topology is `{topology_decision_value(state) or 'unknown'}`.",
+                f"- Recurring jobs target key is `{recurring_target_key or '__unresolved__'}`.",
+                f"- Recurring jobs target path is `{recurring_repo}`.",
                 "- Ask the user to choose recurring-job runner using exactly these numbered options:",
                 recurring_jobs_options_text(state),
                 "- Do not run `gbrain autopilot --install`, `gbrain autopilot install`, `launchctl`, `cron`, `crontab`, `systemd`, or scheduler installation/start commands until the user explicitly chooses that path.",
                 "- First run `zebra-gbrain-onboarding report --status waiting_for_user --section " + json.dumps(section_title) + " --reason recurring_jobs_decision --note \\\"Choose defer, manual_scheduler, platform_scheduler_install, or autopilot_install\\\"` and ask the user to choose.",
                 "- If the user chooses `defer`, do not install or start any background service; report completed with `--recurring-jobs-decision defer`.",
                 "- If the user chooses `manual_scheduler`, do not run scheduler commands; report completed with `--recurring-jobs-decision manual_scheduler`.",
-                "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run `zebra-gbrain-onboarding check-launchd-bun-path` before running `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo <brain repo path>`.",
+                "- If the user chooses `autopilot_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision autopilot_install`, then run `zebra-gbrain-onboarding check-launchd-bun-path` before running `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo " + recurring_repo_arg + "`.",
                 "- If `check-launchd-bun-path` reports `bun_missing_for_launchd_autopilot`, run `zebra-gbrain-onboarding repair-launchd-bun-path`, then rerun `zebra-gbrain-onboarding check-launchd-bun-path`.",
-                "- Only after `check-launchd-bun-path` returns ok, run `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo <brain repo path>`, then report completed with `--recurring-jobs-decision autopilot_install`.",
+                "- Only after `check-launchd-bun-path` returns ok, run `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo " + recurring_repo_arg + "`, then report completed with `--recurring-jobs-decision autopilot_install`.",
                 "- If the user chooses `platform_scheduler_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision platform_scheduler_install`, then run `zebra-gbrain-onboarding prepare-platform-scheduler` to install/start only the selected runtime's scheduler service.",
                 "- Do not run `openclaw gateway install`, `openclaw gateway start`, `hermes gateway install`, or `hermes gateway start` directly; use `zebra-gbrain-onboarding prepare-platform-scheduler` so Zebra can verify Step 7 approval first.",
                 "- After `prepare-platform-scheduler` returns ok, create the recurring job using the selected runtime scheduler only.",
-                "- For OpenClaw, use this shape and keep `--no-deliver`: `openclaw cron create --name \\\"GBrain save\\\" --every 15m --session isolated --message \\\"Run: gbrain sync --repo '<brain repo path>' --yes, then run: gbrain status. If sync reports thin-client/not-routable, run: gbrain remote ping. Do not send any chat message.\\\" --no-deliver --json`.",
-                "- For Hermes, omit `--deliver` so Hermes uses its default local delivery: `hermes cron create \\\"every 15m\\\" \\\"Run: gbrain sync --repo '<brain repo path>' --yes, then run: gbrain status. If sync reports thin-client/not-routable, run: gbrain remote ping. Do not send any chat message.\\\" --name \\\"GBrain save\\\" --workdir \\\"<brain repo path>\\\"`.",
+                "- For OpenClaw, use this shape and keep `--no-deliver`: `openclaw cron create --name \\\"GBrain save\\\" --every 15m --session isolated --message \\\"Run: gbrain sync --repo " + recurring_repo_arg + " --yes, then run: gbrain status. If sync reports thin-client/not-routable, run: gbrain remote ping. Do not send any chat message.\\\" --no-deliver --json`.",
+                "- For Hermes, omit `--deliver` so Hermes uses its default local delivery: `hermes cron create \\\"every 15m\\\" \\\"Run: gbrain sync --repo " + recurring_repo_arg + " --yes, then run: gbrain status. If sync reports thin-client/not-routable, run: gbrain remote ping. Do not send any chat message.\\\" --name \\\"GBrain save\\\" --workdir \\\"" + recurring_repo + "\\\"`.",
                 "- After the runtime cron job is created, report completed with `--recurring-jobs-decision platform_scheduler_install`.",
             ])
         elif role == "verify":
@@ -3466,6 +3498,10 @@ public struct ZebraGBrainOnboardingStore {
     def recurring_jobs_decision_flags_present(flags):
         return bool(flags.get("recurring_jobs_decision"))
 
+    def recurring_jobs_target_key(state):
+        key, _, _, _ = resolved_target(state)
+        return key or "__unresolved__"
+
     def apply_recurring_jobs_decision(state, flags):
         decision = flags.get("recurring_jobs_decision")
         if not decision:
@@ -3473,15 +3509,20 @@ public struct ZebraGBrainOnboardingStore {
         if decision not in allowed_recurring_jobs_decisions:
             return "invalid_recurring_jobs_decision"
         progress = state.setdefault("progress", {})
-        progress["recurringJobsDecision"] = {
+        key = recurring_jobs_target_key(state)
+        decisions = progress.setdefault("recurringJobsDecisionByTarget", {})
+        decisions[key] = {
             "decision": decision,
             "confirmedAt": now(),
+            "targetKey": key,
         }
         return None
 
     def recurring_jobs_decision_value(state):
         progress = state.get("progress") or {}
-        decision = progress.get("recurringJobsDecision") or {}
+        key = recurring_jobs_target_key(state)
+        decisions = progress.get("recurringJobsDecisionByTarget") or {}
+        decision = decisions.get(key) or {}
         value = decision.get("decision")
         return value if value in allowed_recurring_jobs_decisions else None
 
@@ -5155,7 +5196,9 @@ public struct ZebraGBrainOnboardingStore {
     except Exception:
         state = {}
     progress = state.get("progress") or {}
-    decision = progress.get("recurringJobsDecision") or {}
+    receipt = state.get("receipt") or {}
+    key = progress.get("resolvedTargetKey") or receipt.get("primaryTargetKey") or "__unresolved__"
+    decision = (progress.get("recurringJobsDecisionByTarget") or {}).get(key) or {}
     print(decision.get("decision") or "")' "$STATE" 2>/dev/null || true
     }
 

@@ -112,7 +112,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     @Published public private(set) var activeStepID: ZebraOnboardingChecklistStepID?
     @Published public private(set) var runningStepID: ZebraOnboardingChecklistStepID?
     @Published public private(set) var pendingRuntimeInteractiveAuthRequest: ZebraGBrainRuntimeOnboardingStore.InteractiveAuthRequest?
-    @Published private var gbrainSubstepSnapshotRevision = 0
+    @Published public private(set) var gbrainSubstepSnapshotRevision = 0
 
     public init(
         fileManager: FileManager = .default,
@@ -353,6 +353,14 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         case .ingest, .goals:
             break
         }
+    }
+
+    public func resolvedGBrainTargetVaultPath() -> String? {
+        gbrainOnboardingStore.resolvedBrainRepoTargetPath()
+    }
+
+    public func gBrainNextSectionIsImportIndex() -> Bool {
+        gbrainOnboardingStore.nextSectionIsImportIndexFromCachedState()
     }
 
     private func applyAllDetectedCompletion(

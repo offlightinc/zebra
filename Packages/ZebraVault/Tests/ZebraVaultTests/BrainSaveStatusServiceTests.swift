@@ -147,15 +147,15 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         XCTAssertEqual(reason.message, "preflight failed")
     }
 
-    func testOpenClawOkFallsThroughToGBrainSnapshot() {
-        let date = Date(timeIntervalSince1970: 900)
+    func testOpenClawOkMapsToSavedFromRuntime() {
+        let finishedAt = Date(timeIntervalSince1970: 1_100)
         let snapshot = BrainSaveStatusMapper.map(
-            gbrain: .success(report(cycle: .init(lastFullFinishedAt: nil, lastTargetedFinishedAt: date))),
-            runtime: .openClaw(status: "ok", finishedAt: nil, message: nil)
+            gbrain: .success(report(cycle: .init(lastFullFinishedAt: nil, lastTargetedFinishedAt: Date(timeIntervalSince1970: 900)))),
+            runtime: .openClaw(status: "ok", finishedAt: finishedAt, message: nil)
         )
 
-        XCTAssertEqual(snapshot.status, .saved(at: date))
-        XCTAssertEqual(snapshot.runtime, .gbrain)
+        XCTAssertEqual(snapshot.status, .saved(at: finishedAt))
+        XCTAssertEqual(snapshot.runtime, .openClaw)
     }
 
     func testHermesErrorMapsToSaveFailed() {
@@ -185,14 +185,14 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.runtime, .gbrain)
     }
 
-    func testHermesOkFallsThroughToGBrainSnapshot() {
+    func testHermesOkMapsToSavedWithoutInferringSaving() {
         let snapshot = BrainSaveStatusMapper.map(
-            gbrain: .success(report(active: 1)),
+            gbrain: nil,
             runtime: .hermes(lastStatus: "ok", lastRunAt: Date(timeIntervalSince1970: 1), message: nil)
         )
 
-        XCTAssertEqual(snapshot.status, .saving(startedAt: nil))
-        XCTAssertEqual(snapshot.runtime, .gbrain)
+        XCTAssertEqual(snapshot.status, .saved(at: Date(timeIntervalSince1970: 1)))
+        XCTAssertEqual(snapshot.runtime, .hermes)
     }
 
     func testHermesScheduledWithoutGBrainSnapshotDoesNotMapToSaving() {
@@ -215,6 +215,41 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         XCTAssertEqual(parsed.activeLockCount, 0)
     }
 
+    func testGBrainParserUsesOnlySelectedVaultSourceRow() {
+        let selected = "/tmp/zebra-selected"
+        let otherDate = "1970-01-01T00:00:10Z"
+        let selectedDate = "1970-01-01T00:00:20Z"
+        let parsed = BrainSaveStatusCollector.parseGBrainReport(
+            [
+                "cycle": ["last_targeted": ["finished_at": otherDate]],
+                "sync": [
+                    "sources": [
+                        ["local_path": "/tmp/other", "last_sync_at": otherDate],
+                        ["local_path": selected, "last_sync_at": selectedDate],
+                    ],
+                ],
+            ],
+            selectedVaultPath: selected
+        )
+
+        XCTAssertTrue(parsed.selectedSourceMatched)
+        XCTAssertEqual(parsed.cycle?.lastTargetedFinishedAt, Date(timeIntervalSince1970: 20))
+    }
+
+    func testGBrainParserDoesNotUseGlobalCycleWhenSelectedVaultSourceMissing() {
+        let parsed = BrainSaveStatusCollector.parseGBrainReport(
+            [
+                "cycle": ["last_targeted": ["finished_at": "1970-01-01T00:00:10Z"]],
+                "sync": ["sources": [["local_path": "/tmp/other", "last_sync_at": "1970-01-01T00:00:10Z"]]],
+            ],
+            selectedVaultPath: "/tmp/selected"
+        )
+
+        XCTAssertFalse(parsed.selectedSourceMatched)
+        XCTAssertNil(parsed.cycle?.lastTargetedFinishedAt)
+        XCTAssertEqual(BrainSaveStatusMapper.map(gbrain: .success(parsed)).status, .unknown)
+    }
+
     func testOpenClawRuntimeParserFindsGBrainJob() {
         let parsed = BrainSaveStatusCollector.parseOpenClawRuntime([
             "jobs": [
@@ -224,6 +259,38 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         ])
 
         XCTAssertEqual(parsed, .openClaw(status: "running", finishedAt: nil, message: nil))
+    }
+
+    func testOpenClawRuntimeParserRequiresSelectedVaultPathWhenProvided() {
+        let parsed = BrainSaveStatusCollector.parseOpenClawRuntime(
+            [
+                "jobs": [
+                    ["name": "gbrain save", "status": "running", "workdir": "/tmp/other"],
+                    [
+                        "name": "gbrain save",
+                        "status": "ok",
+                        "workdir": "/tmp/selected",
+                        "finishedAt": "1970-01-01T00:00:02Z",
+                    ],
+                ],
+            ],
+            selectedVaultPath: "/tmp/selected"
+        )
+
+        XCTAssertEqual(parsed, .openClaw(status: "ok", finishedAt: Date(timeIntervalSince1970: 2), message: nil))
+    }
+
+    func testOpenClawRuntimeParserIgnoresGBrainJobWithoutSelectedVaultPath() {
+        let parsed = BrainSaveStatusCollector.parseOpenClawRuntime(
+            [
+                "jobs": [
+                    ["name": "gbrain save", "status": "running", "workdir": "/tmp/other"],
+                ],
+            ],
+            selectedVaultPath: "/tmp/selected"
+        )
+
+        XCTAssertEqual(parsed, .none)
     }
 
     func testOpenClawRuntimeParserPrefersNewestCompletedJobOverOlderError() {
@@ -283,6 +350,90 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         )
     }
 
+    func testHermesRuntimeParserRequiresSelectedVaultPathWhenProvided() {
+        let parsed = BrainSaveStatusCollector.parseHermesRuntime(
+            [
+                "jobs": [
+                    [
+                        "name": "gbrain save",
+                        "workdir": "/tmp/other",
+                        "last_status": "error",
+                        "last_run_at": "1970-01-01T00:00:01Z",
+                    ],
+                    [
+                        "name": "gbrain save",
+                        "workdir": "/tmp/selected",
+                        "last_status": "ok",
+                        "last_run_at": "1970-01-01T00:00:02Z",
+                    ],
+                ],
+            ],
+            selectedVaultPath: "/tmp/selected"
+        )
+
+        XCTAssertEqual(
+            parsed,
+            .hermes(lastStatus: "ok", lastRunAt: Date(timeIntervalSince1970: 2), message: nil)
+        )
+    }
+
+    func testCollectMapsOpenClawProviderFailureToPendingFallback() async {
+        let snapshot = await BrainSaveStatusCollector.collect(
+            runner: StubBrainSaveCommandRunner(results: [
+                "openclaw": .init(exitCode: 1, stdout: "", stderr: "GatewayCredentialsRequiredError"),
+                "gbrain": .init(exitCode: 0, stdout: #"{"sync":{"sources":[]}}"#, stderr: ""),
+            ]),
+            selectedVaultPath: "/tmp/selected",
+            runtimeSelection: .openClaw
+        )
+
+        XCTAssertEqual(snapshot.status, .unknown)
+        XCTAssertEqual(snapshot.detail, "GatewayCredentialsRequiredError")
+    }
+
+    func testCollectMapsMissingSelectedVaultCronJobToSaveFailed() async {
+        let gbrainJSON = #"{"sync":{"sources":[{"local_path":"/tmp/selected"}]}}"#
+        let openClawJSON = #"{"jobs":[{"name":"gbrain save","status":"ok","workdir":"/tmp/other"}]}"#
+        let snapshot = await BrainSaveStatusCollector.collect(
+            runner: StubBrainSaveCommandRunner(results: [
+                "openclaw": .init(exitCode: 0, stdout: openClawJSON, stderr: ""),
+                "gbrain": .init(exitCode: 0, stdout: gbrainJSON, stderr: ""),
+            ]),
+            selectedVaultPath: "/tmp/selected",
+            runtimeSelection: .openClaw
+        )
+
+        guard case .failed(_, let reason) = snapshot.status else {
+            return XCTFail("Expected failed status")
+        }
+        XCTAssertEqual(reason.source, .missingCronJob)
+        XCTAssertTrue(reason.message.contains("No GBrain save cron job"))
+    }
+
+    @MainActor
+    func testServiceRefreshUsesLatestSelectedVaultPath() async {
+        let gbrainJSON = #"{"sync":{"sources":[{"local_path":"/tmp/vault-a"},{"local_path":"/tmp/vault-b"}]}}"#
+        let openClawJSON = #"{"jobs":[{"name":"gbrain save","status":"ok","workdir":"/tmp/vault-a","finishedAt":"1970-01-01T00:00:02Z"}]}"#
+        let service = BrainSaveStatusService(
+            runner: StubBrainSaveCommandRunner(results: [
+                "openclaw": .init(exitCode: 0, stdout: openClawJSON, stderr: ""),
+                "gbrain": .init(exitCode: 0, stdout: gbrainJSON, stderr: ""),
+            ]),
+            runtimeSelectionProvider: { .openClaw }
+        )
+
+        service.refresh(selectedVaultPath: "/tmp/vault-a")
+        await waitForRefresh(service)
+        XCTAssertEqual(service.snapshot.status, .saved(at: Date(timeIntervalSince1970: 2)))
+
+        service.refresh(selectedVaultPath: "/tmp/vault-b")
+        await waitForRefresh(service)
+        guard case .failed(_, let reason) = service.snapshot.status else {
+            return XCTFail("Expected missing cron failure after switching vault")
+        }
+        XCTAssertEqual(reason.source, .missingCronJob)
+    }
+
     private func report(
         activeLocks: Int = 0,
         active: Int = 0,
@@ -298,12 +449,27 @@ final class BrainSaveStatusServiceTests: XCTestCase {
             warningCount: warningCount
         )
     }
+
+    @MainActor
+    private func waitForRefresh(_ service: BrainSaveStatusService) async {
+        for _ in 0..<100 where service.isRefreshing {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
 }
 
 private struct StubBrainSaveCommandRunner: BrainSaveCommandRunning {
-    let result: BrainSaveCommandResult
+    let results: [String: BrainSaveCommandResult]
+
+    init(result: BrainSaveCommandResult) {
+        self.results = ["default": result]
+    }
+
+    init(results: [String: BrainSaveCommandResult]) {
+        self.results = results
+    }
 
     func run(_ command: String, _ arguments: [String]) async -> BrainSaveCommandResult {
-        result
+        results[command] ?? results["default"] ?? BrainSaveCommandResult(exitCode: 127, stdout: "", stderr: "missing stub")
     }
 }

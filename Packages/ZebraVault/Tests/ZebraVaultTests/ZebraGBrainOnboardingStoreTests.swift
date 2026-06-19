@@ -2061,10 +2061,13 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(nextPrompt.contains("--no-deliver --json"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("hermes cron create \"every 15m\""), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("omit `--deliver`"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("gbrain sync --repo '<brain repo path>' --yes"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Recurring jobs target key is `vault:\(target.path)`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Recurring jobs target path is `\(target.path)`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("gbrain sync --repo '\(target.path)' --yes"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("--workdir \"\(target.path)\""), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("gbrain remote ping"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding check-launchd-bun-path"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("before running `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo <brain repo path>`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("before running `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo '\(target.path)'`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("Only after `check-launchd-bun-path` returns ok"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("waiting_for_user"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("recurring_jobs_decision"), nextPrompt)
@@ -2211,6 +2214,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(nextPrompt.contains("--no-deliver --json"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("hermes cron create \"every 15m\""), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("omit `--deliver`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("gbrain sync --repo '\(target.path)' --yes"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("--workdir \"\(target.path)\""), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("3. System scheduler"), nextPrompt)
         XCTAssertFalse(nextPrompt.contains("1. GBrain autopilot (recommended)"), nextPrompt)
@@ -5367,6 +5372,77 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(upgrade.exitCode, 0, "stdout: \(upgrade.stdout) stderr: \(upgrade.stderr)")
         XCTAssertNotEqual(importStart.exitCode, 0)
         XCTAssertTrue(importStart.stdout.contains("search_mode_not_completed"), "stdout: \(importStart.stdout) stderr: \(importStart.stderr)")
+    }
+
+    func testRecurringJobsDecisionIsScopedByTargetPath() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root, includeTokenReuseNonRoleSections: true)
+        let targetA = root.appendingPathComponent("brain-a", isDirectory: true)
+        let targetB = root.appendingPathComponent("brain-b", isDirectory: true)
+        try FileManager.default.createDirectory(at: targetA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: targetB, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: targetA.path, searchMode: nil)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
+                "--target", targetA.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        let targetADecision = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 7: Recurring Jobs",
+                "--recurring-jobs-decision", "defer",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
+                "--target", targetB.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        let targetBWithoutDecision = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 7: Recurring Jobs",
+            ]
+        )
+        let state = try stateObject(in: stateURL)
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let decisions = try XCTUnwrap(progress["recurringJobsDecisionByTarget"] as? [String: Any])
+
+        XCTAssertEqual(targetADecision.exitCode, 0, "stdout: \(targetADecision.stdout) stderr: \(targetADecision.stderr)")
+        XCTAssertNotNil(decisions["vault:\(targetA.path)"])
+        XCTAssertNil(decisions["vault:\(targetB.path)"])
+        XCTAssertNotEqual(targetBWithoutDecision.exitCode, 0, "stdout: \(targetBWithoutDecision.stdout) stderr: \(targetBWithoutDecision.stderr)")
+        XCTAssertTrue(targetBWithoutDecision.stdout.contains("recurring_jobs_decision_required"), "stdout: \(targetBWithoutDecision.stdout) stderr: \(targetBWithoutDecision.stderr)")
     }
 
     func testReportGuardRejectsAutopilotInstallCompletionWhenLaunchdCannotRunBun() throws {

@@ -29,6 +29,7 @@ struct ZebraSidebarBody: View {
     @State private var pendingChainedGBrainRuntimeRunningAfterAgentLaunch = false
     @State private var launchedRuntimeInteractiveAuthRequestIDs: Set<String> = []
     @State private var lastRuntimeInteractiveAuthLaunchByKey: [String: Date] = [:]
+    @State private var lastAppliedGBrainTargetVaultPath: String?
     private static let runtimeInteractiveAuthAutoRetryInterval: TimeInterval = 120
 
     var body: some View {
@@ -71,6 +72,7 @@ struct ZebraSidebarBody: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             onboardingChecklistStore.activateCompletionWatching()
+            refreshBrainSaveStatus()
             refreshOnboardingChecklist()
             startRuntimeInteractiveAuthIfNeeded(onboardingChecklistStore.pendingRuntimeInteractiveAuthRequest)
             observedOnboardingCompletedStepIDs = onboardingChecklistStore.completedStepIDs
@@ -89,7 +91,11 @@ struct ZebraSidebarBody: View {
         .onChange(of: onboardingChecklistStore.pendingRuntimeInteractiveAuthRequest) { request in
             startRuntimeInteractiveAuthIfNeeded(request)
         }
+        .onChange(of: onboardingChecklistStore.gbrainSubstepSnapshotRevision) { _ in
+            syncSelectedVaultToResolvedGBrainTargetBeforeImportIndexStart()
+        }
         .onChange(of: vaultState.selectedVaultPath) { _ in
+            refreshBrainSaveStatus()
             refreshOnboardingChecklist()
         }
         .onChange(of: emailListStore.isConnected) { _ in
@@ -310,6 +316,9 @@ struct ZebraSidebarBody: View {
         if stepID == .email {
             startOnboardingChecklistEmailStep(in: workspace)
             return
+        }
+        if stepID == .gbrain {
+            syncSelectedVaultToResolvedGBrainTargetBeforeImportIndexStart()
         }
         guard let launchPlan = ZebraOnboardingChecklistCommand.launchPlan(
             for: stepID,
@@ -613,6 +622,27 @@ struct ZebraSidebarBody: View {
             emailConnectionRepairState: emailListStore.connectionRepairState,
             emailConnectionVerified: emailListStore.hasVerifiedConnection
         )
+    }
+
+    private func refreshBrainSaveStatus() {
+        brainSaveStatusService.refresh(selectedVaultPath: vaultState.selectedVaultPath)
+    }
+
+    private func syncSelectedVaultToResolvedGBrainTargetBeforeImportIndexStart() {
+        guard onboardingChecklistStore.gBrainNextSectionIsImportIndex() else {
+            return
+        }
+        guard let targetPath = onboardingChecklistStore.resolvedGBrainTargetVaultPath(),
+              lastAppliedGBrainTargetVaultPath != targetPath else {
+            return
+        }
+        if vaultState.selectedVaultPath == targetPath {
+            lastAppliedGBrainTargetVaultPath = targetPath
+            return
+        }
+        lastAppliedGBrainTargetVaultPath = targetPath
+        vaultState.addVault(url: URL(fileURLWithPath: targetPath, isDirectory: true))
+        brainSaveStatusService.refresh(selectedVaultPath: targetPath)
     }
 
     private var onboardingSelectedVaultPath: String? {
