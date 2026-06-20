@@ -153,6 +153,7 @@ public struct ZebraGBrainOnboardingStore {
         var gbrainExecutablePath: String?
         var wrapperPath: String?
         var doctorOk: Bool?
+        var doctorEffectiveOk: Bool? = nil
         var verifiedAt: String?
     }
 
@@ -164,6 +165,9 @@ public struct ZebraGBrainOnboardingStore {
         var wrapperPath: String?
         var doctorStatus: ProbeResult?
         var sourcesCurrentResult: SourceProbeResult?
+        var syncProbeResult: ProbeResult?
+        var statsProbeResult: ProbeResult?
+        var embeddingProbeResult: ProbeResult?
         var searchProbeResult: ProbeResult?
         var sourceVerification: SourceVerification?
         var verifiedAt: String?
@@ -183,6 +187,7 @@ public struct ZebraGBrainOnboardingStore {
     private struct ProbeResult: Codable, Equatable {
         var ok: Bool?
         var status: String?
+        var failedChecks: [String]? = nil
     }
 
     private struct SourceProbeResult: Codable, Equatable {
@@ -191,7 +196,6 @@ public struct ZebraGBrainOnboardingStore {
         var localPath: String?
         var status: String?
         var reason: String?
-        var sourcePreviouslyVerified: Bool?
     }
 
     private struct SourceVerification: Codable, Equatable {
@@ -238,6 +242,9 @@ public struct ZebraGBrainOnboardingStore {
 
     private struct DoctorResult {
         var ok: Bool
+        var failedChecks: [String]
+        var effectiveOk: Bool
+        var maintenancePending: Bool
     }
 
     private struct ProcessRunResult {
@@ -884,7 +891,6 @@ public struct ZebraGBrainOnboardingStore {
         func finishCurrentSection() {
             guard let title = currentTitle else { return }
             guard isInstallForAgentsChecklistSectionTitle(title) else { return }
-            guard !isDisabledInstallForAgentsChecklistSectionTitle(title) else { return }
             let body = currentLines.joined(separator: "\n")
             sections.append(DocsSection(title: title, hash: stableHash(body)))
         }
@@ -909,14 +915,8 @@ public struct ZebraGBrainOnboardingStore {
         ) != nil
     }
 
-    private static func isDisabledInstallForAgentsChecklistSectionTitle(_ title: String) -> Bool {
-        let normalized = normalizedSectionTitle(title)
-        return normalized.starts(with: "step 6 ")
-            || normalized == "step 6"
-    }
-
     private static func enabledInstallForAgentsSections(_ sections: [DocsSection]) -> [DocsSection] {
-        sections.filter { !isDisabledInstallForAgentsChecklistSectionTitle($0.title) }
+        sections
     }
 
     private func nextSection(in state: State, completedSections: [String]? = nil) -> String {
@@ -1023,6 +1023,7 @@ public struct ZebraGBrainOnboardingStore {
                     gbrainExecutablePath: nil,
                     wrapperPath: nil,
                     doctorOk: false,
+                    doctorEffectiveOk: false,
                     verifiedAt: Self.isoTimestamp()
                 ),
                 target: updatedTarget,
@@ -1033,20 +1034,16 @@ public struct ZebraGBrainOnboardingStore {
         let doctor = runProcess(executable: executable, arguments: ["doctor", "--json"], cwd: vaultPath, timeout: 20)
         let doctorResult = Self.strictDoctorResult(doctor)
         let doctorOk = doctorResult.ok
+        var doctorEffectiveOk = doctorResult.effectiveOk
         let doctorTransientFailure = !doctorOk && Self.isTransientGBrainProbeFailure(doctor)
         if doctorTransientFailure {
             reasons.append(Self.pgliteBusyReason)
-        } else if !doctorOk {
+        } else if !doctorEffectiveOk && !doctorResult.maintenancePending {
             reasons.append("doctor_failed")
         }
 
         let sourceProbe = sourceProbeResult(
             executable: executable,
-            vaultPath: vaultPath,
-            sourceId: sourceId
-        )
-        let sourcePreviouslyVerified = sourceVerificationMatches(
-            target.sourceVerification,
             vaultPath: vaultPath,
             sourceId: sourceId
         )
@@ -1070,38 +1067,44 @@ public struct ZebraGBrainOnboardingStore {
             hasTransientProbeFailure = doctorTransientFailure
         }
         var warnings: [String] = []
-        if doctorOk,
-           sourcePreviouslyVerified,
-           case .transientFailure(let reason) = sourceProbe.status,
-           reasons.allSatisfy({ $0 == reason }) {
-            warnings.append(reason)
-            reasons.removeAll { $0 == reason }
-        }
-        if doctorOk,
-           sourcePreviouslyVerified,
-           case .error(let reason) = sourceProbe.status,
-           reasons.allSatisfy({ $0 == reason }) {
-            warnings.append(reason)
-            reasons.removeAll { $0 == reason }
+        var syncProbe = ProbeResult(ok: nil, status: "not_run")
+        var statsProbe = ProbeResult(ok: nil, status: "not_run")
+        var embeddingProbe = ProbeResult(ok: nil, status: "not_run")
+        var searchProbe = ProbeResult(ok: nil, status: "not_run")
+        if doctorResult.maintenancePending, sourceProbe.status == .verified {
+            let probes = installProbeResults(executable: executable, vaultPath: vaultPath)
+            syncProbe = probes.sync
+            statsProbe = probes.stats
+            embeddingProbe = probes.embedding
+            searchProbe = probes.search
+            for reason in probes.reasons where !reasons.contains(reason) {
+                reasons.append(reason)
+            }
+            doctorEffectiveOk = probes.reasons.isEmpty
+            if doctorEffectiveOk {
+                warnings.append("maintenance_pending:cycle_freshness")
+            }
         }
 
-        let verified = reasons.isEmpty && doctorOk && sourceProbe.status == .verified
-        let verifiedWithWarnings = reasons.isEmpty && doctorOk && !warnings.isEmpty
-        let complete = verified || verifiedWithWarnings
+        let verified = reasons.isEmpty && doctorEffectiveOk && sourceProbe.status == .verified
+        let complete = verified
         let now = Self.isoTimestamp()
         updatedTarget.gbrainExecutablePath = executable
         updatedTarget.doctorStatus = ProbeResult(
             ok: doctorOk,
-            status: doctorOk ? "ok" : "failed"
+            status: doctorOk ? "ok" : "failed",
+            failedChecks: doctorResult.failedChecks
         )
         updatedTarget.sourcesCurrentResult = SourceProbeResult(
             ok: sourceProbe.status == .verified,
             sourceId: sourceProbe.currentSourceId ?? sourceId,
             localPath: sourceProbe.listedLocalPath,
             status: Self.sourceProbeStatusLabel(sourceProbe.status),
-            reason: Self.sourceProbeStatusReason(sourceProbe.status),
-            sourcePreviouslyVerified: sourceProbe.status == .verified ? nil : sourcePreviouslyVerified
+            reason: Self.sourceProbeStatusReason(sourceProbe.status)
         )
+        updatedTarget.syncProbeResult = syncProbe
+        updatedTarget.statsProbeResult = statsProbe
+        updatedTarget.embeddingProbeResult = embeddingProbe
         if sourceProbe.status == .verified {
             updatedTarget.sourceVerification = SourceVerification(
                 sourceId: sourceId,
@@ -1112,10 +1115,12 @@ public struct ZebraGBrainOnboardingStore {
                 gbrainVersion: nil
             )
         }
-        updatedTarget.searchProbeResult = ProbeResult(ok: complete, status: complete ? "not_run" : "blocked")
+        updatedTarget.searchProbeResult = doctorResult.maintenancePending ? searchProbe : ProbeResult(ok: complete, status: complete ? "not_run" : "blocked")
         updatedTarget.verifiedAt = now
         updatedTarget.complete = complete
-        updatedTarget.status = verifiedWithWarnings ? "verified_with_warnings" : (complete ? "verified" : "failed")
+        updatedTarget.status = complete
+            ? (doctorResult.maintenancePending ? "verified_with_maintenance_pending" : "verified")
+            : "failed"
         updatedTarget.warnings = warnings
         updatedTarget.reasons = reasons
 
@@ -1123,10 +1128,11 @@ public struct ZebraGBrainOnboardingStore {
             complete: complete,
             reasons: reasons,
             globalReadiness: GlobalReadiness(
-                complete: doctorOk,
+                complete: doctorEffectiveOk,
                 gbrainExecutablePath: executable,
                 wrapperPath: target.wrapperPath,
                 doctorOk: doctorOk,
+                doctorEffectiveOk: doctorEffectiveOk,
                 verifiedAt: now
             ),
             target: updatedTarget,
@@ -1285,9 +1291,154 @@ public struct ZebraGBrainOnboardingStore {
 
     private static func strictDoctorResult(_ result: ProcessRunResult) -> DoctorResult {
         if result.exitCode == 0, !result.timedOut {
-            return DoctorResult(ok: true)
+            return DoctorResult(ok: true, failedChecks: [], effectiveOk: true, maintenancePending: false)
         }
-        return DoctorResult(ok: false)
+        let failedChecks = doctorFailedCheckNames(from: result.stdout)
+        let maintenancePending = failedChecks == ["cycle_freshness"]
+        return DoctorResult(
+            ok: false,
+            failedChecks: failedChecks,
+            effectiveOk: false,
+            maintenancePending: maintenancePending
+        )
+    }
+
+    private static func doctorFailedCheckNames(from stdout: String) -> [String] {
+        guard let data = stdout.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let checks = payload["checks"] as? [[String: Any]]
+        else {
+            return []
+        }
+        return checks.compactMap { check -> String? in
+            let status = (check["status"] as? String ?? "").lowercased()
+            guard ["fail", "failed", "error"].contains(status) else { return nil }
+            return check["name"] as? String ?? "unknown"
+        }
+    }
+
+    private func installProbeResults(
+        executable: String,
+        vaultPath: String
+    ) -> (sync: ProbeResult, stats: ProbeResult, embedding: ProbeResult, search: ProbeResult, reasons: [String]) {
+        var reasons: [String] = []
+
+        let sync = runProcess(
+            executable: executable,
+            arguments: ["config", "get", "sync.last_run"],
+            cwd: vaultPath,
+            timeout: 20
+        )
+        let syncValue = sync.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let syncOk = sync.exitCode == 0 && !sync.timedOut && !syncValue.isEmpty
+        if !syncOk {
+            reasons.append("sync_not_verified")
+        }
+        let syncProbe = ProbeResult(ok: syncOk, status: syncOk ? "ok" : "missing_sync_last_run")
+
+        let stats = runProcess(
+            executable: executable,
+            arguments: ["stats"],
+            cwd: vaultPath,
+            timeout: 20
+        )
+        let parsedStats = Self.parseGBrainStats(stats.stdout)
+        let statsOk = stats.exitCode == 0 && !stats.timedOut && !parsedStats.isEmpty
+        if !statsOk {
+            reasons.append("stats_not_verified")
+        }
+        let statsProbe = ProbeResult(ok: statsOk, status: statsOk ? "ok" : "stats_probe_failed")
+
+        let chunks = parsedStats["chunks"]
+        let embedded = parsedStats["embedded"]
+        let embeddingOk = statsOk && chunks != nil && embedded != nil && (chunks == 0 || (embedded ?? -1) >= (chunks ?? 0))
+        if !embeddingOk {
+            reasons.append("embedding_not_verified")
+        }
+        let embeddingProbe = ProbeResult(ok: embeddingOk, status: embeddingOk ? "ok" : "embedding_backlog")
+
+        guard let sample = Self.syncableMarkdownSample(in: vaultPath) else {
+            return (
+                syncProbe,
+                statsProbe,
+                embeddingProbe,
+                ProbeResult(ok: true, status: "skipped_no_content"),
+                reasons
+            )
+        }
+
+        let search = runProcess(
+            executable: executable,
+            arguments: ["search", sample],
+            cwd: vaultPath,
+            timeout: 30
+        )
+        let searchOutput = search.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let searchOk = search.exitCode == 0
+            && !search.timedOut
+            && !searchOutput.isEmpty
+            && searchOutput.lowercased() != "no results."
+        if !searchOk {
+            reasons.append("search_not_verified")
+        }
+        return (
+            syncProbe,
+            statsProbe,
+            embeddingProbe,
+            ProbeResult(ok: searchOk, status: searchOk ? "ok" : "no_results"),
+            reasons
+        )
+    }
+
+    private static func parseGBrainStats(_ stdout: String) -> [String: Int] {
+        var stats: [String: Int] = [:]
+        for line in stdout.components(separatedBy: .newlines) {
+            let parts = line.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let digits = parts[1].filter(\.isNumber)
+            guard let value = Int(String(digits)) else { continue }
+            stats[key] = value
+        }
+        return stats
+    }
+
+    private static func syncableMarkdownSample(in vaultPath: String) -> String? {
+        let excludedNames: Set<String> = ["README.md", "index.md", "schema.md", "log.md"]
+        let rootURL = URL(fileURLWithPath: vaultPath, isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+        for case let fileURL as URL in enumerator {
+            let relative = fileURL.path.replacingOccurrences(of: rootURL.path + "/", with: "")
+            let parts = relative.split(separator: "/").map(String.init)
+            if parts.contains(".raw") || parts.contains("ops") {
+                if (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            guard fileURL.pathExtension == "md",
+                  !excludedNames.contains(fileURL.lastPathComponent),
+                  let contents = try? String(contentsOf: fileURL, encoding: .utf8)
+            else {
+                continue
+            }
+            for line in contents.components(separatedBy: .newlines) {
+                let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .components(separatedBy: .whitespacesAndNewlines)
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " ")
+                if text.count >= 12 && !text.hasPrefix("---") {
+                    return String(text.prefix(80))
+                }
+            }
+        }
+        return nil
     }
 
     private func receiptMateriallyMatches(
@@ -2101,8 +2252,6 @@ public struct ZebraGBrainOnboardingStore {
                 return
             if not re.match(r"^Step\\s+[1-9](?:\\.\\d+)?\\b", current_title, re.IGNORECASE):
                 return
-            if disabled_install_for_agents_section_title(current_title):
-                return
             body = "\\n".join(current_lines)
             sections.append({"title": current_title, "hash": stable_hash(body)})
 
@@ -2115,10 +2264,6 @@ public struct ZebraGBrainOnboardingStore {
                 current_lines.append(line)
         finish()
         return sections
-
-    def disabled_install_for_agents_section_title(title):
-        normalized = normalize_title(title)
-        return normalized == "step 6" or normalized.startswith("step 6 ")
 
     def docs_manifest_fingerprint(manifest):
         if not manifest:
@@ -2343,8 +2488,6 @@ public struct ZebraGBrainOnboardingStore {
         for index, section in enumerate(sections):
             title = section.get("title") or ""
             if not title:
-                continue
-            if disabled_install_for_agents_section_title(title):
                 continue
             body = bodies.get(title)
             if body is None:
@@ -2710,10 +2853,20 @@ public struct ZebraGBrainOnboardingStore {
                 "- Only after `check-launchd-bun-path` returns ok, run `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo " + recurring_repo_arg + "`, then report completed with `--recurring-jobs-decision autopilot_install`.",
                 "- If the user chooses `platform_scheduler_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision platform_scheduler_install`, then run `zebra-gbrain-onboarding prepare-platform-scheduler` to install/start only the selected runtime's scheduler service.",
                 "- Do not run `openclaw gateway install`, `openclaw gateway start`, `hermes gateway install`, or `hermes gateway start` directly; use `zebra-gbrain-onboarding prepare-platform-scheduler` so Zebra can verify Step 7 approval first.",
-                "- After `prepare-platform-scheduler` returns ok, create the recurring job using the selected runtime scheduler only.",
-                "- For OpenClaw, use this shape and keep `--no-deliver`: `openclaw cron create --name \\\"GBrain save\\\" --every 15m --session isolated --message \\\"Run: gbrain sync --repo " + recurring_repo_arg + " --yes, then run: gbrain status. If sync reports thin-client/not-routable, run: gbrain remote ping. Do not send any chat message.\\\" --no-deliver --json`.",
-                "- For Hermes, omit `--deliver` so Hermes uses its default local delivery: `hermes cron create \\\"every 15m\\\" \\\"Run: gbrain sync --repo " + recurring_repo_arg + " --yes, then run: gbrain status. If sync reports thin-client/not-routable, run: gbrain remote ping. Do not send any chat message.\\\" --name \\\"GBrain save\\\" --workdir \\\"" + recurring_repo + "\\\"`.",
-                "- After the runtime cron job is created, report completed with `--recurring-jobs-decision platform_scheduler_install`.",
+                "- After `prepare-platform-scheduler` returns ok, create the GBrain core recurring jobs using the selected runtime scheduler only. Do not create the old single `GBrain save` job.",
+                "- Create exactly these four core jobs for the selected runtime: Live sync every 15 minutes, Auto-update daily, Dream cycle nightly, and Weekly health weekly.",
+                "- Footer save status uses only the Live sync job; auto-update, dream cycle, and weekly health must not be treated as footer save status jobs.",
+                "- For OpenClaw, keep `--no-deliver --json` on all four jobs and use these command shapes:",
+                "  1. `openclaw cron create --name \\\"GBrain live sync\\\" --every 15m --session isolated --message \\\"Run: gbrain sync --repo " + recurring_repo_arg + " --yes && gbrain embed --stale, then run: gbrain status. If sync reports thin-client/not-routable, run: gbrain remote ping. Do not send any chat message.\\\" --no-deliver --json`",
+                "  2. `openclaw cron create --name \\\"GBrain auto-update\\\" --cron \\\"0 9 * * *\\\" --session isolated --message \\\"Run: gbrain check-update --json. Tell the user only if an update is available; never auto-install. Do not send any chat message unless an update is available.\\\" --no-deliver --json`",
+                "  3. `openclaw cron create --name \\\"GBrain dream cycle\\\" --cron \\\"0 2 * * *\\\" --session isolated --message \\\"Run: gbrain dream --dir " + recurring_repo_arg + ". Do not send any chat message unless the dream cycle fails.\\\" --no-deliver --json`",
+                "  4. `openclaw cron create --name \\\"GBrain weekly health\\\" --cron \\\"0 6 * * 1\\\" --session isolated --message \\\"Run: gbrain doctor --json && gbrain embed --stale. Do not send any chat message unless the health check reports failure or warnings requiring user action.\\\" --no-deliver --json`",
+                "- For Hermes, omit `--deliver` so Hermes uses its default local delivery and use these command shapes:",
+                "  1. `hermes cron create \\\"every 15m\\\" \\\"Run: gbrain sync --repo " + recurring_repo_arg + " --yes && gbrain embed --stale, then run: gbrain status. If sync reports thin-client/not-routable, run: gbrain remote ping. Do not send any chat message.\\\" --name \\\"GBrain live sync\\\" --workdir \\\"" + recurring_repo + "\\\"`",
+                "  2. `hermes cron create \\\"0 9 * * *\\\" \\\"Run: gbrain check-update --json. Tell the user only if an update is available; never auto-install. Do not send any chat message unless an update is available.\\\" --name \\\"GBrain auto-update\\\"`",
+                "  3. `hermes cron create \\\"0 2 * * *\\\" \\\"Run: gbrain dream --dir " + recurring_repo_arg + ". Do not send any chat message unless the dream cycle fails.\\\" --name \\\"GBrain dream cycle\\\" --workdir \\\"" + recurring_repo + "\\\"`",
+                "  4. `hermes cron create \\\"0 6 * * 1\\\" \\\"Run: gbrain doctor --json && gbrain embed --stale. Do not send any chat message unless the health check reports failure or warnings requiring user action.\\\" --name \\\"GBrain weekly health\\\"`",
+                "- After all four runtime cron jobs are created, report completed with `--recurring-jobs-decision platform_scheduler_install`.",
             ])
         elif role == "verify":
             common.extend([
@@ -2721,7 +2874,9 @@ public struct ZebraGBrainOnboardingStore {
                 "Verify hard gates:",
                 "- Do not say setup is complete until `zebra-gbrain-onboarding verify` returns `complete: true`.",
                 "- Use `zebra-gbrain-onboarding verify --target <brain repo path> --source-id <source id> --method <targetResolution.method>`.",
-                "- `verify` automatically attempts cycle_freshness-only recovery once. If it still returns `complete: false`, inspect `reasons` and `doctorFailedChecks` and fix the named blockers before retrying verify.",
+                "- `verify` may complete with `status=verified_with_maintenance_pending` only when `cycle_freshness` is the sole doctor failure and source/sync/embed/search probes pass.",
+                "- Do not run `gbrain dream` implicitly during verify. If the user explicitly wants immediate warm-up, run `zebra-gbrain-onboarding recover-cycle-freshness --target <path> --source-id <id>`.",
+                "- If `verify` returns `complete: false`, inspect `reasons` and `doctorFailedChecks` and fix the named blockers before retrying verify.",
             ])
         return "\\n".join(common)
 
@@ -2790,8 +2945,6 @@ public struct ZebraGBrainOnboardingStore {
         state = load_state()
         progress = state.get("progress") or {}
         section = progress.get("nextSection") or next_section_title(state)
-        if disabled_install_for_agents_section_title(section):
-            section = next_section_title(state)
         section_prompt = build_section_prompt(state, section)
         language = (os.environ.get("ZEBRA_ONBOARDING_LANGUAGE") or "en").lower()
         if language == "ko" or language.startswith("ko-"):
@@ -4548,98 +4701,6 @@ public struct ZebraGBrainOnboardingStore {
         except Exception:
             return {}
 
-    def target_uses_local_pglite():
-        cfg = gbrain_config_file()
-        if not cfg:
-            return False
-        if cfg.get("remote_mcp"):
-            return False
-        if os.environ.get("GBRAIN_DATABASE_URL") or os.environ.get("DATABASE_URL"):
-            return False
-        if cfg.get("database_url"):
-            return False
-        engine = cfg.get("engine")
-        return engine == "pglite" or (not engine and bool(cfg.get("database_path")))
-
-    def autopilot_lock_running():
-        lock_path = os.path.join(gbrain_config_dir(), "autopilot.lock")
-        try:
-            with open(lock_path, "r", encoding="utf-8") as handle:
-                pid = int((handle.read() or "").strip())
-            os.kill(pid, 0)
-            return True
-        except Exception:
-            return False
-
-    def autopilot_plist_path():
-        home = os.environ.get("HOME") or os.path.expanduser("~")
-        return os.path.join(os.path.abspath(os.path.expanduser(home)), "Library", "LaunchAgents", "com.gbrain.autopilot.plist")
-
-    def quiesce_autopilot_for_verify(executable, target):
-        payload = {
-            "pausedForVerify": False,
-            "wasRunning": False,
-            "restored": None,
-        }
-        warnings = []
-        if recurring_jobs_decision_value(load_state()) != "autopilot_install":
-            return payload, warnings
-        if not executable or not target or not os.path.isdir(target):
-            return payload, warnings
-        if not target_uses_local_pglite():
-            return payload, warnings
-        plist_path = autopilot_plist_path()
-        installed = os.path.isfile(plist_path)
-        was_running = installed and autopilot_lock_running()
-        payload["wasRunning"] = was_running
-        if not was_running:
-            return payload, warnings
-        try:
-            result = subprocess.run(
-                ["launchctl", "unload", plist_path],
-                cwd=target,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=30,
-            )
-            if result.returncode == 0:
-                payload["pausedForVerify"] = True
-            else:
-                warnings.append("autopilot_stop_failed")
-        except Exception:
-            warnings.append("autopilot_stop_failed")
-        if payload.get("pausedForVerify"):
-            deadline = time.time() + 10
-            while autopilot_lock_running() and time.time() < deadline:
-                time.sleep(0.2)
-        return payload, warnings
-
-    def restore_autopilot_after_verify(executable, target, payload):
-        warnings = []
-        if not payload.get("wasRunning"):
-            return warnings
-        if not payload.get("pausedForVerify"):
-            payload["restored"] = False
-            return warnings
-        plist_path = autopilot_plist_path()
-        try:
-            result = subprocess.run(
-                ["launchctl", "load", plist_path],
-                cwd=target,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=45,
-            )
-            payload["restored"] = result.returncode == 0
-            if result.returncode != 0:
-                warnings.append("autopilot_restart_failed")
-        except Exception:
-            payload["restored"] = False
-            warnings.append("autopilot_restart_failed")
-        return warnings
-
     def doctor_failed_checks(result):
         if result.returncode == 0:
             return []
@@ -4655,6 +4716,126 @@ public struct ZebraGBrainOnboardingStore {
                 failed.append(check.get("name") or "unknown")
         return failed or ["doctor_failed"]
 
+    def syncable_markdown_sample(target):
+        if not target or not os.path.isdir(target):
+            return None
+        excluded_names = {"README.md", "index.md", "schema.md", "log.md"}
+        for root_dir, dirs, files in os.walk(target):
+            rel_root = os.path.relpath(root_dir, target)
+            parts = [] if rel_root == "." else rel_root.split(os.sep)
+            if any(part.startswith(".") for part in parts):
+                dirs[:] = []
+                continue
+            dirs[:] = [
+                d for d in dirs
+                if not d.startswith(".") and d not in {".raw", "ops"}
+            ]
+            if ".raw" in parts or "ops" in parts:
+                continue
+            for name in sorted(files):
+                if not name.endswith(".md") or name in excluded_names:
+                    continue
+                path = os.path.join(root_dir, name)
+                try:
+                    with open(path, "r", encoding="utf-8") as handle:
+                        for line in handle:
+                            text = " ".join((line or "").strip().split())
+                            if len(text) >= 12 and not text.startswith("---"):
+                                return text[:80]
+                except Exception:
+                    continue
+        return None
+
+    def parse_gbrain_stats(stdout):
+        stats = {}
+        for line in (stdout or "").splitlines():
+            if ":" not in line:
+                continue
+            key, raw_value = line.split(":", 1)
+            normalized = key.strip().lower()
+            digits = "".join(ch for ch in raw_value if ch.isdigit())
+            if digits:
+                stats[normalized] = int(digits)
+        return stats
+
+    def run_install_probes(executable, target):
+        probes = {
+            "sync": {"ok": False, "status": "not_run"},
+            "stats": {"ok": False, "status": "not_run"},
+            "embedding": {"ok": False, "status": "not_run"},
+            "search": {"ok": False, "status": "not_run"},
+        }
+        reasons = []
+
+        try:
+            sync_result = subprocess.run(
+                [executable, "config", "get", "sync.last_run"],
+                cwd=target if target and os.path.isdir(target) else None,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+            )
+            sync_value = (sync_result.stdout or "").strip()
+            sync_ok = sync_result.returncode == 0 and bool(sync_value)
+            probes["sync"] = {"ok": sync_ok, "status": "ok" if sync_ok else "missing_sync_last_run"}
+            if not sync_ok:
+                reasons.append("sync_not_verified")
+        except Exception:
+            probes["sync"] = {"ok": False, "status": "sync_probe_failed"}
+            reasons.append("sync_not_verified")
+
+        stats_payload = {}
+        try:
+            stats_result = subprocess.run(
+                [executable, "stats"],
+                cwd=target if target and os.path.isdir(target) else None,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+            )
+            stats_payload = parse_gbrain_stats(stats_result.stdout)
+            stats_ok = stats_result.returncode == 0 and bool(stats_payload)
+            probes["stats"] = {"ok": stats_ok, "status": "ok" if stats_ok else "stats_probe_failed", "stats": stats_payload}
+            chunks = stats_payload.get("chunks")
+            embedded = stats_payload.get("embedded")
+            if stats_ok and chunks is not None and embedded is not None and (chunks == 0 or embedded >= chunks):
+                probes["embedding"] = {"ok": True, "status": "ok", "chunks": chunks, "embedded": embedded}
+            else:
+                probes["embedding"] = {"ok": False, "status": "embedding_backlog", "chunks": chunks, "embedded": embedded}
+                reasons.append("embedding_not_verified")
+            if not stats_ok:
+                reasons.append("stats_not_verified")
+        except Exception:
+            probes["stats"] = {"ok": False, "status": "stats_probe_failed"}
+            probes["embedding"] = {"ok": False, "status": "stats_probe_failed"}
+            reasons.extend(["stats_not_verified", "embedding_not_verified"])
+
+        sample = syncable_markdown_sample(target)
+        if not sample:
+            probes["search"] = {"ok": True, "status": "skipped_no_content"}
+        else:
+            try:
+                search_result = subprocess.run(
+                    [executable, "search", sample],
+                    cwd=target if target and os.path.isdir(target) else None,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                )
+                output = (search_result.stdout or "").strip()
+                search_ok = search_result.returncode == 0 and bool(output) and output.lower() != "no results."
+                probes["search"] = {"ok": search_ok, "status": "ok" if search_ok else "no_results", "sample": sample}
+                if not search_ok:
+                    reasons.append("search_not_verified")
+            except Exception:
+                probes["search"] = {"ok": False, "status": "search_probe_failed", "sample": sample}
+                reasons.append("search_not_verified")
+
+        return probes, reasons
+
     def recover_cycle_freshness():
         flags = parse_flags(args)
         target = flags.get("target")
@@ -4669,11 +4850,6 @@ public struct ZebraGBrainOnboardingStore {
         dream_ran = False
         dream_ok = False
         executable = gbrain_executable()
-        autopilot = {
-            "pausedForVerify": False,
-            "wasRunning": False,
-            "restored": None,
-        }
         if not target:
             reasons.append("target_not_resolved")
         else:
@@ -4690,12 +4866,9 @@ public struct ZebraGBrainOnboardingStore {
                 "status": status_value,
                 "reasons": reasons,
                 "warnings": warnings,
-                "autopilot": autopilot,
             }, sort_keys=True))
             sys.exit(1)
 
-        autopilot, autopilot_warnings = quiesce_autopilot_for_verify(executable, target)
-        warnings.extend(autopilot_warnings)
         try:
             doctor_before = subprocess.run(
                 [executable, "doctor", "--json"],
@@ -4760,8 +4933,6 @@ public struct ZebraGBrainOnboardingStore {
         except Exception:
             reasons.append("cycle_recovery_failed")
             status_value = "failed"
-        finally:
-            warnings.extend(restore_autopilot_after_verify(executable, target, autopilot))
 
         ok = len(reasons) == 0
         print(json.dumps({
@@ -4784,7 +4955,6 @@ public struct ZebraGBrainOnboardingStore {
                 "ok": dream_ok,
                 "sourceId": source_id,
             },
-            "autopilot": autopilot,
         }, sort_keys=True))
         sys.exit(0 if ok else 1)
 
@@ -4814,11 +4984,6 @@ public struct ZebraGBrainOnboardingStore {
         if not executable:
             reasons.append("missing_gbrain_executable")
 
-        autopilot = {
-            "pausedForVerify": False,
-            "wasRunning": False,
-            "restored": None,
-        }
         doctor_ok = False
         doctor_failed_check_names = []
         doctor_transient = False
@@ -4829,6 +4994,14 @@ public struct ZebraGBrainOnboardingStore {
         listed_local_path = None
         source_probe_reason = None
         source_probe_reasons = []
+        doctor_effective_ok = False
+        maintenance_pending = False
+        install_probes = {
+            "sync": {"ok": False, "status": "not_run"},
+            "stats": {"ok": False, "status": "not_run"},
+            "embedding": {"ok": False, "status": "not_run"},
+            "search": {"ok": False, "status": "not_run"},
+        }
         auto_recovery = {
             "ran": False,
             "command": "recover-cycle-freshness",
@@ -4836,212 +5009,108 @@ public struct ZebraGBrainOnboardingStore {
         }
 
         if executable:
-            autopilot, autopilot_warnings = quiesce_autopilot_for_verify(executable, target)
-            warnings.extend(autopilot_warnings)
             try:
-                try:
-                    result = subprocess.run(
-                        [executable, "doctor", "--json"],
-                        cwd=target if target and os.path.isdir(target) else None,
-                        text=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        timeout=45,
-                    )
-                    doctor_ok, _ = strict_doctor_result(result)
-                    doctor_transient_reason = None if doctor_ok else transient_probe_reason((result.stderr or "") + "\\n" + (result.stdout or ""))
-                    doctor_transient = doctor_transient_reason is not None
-                    doctor_failed_check_names = [] if doctor_ok or doctor_transient else doctor_failed_checks(result)
-                    if doctor_transient_reason and doctor_transient_reason not in reasons:
-                        reasons.append(doctor_transient_reason)
-                    elif not doctor_ok:
-                        reasons.append("doctor_failed")
-                except Exception as exc:
-                    doctor_transient_reason = transient_probe_reason(str(exc))
-                    doctor_transient = doctor_transient_reason is not None
-                    doctor_failed_check_names = [] if doctor_transient else ["doctor_failed"]
-                    if doctor_transient_reason and doctor_transient_reason not in reasons:
-                        reasons.append(doctor_transient_reason)
-                    elif not doctor_transient:
-                        reasons.append("doctor_failed")
+                result = subprocess.run(
+                    [executable, "doctor", "--json"],
+                    cwd=target if target and os.path.isdir(target) else None,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=45,
+                )
+                doctor_ok, _ = strict_doctor_result(result)
+                doctor_transient_reason = None if doctor_ok else transient_probe_reason((result.stderr or "") + "\\n" + (result.stdout or ""))
+                doctor_transient = doctor_transient_reason is not None
+                doctor_failed_check_names = [] if doctor_ok or doctor_transient else doctor_failed_checks(result)
+                if doctor_transient_reason and doctor_transient_reason not in reasons:
+                    reasons.append(doctor_transient_reason)
+                elif not doctor_ok:
+                    reasons.append("doctor_failed")
+            except Exception as exc:
+                doctor_transient_reason = transient_probe_reason(str(exc))
+                doctor_transient = doctor_transient_reason is not None
+                doctor_failed_check_names = [] if doctor_transient else ["doctor_failed"]
+                if doctor_transient_reason and doctor_transient_reason not in reasons:
+                    reasons.append(doctor_transient_reason)
+                elif not doctor_transient:
+                    reasons.append("doctor_failed")
 
-                if target and os.path.isdir(target) and source_id:
-                    source_probe, current_source_id, listed_local_path, source_probe_reason = source_probe_status(executable, target, source_id)
-                    current_ok = source_probe == "verified"
-                    list_ok = source_probe == "verified"
-                    if source_probe == "mismatch":
-                        source_probe_reasons.append("source_not_registered")
-                    elif source_probe_reason:
-                        source_probe_reasons.append(source_probe_reason)
-                    for reason in source_probe_reasons:
-                        if reason not in reasons:
-                            reasons.append(reason)
-                if (
-                    (not doctor_ok)
-                    and (not doctor_transient)
-                    and doctor_failed_check_names == [CYCLE_FRESHNESS_CHECK_NAME]
-                ):
-                    non_doctor_reasons = [reason for reason in reasons if reason != "doctor_failed"]
-                    has_invocation_blocker = any(reason not in source_probe_reasons for reason in non_doctor_reasons)
-                    if has_invocation_blocker:
-                        auto_recovery = {
-                            "ran": False,
-                            "command": "recover-cycle-freshness",
-                            "status": "unsupported_doctor_failed_checks",
-                            "reason": "unsupported_doctor_failed_checks",
-                        }
-                    elif source_probe != "verified":
-                        auto_recovery = {
-                            "ran": False,
-                            "command": "recover-cycle-freshness",
-                            "status": "source_probe_not_verified",
-                            "reason": source_probe_reason or ("source_not_registered" if source_probe == "mismatch" else "source_probe_not_verified"),
-                        }
-                    else:
-                        auto_recovery = {
-                            "ran": True,
-                            "command": "recover-cycle-freshness",
-                            "status": "running",
-                        }
-                        dream_ok = False
-                        try:
-                            dream_result = subprocess.run(
-                                [executable, "dream", "--source", source_id],
-                                cwd=target,
-                                text=True,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                timeout=1800,
-                            )
-                            dream_ok = dream_result.returncode == 0
-                            if not dream_ok:
-                                auto_recovery["status"] = "dream_failed"
-                                if "dream_failed" not in reasons:
-                                    reasons.append("dream_failed")
-                        except subprocess.TimeoutExpired:
-                            auto_recovery["status"] = "dream_timeout"
-                            if "dream_timeout" not in reasons:
-                                reasons.append("dream_timeout")
-                        except Exception:
-                            auto_recovery["status"] = "dream_failed"
-                            if "dream_failed" not in reasons:
-                                reasons.append("dream_failed")
-                        if dream_ok:
-                            try:
-                                result = subprocess.run(
-                                    [executable, "doctor", "--json"],
-                                    cwd=target if target and os.path.isdir(target) else None,
-                                    text=True,
-                                    stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE,
-                                    timeout=45,
-                                )
-                                doctor_ok, _ = strict_doctor_result(result)
-                                doctor_transient_reason = None if doctor_ok else transient_probe_reason((result.stderr or "") + "\\n" + (result.stdout or ""))
-                                doctor_transient = doctor_transient_reason is not None
-                                doctor_failed_check_names = [] if doctor_ok or doctor_transient else doctor_failed_checks(result)
-                                if doctor_ok:
-                                    reasons = [reason for reason in reasons if reason != "doctor_failed"]
-                                    auto_recovery["status"] = "recovered"
-                                elif doctor_transient_reason:
-                                    auto_recovery["status"] = doctor_transient_reason
-                                    if doctor_transient_reason not in reasons:
-                                        reasons.append(doctor_transient_reason)
-                                    reasons = [reason for reason in reasons if reason != "doctor_failed"]
-                                else:
-                                    auto_recovery["status"] = "doctor_still_failed"
-                                    if "doctor_failed" not in reasons:
-                                        reasons.append("doctor_failed")
-                                source_probe, current_source_id, listed_local_path, source_probe_reason = source_probe_status(executable, target, source_id)
-                                current_ok = source_probe == "verified"
-                                list_ok = source_probe == "verified"
-                                source_probe_reasons = []
-                                if source_probe == "mismatch":
-                                    source_probe_reasons.append("source_not_registered")
-                                elif source_probe_reason:
-                                    source_probe_reasons.append(source_probe_reason)
-                                for reason in source_probe_reasons:
-                                    if reason not in reasons:
-                                        reasons.append(reason)
-                            except subprocess.TimeoutExpired:
-                                auto_recovery["status"] = "doctor_timeout"
-                                if "doctor_timeout" not in reasons:
-                                    reasons.append("doctor_timeout")
-                            except Exception:
-                                auto_recovery["status"] = "doctor_failed"
-                                if "doctor_failed" not in reasons:
-                                    reasons.append("doctor_failed")
-                elif (not doctor_ok) and (not doctor_transient) and doctor_failed_check_names:
+            if target and os.path.isdir(target) and source_id:
+                source_probe, current_source_id, listed_local_path, source_probe_reason = source_probe_status(executable, target, source_id)
+                current_ok = source_probe == "verified"
+                list_ok = source_probe == "verified"
+                if source_probe == "mismatch":
+                    source_probe_reasons.append("source_not_registered")
+                elif source_probe_reason:
+                    source_probe_reasons.append(source_probe_reason)
+                for reason in source_probe_reasons:
+                    if reason not in reasons:
+                        reasons.append(reason)
+            if (
+                (not doctor_ok)
+                and (not doctor_transient)
+                and doctor_failed_check_names == [CYCLE_FRESHNESS_CHECK_NAME]
+            ):
+                non_doctor_reasons = [reason for reason in reasons if reason != "doctor_failed"]
+                has_invocation_blocker = any(reason not in source_probe_reasons for reason in non_doctor_reasons)
+                if has_invocation_blocker:
                     auto_recovery = {
                         "ran": False,
                         "command": "recover-cycle-freshness",
                         "status": "unsupported_doctor_failed_checks",
                         "reason": "unsupported_doctor_failed_checks",
                     }
-            finally:
-                warnings.extend(restore_autopilot_after_verify(executable, target, autopilot))
+                elif source_probe != "verified":
+                    auto_recovery = {
+                        "ran": False,
+                        "command": "recover-cycle-freshness",
+                        "status": "source_probe_not_verified",
+                        "reason": source_probe_reason or ("source_not_registered" if source_probe == "mismatch" else "source_probe_not_verified"),
+                    }
+                else:
+                    install_probes, probe_reasons = run_install_probes(executable, target)
+                    if probe_reasons:
+                        for reason in probe_reasons:
+                            if reason not in reasons:
+                                reasons.append(reason)
+                        auto_recovery = {
+                            "ran": False,
+                            "command": "recover-cycle-freshness",
+                            "status": "maintenance_probe_failed",
+                            "reason": ",".join(probe_reasons),
+                        }
+                    else:
+                        reasons = [reason for reason in reasons if reason != "doctor_failed"]
+                        maintenance_pending = True
+                        doctor_effective_ok = True
+                        warnings.append("maintenance_pending:cycle_freshness")
+                        auto_recovery = {
+                            "ran": False,
+                            "command": "recover-cycle-freshness",
+                            "status": "maintenance_pending",
+                        }
+            elif (not doctor_ok) and (not doctor_transient) and doctor_failed_check_names:
+                auto_recovery = {
+                    "ran": False,
+                    "command": "recover-cycle-freshness",
+                    "status": "unsupported_doctor_failed_checks",
+                    "reason": "unsupported_doctor_failed_checks",
+                }
 
         state = load_state()
         receipt = state.setdefault("receipt", {})
         key = target_key(target) if target and os.path.isdir(target) else None
         existing_target = (receipt.get("targets") or {}).get(key) if key else None
-        transient_source_probe = source_probe == "transient" and executable and target and os.path.isdir(target) and source_id
-        transient_probe = doctor_transient or transient_source_probe
-        source_previously_verified = bool(
-            existing_target
-            and source_verification_matches(existing_target, target, source_id)
-        )
-        source_probe_warning_pass = (
-            doctor_ok
-            and bool(executable)
-            and bool(target)
-            and os.path.isdir(target)
-            and bool(source_id)
-            and source_previously_verified
-            and source_probe in {"transient", "error"}
-            and source_probe != "mismatch"
-            and all(reason in source_probe_reasons for reason in reasons)
-            and len(source_probe_reasons) > 0
-        )
-        if source_probe_warning_pass:
-            for reason in source_probe_reasons:
-                if reason not in warnings:
-                    warnings.append(reason)
-            reasons = [reason for reason in reasons if reason not in source_probe_reasons]
-        preserve_complete = (
-            transient_probe
-            and all(reason == PGLITE_BUSY_REASON for reason in reasons)
-            and bool(receipt.get("globalReadiness", {}).get("complete"))
-            and bool((existing_target or {}).get("complete"))
-            and bool(executable)
-        )
-        verified = len(reasons) == 0 and doctor_ok and source_probe == "verified"
-        verified_with_warnings = len(reasons) == 0 and doctor_ok and len(warnings) > 0
-        complete = preserve_complete or verified or verified_with_warnings
-        status_value = "verified_with_warnings" if verified_with_warnings or preserve_complete else ("verified" if complete else "failed")
-        if preserve_complete:
-            print(json.dumps({
-                "complete": True,
-                "status": status_value,
-                "reasons": [],
-                "warnings": warnings or [PGLITE_BUSY_REASON],
-                "doctorOk": doctor_ok,
-                "doctorFailedChecks": doctor_failed_check_names,
-                "autoRecovery": auto_recovery,
-                "sourceProbe": {
-                    "ok": source_probe == "verified",
-                    "status": source_probe,
-                    "reason": source_probe_reason,
-                    "sourcePreviouslyVerified": source_previously_verified,
-                },
-                "autopilot": autopilot,
-            }, sort_keys=True))
-            save_state(state)
-            sys.exit(0)
+        if doctor_ok:
+            doctor_effective_ok = True
+        verified = len(reasons) == 0 and doctor_effective_ok and source_probe == "verified"
+        complete = verified
+        status_value = "verified_with_maintenance_pending" if complete and maintenance_pending else ("verified" if complete else "failed")
         receipt["globalReadiness"] = {
-            "complete": bool(executable and doctor_ok),
+            "complete": bool(executable and doctor_effective_ok),
             "gbrainExecutablePath": executable,
             "doctorOk": doctor_ok,
+            "doctorEffectiveOk": doctor_effective_ok,
             "verifiedAt": now(),
         }
         if key:
@@ -5063,9 +5132,11 @@ public struct ZebraGBrainOnboardingStore {
                     "localPath": listed_local_path,
                     "status": source_probe,
                     "reason": source_probe_reason,
-                    "sourcePreviouslyVerified": source_previously_verified if source_probe != "verified" else None,
                 },
-                "searchProbeResult": {"ok": complete},
+                "syncProbeResult": install_probes.get("sync"),
+                "statsProbeResult": install_probes.get("stats"),
+                "embeddingProbeResult": install_probes.get("embedding"),
+                "searchProbeResult": install_probes.get("search") if maintenance_pending else {"ok": complete},
                 "verifiedAt": now(),
                 "complete": complete,
                 "status": status_value,
@@ -5091,7 +5162,7 @@ public struct ZebraGBrainOnboardingStore {
             progress = state.setdefault("progress", {})
             progress["resolvedTargetKey"] = key
             progress["targetResolution"] = {
-                "status": "verified" if complete else "failed",
+                "status": status_value,
                 "method": method,
                 "confirmedAt": now(),
             }
@@ -5108,15 +5179,16 @@ public struct ZebraGBrainOnboardingStore {
             "reasons": reasons,
             "warnings": warnings,
             "doctorOk": doctor_ok,
+            "doctorEffectiveOk": doctor_effective_ok,
             "doctorFailedChecks": doctor_failed_check_names,
             "autoRecovery": auto_recovery,
+            "maintenancePending": maintenance_pending,
+            "probes": install_probes,
             "sourceProbe": {
                 "ok": source_probe == "verified",
                 "status": source_probe,
                 "reason": source_probe_reason,
-                "sourcePreviouslyVerified": source_previously_verified,
             },
-            "autopilot": autopilot,
         }, sort_keys=True))
         sys.exit(0 if complete else 1)
 
