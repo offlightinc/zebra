@@ -577,6 +577,68 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testGBrainRecurringJobsCompletionPublishesDedicatedRevisionOnlyOnTransition() throws {
+        let root = try makeTemporaryDirectory()
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+
+        XCTAssertEqual(store.gbrainRecurringJobsCompletionRevision, 0)
+
+        try writeGBrainRecurringJobsProgressState(
+            stateURL: gbrainStateURL,
+            completedSections: ["Step 4: Import and index"],
+            nextSection: "Step 7: Recurring jobs"
+        )
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        XCTAssertEqual(
+            store.gbrainRecurringJobsCompletionRevision,
+            0,
+            "Non-recurring GBrain progress should not refresh Save UI."
+        )
+
+        try writeGBrainRecurringJobsProgressState(
+            stateURL: gbrainStateURL,
+            completedSections: ["Step 4: Import and index", "Step 7: Recurring jobs"],
+            nextSection: "Step 9: Verify"
+        )
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        XCTAssertEqual(store.gbrainRecurringJobsCompletionRevision, 1)
+
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        XCTAssertEqual(
+            store.gbrainRecurringJobsCompletionRevision,
+            1,
+            "A recurring_jobs completion that is already known should not emit another Save UI refresh signal."
+        )
+
+        try writeGBrainRecurringJobsProgressState(
+            stateURL: gbrainStateURL,
+            completedSections: ["Step 4: Import and index"],
+            nextSection: "Step 7: Recurring jobs"
+        )
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        XCTAssertEqual(store.gbrainRecurringJobsCompletionRevision, 1)
+
+        try writeGBrainRecurringJobsProgressState(
+            stateURL: gbrainStateURL,
+            completedSections: ["Step 4: Import and index", "Step 7: Recurring jobs"],
+            nextSection: "Step 9: Verify"
+        )
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        XCTAssertEqual(store.gbrainRecurringJobsCompletionRevision, 2)
+    }
+
+    @MainActor
     func testRuntimeReceiptWithoutLLMCallCheckDoesNotCompleteRuntimeStep() throws {
         let root = try makeTemporaryDirectory()
         let executable = try installFakeRuntime(root: root, name: "hermes")
@@ -2608,6 +2670,66 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                         "title": "Step 3: Create the Brain",
                         "hash": "step-3",
                     ],
+                ],
+            ],
+            "progress": [
+                "completedSections": completedSections,
+                "nextSection": nextSection,
+            ],
+        ]
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeGBrainRecurringJobsProgressState(
+        stateURL: URL,
+        completedSections: [String],
+        nextSection: String
+    ) throws {
+        let state: [String: Any] = [
+            "schemaVersion": 1,
+            "docsManifest": [
+                "generatedAt": "2026-06-12T00:00:00Z",
+                "sourceKind": "local",
+                "sourceRef": "test",
+                "files": [],
+                "installForAgentsSections": [
+                    [
+                        "title": "Step 4: Import and index",
+                        "hash": "step-4",
+                    ],
+                    [
+                        "title": "Step 7: Recurring jobs",
+                        "hash": "step-7",
+                    ],
+                    [
+                        "title": "Step 9: Verify",
+                        "hash": "step-9",
+                    ],
+                ],
+            ],
+            "sectionRoles": [
+                "hash:step-4": [
+                    "section": "Step 4: Import and index",
+                    "sectionHash": "step-4",
+                    "role": "import_index",
+                    "roleSource": "exact_title",
+                    "roleConfidence": "deterministic",
+                    "roleEvidence": ["exact_title"],
+                    "updatedAt": "2026-06-12T00:00:00Z",
+                ],
+                "hash:step-7": [
+                    "section": "Step 7: Recurring jobs",
+                    "sectionHash": "step-7",
+                    "role": "recurring_jobs",
+                    "roleSource": "recurring_jobs_title",
+                    "roleConfidence": "deterministic",
+                    "roleEvidence": ["recurring_jobs_title"],
+                    "updatedAt": "2026-06-12T00:00:00Z",
                 ],
             ],
             "progress": [

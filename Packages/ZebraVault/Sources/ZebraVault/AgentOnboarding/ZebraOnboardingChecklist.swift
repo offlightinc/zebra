@@ -83,6 +83,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private var startedStepIDs: Set<ZebraOnboardingChecklistStepID> = []
     private var gbrainDocsPrefetchTask: Task<Bool, Never>?
     private var didStartGBrainDocsPrefetch = false
+    private var lastKnownGBrainRecurringJobsCompleted: Bool?
 #if DEBUG
     private static let developmentCompletedStepIDsDefaultsKey = "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
     private static let developmentIncompleteStepIDsDefaultsKey = "ZebraOnboardingChecklistStore.developmentIncompleteStepIDs"
@@ -113,6 +114,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     @Published public private(set) var runningStepID: ZebraOnboardingChecklistStepID?
     @Published public private(set) var pendingRuntimeInteractiveAuthRequest: ZebraGBrainRuntimeOnboardingStore.InteractiveAuthRequest?
     @Published public private(set) var gbrainSubstepSnapshotRevision = 0
+    @Published public private(set) var gbrainRecurringJobsCompletionRevision = 0
 
     public init(
         fileManager: FileManager = .default,
@@ -314,6 +316,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     public func refreshDetectedCompletion() {
         let runtimeCompletion = runtimeCompletionResult()
         refreshRuntimeInteractiveAuthRequest()
+        refreshGBrainRecurringJobsCompletionSignal()
         let cachedGBrainCompletion = gbrainCompletionResultFromCachedReceipt(
             selectedVaultPath: selectedVaultPath
         )
@@ -338,6 +341,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             applyDetectedCompletion(for: .gbrainRuntime, result: runtimeCompletionResult())
         case .gbrain:
             invalidateGBrainSubstepSnapshots()
+            refreshGBrainRecurringJobsCompletionSignal()
             let cached = gbrainCompletionResultFromCachedReceipt(selectedVaultPath: selectedVaultPath)
             applyDetectedCompletion(
                 for: .gbrain,
@@ -433,6 +437,14 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 
     private func invalidateGBrainSubstepSnapshots() {
         gbrainSubstepSnapshotRevision &+= 1
+    }
+
+    private func refreshGBrainRecurringJobsCompletionSignal() {
+        let isCompleted = gbrainOnboardingStore.recurringJobsCompletedFromCachedState()
+        if lastKnownGBrainRecurringJobsCompleted == false && isCompleted {
+            gbrainRecurringJobsCompletionRevision &+= 1
+        }
+        lastKnownGBrainRecurringJobsCompleted = isCompleted
     }
 
     private func shouldMarkRuntimeCompleted(_ result: StepCompletionResult) -> Bool {

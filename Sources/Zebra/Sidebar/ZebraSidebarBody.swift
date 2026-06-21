@@ -30,6 +30,7 @@ struct ZebraSidebarBody: View {
     @State private var launchedRuntimeInteractiveAuthRequestIDs: Set<String> = []
     @State private var lastRuntimeInteractiveAuthLaunchByKey: [String: Date] = [:]
     @State private var lastAppliedGBrainTargetVaultPath: String?
+    @State private var suppressedAutoSelectedVaultPathForBrainSaveRefresh: String?
     private static let runtimeInteractiveAuthAutoRetryInterval: TimeInterval = 120
 
     var body: some View {
@@ -84,6 +85,7 @@ struct ZebraSidebarBody: View {
             pendingChainedGBrainRuntimeRunningAfterAgentLaunch = false
             launchedRuntimeInteractiveAuthRequestIDs = []
             lastRuntimeInteractiveAuthLaunchByKey = [:]
+            suppressedAutoSelectedVaultPathForBrainSaveRefresh = nil
         }
         .onChange(of: onboardingChecklistStore.completedStepIDs) { completedStepIDs in
             handleOnboardingCompletionChange(completedStepIDs)
@@ -94,8 +96,15 @@ struct ZebraSidebarBody: View {
         .onChange(of: onboardingChecklistStore.gbrainSubstepSnapshotRevision) { _ in
             syncSelectedVaultToResolvedGBrainTargetBeforeImportIndexStart()
         }
-        .onChange(of: vaultState.selectedVaultPath) { _ in
+        .onChange(of: onboardingChecklistStore.gbrainRecurringJobsCompletionRevision) { _ in
             refreshBrainSaveStatus()
+        }
+        .onChange(of: vaultState.selectedVaultPath) { selectedVaultPath in
+            if selectedVaultPath == suppressedAutoSelectedVaultPathForBrainSaveRefresh {
+                suppressedAutoSelectedVaultPathForBrainSaveRefresh = nil
+            } else {
+                refreshBrainSaveStatus()
+            }
             refreshOnboardingChecklist()
         }
         .onChange(of: emailListStore.isConnected) { _ in
@@ -641,8 +650,8 @@ struct ZebraSidebarBody: View {
             return
         }
         lastAppliedGBrainTargetVaultPath = targetPath
+        suppressedAutoSelectedVaultPathForBrainSaveRefresh = targetPath
         vaultState.addVault(url: URL(fileURLWithPath: targetPath, isDirectory: true))
-        brainSaveStatusService.refresh(selectedVaultPath: targetPath)
     }
 
     private var onboardingSelectedVaultPath: String? {

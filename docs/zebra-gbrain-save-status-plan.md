@@ -67,6 +67,12 @@ Zebra sidebar footer의 기존 sync UI를 GBrain save 상태 UI로 전환한다.
 - `ZebraGBrainOnboarding` recurring jobs prompt는 `<brain repo path>` placeholder만 보여주지 말고 resolved selected vault path를 shell-quoted example에 넣는다.
 - `ZebraGBrainOnboarding` recurring jobs prompt는 platform scheduler 선택 시 GBrain core recurring jobs 4개를 만들도록 지시한다. `GBrain save`라는 Zebra 임의 1개 job으로 축약하지 않는다.
 - save status parser는 4개 recurring jobs 중 live sync job만 footer 상태 source로 사용한다.
+- `platform_scheduler_install`의 Step 7 `recurring_jobs completed` report는 단순히 scheduler/gateway가 준비된 상태만으로 허용하지 않는다.
+  - selected vault용 GBrain live sync job이 실제 runtime scheduler에 존재해야 한다.
+  - selected vault가 GBrain source로 등록되어 있어야 한다.
+  - agent/helper가 selected vault에 대해 `gbrain sync --repo '<selected vault path>' --yes`와 `gbrain embed --stale`를 직접 한 번 성공시켜야 한다.
+  - 이후 `gbrain status --json`에서 selected vault source row에 완료 timestamp(`last_sync_at`, `last_synced_at`, `last_save_at`, `last_saved_at`, `updated_at` 중 하나)가 있어야 한다.
+  - 이 기준을 만족한 뒤에만 Step 7 completed report를 저장한다. 목적은 completed report 직후 Save UI refresh가 `Save pending`에 머물지 않고 `Saved` 판정 가능한 증거를 보게 하는 것이다.
 - Step 3에서 brain repo target이 결정되면 Zebra의 selected vault도 그 repo path로 옮긴다:
   - target path가 이미 vault 목록에 있으면 select한다.
   - 없으면 vault 목록에 추가하고 select한다.
@@ -100,6 +106,8 @@ Zebra sidebar footer의 기존 sync UI를 GBrain save 상태 UI로 전환한다.
   - recurring job receipt가 target path별로 저장된다.
   - vault A recurring job completion이 vault B completion에 적용되지 않는다.
   - Step 3에서 resolved brain repo target이 정해지면 selected vault가 그 path로 이동한다.
+  - `platform_scheduler_install` Step 7 completed report는 scheduler ready, live sync job 존재, source verification, immediate sync/embed success, `gbrain status --json` timestamp까지 모두 검증한 뒤에만 허용된다.
+  - `gbrain status --json` timestamp가 없으면 Step 7 completed report는 거부되고 `live_sync_timestamp_missing` reason을 반환한다.
 
 ## Completion Criteria
 
@@ -113,6 +121,7 @@ Zebra sidebar footer의 기존 sync UI를 GBrain save 상태 UI로 전환한다.
 - platform scheduler hard-gate는 GBrain core recurring jobs 4개를 설치하도록 지시한다.
 - footer save 상태는 core recurring jobs 4개 중 live sync job만 상태 source로 사용한다.
 - live sync cron은 selected vault를 `gbrain sync --repo '<selected vault path>' --yes` target으로 명시한다.
+- `platform_scheduler_install` Step 7 completed는 selected vault에서 live sync 경로가 실제 1회 성공했고 Save UI parser가 읽을 완료 timestamp가 생긴 뒤에만 허용한다.
 - `autopilot_install`은 4개 cron을 직접 만들지 않고 `gbrain autopilot --install --repo '<selected vault path>'` daemon path를 사용한다.
 - Step 3에서 resolved brain repo target이 결정되면 Zebra selected vault가 그 path로 이동한다.
 - Hermes는 running marker가 없으므로 Hermes 단독으로 Saving을 표시하지 않는다.

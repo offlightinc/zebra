@@ -346,6 +346,18 @@ public struct ZebraGBrainOnboardingStore {
             && normalized.contains("index")
     }
 
+    func recurringJobsCompletedFromCachedState() -> Bool {
+        guard let state = loadState(),
+              let completedSections = state.progress?.completedSections,
+              !completedSections.isEmpty else {
+            return false
+        }
+        return completedSections.contains { completedSection in
+            completedSectionHasRole("recurring_jobs", title: completedSection, in: state)
+                || Self.isRecurringJobsSectionTitle(completedSection)
+        }
+    }
+
     func sectionSnapshotsFromCachedState(
         isParentRunning: Bool,
         showsStartForActiveSection: Bool,
@@ -604,6 +616,55 @@ public struct ZebraGBrainOnboardingStore {
         return completedSections.contains { Self.isImportIndexSectionTitle($0) }
     }
 
+    private func completedSectionHasRole(
+        _ role: String,
+        title completedTitle: String,
+        in state: State
+    ) -> Bool {
+        guard let sectionRoles = state.sectionRoles, !sectionRoles.isEmpty else {
+            return false
+        }
+        let manifestSection = matchingManifestSection(title: completedTitle, in: state)
+        var candidateKeys = Set<String>()
+        if let hash = nonEmpty(manifestSection?.hash) {
+            candidateKeys.insert("hash:\(hash)")
+        }
+        candidateKeys.insert("title:\(Self.normalizedSectionTitle(completedTitle))")
+        if let manifestTitle = nonEmpty(manifestSection?.title) {
+            candidateKeys.insert("title:\(Self.normalizedSectionTitle(manifestTitle))")
+        }
+        if candidateKeys.contains(where: { sectionRoles[$0]?.role == role }) {
+            return true
+        }
+
+        let completedNormalizedTitle = Self.normalizedSectionTitle(completedTitle)
+        let manifestNormalizedTitle = manifestSection.map { Self.normalizedSectionTitle($0.title) }
+        return sectionRoles.values.contains { record in
+            guard record.role == role else { return false }
+            if let sectionHash = nonEmpty(record.sectionHash),
+               sectionHash == nonEmpty(manifestSection?.hash) {
+                return true
+            }
+            guard let recordedSection = nonEmpty(record.section) else {
+                return false
+            }
+            let recordedNormalizedTitle = Self.normalizedSectionTitle(recordedSection)
+            return recordedNormalizedTitle == completedNormalizedTitle
+                || recordedNormalizedTitle == manifestNormalizedTitle
+        }
+    }
+
+    private func matchingManifestSection(title: String, in state: State) -> DocsSection? {
+        guard let sections = state.docsManifest?.installForAgentsSections else {
+            return nil
+        }
+        if let exact = sections.first(where: { $0.title == title }) {
+            return exact
+        }
+        let normalized = Self.normalizedSectionTitle(title)
+        return sections.first { Self.normalizedSectionTitle($0.title) == normalized }
+    }
+
     private func blockingWaitingForUser(
         in state: State,
         receipt: Receipt,
@@ -678,6 +739,18 @@ public struct ZebraGBrainOnboardingStore {
         return normalized.contains("step 4")
             && normalized.contains("import")
             && normalized.contains("index")
+    }
+
+    private static func isRecurringJobsSectionTitle(_ title: String) -> Bool {
+        let normalized = normalizedSectionTitle(title)
+        return normalized.contains("recurring job")
+            || normalized.contains("recurring jobs")
+            || normalized.contains("scheduler")
+            || normalized.contains("autopilot")
+            || normalized.contains("background sync")
+            || normalized.contains("background job")
+            || normalized.contains("background service")
+            || normalized.contains("daemon")
     }
 
     private static func isInstallSectionTitle(_ title: String) -> Bool {
@@ -3288,6 +3361,87 @@ public struct ZebraGBrainOnboardingStore {
             return "mismatch", current_source_id, listed_local_path, None
         return "verified", current_source_id, listed_local_path, None
 
+    def live_sync_job_matches_target_payload(payload, target_path):
+        text = json.dumps(payload or {}, sort_keys=True)
+        lower = text.lower()
+        if "gbrain live sync" not in lower:
+            return False
+        if "gbrain sync" not in lower or "gbrain embed --stale" not in lower:
+            return False
+        if target_path and target_path not in text:
+            return False
+        excluded = ["auto-update", "auto update", "dream cycle", "weekly health"]
+        return not any(value in lower for value in excluded)
+
+    def selected_runtime_live_sync_job_exists(runtime, runtime_executable, target_path):
+        try:
+            if runtime == "openclaw":
+                result = subprocess.run(
+                    [runtime_executable, "cron", "list", "--json"],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=20,
+                )
+                if result.returncode != 0:
+                    return False, "live_sync_job_list_failed"
+                payload = json.loads(result.stdout or "{}")
+                if isinstance(payload, list):
+                    jobs = payload
+                elif isinstance(payload, dict):
+                    if live_sync_job_matches_target_payload(payload, target_path):
+                        jobs = [payload]
+                    else:
+                        jobs = payload.get("jobs") or []
+                else:
+                    jobs = []
+                return any(live_sync_job_matches_target_payload(job, target_path) for job in jobs), "live_sync_job_missing"
+            if runtime == "hermes":
+                path = os.path.join(zebra_home_directory(), ".hermes", "cron", "jobs.json")
+                with open(path, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                jobs = payload.get("jobs") if isinstance(payload, dict) else []
+                return any(live_sync_job_matches_target_payload(job, target_path) for job in jobs), "live_sync_job_missing"
+        except Exception:
+            return False, "live_sync_job_check_failed"
+        return False, "live_sync_job_runtime_missing"
+
+    def run_gbrain_command(executable, arguments, cwd, timeout=300):
+        try:
+            result = subprocess.run(
+                [executable] + arguments,
+                cwd=cwd if cwd and os.path.isdir(cwd) else None,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return False, "command_timeout"
+        except Exception:
+            return False, "command_failed"
+        return result.returncode == 0, (result.stderr or result.stdout or "").strip()
+
+    def gbrain_status_has_selected_target_timestamp(executable, target_path):
+        ok, payload, error = run_json([executable, "status", "--json"], cwd=target_path, timeout=30)
+        if not ok:
+            return False, "gbrain_status_failed"
+        sources = (((payload.get("sync") or {}).get("sources") if isinstance(payload.get("sync"), dict) else None)
+                   or payload.get("sources")
+                   or [])
+        target = os.path.abspath(os.path.expanduser(target_path)) if target_path else None
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            path = source.get("local_path") or source.get("path")
+            if not path or os.path.abspath(os.path.expanduser(path)) != target:
+                continue
+            for key in ["last_sync_at", "last_synced_at", "last_save_at", "last_saved_at", "updated_at"]:
+                if source.get(key):
+                    return True, None
+            return False, "live_sync_timestamp_missing"
+        return False, "selected_source_missing_in_status"
+
     def stable_hash(value):
         hash_value = 0xcbf29ce484222325
         for byte in value.encode("utf-8"):
@@ -3810,6 +3964,45 @@ public struct ZebraGBrainOnboardingStore {
             platform_scheduler.get("runtime") == runtime_receipt.get("runtime")
             and platform_scheduler.get("executablePath") == runtime_receipt.get("executablePath")
         )
+
+    def recurring_jobs_platform_completion_guard_reason(state):
+        try:
+            runtime_receipt = selected_runtime_receipt()
+        except Exception:
+            return "selected_runtime_receipt_missing"
+        runtime = runtime_receipt.get("runtime")
+        runtime_executable = runtime_receipt.get("executablePath")
+        executable = gbrain_executable()
+        target_key_value, target_path, _, target_entry = resolved_target(state)
+        source_id = (target_entry or {}).get("sourceId")
+        if not executable:
+            return "missing_gbrain_executable"
+        if not target_path or not os.path.isdir(os.path.abspath(os.path.expanduser(target_path))):
+            return "receipt_target_missing"
+        target_path = os.path.abspath(os.path.expanduser(target_path))
+        if not source_id:
+            return "source_not_registered"
+        status_result = hermes_gateway_liveness(runtime_executable) if runtime == "hermes" else platform_scheduler_status(runtime, runtime_executable)
+        if not platform_scheduler_ready(runtime, status_result):
+            return "platform_scheduler_prepare_required"
+        job_exists, job_reason = selected_runtime_live_sync_job_exists(runtime, runtime_executable, target_path)
+        if not job_exists:
+            return job_reason
+        source_probe, current_source_id, listed_local_path, source_probe_reason = source_probe_status(executable, target_path, source_id)
+        if source_probe != "verified":
+            if source_probe == "mismatch":
+                return "source_not_registered"
+            return source_probe_reason or "source_probe_not_verified"
+        sync_ok, sync_detail = run_gbrain_command(executable, ["sync", "--repo", target_path, "--yes"], target_path, timeout=1800)
+        if not sync_ok:
+            return "live_sync_run_failed"
+        embed_ok, embed_detail = run_gbrain_command(executable, ["embed", "--stale"], target_path, timeout=1800)
+        if not embed_ok:
+            return "live_sync_embed_failed"
+        status_ok, status_reason = gbrain_status_has_selected_target_timestamp(executable, target_path)
+        if not status_ok:
+            return status_reason
+        return None
 
     def prepare_platform_scheduler():
         state = load_state()
@@ -4583,6 +4776,10 @@ public struct ZebraGBrainOnboardingStore {
                     return bun_reason
             if recurring_jobs_decision == "platform_scheduler_install" and not recorded_platform_scheduler_ready(state):
                 return "platform_scheduler_prepare_required"
+            if recurring_jobs_decision == "platform_scheduler_install":
+                platform_completion_reason = recurring_jobs_platform_completion_guard_reason(state)
+                if platform_completion_reason:
+                    return platform_completion_reason
         if role == "verify" and status == "completed" and not receipt_verify_complete(state):
             return "verify_incomplete"
         return None
