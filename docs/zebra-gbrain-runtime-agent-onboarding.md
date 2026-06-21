@@ -273,8 +273,14 @@ Hermes runtime에서만 2번 선택지 label을 다음처럼 바꾼다:
 2. Claude Code 계정으로 로그인 (Claude Max plan + extra usage credits 필수)
 ```
 
-사용자가 번호로 답하면 agent가 해당 provider id로 `configure-runtime <runtime>
---provider <provider-id>`를 호출한다.
+사용자가 OpenClaw + Claude Code를 선택하면 agent는 다음 command를 그대로 호출한다:
+
+```bash
+zebra-gbrain-runtime-onboarding configure-runtime openclaw --provider anthropic-claude-code
+```
+
+그 외 선택지는 해당 provider id로 `configure-runtime <runtime> --provider
+<provider-id>`를 호출한다.
 
 Secret 값은 Zebra state에 쓰면 안 된다. State에는 environment variable 이름,
 OAuth source, entered-key source label 같은 key source만 기록할 수 있다.
@@ -290,9 +296,22 @@ command string을 그대로 실행하지 않고, `runtime`, `provider`, `request
 간격 안에서 다시 열지 않는다. Auth command가 성공하면 terminal은 자동 종료되고,
 실패하거나 취소되면 사용자가 원인을 확인할 수 있도록 terminal을 남긴다.
 
+OpenClaw + Claude Code에서 `openclaw_claude_cli_registration_requires_tty`가 나오면,
+Claude Code 계정 로그인이 필요한 상태가 아니다. Claude CLI 로그인은 이미 확인됐고,
+OpenClaw가 그 로그인을 재사용하도록 등록하는 단계다. 이때는 다음처럼 안내한다:
+
+```text
+OpenClaw가 Claude CLI 로그인을 재사용하도록 등록합니다.
+
+새 터미널이 열려 자동 등록을 진행하고, 성공하면 자동으로 닫힙니다.
+터미널이 닫히면 여기로 돌아와 완료됐다고 알려주세요.
+```
+
 Agent는 이 상태를 실패로 처리하지 않는다. 사용자가 real terminal에서
-`interactive-auth`를 완료한 뒤, agent는 `status --json`, `configure-runtime`,
-`verify-runtime`을 다시 호출해서 helper probe 결과로 완료 여부를 확인한다.
+`interactive-auth`를 완료한 뒤에는 `configure-runtime`을 다시 호출하지 않는다.
+먼저 `status --json`을 호출하고, `runtimeConfig.result.ok == true`이면 바로
+`verify-runtime <runtime>`으로 넘어간다. `runtimeVerification.result.ok == true`이면
+`write-receipt`를 호출한다.
 
 ### 6. Verify selected runtime
 

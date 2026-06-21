@@ -1614,7 +1614,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(log.contains("openclaw gateway start"), log)
     }
 
-    func testRecurringJobsPlatformInstallCompletionRunsAndVerifiesLiveSyncBeforeReport() throws {
+    func testRecurringJobsPlatformInstallCompletionVerifiesAgentRunnableLiveSyncSetupBeforeReport() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root.appendingPathComponent("state.json")
         let target = root.appendingPathComponent("brain", isDirectory: true)
@@ -1669,12 +1669,12 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(runtimeLog.contains("openclaw cron list --json"), runtimeLog)
         XCTAssertTrue(gbrainLog.contains("gbrain sources current --json"), gbrainLog)
         XCTAssertTrue(gbrainLog.contains("gbrain sources list --json"), gbrainLog)
-        XCTAssertTrue(gbrainLog.contains("gbrain sync --repo \(target.path) --yes"), gbrainLog)
-        XCTAssertTrue(gbrainLog.contains("gbrain embed --stale"), gbrainLog)
-        XCTAssertTrue(gbrainLog.contains("gbrain status --json"), gbrainLog)
+        XCTAssertFalse(gbrainLog.contains("gbrain sync --repo \(target.path) --yes"), gbrainLog)
+        XCTAssertFalse(gbrainLog.contains("gbrain embed --stale"), gbrainLog)
+        XCTAssertFalse(gbrainLog.contains("gbrain status --json"), gbrainLog)
     }
 
-    func testRecurringJobsPlatformInstallCompletionRejectsWhenStatusTimestampMissing() throws {
+    func testRecurringJobsPlatformInstallCompletionDoesNotRequireSaveTimestamp() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root.appendingPathComponent("state.json")
         let target = root.appendingPathComponent("brain", isDirectory: true)
@@ -1718,9 +1718,15 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "--recurring-jobs-decision", "platform_scheduler_install",
             ]
         )
+        let state = try stateObject(in: stateURL)
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let completedSections = try XCTUnwrap(progress["completedSections"] as? [String])
+        let gbrainLog = try String(contentsOf: fakeGBrain.log, encoding: .utf8)
 
-        XCTAssertNotEqual(report.exitCode, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
-        XCTAssertTrue(report.stdout.contains("live_sync_timestamp_missing"), "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+        XCTAssertEqual(report.exitCode, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+        XCTAssertTrue(completedSections.contains("Step 7: Recurring Jobs"))
+        XCTAssertFalse(gbrainLog.contains("gbrain sync --repo \(target.path) --yes"), gbrainLog)
+        XCTAssertFalse(gbrainLog.contains("gbrain status --json"), gbrainLog)
     }
 
     func testRecommendedHomeInstallReportRequiresGlobalGBrainNotWrapperFallback() throws {

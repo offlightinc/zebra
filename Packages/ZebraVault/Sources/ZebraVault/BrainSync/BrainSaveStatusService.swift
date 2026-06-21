@@ -260,6 +260,16 @@ public enum BrainSaveStatusMapper {
 public final class BrainSaveStatusService: ObservableObject {
     @Published public private(set) var snapshot = BrainSaveStatusSnapshot(status: .unknown, runtime: nil)
     @Published public private(set) var isRefreshing = false
+    private static let recurringJobsCompletionRetryDelaysNanoseconds: [UInt64] = [
+        1_000_000_000,
+        3_000_000_000,
+        5_000_000_000,
+        10_000_000_000,
+        20_000_000_000,
+        30_000_000_000,
+        60_000_000_000,
+        90_000_000_000,
+    ]
 
     private let runner: BrainSaveCommandRunning
     private let runtimeSelectionProvider: @Sendable () -> BrainSaveRuntimeSelection?
@@ -293,6 +303,24 @@ public final class BrainSaveStatusService: ObservableObject {
     }
 
     public func refresh(selectedVaultPath: String? = nil) {
+        startRefresh(selectedVaultPath: selectedVaultPath, retryDelaysNanoseconds: [])
+    }
+
+    public func refreshAfterRecurringJobsCompletion(selectedVaultPath: String? = nil) {
+        refreshAfterRecurringJobsCompletion(
+            selectedVaultPath: selectedVaultPath,
+            retryDelaysNanoseconds: Self.recurringJobsCompletionRetryDelaysNanoseconds
+        )
+    }
+
+    func refreshAfterRecurringJobsCompletion(
+        selectedVaultPath: String? = nil,
+        retryDelaysNanoseconds: [UInt64]
+    ) {
+        startRefresh(selectedVaultPath: selectedVaultPath, retryDelaysNanoseconds: retryDelaysNanoseconds)
+    }
+
+    private func startRefresh(selectedVaultPath: String?, retryDelaysNanoseconds: [UInt64]) {
         if let selectedVaultPath {
             self.selectedVaultPath = Self.normalizedPath(selectedVaultPath)
         }
@@ -302,18 +330,83 @@ public final class BrainSaveStatusService: ObservableObject {
         let runtimeSelection = runtimeSelectionProvider()
         let runtimeExecutablePath = runtimeExecutablePathProvider()
         let vaultPath = self.selectedVaultPath
+        let isRecurringJobsCompletionRefresh = !retryDelaysNanoseconds.isEmpty
         refreshTask = Task.detached(priority: .utility) {
-            let snapshot = await BrainSaveStatusCollector.collect(
+            var attempts = 1
+            var snapshot = await Self.collectSnapshot(
                 runner: runner,
                 selectedVaultPath: vaultPath,
                 runtimeSelection: runtimeSelection,
                 runtimeExecutablePath: runtimeExecutablePath
             )
+            for delay in retryDelaysNanoseconds {
+                guard !Task.isCancelled, snapshot.status == .unknown else { break }
+                try? await Task.sleep(nanoseconds: delay)
+                guard !Task.isCancelled else { break }
+                attempts += 1
+                snapshot = await Self.collectSnapshot(
+                    runner: runner,
+                    selectedVaultPath: vaultPath,
+                    runtimeSelection: runtimeSelection,
+                    runtimeExecutablePath: runtimeExecutablePath
+                )
+            }
+            let finalSnapshot = snapshot
+            if isRecurringJobsCompletionRefresh {
+                Self.logRecurringJobsCompletionRefreshResult(
+                    snapshot: finalSnapshot,
+                    attempts: attempts,
+                    selectedVaultPath: vaultPath
+                )
+            }
             await MainActor.run {
                 guard !Task.isCancelled else { return }
-                self.snapshot = snapshot
+                self.snapshot = finalSnapshot
                 self.isRefreshing = false
             }
+        }
+    }
+
+    private static func collectSnapshot(
+        runner: BrainSaveCommandRunning,
+        selectedVaultPath: String?,
+        runtimeSelection: BrainSaveRuntimeSelection?,
+        runtimeExecutablePath: String?
+    ) async -> BrainSaveStatusSnapshot {
+        await BrainSaveStatusCollector.collect(
+            runner: runner,
+            selectedVaultPath: selectedVaultPath,
+            runtimeSelection: runtimeSelection,
+            runtimeExecutablePath: runtimeExecutablePath
+        )
+    }
+
+    nonisolated private static func logRecurringJobsCompletionRefreshResult(
+        snapshot: BrainSaveStatusSnapshot,
+        attempts: Int,
+        selectedVaultPath: String?
+    ) {
+        #if DEBUG
+        NSLog(
+            "[BrainSaveStatus] recurring jobs completion refresh finished attempts=%d status=%@ runtime=%@ vault=%@",
+            attempts,
+            statusLogValue(snapshot.status),
+            snapshot.runtime?.rawValue ?? "nil",
+            selectedVaultPath ?? "nil"
+        )
+        #endif
+    }
+
+    nonisolated private static func statusLogValue(_ status: BrainSaveStatus) -> String {
+        switch status {
+        case .unknown:
+            return "unknown"
+        case .saved:
+            return "saved"
+        case .saving:
+            return "saving"
+        case .failed:
+            return "failed"
         }
     }
 

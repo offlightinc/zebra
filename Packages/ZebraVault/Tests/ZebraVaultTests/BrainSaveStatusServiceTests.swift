@@ -631,6 +631,119 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         XCTAssertEqual(reason.source, .missingCronJob)
     }
 
+    @MainActor
+    func testRefreshAfterRecurringJobsCompletionRetriesUnknownThenAcceptsSaved() async {
+        let runner = SequencedBrainSaveCommandRunner(results: [
+            "gbrain": [
+                .init(exitCode: 0, stdout: #"{"sync":{"sources":[{"local_path":"/tmp/selected"}]}}"#, stderr: ""),
+                .init(exitCode: 0, stdout: #"{"sync":{"sources":[{"local_path":"/tmp/selected","last_sync_at":"1970-01-01T00:00:02Z"}]}}"#, stderr: ""),
+            ],
+        ])
+        let service = BrainSaveStatusService(runner: runner, runtimeSelectionProvider: { nil })
+
+        service.refreshAfterRecurringJobsCompletion(
+            selectedVaultPath: "/tmp/selected",
+            retryDelaysNanoseconds: [1_000_000]
+        )
+        await waitForRefresh(service)
+
+        XCTAssertEqual(service.snapshot.status, .saved(at: Date(timeIntervalSince1970: 2)))
+        let gbrainCallCount = await runner.callCount(for: "gbrain", ["status", "--json"])
+        XCTAssertEqual(gbrainCallCount, 2)
+    }
+
+    @MainActor
+    func testRefreshAfterRecurringJobsCompletionContinuesUntilLaterSaved() async {
+        let pending = BrainSaveCommandResult(
+            exitCode: 0,
+            stdout: #"{"sync":{"sources":[{"local_path":"/tmp/selected"}]}}"#,
+            stderr: ""
+        )
+        let runner = SequencedBrainSaveCommandRunner(results: [
+            "gbrain": [
+                pending,
+                pending,
+                pending,
+                .init(exitCode: 0, stdout: #"{"sync":{"sources":[{"local_path":"/tmp/selected","last_sync_at":"1970-01-01T00:00:02Z"}]}}"#, stderr: ""),
+            ],
+        ])
+        let service = BrainSaveStatusService(runner: runner, runtimeSelectionProvider: { nil })
+
+        service.refreshAfterRecurringJobsCompletion(
+            selectedVaultPath: "/tmp/selected",
+            retryDelaysNanoseconds: [1_000_000, 1_000_000, 1_000_000]
+        )
+        await waitForRefresh(service)
+
+        XCTAssertEqual(service.snapshot.status, .saved(at: Date(timeIntervalSince1970: 2)))
+        let gbrainCallCount = await runner.callCount(for: "gbrain", ["status", "--json"])
+        XCTAssertEqual(gbrainCallCount, 4)
+    }
+
+    @MainActor
+    func testRefreshAfterRecurringJobsCompletionStopsOnSaved() async {
+        let runner = SequencedBrainSaveCommandRunner(results: [
+            "gbrain": [
+                .init(exitCode: 0, stdout: #"{"sync":{"sources":[{"local_path":"/tmp/selected","last_sync_at":"1970-01-01T00:00:02Z"}]}}"#, stderr: ""),
+            ],
+        ])
+        let service = BrainSaveStatusService(runner: runner, runtimeSelectionProvider: { nil })
+
+        service.refreshAfterRecurringJobsCompletion(
+            selectedVaultPath: "/tmp/selected",
+            retryDelaysNanoseconds: [1_000_000, 1_000_000]
+        )
+        await waitForRefresh(service)
+
+        XCTAssertEqual(service.snapshot.status, .saved(at: Date(timeIntervalSince1970: 2)))
+        let gbrainCallCount = await runner.callCount(for: "gbrain", ["status", "--json"])
+        XCTAssertEqual(gbrainCallCount, 1)
+    }
+
+    @MainActor
+    func testRefreshAfterRecurringJobsCompletionStopsOnSaving() async {
+        let runner = SequencedBrainSaveCommandRunner(results: [
+            "gbrain": [
+                .init(exitCode: 0, stdout: #"{"sync":{"sources":[{"local_path":"/tmp/selected","active":1}]}}"#, stderr: ""),
+            ],
+        ])
+        let service = BrainSaveStatusService(runner: runner, runtimeSelectionProvider: { nil })
+
+        service.refreshAfterRecurringJobsCompletion(
+            selectedVaultPath: "/tmp/selected",
+            retryDelaysNanoseconds: [1_000_000, 1_000_000]
+        )
+        await waitForRefresh(service)
+
+        XCTAssertEqual(service.snapshot.status, .saving(startedAt: nil))
+        let gbrainCallCount = await runner.callCount(for: "gbrain", ["status", "--json"])
+        XCTAssertEqual(gbrainCallCount, 1)
+    }
+
+    @MainActor
+    func testRefreshAfterRecurringJobsCompletionStopsOnFailed() async {
+        let runner = SequencedBrainSaveCommandRunner(results: [
+            "gbrain": [
+                .init(exitCode: 1, stdout: "", stderr: "provider failed"),
+            ],
+        ])
+        let service = BrainSaveStatusService(runner: runner, runtimeSelectionProvider: { nil })
+
+        service.refreshAfterRecurringJobsCompletion(
+            selectedVaultPath: "/tmp/selected",
+            retryDelaysNanoseconds: [1_000_000, 1_000_000]
+        )
+        await waitForRefresh(service)
+
+        guard case .failed(_, let reason) = service.snapshot.status else {
+            return XCTFail("Expected failed status")
+        }
+        XCTAssertEqual(reason.source, .gbrainStatus)
+        XCTAssertEqual(reason.message, "provider failed")
+        let gbrainCallCount = await runner.callCount(for: "gbrain", ["status", "--json"])
+        XCTAssertEqual(gbrainCallCount, 1)
+    }
+
     private func report(
         activeLocks: Int = 0,
         active: Int = 0,
@@ -687,5 +800,31 @@ private struct StubBrainSaveCommandRunner: BrainSaveCommandRunning {
             ?? results[command]
             ?? results["default"]
             ?? BrainSaveCommandResult(exitCode: 127, stdout: "", stderr: "missing stub")
+    }
+}
+
+private actor SequencedBrainSaveCommandRunner: BrainSaveCommandRunning {
+    private var results: [String: [BrainSaveCommandResult]]
+    private var calls: [String] = []
+
+    init(results: [String: [BrainSaveCommandResult]]) {
+        self.results = results
+    }
+
+    func run(_ command: String, _ arguments: [String]) async -> BrainSaveCommandResult {
+        let keyed = StubBrainSaveCommandRunner.key(command, arguments)
+        calls.append(keyed)
+        let lookupKey = results[keyed] != nil ? keyed : command
+        guard var sequence = results[lookupKey], !sequence.isEmpty else {
+            return BrainSaveCommandResult(exitCode: 127, stdout: "", stderr: "missing stub")
+        }
+        let result = sequence.removeFirst()
+        results[lookupKey] = sequence.isEmpty ? [result] : sequence
+        return result
+    }
+
+    func callCount(for command: String, _ arguments: [String]) -> Int {
+        let key = StubBrainSaveCommandRunner.key(command, arguments)
+        return calls.filter { $0 == key }.count
     }
 }

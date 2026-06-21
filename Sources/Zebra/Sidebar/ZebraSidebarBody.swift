@@ -97,7 +97,7 @@ struct ZebraSidebarBody: View {
             syncSelectedVaultToResolvedGBrainTargetBeforeImportIndexStart()
         }
         .onChange(of: onboardingChecklistStore.gbrainRecurringJobsCompletionRevision) { _ in
-            refreshBrainSaveStatus()
+            refreshBrainSaveStatusAfterRecurringJobsCompletion()
         }
         .onChange(of: vaultState.selectedVaultPath) { selectedVaultPath in
             if selectedVaultPath == suppressedAutoSelectedVaultPathForBrainSaveRefresh {
@@ -635,6 +635,10 @@ struct ZebraSidebarBody: View {
 
     private func refreshBrainSaveStatus() {
         brainSaveStatusService.refresh(selectedVaultPath: vaultState.selectedVaultPath)
+    }
+
+    private func refreshBrainSaveStatusAfterRecurringJobsCompletion() {
+        brainSaveStatusService.refreshAfterRecurringJobsCompletion(selectedVaultPath: vaultState.selectedVaultPath)
     }
 
     private func syncSelectedVaultToResolvedGBrainTargetBeforeImportIndexStart() {

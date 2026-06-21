@@ -70,9 +70,8 @@ Zebra sidebar footer의 기존 sync UI를 GBrain save 상태 UI로 전환한다.
 - `platform_scheduler_install`의 Step 7 `recurring_jobs completed` report는 단순히 scheduler/gateway가 준비된 상태만으로 허용하지 않는다.
   - selected vault용 GBrain live sync job이 실제 runtime scheduler에 존재해야 한다.
   - selected vault가 GBrain source로 등록되어 있어야 한다.
-  - agent/helper가 selected vault에 대해 `gbrain sync --repo '<selected vault path>' --yes`와 `gbrain embed --stale`를 직접 한 번 성공시켜야 한다.
-  - 이후 `gbrain status --json`에서 selected vault source row에 완료 timestamp(`last_sync_at`, `last_synced_at`, `last_save_at`, `last_saved_at`, `updated_at` 중 하나)가 있어야 한다.
-  - 이 기준을 만족한 뒤에만 Step 7 completed report를 저장한다. 목적은 completed report 직후 Save UI refresh가 `Save pending`에 머물지 않고 `Saved` 판정 가능한 증거를 보게 하는 것이다.
+  - helper는 Step 7 completed guard에서 `gbrain sync`, `gbrain embed --stale`, `gbrain status --json` timestamp 확인을 직접 실행하지 않는다.
+  - Step 7 completed report 저장 뒤 Save UI가 별도 post-completion refresh/poll을 수행한다. 이 poll이 selected vault source row의 완료 timestamp(`last_sync_at`, `last_synced_at`, `last_save_at`, `last_saved_at`, `updated_at` 중 하나), running 상태, 또는 실패 상태를 관찰한다.
 - Step 3에서 brain repo target이 결정되면 Zebra의 selected vault도 그 repo path로 옮긴다:
   - target path가 이미 vault 목록에 있으면 select한다.
   - 없으면 vault 목록에 추가하고 select한다.
@@ -106,8 +105,8 @@ Zebra sidebar footer의 기존 sync UI를 GBrain save 상태 UI로 전환한다.
   - recurring job receipt가 target path별로 저장된다.
   - vault A recurring job completion이 vault B completion에 적용되지 않는다.
   - Step 3에서 resolved brain repo target이 정해지면 selected vault가 그 path로 이동한다.
-  - `platform_scheduler_install` Step 7 completed report는 scheduler ready, live sync job 존재, source verification, immediate sync/embed success, `gbrain status --json` timestamp까지 모두 검증한 뒤에만 허용된다.
-  - `gbrain status --json` timestamp가 없으면 Step 7 completed report는 거부되고 `live_sync_timestamp_missing` reason을 반환한다.
+  - `platform_scheduler_install` Step 7 completed report는 scheduler ready, selected vault live sync job 존재, source verification까지 검증한 뒤 허용된다.
+  - Step 7 completed report 직후 Save UI는 post-completion refresh/poll을 수행한다. `unknown`이면 즉시/1/3/5/10/20/30/60/90초 관찰 window 안에서 재시도하고, Saved / Saving / Save failed 중 하나가 관찰되면 멈춘다.
 
 ## Completion Criteria
 

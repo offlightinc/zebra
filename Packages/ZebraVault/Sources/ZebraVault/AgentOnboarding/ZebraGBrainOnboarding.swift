@@ -3406,42 +3406,6 @@ public struct ZebraGBrainOnboardingStore {
             return False, "live_sync_job_check_failed"
         return False, "live_sync_job_runtime_missing"
 
-    def run_gbrain_command(executable, arguments, cwd, timeout=300):
-        try:
-            result = subprocess.run(
-                [executable] + arguments,
-                cwd=cwd if cwd and os.path.isdir(cwd) else None,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            return False, "command_timeout"
-        except Exception:
-            return False, "command_failed"
-        return result.returncode == 0, (result.stderr or result.stdout or "").strip()
-
-    def gbrain_status_has_selected_target_timestamp(executable, target_path):
-        ok, payload, error = run_json([executable, "status", "--json"], cwd=target_path, timeout=30)
-        if not ok:
-            return False, "gbrain_status_failed"
-        sources = (((payload.get("sync") or {}).get("sources") if isinstance(payload.get("sync"), dict) else None)
-                   or payload.get("sources")
-                   or [])
-        target = os.path.abspath(os.path.expanduser(target_path)) if target_path else None
-        for source in sources:
-            if not isinstance(source, dict):
-                continue
-            path = source.get("local_path") or source.get("path")
-            if not path or os.path.abspath(os.path.expanduser(path)) != target:
-                continue
-            for key in ["last_sync_at", "last_synced_at", "last_save_at", "last_saved_at", "updated_at"]:
-                if source.get(key):
-                    return True, None
-            return False, "live_sync_timestamp_missing"
-        return False, "selected_source_missing_in_status"
-
     def stable_hash(value):
         hash_value = 0xcbf29ce484222325
         for byte in value.encode("utf-8"):
@@ -3993,15 +3957,6 @@ public struct ZebraGBrainOnboardingStore {
             if source_probe == "mismatch":
                 return "source_not_registered"
             return source_probe_reason or "source_probe_not_verified"
-        sync_ok, sync_detail = run_gbrain_command(executable, ["sync", "--repo", target_path, "--yes"], target_path, timeout=1800)
-        if not sync_ok:
-            return "live_sync_run_failed"
-        embed_ok, embed_detail = run_gbrain_command(executable, ["embed", "--stale"], target_path, timeout=1800)
-        if not embed_ok:
-            return "live_sync_embed_failed"
-        status_ok, status_reason = gbrain_status_has_selected_target_timestamp(executable, target_path)
-        if not status_ok:
-            return status_reason
         return None
 
     def prepare_platform_scheduler():
