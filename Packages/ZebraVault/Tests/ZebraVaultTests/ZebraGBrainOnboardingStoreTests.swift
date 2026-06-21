@@ -1614,6 +1614,115 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(log.contains("openclaw gateway start"), log)
     }
 
+    func testRecurringJobsPlatformInstallCompletionRunsAndVerifiesLiveSyncBeforeReport() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let fakeRuntime = try writeFakePlatformRuntime(
+            root: root,
+            runtime: "openclaw",
+            liveSyncTargetPath: target.path
+        )
+        let fakeGBrain = try installFakeGBrainForStep7SaveReadiness(
+            root: root,
+            sourceId: "brain",
+            localPath: target.path
+        )
+        let path = "\(fakeRuntime.bin.path):\(fakeGBrain.bin.path)"
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeState(
+            stateURL,
+            targetPath: target.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            sourceVerification: true
+        )
+        try writeRuntimeReceipt(stateURL: stateURL, runtime: "openclaw", executable: fakeRuntime.executable)
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: path, decision: "platform_scheduler_install")
+        let prepare = try runHelper(stateURL: stateURL, path: path, arguments: ["prepare-platform-scheduler"])
+
+        let report = try runHelper(
+            stateURL: stateURL,
+            path: path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 7: Recurring Jobs",
+                "--recurring-jobs-decision", "platform_scheduler_install",
+            ]
+        )
+        let state = try stateObject(in: stateURL)
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let completedSections = try XCTUnwrap(progress["completedSections"] as? [String])
+        let gbrainLog = try String(contentsOf: fakeGBrain.log, encoding: .utf8)
+        let runtimeLog = try String(contentsOf: fakeRuntime.log, encoding: .utf8)
+
+        XCTAssertEqual(prepare.exitCode, 0, "stdout:\n\(prepare.stdout)\nstderr:\n\(prepare.stderr)")
+        XCTAssertEqual(report.exitCode, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+        XCTAssertTrue(completedSections.contains("Step 7: Recurring Jobs"))
+        XCTAssertTrue(runtimeLog.contains("openclaw cron list --json"), runtimeLog)
+        XCTAssertTrue(gbrainLog.contains("gbrain sources current --json"), gbrainLog)
+        XCTAssertTrue(gbrainLog.contains("gbrain sources list --json"), gbrainLog)
+        XCTAssertTrue(gbrainLog.contains("gbrain sync --repo \(target.path) --yes"), gbrainLog)
+        XCTAssertTrue(gbrainLog.contains("gbrain embed --stale"), gbrainLog)
+        XCTAssertTrue(gbrainLog.contains("gbrain status --json"), gbrainLog)
+    }
+
+    func testRecurringJobsPlatformInstallCompletionRejectsWhenStatusTimestampMissing() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let fakeRuntime = try writeFakePlatformRuntime(
+            root: root,
+            runtime: "openclaw",
+            liveSyncTargetPath: target.path
+        )
+        let fakeGBrain = try installFakeGBrainForStep7SaveReadiness(
+            root: root,
+            sourceId: "brain",
+            localPath: target.path,
+            statusTimestampAfterSync: false
+        )
+        let path = "\(fakeRuntime.bin.path):\(fakeGBrain.bin.path)"
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeState(
+            stateURL,
+            targetPath: target.path,
+            sourceId: "brain",
+            method: "user_created_repo",
+            sourceVerification: true
+        )
+        try writeRuntimeReceipt(stateURL: stateURL, runtime: "openclaw", executable: fakeRuntime.executable)
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: path, decision: "platform_scheduler_install")
+        _ = try runHelper(stateURL: stateURL, path: path, arguments: ["prepare-platform-scheduler"])
+
+        let report = try runHelper(
+            stateURL: stateURL,
+            path: path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 7: Recurring Jobs",
+                "--recurring-jobs-decision", "platform_scheduler_install",
+            ]
+        )
+
+        XCTAssertNotEqual(report.exitCode, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+        XCTAssertTrue(report.stdout.contains("live_sync_timestamp_missing"), "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+    }
+
     func testRecommendedHomeInstallReportRequiresGlobalGBrainNotWrapperFallback() throws {
         let root = try makeTemporaryDirectory()
         let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
@@ -6102,7 +6211,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
     private func writeFakePlatformRuntime(
         root: URL,
         runtime: String,
-        initialStatus: String = "stopped"
+        initialStatus: String = "stopped",
+        liveSyncTargetPath: String? = nil
     ) throws -> (bin: URL, executable: URL, log: URL) {
         let bin = root.appendingPathComponent("fake-\(runtime)-platform-bin", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -6205,11 +6315,25 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 """
             }
         }
+        let liveSyncCronBlock: String
+        if runtime == "openclaw", let liveSyncTargetPath {
+            let escapedTarget = liveSyncTargetPath.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            liveSyncCronBlock = """
+            if [ "$1" = "cron" ] && [ "$2" = "list" ]; then
+              echo '{"jobs":[{"name":"GBrain live sync","message":"Run: gbrain sync --repo \(escapedTarget) --yes && gbrain embed --stale, then run: gbrain status."},{"name":"GBrain auto-update","message":"Run: gbrain check-update --json."}]}'
+              exit 0
+            fi
+            """
+        } else {
+            liveSyncCronBlock = ""
+        }
         try """
         #!/bin/sh
         set -eu
         printf '\(runtime) %s\\n' "$*" >> '\(log.path)'
         \(statusBlock)
+        \(liveSyncCronBlock)
         if [ "$1" = "gateway" ] && [ "$2" = "install" ]; then
           exit 0
         fi
@@ -6295,6 +6419,67 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let script = bin.appendingPathComponent("gbrain", isDirectory: false)
         try writeFakeGBrainScript(script, sourceId: sourceId, localPath: localPath, searchMode: searchMode, shebang: "#!/bin/sh")
         return bin
+    }
+
+    private func installFakeGBrainForStep7SaveReadiness(
+        root: URL,
+        sourceId: String,
+        localPath: String,
+        statusTimestampAfterSync: Bool = true
+    ) throws -> (bin: URL, log: URL) {
+        let bin = root.appendingPathComponent("fake-step7-gbrain-bin", isDirectory: true)
+        let log = root.appendingPathComponent("step7-gbrain.log")
+        let syncedMarker = root.appendingPathComponent("step7-live-sync.done")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let script = bin.appendingPathComponent("gbrain", isDirectory: false)
+        let escapedPath = localPath.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let statusTimestampBlock = statusTimestampAfterSync
+            ? #""last_sync_at":"2026-06-21T00:00:00Z""#
+            : #""last_sync_at":null"#
+        try """
+        #!/bin/sh
+        set -eu
+        printf 'gbrain %s\\n' "$*" >> '\(log.path)'
+        if [ "$1" = "--version" ]; then
+          echo "gbrain test"
+          exit 0
+        fi
+        if [ "$1" = "sources" ] && [ "$2" = "current" ]; then
+          echo '{"source_id":"\(sourceId)"}'
+          exit 0
+        fi
+        if [ "$1" = "sources" ] && [ "$2" = "list" ]; then
+          echo '{"sources":[{"id":"\(sourceId)","local_path":"\(escapedPath)"}]}'
+          exit 0
+        fi
+        if [ "$1" = "sync" ]; then
+          if [ "$2" = "--repo" ] && [ "$3" = "\(localPath)" ] && [ "$4" = "--yes" ]; then
+            touch '\(syncedMarker.path)'
+            echo '{"ok":true}'
+            exit 0
+          fi
+          echo "unexpected sync args: $*" >&2
+          exit 64
+        fi
+        if [ "$1" = "embed" ] && [ "$2" = "--stale" ]; then
+          [ -f '\(syncedMarker.path)' ]
+          echo '{"ok":true}'
+          exit 0
+        fi
+        if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
+          if [ -f '\(syncedMarker.path)' ]; then
+            echo '{"sync":{"sources":[{"id":"\(sourceId)","local_path":"\(escapedPath)",\(statusTimestampBlock)}]}}'
+          else
+            echo '{"sync":{"sources":[{"id":"\(sourceId)","local_path":"\(escapedPath)","last_sync_at":null}]}}'
+          fi
+          exit 0
+        fi
+        exit 1
+        """
+        .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return (bin, log)
     }
 
     private func installFakeGBrainWithTransientSources(root: URL) throws -> URL {
