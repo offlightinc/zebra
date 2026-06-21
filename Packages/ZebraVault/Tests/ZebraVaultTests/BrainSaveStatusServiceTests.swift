@@ -265,6 +265,26 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         XCTAssertEqual(parsed, .openClaw(status: "running", finishedAt: nil, message: nil))
     }
 
+    func testOpenClawRuntimeParserFindsLiveSyncJobInPayloadMessage() {
+        let parsed = BrainSaveStatusCollector.parseOpenClawRuntime(
+            [
+                "jobs": [
+                    [
+                        "name": "GBrain live sync",
+                        "status": "idle",
+                        "payload": [
+                            "kind": "agentTurn",
+                            "message": "Run: gbrain sync --repo '/tmp/selected' --yes && gbrain embed --stale, then run: gbrain status.",
+                        ],
+                    ],
+                ],
+            ],
+            selectedVaultPath: "/tmp/selected"
+        )
+
+        XCTAssertEqual(parsed, .openClaw(status: "idle", finishedAt: nil, message: nil))
+    }
+
     func testOpenClawRuntimeParserRequiresSelectedVaultPathWhenProvided() {
         let parsed = BrainSaveStatusCollector.parseOpenClawRuntime(
             [
@@ -479,6 +499,23 @@ final class BrainSaveStatusServiceTests: XCTestCase {
     func testCollectMapsOpenClawLiveSyncJobToSavedWhenGatewayIsRunning() async {
         let gbrainJSON = #"{"sync":{"sources":[{"local_path":"/tmp/selected"}]}}"#
         let openClawJSON = #"{"jobs":[{"name":"GBrain live sync","status":"ok","workdir":"/tmp/selected","message":"Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale","finishedAt":"1970-01-01T00:00:02Z"}]}"#
+        let snapshot = await BrainSaveStatusCollector.collect(
+            runner: StubBrainSaveCommandRunner(results: [
+                StubBrainSaveCommandRunner.key("openclaw", ["cron", "list", "--json"]): .init(exitCode: 0, stdout: openClawJSON, stderr: ""),
+                StubBrainSaveCommandRunner.key("openclaw", ["gateway", "status", "--json", "--require-rpc", "--timeout", "5000"]): .init(exitCode: 0, stdout: #"{"running":true}"#, stderr: ""),
+                "gbrain": .init(exitCode: 0, stdout: gbrainJSON, stderr: ""),
+            ]),
+            selectedVaultPath: "/tmp/selected",
+            runtimeSelection: .openClaw
+        )
+
+        XCTAssertEqual(snapshot.status, .saved(at: Date(timeIntervalSince1970: 2)))
+        XCTAssertEqual(snapshot.runtime, .openClaw)
+    }
+
+    func testCollectDoesNotReportMissingOpenClawCronWhenLiveSyncJobUsesPayloadMessage() async {
+        let gbrainJSON = #"{"sync":{"sources":[{"local_path":"/tmp/selected"}]}}"#
+        let openClawJSON = #"{"jobs":[{"name":"GBrain live sync","status":"ok","payload":{"kind":"agentTurn","message":"Run: gbrain sync --repo '/tmp/selected' --yes && gbrain embed --stale, then run: gbrain status."},"finishedAt":"1970-01-01T00:00:02Z"}]}"#
         let snapshot = await BrainSaveStatusCollector.collect(
             runner: StubBrainSaveCommandRunner(results: [
                 StubBrainSaveCommandRunner.key("openclaw", ["cron", "list", "--json"]): .init(exitCode: 0, stdout: openClawJSON, stderr: ""),

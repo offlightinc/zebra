@@ -817,9 +817,7 @@ print(json.dumps({"running": pid is not None, "pid": pid}))
     }
 
     private static func looksLikeGBrainLiveSyncJob(_ job: [String: Any]) -> Bool {
-        let fields = ["name", "prompt", "script", "command", "message", "description"]
-        let text = fields
-            .compactMap { textValue(job[$0]) }
+        let text = jobTextValues(job)
             .joined(separator: " ")
             .lowercased()
         return text.contains("gbrain")
@@ -834,11 +832,20 @@ print(json.dumps({"running": pid is not None, "pid": pid}))
         if normalizedPath(stringValue(job["workdir"])) == selectedVaultPath {
             return true
         }
-        let fields = ["command", "prompt", "script", "description", "message", "workdir"]
-        return fields.contains { key in
-            guard let text = textValue(job[key]) else { return false }
-            return text.contains(selectedVaultPath)
+        return jobTextValues(job).contains { $0.contains(selectedVaultPath) }
+    }
+
+    private static func jobTextValues(_ job: [String: Any]) -> [String] {
+        var values: [String] = []
+        let topLevelFields = ["name", "prompt", "script", "command", "message", "description", "workdir"]
+        values.append(contentsOf: topLevelFields.compactMap { textValue(job[$0]) })
+
+        if let payload = job["payload"] as? [String: Any] {
+            let payloadFields = ["prompt", "script", "command", "message", "description", "text"]
+            values.append(contentsOf: payloadFields.compactMap { textValue(payload[$0]) })
         }
+
+        return values
     }
 
     private static func isMissingCronJob(
