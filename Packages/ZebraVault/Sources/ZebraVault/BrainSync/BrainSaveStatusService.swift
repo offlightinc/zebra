@@ -4,6 +4,8 @@ public enum BrainSaveFailureSource: String, Equatable, Sendable {
     case gbrainStatus
     case openClawCron
     case hermesCron
+    case openClawGateway
+    case hermesGateway
     case missingCronJob
     case unavailable
 }
@@ -261,6 +263,7 @@ public final class BrainSaveStatusService: ObservableObject {
 
     private let runner: BrainSaveCommandRunning
     private let runtimeSelectionProvider: @Sendable () -> BrainSaveRuntimeSelection?
+    private let runtimeExecutablePathProvider: @Sendable () -> String?
     private var selectedVaultPath: String?
     private var refreshTask: Task<Void, Never>?
 
@@ -271,10 +274,14 @@ public final class BrainSaveStatusService: ObservableObject {
                 return nil
             }
             return BrainSaveRuntimeSelection(rawValue: runtime)
+        },
+        runtimeExecutablePathProvider: @escaping @Sendable () -> String? = {
+            ZebraGBrainRuntimeOnboardingStore().selectedRuntimeForGBrainSetup()?.executablePath
         }
     ) {
         self.runner = runner
         self.runtimeSelectionProvider = runtimeSelectionProvider
+        self.runtimeExecutablePathProvider = runtimeExecutablePathProvider
     }
 
     deinit {
@@ -293,12 +300,14 @@ public final class BrainSaveStatusService: ObservableObject {
         isRefreshing = true
         let runner = runner
         let runtimeSelection = runtimeSelectionProvider()
+        let runtimeExecutablePath = runtimeExecutablePathProvider()
         let vaultPath = self.selectedVaultPath
         refreshTask = Task.detached(priority: .utility) {
             let snapshot = await BrainSaveStatusCollector.collect(
                 runner: runner,
                 selectedVaultPath: vaultPath,
-                runtimeSelection: runtimeSelection
+                runtimeSelection: runtimeSelection,
+                runtimeExecutablePath: runtimeExecutablePath
             )
             await MainActor.run {
                 guard !Task.isCancelled else { return }
@@ -405,7 +414,9 @@ public enum BrainSaveStatusCollector {
     public static func collect(
         runner: BrainSaveCommandRunning,
         selectedVaultPath: String? = nil,
-        runtimeSelection: BrainSaveRuntimeSelection? = nil
+        runtimeSelection: BrainSaveRuntimeSelection? = nil,
+        runtimeExecutablePath: String? = nil,
+        hermesCronJobsPath: String? = nil
     ) async -> BrainSaveStatusSnapshot {
         let vaultPath = normalizedPath(selectedVaultPath)
         let runtime: BrainSaveRuntimeStatus
@@ -413,18 +424,25 @@ public enum BrainSaveStatusCollector {
         case .openClaw:
             runtime = await openClawStatus(runner: runner, selectedVaultPath: vaultPath)
         case .hermes:
-            runtime = hermesStatus(selectedVaultPath: vaultPath)
+            runtime = hermesStatus(selectedVaultPath: vaultPath, jobsPath: hermesCronJobsPath)
         case .none:
             runtime = .none
-        }
-
-        if case .openClaw(let status, _, _) = runtime, status == "running" {
-            return BrainSaveStatusMapper.map(gbrain: nil, runtime: runtime)
         }
 
         let gbrain = await gbrainReport(runner: runner, selectedVaultPath: vaultPath)
         if isMissingCronJob(runtime, runtimeSelection: runtimeSelection, selectedVaultPath: vaultPath) {
             return missingCronJobSnapshot(runtimeSelection: runtimeSelection)
+        }
+        if let gatewayFailure = await gatewayFailureSnapshot(
+            runner: runner,
+            runtimeSelection: runtimeSelection,
+            runtimeStatus: runtime,
+            runtimeExecutablePath: runtimeExecutablePath
+        ) {
+            return gatewayFailure
+        }
+        if case .openClaw(let status, _, _) = runtime, status == "running" {
+            return BrainSaveStatusMapper.map(gbrain: nil, runtime: runtime)
         }
         return BrainSaveStatusMapper.map(gbrain: gbrain, runtime: runtime)
     }
@@ -495,13 +513,13 @@ public enum BrainSaveStatusCollector {
                   let array = dict["jobs"] as? [[String: Any]] {
             jobs = array
         } else if let dict = object as? [String: Any],
-                  looksLikeGBrainJob(dict) {
+                  looksLikeGBrainLiveSyncJob(dict) {
             jobs = [dict]
         } else {
             return .none
         }
         let candidates = jobs.filter { job in
-            looksLikeGBrainJob(job) && jobMatchesVault(job, selectedVaultPath: selectedVaultPath)
+            looksLikeGBrainLiveSyncJob(job) && jobMatchesVault(job, selectedVaultPath: selectedVaultPath)
         }
         guard let job = preferredOpenClawJob(candidates) else { return .none }
         let state = job["state"] as? [String: Any]
@@ -517,7 +535,7 @@ public enum BrainSaveStatusCollector {
     ) -> BrainSaveRuntimeStatus {
         guard let jobs = object["jobs"] as? [[String: Any]] else { return .none }
         let candidates = jobs.filter { job in
-            looksLikeGBrainJob(job) && jobMatchesVault(job, selectedVaultPath: selectedVaultPath)
+            looksLikeGBrainLiveSyncJob(job) && jobMatchesVault(job, selectedVaultPath: selectedVaultPath)
         }
         guard let job = preferredHermesJob(candidates) else { return .none }
         return .hermes(
@@ -542,8 +560,8 @@ public enum BrainSaveStatusCollector {
         return parseOpenClawRuntime(object, selectedVaultPath: selectedVaultPath)
     }
 
-    private static func hermesStatus(selectedVaultPath: String?) -> BrainSaveRuntimeStatus {
-        let path = (NSHomeDirectory() as NSString).appendingPathComponent(".hermes/cron/jobs.json")
+    private static func hermesStatus(selectedVaultPath: String?, jobsPath: String?) -> BrainSaveRuntimeStatus {
+        let path = jobsPath ?? (NSHomeDirectory() as NSString).appendingPathComponent(".hermes/cron/jobs.json")
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
             return .none
         }
@@ -551,6 +569,146 @@ public enum BrainSaveStatusCollector {
             return .unavailable(runtime: .hermes, message: nil)
         }
         return parseHermesRuntime(object, selectedVaultPath: selectedVaultPath)
+    }
+
+    private static func gatewayFailureSnapshot(
+        runner: BrainSaveCommandRunning,
+        runtimeSelection: BrainSaveRuntimeSelection?,
+        runtimeStatus: BrainSaveRuntimeStatus,
+        runtimeExecutablePath: String?
+    ) async -> BrainSaveStatusSnapshot? {
+        guard runtimeSelection != nil, runtimeHasLiveSyncJob(runtimeStatus) else { return nil }
+        switch runtimeSelection {
+        case .openClaw:
+            let result = await runner.run("openclaw", ["gateway", "status", "--json", "--require-rpc", "--timeout", "5000"])
+            guard result.exitCode == 0 else {
+                let message = nonEmpty(result.stderr)
+                    ?? nonEmpty(result.stdout)
+                    ?? String(
+                        localized: "brainSave.failure.openClawGatewayNotRunning",
+                        defaultValue: "OpenClaw gateway is not running."
+                    )
+                return gatewayFailedSnapshot(runtime: .openClaw, source: .openClawGateway, message: message)
+            }
+            return nil
+        case .hermes:
+            let result = await hermesGatewayProbe(runner: runner, executablePath: runtimeExecutablePath)
+            guard result.running else {
+                return gatewayFailedSnapshot(
+                    runtime: .hermes,
+                    source: .hermesGateway,
+                    message: result.message ?? String(
+                        localized: "brainSave.failure.hermesGatewayNotRunning",
+                        defaultValue: "Hermes gateway is not running."
+                    )
+                )
+            }
+            return nil
+        case .none:
+            return nil
+        }
+    }
+
+    private static func runtimeHasLiveSyncJob(_ runtimeStatus: BrainSaveRuntimeStatus) -> Bool {
+        switch runtimeStatus {
+        case .openClaw, .hermes:
+            return true
+        case .none, .unavailable:
+            return false
+        }
+    }
+
+    private static func gatewayFailedSnapshot(
+        runtime: BrainSaveRuntime,
+        source: BrainSaveFailureSource,
+        message: String
+    ) -> BrainSaveStatusSnapshot {
+        BrainSaveStatusSnapshot(
+            status: .failed(at: nil, reason: BrainSaveFailure(source: source, message: message)),
+            runtime: runtime,
+            detail: message
+        )
+    }
+
+    private struct HermesGatewayProbeResult {
+        let running: Bool
+        let message: String?
+    }
+
+    private static func hermesGatewayProbe(
+        runner: BrainSaveCommandRunning,
+        executablePath: String?
+    ) async -> HermesGatewayProbeResult {
+        guard let python = hermesPythonPath(executablePath: executablePath) else {
+            return HermesGatewayProbeResult(
+                running: false,
+                message: String(
+                    localized: "brainSave.failure.hermesGatewayProbeUnavailable",
+                    defaultValue: "Hermes gateway status probe is unavailable."
+                )
+            )
+        }
+        let code = """
+import json
+from gateway.status import get_running_pid
+pid = get_running_pid()
+print(json.dumps({"running": pid is not None, "pid": pid}))
+"""
+        let result = await runner.run(python, ["-c", code])
+        guard result.exitCode == 0 else {
+            return HermesGatewayProbeResult(
+                running: false,
+                message: nonEmpty(result.stderr) ?? nonEmpty(result.stdout)
+            )
+        }
+        guard let data = result.stdout.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let running = boolValue(object["running"]) else {
+            return HermesGatewayProbeResult(
+                running: false,
+                message: String(
+                    localized: "brainSave.failure.hermesGatewayProbeInvalid",
+                    defaultValue: "Hermes gateway status probe returned invalid JSON."
+                )
+            )
+        }
+        return HermesGatewayProbeResult(running: running, message: nil)
+    }
+
+    private static func hermesPythonPath(executablePath: String?) -> String? {
+        var candidates: [String] = []
+        if let executablePath = normalizedPath(executablePath) {
+            appendHermesPythonCandidates(nextTo: executablePath, into: &candidates)
+            let resolved = URL(fileURLWithPath: executablePath).resolvingSymlinksInPath().path
+            if resolved != executablePath {
+                appendHermesPythonCandidates(nextTo: resolved, into: &candidates)
+            }
+        } else {
+            candidates.append(contentsOf: ["python3", "python"])
+        }
+        let hermesVenvBin = (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".hermes/hermes-agent/venv/bin")
+        candidates.append((hermesVenvBin as NSString).appendingPathComponent("python"))
+        candidates.append((hermesVenvBin as NSString).appendingPathComponent("python3"))
+        var seen = Set<String>()
+        candidates = candidates.filter { seen.insert($0).inserted }
+        let fileManager = FileManager.default
+        for candidate in candidates {
+            if candidate.contains("/") {
+                if fileManager.isExecutableFile(atPath: candidate) {
+                    return candidate
+                }
+            } else {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    private static func appendHermesPythonCandidates(nextTo executablePath: String, into candidates: inout [String]) {
+        let bin = (executablePath as NSString).deletingLastPathComponent
+        candidates.append((bin as NSString).appendingPathComponent("python"))
+        candidates.append((bin as NSString).appendingPathComponent("python3"))
     }
 
     private static func parseSelectedSourceGBrainReport(
@@ -658,11 +816,15 @@ public enum BrainSaveStatusCollector {
             ?? "idle"
     }
 
-    private static func looksLikeGBrainJob(_ job: [String: Any]) -> Bool {
-        let fields = ["name", "prompt", "script", "command", "workdir", "description"]
-        return fields.contains { key in
-            textValue(job[key])?.localizedCaseInsensitiveContains("gbrain") == true
-        }
+    private static func looksLikeGBrainLiveSyncJob(_ job: [String: Any]) -> Bool {
+        let fields = ["name", "prompt", "script", "command", "message", "description"]
+        let text = fields
+            .compactMap { textValue(job[$0]) }
+            .joined(separator: " ")
+            .lowercased()
+        return text.contains("gbrain")
+            && text.contains("sync")
+            && text.contains("--repo")
     }
 
     private static func jobMatchesVault(_ job: [String: Any], selectedVaultPath: String?) -> Bool {
@@ -697,7 +859,7 @@ public enum BrainSaveStatusCollector {
         }
         let message = String(
             localized: "brainSave.failure.missingCronJob",
-            defaultValue: "No GBrain save cron job is configured for this vault."
+            defaultValue: "No GBrain live sync cron job is configured for this vault."
         )
         return BrainSaveStatusSnapshot(
             status: .failed(

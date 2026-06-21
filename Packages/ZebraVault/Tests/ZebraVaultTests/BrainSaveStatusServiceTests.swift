@@ -250,11 +250,15 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         XCTAssertEqual(BrainSaveStatusMapper.map(gbrain: .success(parsed)).status, .unknown)
     }
 
-    func testOpenClawRuntimeParserFindsGBrainJob() {
+    func testOpenClawRuntimeParserFindsGBrainLiveSyncJob() {
         let parsed = BrainSaveStatusCollector.parseOpenClawRuntime([
             "jobs": [
                 ["name": "other", "status": "running"],
-                ["name": "gbrain save", "status": "running"],
+                [
+                    "name": "GBrain live sync",
+                    "status": "running",
+                    "message": "Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale",
+                ],
             ],
         ])
 
@@ -265,11 +269,17 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         let parsed = BrainSaveStatusCollector.parseOpenClawRuntime(
             [
                 "jobs": [
-                    ["name": "gbrain save", "status": "running", "workdir": "/tmp/other"],
                     [
-                        "name": "gbrain save",
+                        "name": "GBrain live sync",
+                        "status": "running",
+                        "workdir": "/tmp/other",
+                        "message": "Run: gbrain sync --repo /tmp/other --yes && gbrain embed --stale",
+                    ],
+                    [
+                        "name": "GBrain live sync",
                         "status": "ok",
                         "workdir": "/tmp/selected",
+                        "message": "Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale",
                         "finishedAt": "1970-01-01T00:00:02Z",
                     ],
                 ],
@@ -284,7 +294,12 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         let parsed = BrainSaveStatusCollector.parseOpenClawRuntime(
             [
                 "jobs": [
-                    ["name": "gbrain save", "status": "running", "workdir": "/tmp/other"],
+                    [
+                        "name": "GBrain live sync",
+                        "status": "running",
+                        "workdir": "/tmp/other",
+                        "message": "Run: gbrain sync --repo /tmp/other --yes && gbrain embed --stale",
+                    ],
                 ],
             ],
             selectedVaultPath: "/tmp/selected"
@@ -297,14 +312,16 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         let parsed = BrainSaveStatusCollector.parseOpenClawRuntime([
             "jobs": [
                 [
-                    "name": "gbrain save",
+                    "name": "GBrain live sync",
                     "status": "error",
+                    "message": "Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale",
                     "finishedAt": "1970-01-01T00:00:01Z",
                     "error": "old failure",
                 ],
                 [
-                    "name": "gbrain save",
+                    "name": "GBrain live sync",
                     "status": "ok",
+                    "message": "Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale",
                     "finishedAt": "1970-01-01T00:00:02Z",
                 ],
             ],
@@ -317,13 +334,15 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         let parsed = BrainSaveStatusCollector.parseOpenClawRuntime([
             "jobs": [
                 [
-                    "name": "gbrain save",
+                    "name": "GBrain live sync",
                     "status": "ok",
+                    "message": "Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale",
                     "finishedAt": "1970-01-01T00:00:02Z",
                 ],
                 [
-                    "name": "gbrain save",
+                    "name": "GBrain live sync",
                     "status": "running",
+                    "message": "Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale",
                     "runningAtMs": 1_000,
                 ],
             ],
@@ -336,7 +355,8 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         let parsed = BrainSaveStatusCollector.parseHermesRuntime([
             "jobs": [
                 [
-                    "name": "gbrain save",
+                    "name": "GBrain live sync",
+                    "prompt": "Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale",
                     "last_status": "error",
                     "last_error": "boom",
                     "last_run_at": "1970-01-01T00:00:01Z",
@@ -355,14 +375,16 @@ final class BrainSaveStatusServiceTests: XCTestCase {
             [
                 "jobs": [
                     [
-                        "name": "gbrain save",
+                        "name": "GBrain live sync",
                         "workdir": "/tmp/other",
+                        "prompt": "Run: gbrain sync --repo /tmp/other --yes && gbrain embed --stale",
                         "last_status": "error",
                         "last_run_at": "1970-01-01T00:00:01Z",
                     ],
                     [
-                        "name": "gbrain save",
+                        "name": "GBrain live sync",
                         "workdir": "/tmp/selected",
+                        "prompt": "Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale",
                         "last_status": "ok",
                         "last_run_at": "1970-01-01T00:00:02Z",
                     ],
@@ -375,6 +397,29 @@ final class BrainSaveStatusServiceTests: XCTestCase {
             parsed,
             .hermes(lastStatus: "ok", lastRunAt: Date(timeIntervalSince1970: 2), message: nil)
         )
+    }
+
+    func testOpenClawRuntimeParserIgnoresNonLiveSyncGBrainJobsForSaveStatus() {
+        let parsed = BrainSaveStatusCollector.parseOpenClawRuntime(
+            [
+                "jobs": [
+                    [
+                        "name": "GBrain dream cycle",
+                        "status": "running",
+                        "message": "Run: gbrain dream --dir /tmp/selected",
+                    ],
+                    [
+                        "name": "GBrain weekly health",
+                        "status": "error",
+                        "message": "Run: gbrain doctor --json && gbrain embed --stale",
+                        "workdir": "/tmp/selected",
+                    ],
+                ],
+            ],
+            selectedVaultPath: "/tmp/selected"
+        )
+
+        XCTAssertEqual(parsed, .none)
     }
 
     func testCollectMapsOpenClawProviderFailureToPendingFallback() async {
@@ -393,7 +438,7 @@ final class BrainSaveStatusServiceTests: XCTestCase {
 
     func testCollectMapsMissingSelectedVaultCronJobToSaveFailed() async {
         let gbrainJSON = #"{"sync":{"sources":[{"local_path":"/tmp/selected"}]}}"#
-        let openClawJSON = #"{"jobs":[{"name":"gbrain save","status":"ok","workdir":"/tmp/other"}]}"#
+        let openClawJSON = #"{"jobs":[{"name":"GBrain live sync","status":"ok","workdir":"/tmp/other","message":"Run: gbrain sync --repo /tmp/other --yes && gbrain embed --stale"}]}"#
         let snapshot = await BrainSaveStatusCollector.collect(
             runner: StubBrainSaveCommandRunner(results: [
                 "openclaw": .init(exitCode: 0, stdout: openClawJSON, stderr: ""),
@@ -407,13 +452,128 @@ final class BrainSaveStatusServiceTests: XCTestCase {
             return XCTFail("Expected failed status")
         }
         XCTAssertEqual(reason.source, .missingCronJob)
-        XCTAssertTrue(reason.message.contains("No GBrain save cron job"))
+        XCTAssertTrue(reason.message.contains("No GBrain live sync cron job"))
+    }
+
+    func testCollectMapsOpenClawGatewayDownToSaveFailedWhenLiveSyncJobExists() async {
+        let gbrainJSON = #"{"sync":{"sources":[{"local_path":"/tmp/selected"}]}}"#
+        let openClawJSON = #"{"jobs":[{"name":"GBrain live sync","status":"ok","workdir":"/tmp/selected","message":"Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale","finishedAt":"1970-01-01T00:00:02Z"}]}"#
+        let snapshot = await BrainSaveStatusCollector.collect(
+            runner: StubBrainSaveCommandRunner(results: [
+                StubBrainSaveCommandRunner.key("openclaw", ["cron", "list", "--json"]): .init(exitCode: 0, stdout: openClawJSON, stderr: ""),
+                StubBrainSaveCommandRunner.key("openclaw", ["gateway", "status", "--json", "--require-rpc", "--timeout", "5000"]): .init(exitCode: 1, stdout: "", stderr: "gateway rpc unavailable"),
+                "gbrain": .init(exitCode: 0, stdout: gbrainJSON, stderr: ""),
+            ]),
+            selectedVaultPath: "/tmp/selected",
+            runtimeSelection: .openClaw
+        )
+
+        guard case .failed(_, let reason) = snapshot.status else {
+            return XCTFail("Expected gateway failure")
+        }
+        XCTAssertEqual(reason.source, .openClawGateway)
+        XCTAssertEqual(reason.message, "gateway rpc unavailable")
+        XCTAssertEqual(snapshot.runtime, .openClaw)
+    }
+
+    func testCollectMapsOpenClawLiveSyncJobToSavedWhenGatewayIsRunning() async {
+        let gbrainJSON = #"{"sync":{"sources":[{"local_path":"/tmp/selected"}]}}"#
+        let openClawJSON = #"{"jobs":[{"name":"GBrain live sync","status":"ok","workdir":"/tmp/selected","message":"Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale","finishedAt":"1970-01-01T00:00:02Z"}]}"#
+        let snapshot = await BrainSaveStatusCollector.collect(
+            runner: StubBrainSaveCommandRunner(results: [
+                StubBrainSaveCommandRunner.key("openclaw", ["cron", "list", "--json"]): .init(exitCode: 0, stdout: openClawJSON, stderr: ""),
+                StubBrainSaveCommandRunner.key("openclaw", ["gateway", "status", "--json", "--require-rpc", "--timeout", "5000"]): .init(exitCode: 0, stdout: #"{"running":true}"#, stderr: ""),
+                "gbrain": .init(exitCode: 0, stdout: gbrainJSON, stderr: ""),
+            ]),
+            selectedVaultPath: "/tmp/selected",
+            runtimeSelection: .openClaw
+        )
+
+        XCTAssertEqual(snapshot.status, .saved(at: Date(timeIntervalSince1970: 2)))
+        XCTAssertEqual(snapshot.runtime, .openClaw)
+    }
+
+    func testCollectMapsHermesGatewayDownToSaveFailedWhenLiveSyncJobExists() async throws {
+        let jobsPath = try writeHermesJobsJSON(
+            #"{"jobs":[{"name":"GBrain live sync","workdir":"/tmp/selected","prompt":"Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale","last_status":null,"last_run_at":null}]}"#
+        )
+        let executablePath = (jobsPath.deletingLastPathComponent().path as NSString).appendingPathComponent("hermes")
+        let pythonPath = (jobsPath.deletingLastPathComponent().path as NSString).appendingPathComponent("python")
+        let gbrainJSON = #"{"sync":{"sources":[{"local_path":"/tmp/selected"}]}}"#
+        let snapshot = await BrainSaveStatusCollector.collect(
+            runner: StubBrainSaveCommandRunner(results: [
+                pythonPath: .init(exitCode: 0, stdout: #"{"running":false,"pid":null}"#, stderr: ""),
+                "gbrain": .init(exitCode: 0, stdout: gbrainJSON, stderr: ""),
+            ]),
+            selectedVaultPath: "/tmp/selected",
+            runtimeSelection: .hermes,
+            runtimeExecutablePath: executablePath,
+            hermesCronJobsPath: jobsPath.path
+        )
+
+        guard case .failed(_, let reason) = snapshot.status else {
+            return XCTFail("Expected Hermes gateway failure")
+        }
+        XCTAssertEqual(reason.source, .hermesGateway)
+        XCTAssertEqual(reason.message, "Hermes gateway is not running.")
+        XCTAssertEqual(snapshot.runtime, .hermes)
+    }
+
+    func testCollectMapsHermesLiveSyncJobThroughExistingStatusWhenGatewayIsRunning() async throws {
+        let jobsPath = try writeHermesJobsJSON(
+            #"{"jobs":[{"name":"GBrain live sync","workdir":"/tmp/selected","prompt":"Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale","last_status":"ok","last_run_at":"1970-01-01T00:00:02Z"}]}"#
+        )
+        let executablePath = (jobsPath.deletingLastPathComponent().path as NSString).appendingPathComponent("hermes")
+        let pythonPath = (jobsPath.deletingLastPathComponent().path as NSString).appendingPathComponent("python")
+        let gbrainJSON = #"{"sync":{"sources":[{"local_path":"/tmp/selected"}]}}"#
+        let snapshot = await BrainSaveStatusCollector.collect(
+            runner: StubBrainSaveCommandRunner(results: [
+                pythonPath: .init(exitCode: 0, stdout: #"{"running":true,"pid":123}"#, stderr: ""),
+                "gbrain": .init(exitCode: 0, stdout: gbrainJSON, stderr: ""),
+            ]),
+            selectedVaultPath: "/tmp/selected",
+            runtimeSelection: .hermes,
+            runtimeExecutablePath: executablePath,
+            hermesCronJobsPath: jobsPath.path
+        )
+
+        XCTAssertEqual(snapshot.status, .saved(at: Date(timeIntervalSince1970: 2)))
+        XCTAssertEqual(snapshot.runtime, .hermes)
+    }
+
+    func testCollectResolvesHermesExecutableSymlinkBeforeGatewayProbe() async throws {
+        let jobsPath = try writeHermesJobsJSON(
+            #"{"jobs":[{"name":"GBrain live sync","workdir":"/tmp/selected","prompt":"Run: gbrain sync --repo /tmp/selected --yes && gbrain embed --stale","last_status":"ok","last_run_at":"1970-01-01T00:00:02Z"}]}"#
+        )
+        let realBin = jobsPath.deletingLastPathComponent()
+        let realExecutable = realBin.appendingPathComponent("hermes")
+        try Data().write(to: realExecutable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: realExecutable.path)
+        let shimBin = realBin.appendingPathComponent("shim", isDirectory: true)
+        try FileManager.default.createDirectory(at: shimBin, withIntermediateDirectories: true)
+        let shimExecutable = shimBin.appendingPathComponent("hermes")
+        try FileManager.default.createSymbolicLink(at: shimExecutable, withDestinationURL: realExecutable)
+        let pythonPath = realBin.appendingPathComponent("python").path
+        let gbrainJSON = #"{"sync":{"sources":[{"local_path":"/tmp/selected"}]}}"#
+        let snapshot = await BrainSaveStatusCollector.collect(
+            runner: StubBrainSaveCommandRunner(results: [
+                pythonPath: .init(exitCode: 0, stdout: #"{"running":true,"pid":123}"#, stderr: ""),
+                "gbrain": .init(exitCode: 0, stdout: gbrainJSON, stderr: ""),
+            ]),
+            selectedVaultPath: "/tmp/selected",
+            runtimeSelection: .hermes,
+            runtimeExecutablePath: shimExecutable.path,
+            hermesCronJobsPath: jobsPath.path
+        )
+
+        XCTAssertEqual(snapshot.status, .saved(at: Date(timeIntervalSince1970: 2)))
+        XCTAssertEqual(snapshot.runtime, .hermes)
     }
 
     @MainActor
     func testServiceRefreshUsesLatestSelectedVaultPath() async {
         let gbrainJSON = #"{"sync":{"sources":[{"local_path":"/tmp/vault-a"},{"local_path":"/tmp/vault-b"}]}}"#
-        let openClawJSON = #"{"jobs":[{"name":"gbrain save","status":"ok","workdir":"/tmp/vault-a","finishedAt":"1970-01-01T00:00:02Z"}]}"#
+        let openClawJSON = #"{"jobs":[{"name":"GBrain live sync","status":"ok","workdir":"/tmp/vault-a","message":"Run: gbrain sync --repo /tmp/vault-a --yes && gbrain embed --stale","finishedAt":"1970-01-01T00:00:02Z"}]}"#
         let service = BrainSaveStatusService(
             runner: StubBrainSaveCommandRunner(results: [
                 "openclaw": .init(exitCode: 0, stdout: openClawJSON, stderr: ""),
@@ -450,6 +610,18 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         )
     }
 
+    private func writeHermesJobsJSON(_ json: String) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BrainSaveStatusServiceTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let python = directory.appendingPathComponent("python")
+        try Data().write(to: python)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: python.path)
+        let jobs = directory.appendingPathComponent("jobs.json")
+        try XCTUnwrap(json.data(using: .utf8)).write(to: jobs)
+        return jobs
+    }
+
     @MainActor
     private func waitForRefresh(_ service: BrainSaveStatusService) async {
         for _ in 0..<100 where service.isRefreshing {
@@ -469,7 +641,14 @@ private struct StubBrainSaveCommandRunner: BrainSaveCommandRunning {
         self.results = results
     }
 
+    static func key(_ command: String, _ arguments: [String]) -> String {
+        ([command] + arguments).joined(separator: "\u{1f}")
+    }
+
     func run(_ command: String, _ arguments: [String]) async -> BrainSaveCommandResult {
-        results[command] ?? results["default"] ?? BrainSaveCommandResult(exitCode: 127, stdout: "", stderr: "missing stub")
+        results[Self.key(command, arguments)]
+            ?? results[command]
+            ?? results["default"]
+            ?? BrainSaveCommandResult(exitCode: 127, stdout: "", stderr: "missing stub")
     }
 }

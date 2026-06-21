@@ -30,13 +30,21 @@ public enum BrainSaveFailureContextPrefix {
             return """
             OpenClaw cron reported a GBrain save failure. Inspect the OpenClaw cron job status and recent output, then compare it with `gbrain status --json` so stale cron failures do not hide a newer successful save.
             """
+        case .openClawGateway:
+            return """
+            Zebra found the GBrain live sync cron job, but OpenClaw's gateway is not reachable. Inspect the OpenClaw gateway status before creating new cron jobs; the existing job cannot run until the gateway is installed and running.
+            """
         case .hermesCron:
             return """
             Hermes cron reported a GBrain save failure. Inspect the Hermes cron jobs file and recent GBrain status. Treat Hermes as the scheduler/runtime layer and avoid applying git-sync recovery steps unless GBrain status points to a repository problem.
             """
+        case .hermesGateway:
+            return """
+            Zebra found the GBrain live sync cron job, but Hermes gateway is not running. Inspect the Hermes gateway service before creating new cron jobs; the existing job cannot run until the gateway is installed and running.
+            """
         case .missingCronJob:
             return """
-            Zebra could not find a GBrain save cron job for the selected vault. Inspect the selected vault path and the configured runtime scheduler, then create or repair a job that runs `gbrain sync --repo <selected vault path> --yes` only after user approval for persistent background jobs.
+            Zebra could not find a GBrain live sync cron job for the selected vault. Inspect the selected vault path and the configured runtime scheduler, then create or repair the live sync job that runs `gbrain sync --repo <selected vault path> --yes && gbrain embed --stale` only after user approval for persistent background jobs. Do not use the auto-update, dream cycle, or weekly health jobs as footer save status jobs.
             """
         case .unavailable:
             return """
@@ -56,9 +64,16 @@ public enum BrainSaveFailureContextPrefix {
         case .openClawCron:
             commands.append("openclaw cron list --json")
             commands.append("openclaw cron list --json | jq '.jobs[]? | select((.name // .command // .description // \"\") | test(\"gbrain\"; \"i\"))'")
+        case .openClawGateway:
+            commands.append("openclaw cron list --json")
+            commands.append("openclaw gateway status --json --require-rpc --timeout 5000")
         case .hermesCron:
             commands.append("cat ~/.hermes/cron/jobs.json")
             commands.append("jq '.jobs[]? | select((.name // .command // .description // \"\") | test(\"gbrain\"; \"i\"))' ~/.hermes/cron/jobs.json")
+        case .hermesGateway:
+            commands.append("cat ~/.hermes/cron/jobs.json")
+            commands.append("hermes gateway status")
+            commands.append("hermes gateway list")
         case .missingCronJob:
             commands.append("openclaw cron list --json")
             commands.append("cat ~/.hermes/cron/jobs.json")

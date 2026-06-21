@@ -9,7 +9,8 @@ Zebra sidebar footer의 기존 sync UI를 GBrain save 상태 UI로 전환한다.
 중요한 구분:
 
 - `gbrain status --repo <path> --json`는 사용하지 않는다. status는 `--repo`를 scope로 쓰지 않는다.
-- `gbrain sync --repo <path>`는 유효하다. cron save job이 특정 vault를 저장할 때 selected vault path를 sync target으로 명시하는 용도로 사용한다.
+- `gbrain sync --repo <path>`는 유효하다. recurring live sync job이 특정 vault를 sync target으로 명시하는 용도로 사용한다.
+- Zebra의 footer save 상태는 recurring jobs 전체가 아니라 selected vault를 대상으로 하는 live sync job만 추적한다.
 
 ## Key Changes
 
@@ -20,12 +21,12 @@ Zebra sidebar footer의 기존 sync UI를 GBrain save 상태 UI로 전환한다.
   - 결과의 `sync.sources[].local_path` 중 selected vault path와 매칭되는 source row만 사용한다.
   - selected vault source row가 없으면 전역 cycle/queue만으로 Saved / Saving / Save failed를 표시하지 않는다.
 - OpenClaw runtime 판단:
-  - selected vault path를 대상으로 하는 GBrain save cron job만 사용한다.
+  - selected vault path를 대상으로 하는 GBrain live sync cron job만 사용한다.
   - `status == "running"` -> Saving
   - `status == "ok"` -> Saved
   - `status == "error"` 또는 `skipped` -> Save failed
 - Hermes runtime 판단:
-  - selected vault path를 대상으로 하는 GBrain save cron job만 사용한다.
+  - selected vault path를 대상으로 하는 GBrain live sync cron job만 사용한다.
   - `last_status == "ok"` -> Saved
   - `last_status == "error"` -> Save failed
   - Hermes `jobs.json`만으로 running은 확정 불가하므로 Hermes 단독으로 Saving을 표시하지 않는다.
@@ -33,16 +34,27 @@ Zebra sidebar footer의 기존 sync UI를 GBrain save 상태 UI로 전환한다.
 ## Agent Cron Requirements
 
 - Agent cron은 selected vault 기준으로 생성/검증되어야 한다.
-- OpenClaw cron job message는 selected vault target을 명시해야 한다:
-  - `gbrain sync --repo '<selected vault path>' --yes`
+- `platform_scheduler_install` hard-gate는 Zebra 임의의 `GBrain save` 1개 job이 아니라 GBrain 문서의 core recurring jobs를 설치하도록 지시한다:
+  - Live sync, every 15 minutes: `gbrain sync --repo '<selected vault path>' --yes && gbrain embed --stale`
+  - Auto-update, daily: `gbrain check-update --json`
+  - Dream cycle, nightly: `gbrain dream --dir '<selected vault path>'`
+  - Weekly health, weekly: `gbrain doctor --json && gbrain embed --stale`
+- Footer save 상태 판단은 위 4개 중 selected vault를 대상으로 하는 Live sync job만 사용한다.
+  - Auto-update, dream cycle, weekly health의 running/error는 footer Saved / Saving / Save failed 상태로 매핑하지 않는다.
+  - OpenClaw/Hermes parser는 selected vault path와 live sync command shape가 모두 맞는 job만 save status job으로 인정한다.
+- OpenClaw cron jobs는 selected vault target을 명시해야 한다:
+  - Live sync message 내부 `gbrain sync --repo '<selected vault path>' --yes`
+  - Dream cycle message 내부 `gbrain dream --dir '<selected vault path>'`
   - 가능하면 onboarding에서 검증된 `sourceId`도 함께 반영한다.
-- Hermes cron job은 selected vault target을 두 군데에 명시해야 한다:
-  - message 내부 `gbrain sync --repo '<selected vault path>' --yes`
-  - cron `--workdir '<selected vault path>'`
+- Hermes cron jobs는 selected vault target을 명시해야 한다:
+  - Live sync message 내부 `gbrain sync --repo '<selected vault path>' --yes`
+  - Dream cycle message 내부 `gbrain dream --dir '<selected vault path>'`
+  - Live sync와 dream cycle의 cron `--workdir '<selected vault path>'`
+- `autopilot_install` path는 cron 4개를 직접 만들지 않는다. `gbrain autopilot --install --repo '<selected vault path>'`로 GBrain이 소유하는 daemon/launchd path를 사용한다.
 - recurring job decision/completion은 전역이 아니라 target path/key별로 저장한다.
 - vault A의 cron setup 완료가 vault B에 재사용되면 안 된다.
 - Zebra가 vault 변경만으로 persistent cron을 자동 생성/수정하지 않는다. background job 생성은 기존 정책대로 사용자 승인 후 온보딩/agent가 수행한다.
-- vault가 옮겨졌을 때 해당 path에 GBrain save cron job이 없으면, 기존 footer save/sync 상태 컴포넌트에서 `Save failed`를 표시하고 cron job이 없다는 failure detail을 보여준다. 새 별도 UI를 만들지 않는다.
+- vault가 옮겨졌을 때 해당 path에 GBrain live sync cron job이 없으면, 기존 footer save/sync 상태 컴포넌트에서 `Save failed`를 표시하고 live sync cron job이 없다는 failure detail을 보여준다. 새 별도 UI를 만들지 않는다.
 
 ## Implementation Notes
 
@@ -53,6 +65,8 @@ Zebra sidebar footer의 기존 sync UI를 GBrain save 상태 UI로 전환한다.
   - 단순히 `gbrain` 문자열만 있는 job은 selected vault job으로 인정하지 않는다.
 - `ZebraServices`의 현재 `brainSaveStatus.start()` 전역 시작 방식은 selected vault path를 받을 수 있게 바꾼다.
 - `ZebraGBrainOnboarding` recurring jobs prompt는 `<brain repo path>` placeholder만 보여주지 말고 resolved selected vault path를 shell-quoted example에 넣는다.
+- `ZebraGBrainOnboarding` recurring jobs prompt는 platform scheduler 선택 시 GBrain core recurring jobs 4개를 만들도록 지시한다. `GBrain save`라는 Zebra 임의 1개 job으로 축약하지 않는다.
+- save status parser는 4개 recurring jobs 중 live sync job만 footer 상태 source로 사용한다.
 - Step 3에서 brain repo target이 결정되면 Zebra의 selected vault도 그 repo path로 옮긴다:
   - target path가 이미 vault 목록에 있으면 select한다.
   - 없으면 vault 목록에 추가하고 select한다.
@@ -68,17 +82,21 @@ Zebra sidebar footer의 기존 sync UI를 GBrain save 상태 UI로 전환한다.
 - OpenClaw parser:
   - selected vault job running/ok/error/skipped 매핑을 검증한다.
   - `gbrain` 문자열만 있고 selected vault path가 없는 job은 무시한다.
+  - selected vault path가 있어도 live sync job이 아닌 auto-update/dream/weekly health job은 footer save status로 사용하지 않는다.
   - Gateway 실패는 Save failed가 아니라 provider unavailable fallback이다.
 - Hermes parser:
   - selected vault job `last_status == ok/error` 매핑을 검증한다.
   - `next_run_at`이 과거여도 Saving으로 매핑하지 않는다.
+  - selected vault path가 있어도 live sync job이 아닌 auto-update/dream/weekly health job은 footer save status로 사용하지 않는다.
 - Vault switching:
   - vault A job/source만 있는 상태에서 vault B 선택 시 vault A 상태를 표시하지 않는다.
   - vault 변경 시 `BrainSaveStatusService`가 새 path로 refresh된다.
-  - vault B에 cron job이 없으면 기존 footer save/sync 상태 컴포넌트가 `Save failed`와 cron job 없음 detail을 표시한다.
+  - vault B에 live sync cron job이 없으면 기존 footer save/sync 상태 컴포넌트가 `Save failed`와 live sync cron job 없음 detail을 표시한다.
 - Onboarding/cron:
-  - recurring jobs prompt가 selected vault path를 실제 `gbrain sync --repo '<path>'` 예시에 포함한다.
-  - Hermes prompt가 `--workdir '<path>'`를 포함한다.
+  - recurring jobs prompt가 GBrain core recurring jobs 4개를 설치하도록 지시한다.
+  - live sync prompt가 selected vault path를 실제 `gbrain sync --repo '<path>'` 예시에 포함한다.
+  - dream cycle prompt가 selected vault path를 실제 `gbrain dream --dir '<path>'` 예시에 포함한다.
+  - Hermes prompt가 live sync와 dream cycle에 `--workdir '<path>'`를 포함한다.
   - recurring job receipt가 target path별로 저장된다.
   - vault A recurring job completion이 vault B completion에 적용되지 않는다.
   - Step 3에서 resolved brain repo target이 정해지면 selected vault가 그 path로 이동한다.
@@ -88,11 +106,14 @@ Zebra sidebar footer의 기존 sync UI를 GBrain save 상태 UI로 전환한다.
 - Sidebar footer가 save 용어 Saved / Saving / Save failed를 표시한다.
 - 상태 판단은 selected vault path 기준이다.
   - GBrain: selected vault와 매칭되는 `sync.sources[].local_path` row만 사용.
-  - OpenClaw/Hermes: selected vault와 매칭되는 GBrain save cron job만 사용.
+  - OpenClaw/Hermes: selected vault와 매칭되는 GBrain live sync cron job만 사용.
   - 매칭 source/job이 없으면 전역 상태나 다른 vault 상태를 표시하지 않음.
-- selected vault path에 매칭되는 cron job이 없으면 기존 footer save/sync 상태 컴포넌트가 `Save failed`를 표시하고, failure detail은 cron job이 없다는 사실을 설명한다.
+- selected vault path에 매칭되는 live sync cron job이 없으면 기존 footer save/sync 상태 컴포넌트가 `Save failed`를 표시하고, failure detail은 live sync cron job이 없다는 사실을 설명한다.
 - `gbrain status --repo <path> --json`는 사용하지 않는다.
-- save 실행 cron은 selected vault를 `gbrain sync --repo '<selected vault path>' --yes` target으로 명시한다.
+- platform scheduler hard-gate는 GBrain core recurring jobs 4개를 설치하도록 지시한다.
+- footer save 상태는 core recurring jobs 4개 중 live sync job만 상태 source로 사용한다.
+- live sync cron은 selected vault를 `gbrain sync --repo '<selected vault path>' --yes` target으로 명시한다.
+- `autopilot_install`은 4개 cron을 직접 만들지 않고 `gbrain autopilot --install --repo '<selected vault path>'` daemon path를 사용한다.
 - Step 3에서 resolved brain repo target이 결정되면 Zebra selected vault가 그 path로 이동한다.
 - Hermes는 running marker가 없으므로 Hermes 단독으로 Saving을 표시하지 않는다.
 - OpenClaw와 Hermes는 서로 보완하지 않고 선택된 runtime별로 독립 판단한다.

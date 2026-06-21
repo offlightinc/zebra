@@ -3748,6 +3748,69 @@ public struct ZebraGBrainOnboardingStore {
             )
         return run_platform_scheduler_command([executable, "gateway", "status"], timeout=20)
 
+    def hermes_python_for_executable(executable):
+        candidates = []
+        for base in (executable, os.path.realpath(executable or "")):
+            if not base:
+                continue
+            bin_dir = os.path.dirname(base)
+            for name in ("python", "python3"):
+                candidate = os.path.join(bin_dir, name)
+                if candidate not in candidates:
+                    candidates.append(candidate)
+        hermes_home = os.path.abspath(os.path.expanduser(os.environ.get("ZEBRA_GBRAIN_HOME") or "~"))
+        for name in ("python", "python3"):
+            candidate = os.path.join(hermes_home, ".hermes", "hermes-agent", "venv", "bin", name)
+            if candidate not in candidates:
+                candidates.append(candidate)
+        for candidate in candidates:
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+        return None
+
+    def hermes_gateway_liveness(executable):
+        python = hermes_python_for_executable(executable)
+        if not python:
+            return {
+                "ok": False,
+                "code": 127,
+                "stdoutTail": "",
+                "stderrTail": "Hermes venv python not found next to executable",
+            }
+        return run_platform_scheduler_command(
+            [
+                python,
+                "-c",
+                "import json\\nfrom gateway.status import get_running_pid\\npid = get_running_pid()\\nprint(json.dumps({'running': pid is not None, 'pid': pid}))",
+            ],
+            timeout=20,
+        )
+
+    def platform_scheduler_ready(runtime, status_result):
+        if runtime == "hermes":
+            try:
+                payload = json.loads(status_result.get("stdoutTail") or "{}")
+            except Exception:
+                return False
+            if isinstance(payload, dict):
+                return bool(payload.get("running"))
+            return False
+        return bool(status_result.get("ok"))
+
+    def recorded_platform_scheduler_ready(state):
+        progress = state.get("progress") or {}
+        platform_scheduler = progress.get("platformScheduler") or {}
+        if platform_scheduler.get("ready") is not True:
+            return False
+        try:
+            runtime_receipt = selected_runtime_receipt()
+        except Exception:
+            return False
+        return (
+            platform_scheduler.get("runtime") == runtime_receipt.get("runtime")
+            and platform_scheduler.get("executablePath") == runtime_receipt.get("executablePath")
+        )
+
     def prepare_platform_scheduler():
         state = load_state()
         decision = recurring_jobs_decision_value(state)
@@ -3759,11 +3822,12 @@ public struct ZebraGBrainOnboardingStore {
         runtime_receipt = selected_runtime_receipt()
         runtime = runtime_receipt["runtime"]
         executable = runtime_receipt["executablePath"]
-        status_before = platform_scheduler_status(runtime, executable)
+        status_before = hermes_gateway_liveness(executable) if runtime == "hermes" else platform_scheduler_status(runtime, executable)
         install_result = None
         start_result = None
         status_after = status_before
-        if not status_before["ok"]:
+        ready_before = platform_scheduler_ready(runtime, status_before)
+        if not ready_before:
             if runtime == "openclaw":
                 install_result = run_platform_scheduler_command([executable, "gateway", "install", "--json"], timeout=180)
                 if install_result["ok"]:
@@ -3772,16 +3836,17 @@ public struct ZebraGBrainOnboardingStore {
                 install_result = run_platform_scheduler_command([executable, "gateway", "install"], timeout=180)
                 if install_result["ok"]:
                     start_result = run_platform_scheduler_command([executable, "gateway", "start"], timeout=60)
-            status_after = platform_scheduler_status(runtime, executable)
+            status_after = hermes_gateway_liveness(executable) if runtime == "hermes" else platform_scheduler_status(runtime, executable)
 
-        ready = bool(status_before["ok"] or status_after["ok"])
+        ready_after = platform_scheduler_ready(runtime, status_after)
+        ready = bool(ready_before or ready_after)
         state = load_state()
         progress = state.setdefault("progress", {})
         progress["platformScheduler"] = {
             "runtime": runtime,
             "executablePath": executable,
             "ready": ready,
-            "alreadyRunning": bool(status_before["ok"]),
+            "alreadyRunning": bool(ready_before),
             "preparedAt": now(),
         }
         if ready:
@@ -4516,6 +4581,8 @@ public struct ZebraGBrainOnboardingStore {
                 bun_reason = launchd_style_bun_guard_reason()
                 if bun_reason:
                     return bun_reason
+            if recurring_jobs_decision == "platform_scheduler_install" and not recorded_platform_scheduler_ready(state):
+                return "platform_scheduler_prepare_required"
         if role == "verify" and status == "completed" and not receipt_verify_complete(state):
             return "verify_incomplete"
         return None

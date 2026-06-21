@@ -1480,9 +1480,78 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(payload["runtime"] as? String, "hermes")
         XCTAssertEqual(platformScheduler["ready"] as? Bool, true)
         XCTAssertEqual(platformScheduler["alreadyRunning"] as? Bool, false)
-        XCTAssertTrue(log.contains("hermes gateway status"), log)
+        XCTAssertTrue(log.contains("hermes-python -c"), log)
         XCTAssertTrue(log.contains("hermes gateway install"), log)
         XCTAssertTrue(log.contains("hermes gateway start"), log)
+    }
+
+    func testPreparePlatformSchedulerFindsHermesVenvPythonForShimExecutable() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let fake = try writeFakePlatformRuntime(root: root, runtime: "hermes")
+        let shimBin = root.appendingPathComponent(".local/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: shimBin, withIntermediateDirectories: true)
+        let shim = shimBin.appendingPathComponent("hermes", isDirectory: false)
+        try String(contentsOf: fake.executable, encoding: .utf8).write(to: shim, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shim.path)
+        let venvBin = root.appendingPathComponent(".hermes/hermes-agent/venv/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: venvBin, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(
+            at: fake.bin.appendingPathComponent("python", isDirectory: false),
+            to: venvBin.appendingPathComponent("python", isDirectory: false)
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeRuntimeReceipt(stateURL: stateURL, runtime: "hermes", executable: shim)
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: shimBin.path, decision: "platform_scheduler_install")
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: shimBin.path,
+            arguments: ["prepare-platform-scheduler"]
+        )
+        let state = try stateObject(in: stateURL)
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let platformScheduler = try XCTUnwrap(progress["platformScheduler"] as? [String: Any])
+        let log = try String(contentsOf: fake.log, encoding: .utf8)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(platformScheduler["ready"] as? Bool, true)
+        XCTAssertTrue(log.contains("hermes-python -c"), log)
+        XCTAssertTrue(log.contains("hermes gateway install"), log)
+        XCTAssertTrue(log.contains("hermes gateway start"), log)
+    }
+
+    func testRecurringJobsReportRejectsPlatformSchedulerInstallWhenSchedulerNotReady() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let fake = try writeFakePlatformRuntime(root: root, runtime: "hermes")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"]
+        )
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeRuntimeReceipt(stateURL: stateURL, runtime: "hermes", executable: fake.executable)
+        _ = try recordRecurringJobsDecision(stateURL: stateURL, path: fake.bin.path, decision: "platform_scheduler_install")
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: fake.bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 7: Recurring Jobs",
+                "--recurring-jobs-decision", "platform_scheduler_install",
+            ]
+        )
+
+        XCTAssertNotEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("platform_scheduler_prepare_required"), result.stdout)
     }
 
     func testPreparePlatformSchedulerSkipsInstallWhenGatewayAlreadyRunning() throws {
@@ -6040,33 +6109,101 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let executable = bin.appendingPathComponent(runtime, isDirectory: false)
         let log = root.appendingPathComponent("\(runtime)-platform.log", isDirectory: false)
         let ready = root.appendingPathComponent("\(runtime)-gateway-ready", isDirectory: false)
+        if runtime == "hermes" {
+            let python = bin.appendingPathComponent("python", isDirectory: false)
+            let probeBlock: String
+            switch initialStatus {
+            case "running":
+                probeBlock = """
+                  echo '{"running": true, "pid": 123}'
+                  exit 0
+                """
+            case "always-fail":
+                probeBlock = """
+                  echo '{"running": false, "pid": null}'
+                  exit 0
+                """
+            default:
+                probeBlock = """
+                  if [ -f '\(ready.path)' ]; then
+                    echo '{"running": true, "pid": 123}'
+                    exit 0
+                  fi
+                  echo '{"running": false, "pid": null}'
+                  exit 0
+                """
+            }
+            try """
+            #!/bin/sh
+            set -eu
+            printf 'hermes-python %s\\n' "$*" >> '\(log.path)'
+            if [ "$1" = "-c" ]; then
+            \(probeBlock)
+            fi
+            echo "unexpected hermes python args: $*" >&2
+            exit 64
+            """
+            .write(to: python, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: python.path)
+        }
         let statusBlock: String
         switch initialStatus {
         case "running":
-            statusBlock = """
-              if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
-                echo '{"ready":true}'
-                exit 0
-              fi
-            """
+            if runtime == "hermes" {
+                statusBlock = """
+                  if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
+                    echo '✓ Gateway is running (PID: 123)'
+                    exit 0
+                  fi
+                """
+            } else {
+                statusBlock = """
+                  if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
+                    echo '{"ready":true}'
+                    exit 0
+                  fi
+                """
+            }
         case "always-fail":
-            statusBlock = """
-              if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
-                echo '{"ready":false}'
-                exit 1
-              fi
-            """
+            if runtime == "hermes" {
+                statusBlock = """
+                  if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
+                    echo '✗ Gateway is not running'
+                    exit 0
+                  fi
+                """
+            } else {
+                statusBlock = """
+                  if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
+                    echo '{"ready":false}'
+                    exit 1
+                  fi
+                """
+            }
         default:
-            statusBlock = """
-              if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
-                if [ -f '\(ready.path)' ]; then
-                  echo '{"ready":true}'
-                  exit 0
-                fi
-                echo '{"ready":false}'
-                exit 1
-              fi
-            """
+            if runtime == "hermes" {
+                statusBlock = """
+                  if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
+                    if [ -f '\(ready.path)' ]; then
+                      echo '✓ Gateway is running (PID: 123)'
+                      exit 0
+                    fi
+                    echo '✗ Gateway is not running'
+                    exit 0
+                  fi
+                """
+            } else {
+                statusBlock = """
+                  if [ "$1" = "gateway" ] && [ "$2" = "status" ]; then
+                    if [ -f '\(ready.path)' ]; then
+                      echo '{"ready":true}'
+                      exit 0
+                    fi
+                    echo '{"ready":false}'
+                    exit 1
+                  fi
+                """
+            }
         }
         try """
         #!/bin/sh
