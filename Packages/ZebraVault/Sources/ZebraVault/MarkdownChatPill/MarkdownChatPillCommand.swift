@@ -244,6 +244,7 @@ public enum MarkdownChatPillCommand {
         agent: MarkdownPillAgent,
         cwd: String,
         userPrompt: String,
+        model: String? = nil,
         allowTrustedAutomation: Bool = true,
         allowLaunchDirectoryTrust: Bool? = nil,
         allowApprovalAutomation: Bool = true,
@@ -254,13 +255,14 @@ public enum MarkdownChatPillCommand {
             surface: .fallback(typeLabel: "onboarding")
         )
         let trustEligible = allowLaunchDirectoryTrust ?? allowTrustedAutomation
-        return "\(invocation(agent: agent, cwd: cwd, trustEligible: trustEligible, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation, executableShellExpression: executableShellExpression))\r"
+        return "\(invocation(agent: agent, cwd: cwd, trustEligible: trustEligible, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, model: model, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation, executableShellExpression: executableShellExpression))\r"
     }
 
     public static func shellStartupLineForGBrainSetup(
         agent: MarkdownPillAgent,
         cwdShellExpression: String,
         userPrompt: String,
+        model: String? = nil,
         allowTrustedAutomation: Bool = true,
         allowApprovalAutomation: Bool = true,
         executableShellExpression: String? = nil
@@ -269,7 +271,7 @@ public enum MarkdownChatPillCommand {
             markdownFilePath: nil,
             surface: .fallback(typeLabel: "onboarding")
         )
-        return "\(invocation(agent: agent, cwdShellExpression: cwdShellExpression, trustCwd: nil, trustEligible: false, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation, executableShellExpression: executableShellExpression))\r"
+        return "\(invocation(agent: agent, cwdShellExpression: cwdShellExpression, trustCwd: nil, trustEligible: false, contextPrefix: contextPrefix, prompt: userPrompt, mode: .gbrainSetup, model: model, allowTrustedAutomation: allowTrustedAutomation, allowApprovalAutomation: allowApprovalAutomation, executableShellExpression: executableShellExpression))\r"
     }
 
     @discardableResult
@@ -379,6 +381,7 @@ public enum MarkdownChatPillCommand {
         contextPrefix: String,
         prompt: String,
         mode: InvocationMode = .standard,
+        model: String? = nil,
         allowTrustedAutomation: Bool = true,
         allowApprovalAutomation: Bool = true,
         executableShellExpression: String? = nil
@@ -391,6 +394,7 @@ public enum MarkdownChatPillCommand {
             contextPrefix: contextPrefix,
             prompt: prompt,
             mode: mode,
+            model: model,
             allowTrustedAutomation: allowTrustedAutomation,
             allowApprovalAutomation: allowApprovalAutomation,
             executableShellExpression: executableShellExpression
@@ -405,6 +409,7 @@ public enum MarkdownChatPillCommand {
         contextPrefix: String,
         prompt: String,
         mode: InvocationMode = .standard,
+        model: String? = nil,
         allowTrustedAutomation: Bool = true,
         allowApprovalAutomation: Bool = true,
         executableShellExpression: String? = nil
@@ -422,6 +427,9 @@ public enum MarkdownChatPillCommand {
                 "cd \(cwdShellExpression) && \(executable)",
                 "-C \(cwdShellExpression)"
             ]
+            if let model, !model.isEmpty {
+                parts.append("--model \(shellQuote(model))")
+            }
             // trust 우회는 (a) surface 가 file-bound 이고 (b) cwd 가 안전한
             // 사용자-소유 디렉터리일 때만. `/` 나 home 직속을 silent trusted 처리 금지.
             if trustEligible, let cwd = trustCwd, let trustCwd = safeTrustCwd(cwd) {
@@ -440,7 +448,8 @@ public enum MarkdownChatPillCommand {
         case .claude:
             let executable = executableShellExpression ?? "claude"
             let permissionMode = mode == .gbrainSetup && allowTrustedAutomation ? " --permission-mode auto" : ""
-            return "cd \(cwdShellExpression) && \(executable)\(permissionMode) --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
+            let modelArgument = model.map { $0.isEmpty ? "" : " --model \(shellQuote($0))" } ?? ""
+            return "cd \(cwdShellExpression) && \(executable)\(permissionMode)\(modelArgument) --append-system-prompt \(shellQuote(contextPrefix)) \(shellQuote(promptArgument))"
         case .antigravity:
             let executable = executableShellExpression ?? "agy"
             return "cd \(cwdShellExpression) && \(executable) --prompt-interactive --add-dir \(cwdShellExpression) \(shellQuote(visibleContextPrompt))"

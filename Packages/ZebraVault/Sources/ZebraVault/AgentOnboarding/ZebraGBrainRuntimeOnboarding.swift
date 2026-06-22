@@ -1065,12 +1065,12 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         language = "en"
 
     provider_choices = [
-        {"id": "openai-codex", "label": "OpenAI Codex account login", "env": "", "auth_type": "oauth", "openclaw_provider": "openai", "openclaw_auth": "openai", "hermes_provider": "openai-codex", "hermes_model": "gpt-5.5", "hermes_base_url": "https://chatgpt.com/backend-api/codex", "hermes_base_env": "HERMES_CODEX_BASE_URL", "hermes_api_mode": "codex_responses"},
-        {"id": "anthropic-claude-code", "label": "Anthropic Claude Code account login", "env": "", "auth_type": "oauth", "openclaw_provider": "claude-cli", "openclaw_auth": "anthropic-cli", "hermes_provider": "anthropic", "hermes_model": "claude-opus-4-8", "hermes_base_url": "https://api.anthropic.com", "hermes_base_env": "ANTHROPIC_BASE_URL", "hermes_api_mode": "anthropic_messages"},
-        {"id": "openrouter", "label": "OpenRouter", "env": "OPENROUTER_API_KEY", "auth_type": "api_key", "openclaw_provider": "openrouter", "openclaw_auth": "openrouter-api-key", "hermes_provider": "openrouter", "hermes_model": "google/gemini-3.5-flash", "hermes_base_url": "https://openrouter.ai/api/v1", "hermes_base_env": "OPENROUTER_BASE_URL", "hermes_api_mode": "chat_completions"},
-        {"id": "anthropic-api", "label": "Anthropic API key", "env": "ANTHROPIC_API_KEY", "auth_type": "api_key", "openclaw_provider": "anthropic", "openclaw_auth": "apiKey", "hermes_provider": "anthropic", "hermes_model": "claude-haiku-4-5-20251001", "hermes_base_url": "https://api.anthropic.com", "hermes_base_env": "ANTHROPIC_BASE_URL", "hermes_api_mode": "anthropic_messages"},
-        {"id": "google", "label": "Google Gemini", "env": "GOOGLE_API_KEY", "auth_type": "api_key", "openclaw_provider": "google", "openclaw_auth": "google-api-key", "hermes_provider": "gemini", "hermes_model": "gemini-3.5-flash", "hermes_base_url": "https://generativelanguage.googleapis.com/v1beta", "hermes_base_env": "GEMINI_BASE_URL", "hermes_api_mode": "chat_completions"},
-        {"id": "openai-api", "label": "OpenAI API key", "env": "OPENAI_API_KEY", "auth_type": "api_key", "openclaw_provider": "openai", "openclaw_auth": "openai-api-key", "hermes_provider": "openai-api", "hermes_model": "gpt-5-mini", "hermes_base_url": "https://api.openai.com/v1", "hermes_base_env": "OPENAI_BASE_URL", "hermes_api_mode": "codex_responses"},
+        {"id": "openai-codex", "label": "OpenAI Codex account login", "env": "", "auth_type": "oauth", "openclaw_provider": "openai", "openclaw_auth": "openai", "openclaw_model": "openai/gpt-5.5", "hermes_provider": "openai-codex", "hermes_model": "gpt-5.5", "hermes_base_url": "https://chatgpt.com/backend-api/codex", "hermes_base_env": "HERMES_CODEX_BASE_URL", "hermes_api_mode": "codex_responses"},
+        {"id": "anthropic-claude-code", "label": "Anthropic Claude Code account login", "env": "", "auth_type": "oauth", "openclaw_provider": "claude-cli", "openclaw_auth": "anthropic-cli", "openclaw_model": "anthropic/claude-opus-4-8", "hermes_provider": "anthropic", "hermes_model": "claude-opus-4-8", "hermes_base_url": "https://api.anthropic.com", "hermes_base_env": "ANTHROPIC_BASE_URL", "hermes_api_mode": "anthropic_messages"},
+        {"id": "openrouter", "label": "OpenRouter", "env": "OPENROUTER_API_KEY", "auth_type": "api_key", "openclaw_provider": "openrouter", "openclaw_auth": "openrouter-api-key", "openclaw_model": "", "hermes_provider": "openrouter", "hermes_model": "google/gemini-3.5-flash", "hermes_base_url": "https://openrouter.ai/api/v1", "hermes_base_env": "OPENROUTER_BASE_URL", "hermes_api_mode": "chat_completions"},
+        {"id": "anthropic-api", "label": "Anthropic API key", "env": "ANTHROPIC_API_KEY", "auth_type": "api_key", "openclaw_provider": "anthropic", "openclaw_auth": "apiKey", "openclaw_model": "", "hermes_provider": "anthropic", "hermes_model": "claude-haiku-4-5-20251001", "hermes_base_url": "https://api.anthropic.com", "hermes_base_env": "ANTHROPIC_BASE_URL", "hermes_api_mode": "anthropic_messages"},
+        {"id": "google", "label": "Google Gemini", "env": "GOOGLE_API_KEY", "auth_type": "api_key", "openclaw_provider": "google", "openclaw_auth": "google-api-key", "openclaw_model": "", "hermes_provider": "gemini", "hermes_model": "gemini-3.5-flash", "hermes_base_url": "https://generativelanguage.googleapis.com/v1beta", "hermes_base_env": "GEMINI_BASE_URL", "hermes_api_mode": "chat_completions"},
+        {"id": "openai-api", "label": "OpenAI API key", "env": "OPENAI_API_KEY", "auth_type": "api_key", "openclaw_provider": "openai", "openclaw_auth": "openai-api-key", "openclaw_model": "", "hermes_provider": "openai-api", "hermes_model": "gpt-5-mini", "hermes_base_url": "https://api.openai.com/v1", "hermes_base_env": "OPENAI_BASE_URL", "hermes_api_mode": "codex_responses"},
     ]
 
     def now():
@@ -1462,7 +1462,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "selectedRuntime": runtime,
             "selectedProvider": provider_id,
             "runtimeProvider": provider_id_for_runtime(provider, runtime),
-            "runtimeModel": provider.get("hermes_model") if runtime == "hermes" else "",
+            "runtimeModel": model_id_for_runtime(provider, runtime),
             "credential": non_secret_credential(credential),
             "updatedAt": now(),
         }
@@ -1507,6 +1507,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         if selection.get("selectedRuntime") != runtime:
             return None
         if selection.get("selectedProvider") != provider_id:
+            return None
+        if selection.get("runtimeModel", "") != model_id_for_runtime(provider, runtime):
             return None
         if interactive_auth.get("status") != "completed":
             return None
@@ -1967,6 +1969,11 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             return provider["hermes_provider"]
         return provider["openclaw_provider"]
 
+    def model_id_for_runtime(provider, runtime):
+        if runtime == "hermes":
+            return provider.get("hermes_model", "")
+        return provider.get("openclaw_model", "")
+
     def load_json_object(text):
         try:
             return json.loads(text)
@@ -2395,10 +2402,22 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     def run_openclaw_config(exe, provider, credential):
         if provider.get("id") == "anthropic-claude-code":
-            return run_openclaw_anthropic_cli_setup(exe, provider, credential)
-        if provider.get("id") == "openai-codex":
-            return run_openclaw_openai_codex_setup(exe, provider, credential)
-        return run_openclaw_onboard(exe, provider, credential)
+            result = run_openclaw_anthropic_cli_setup(exe, provider, credential)
+        elif provider.get("id") == "openai-codex":
+            result = run_openclaw_openai_codex_setup(exe, provider, credential)
+        else:
+            result = run_openclaw_onboard(exe, provider, credential)
+        if not result.get("ok") or result.get("requiresInteractiveAuth"):
+            return result
+        openclaw_model = provider.get("openclaw_model", "")
+        if not openclaw_model:
+            return result
+        model_result = run_process([exe, "models", "set", openclaw_model], env=openclaw_env(provider, credential), timeout=60)
+        if not model_result["ok"]:
+            return model_result
+        result["stdout"] = (result.get("stdout", "") + "\\n" + model_result.get("stdout", "")).strip()
+        result["stderr"] = (result.get("stderr", "") + "\\n" + model_result.get("stderr", "")).strip()
+        return result
 
     def verify_hermes_llm_call(exe, provider, credential):
         provider_id = provider_id_for_runtime(provider, "hermes")
@@ -2502,7 +2521,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "version": executable["version"],
             "provider": provider["id"],
             "runtimeProvider": provider_id_for_runtime(provider, runtime),
-            "runtimeModel": provider.get("hermes_model") if runtime == "hermes" else "",
+            "runtimeModel": model_id_for_runtime(provider, runtime),
             "keySource": credential["source"],
             "keyEnvName": credential.get("envName") or "",
             "keyPersistedEnvName": credential.get("persistEnvName") or "",
@@ -2722,7 +2741,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "selectedRuntime": runtime,
             "selectedProvider": provider_id,
             "runtimeProvider": provider_id_for_runtime(provider, runtime),
-            "runtimeModel": provider.get("hermes_model") if runtime == "hermes" else "",
+            "runtimeModel": model_id_for_runtime(provider, runtime),
             "credential": non_secret_credential(credential),
             "updatedAt": now(),
         }
@@ -2769,7 +2788,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             "selectedRuntime": runtime,
             "selectedProvider": provider_id,
             "runtimeProvider": provider_id_for_runtime(provider, runtime),
-            "runtimeModel": provider.get("hermes_model") if runtime == "hermes" else "",
+            "runtimeModel": model_id_for_runtime(provider, runtime),
             "credential": non_secret_credential(credential),
             "updatedAt": now(),
         }

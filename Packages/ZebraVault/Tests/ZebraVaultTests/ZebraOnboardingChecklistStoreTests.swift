@@ -1552,7 +1552,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                     "selectedRuntime": "openclaw",
                     "selectedProvider": "anthropic-claude-code",
                     "runtimeProvider": "claude-cli",
-                    "runtimeModel": "",
+                    "runtimeModel": "anthropic/claude-opus-4-8",
                     "credential": ["source": "agent-cli:claude-auth-status"],
                     "updatedAt": "2026-06-17T00:00:00Z",
                 ],
@@ -1647,7 +1647,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                     "selectedRuntime": "openclaw",
                     "selectedProvider": "anthropic-claude-code",
                     "runtimeProvider": "claude-cli",
-                    "runtimeModel": "",
+                    "runtimeModel": "anthropic/claude-opus-4-8",
                     "credential": ["source": "agent-cli:claude-auth-status"],
                     "updatedAt": "2026-06-17T00:00:00Z",
                 ],
@@ -1931,6 +1931,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
+        XCTAssertTrue(logText.contains("models set openai/gpt-5.5"))
         XCTAssertFalse(logText.contains("onboard --non-interactive"))
         XCTAssertFalse(logText.contains("--auth-choice openai-codex"))
 
@@ -1940,6 +1941,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "openai/gpt-5.5")
         XCTAssertEqual(receipt["keySource"] as? String, "openai-codex:oauth")
     }
 
@@ -1981,6 +1983,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models status --json --probe-provider openai"))
+        XCTAssertTrue(logText.contains("models set openai/gpt-5.5"))
         XCTAssertFalse(logText.contains("models auth login --provider openai"))
 
         let state = try XCTUnwrap(
@@ -1989,6 +1992,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "openai/gpt-5.5")
         XCTAssertEqual(receipt["keySource"] as? String, "openai-codex:oauth")
     }
 
@@ -2034,6 +2038,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
         XCTAssertTrue(logText.contains("models status --json --probe-provider openai"))
+        XCTAssertTrue(logText.contains("models set openai/gpt-5.5"))
 
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
@@ -2041,6 +2046,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "openai/gpt-5.5")
         XCTAssertEqual(receipt["keySource"] as? String, "openai-codex:oauth")
     }
 
@@ -2085,6 +2091,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
+        XCTAssertTrue(logText.contains("models set openai/gpt-5.5"))
         XCTAssertFalse(logText.contains("env OPENAI_API_KEY"))
         XCTAssertFalse(logText.contains("env CODEX_API_KEY"))
     }
@@ -2133,6 +2140,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         let openClawLogText = try String(contentsOf: openClawLog, encoding: .utf8)
         XCTAssertTrue(openClawLogText.contains("models auth login --provider anthropic --method cli --set-default"))
+        XCTAssertTrue(openClawLogText.contains("models set anthropic/claude-opus-4-8"))
         XCTAssertFalse(openClawLogText.contains("onboard --non-interactive"))
         XCTAssertFalse(openClawLogText.contains("--auth-choice anthropic-cli"))
         let claudeLogText = try String(contentsOf: claudeLog, encoding: .utf8)
@@ -2145,6 +2153,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "anthropic-claude-code")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "claude-cli")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "anthropic/claude-opus-4-8")
         XCTAssertEqual(receipt["keySource"] as? String, "agent-cli:claude-auth-status")
     }
 
@@ -2191,6 +2200,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         let openClawLogText = try String(contentsOf: openClawLog, encoding: .utf8)
         XCTAssertTrue(openClawLogText.contains("models status --json --probe-provider claude-cli"))
+        XCTAssertTrue(openClawLogText.contains("models set anthropic/claude-opus-4-8"))
         XCTAssertFalse(openClawLogText.contains("models auth login --provider anthropic"))
 
         let state = try XCTUnwrap(
@@ -2199,6 +2209,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "anthropic-claude-code")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "claude-cli")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "anthropic/claude-opus-4-8")
         XCTAssertEqual(receipt["keySource"] as? String, "agent-cli:claude-auth-status")
     }
 
@@ -3426,6 +3437,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             sleep 60
             exit 0
           fi
+          exit 0
+        fi
+        if [ "$1" = "models" ] && [ "$2" = "set" ]; then
           exit 0
         fi
         if [ "$1" = "models" ] && [ "$2" = "status" ]; then

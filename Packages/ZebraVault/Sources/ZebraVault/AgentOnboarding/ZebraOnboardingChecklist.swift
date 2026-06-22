@@ -1033,6 +1033,7 @@ public enum ZebraOnboardingChecklistCommand {
                 agent: agent,
                 cwd: cwd,
                 userPrompt: localizedPrompt,
+                model: gbrainRuntimePrimaryAgentModel(agent),
                 allowTrustedAutomation: true,
                 allowLaunchDirectoryTrust: true,
                 allowApprovalAutomation: true,
@@ -1051,6 +1052,17 @@ public enum ZebraOnboardingChecklistCommand {
             return startupLine
         }
         return "\(shellEnvironmentPrefix)\(startupLine)"
+    }
+
+    private static func gbrainRuntimePrimaryAgentModel(_ agent: MarkdownPillAgent) -> String? {
+        switch agent {
+        case .codex:
+            return "gpt-5.5"
+        case .claude:
+            return "opus"
+        case .antigravity:
+            return nil
+        }
     }
 
     private static func launchDirectory(selectedVaultPath: String?) -> String {

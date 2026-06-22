@@ -80,7 +80,22 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(line.contains("--ask-for-approval on-request"))
         XCTAssertTrue(line.contains("'approvals_reviewer=\"auto_review\"'"))
         XCTAssertTrue(line.contains("'projects.\"\(cwd.path)\".trust_level=\"trusted\"'"))
+        XCTAssertFalse(line.contains("--model"))
         XCTAssertFalse(line.contains("\r\r"))
+    }
+
+    func testGBrainCodexLaunchCanCarryExplicitModel() throws {
+        let cwd = try makeTemporaryDirectory()
+
+        let line = MarkdownChatPillCommand.shellStartupLineForGBrainSetup(
+            agent: .codex,
+            cwd: cwd.path,
+            userPrompt: "Set up GBrain",
+            model: "gpt-5.5"
+        )
+
+        XCTAssertTrue(line.contains("cd '\(cwd.path)' && codex"))
+        XCTAssertTrue(line.contains("--model 'gpt-5.5'"))
     }
 
     func testGBrainCodexSetupPersistsAutoReviewConfigAndProjectTrust() throws {
@@ -155,6 +170,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(raw.contains("[projects.\"\(cwd.path)\"]"))
         XCTAssertTrue(raw.contains("trust_level = \"trusted\""))
         XCTAssertFalse(raw.contains("approval_policy"))
+        XCTAssertTrue(line.contains("--model 'gpt-5.5'"))
         XCTAssertTrue(line.contains("--ask-for-approval on-request"))
         XCTAssertTrue(line.contains("'approvals_reviewer=\"auto_review\"'"))
     }
@@ -179,7 +195,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         )
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: configURL.path))
-        XCTAssertTrue(line.contains("claude --permission-mode auto"))
+        XCTAssertTrue(line.contains("claude --permission-mode auto --model 'opus'"))
     }
 
     func testChainedGBrainRuntimeCommandFileUsesInjectedAgentExecutable() throws {
@@ -206,7 +222,9 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(raw.contains("codex)"))
         XCTAssertTrue(raw.contains("antigravity)"))
         XCTAssertTrue(raw.contains("\"$ZEBRA_AGENT_EXECUTABLE\" --permission-mode auto"))
+        XCTAssertTrue(raw.contains("\"$ZEBRA_AGENT_EXECUTABLE\" --permission-mode auto --model 'opus'"))
         XCTAssertTrue(raw.contains("\"$ZEBRA_AGENT_EXECUTABLE\" -C '\(cwd.path)'"))
+        XCTAssertTrue(raw.contains("\"$ZEBRA_AGENT_EXECUTABLE\" -C '\(cwd.path)' --model 'gpt-5.5'"))
         XCTAssertTrue(raw.contains("\"$ZEBRA_AGENT_EXECUTABLE\" --prompt-interactive"))
         XCTAssertFalse(raw.contains("\r"))
         XCTAssertEqual(try octalPermissions(atPath: commandFileURL.path), 0o600)
@@ -235,6 +253,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: configURL.path))
         XCTAssertTrue(line.contains("\"$ZEBRA_AGENT_EXECUTABLE\" -C '\(cwd.path)'"))
+        XCTAssertTrue(line.contains("--model 'gpt-5.5'"))
         XCTAssertTrue(line.contains("--ask-for-approval on-request"))
         XCTAssertTrue(line.contains("'approvals_reviewer=\"auto_review\"'"))
         XCTAssertTrue(line.contains("'projects.\"\(cwd.path)\".trust_level=\"trusted\"'"))
@@ -288,6 +307,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(line.contains("--ask-for-approval on-request"))
         XCTAssertTrue(line.contains("'approvals_reviewer=\"auto_review\"'"))
         XCTAssertFalse(line.contains("trust_level=\"trusted\""))
+        XCTAssertFalse(line.contains("--model"))
         XCTAssertFalse(line.contains("\r\r"))
     }
 
@@ -308,6 +328,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(line.contains("--ask-for-approval on-request"))
         XCTAssertTrue(line.contains("'approvals_reviewer=\"auto_review\"'"))
         XCTAssertTrue(line.contains("'projects.\"\(cwd.path)\".trust_level=\"trusted\"'"))
+        XCTAssertFalse(line.contains("--model"))
         XCTAssertFalse(line.contains("\r\r"))
     }
 
@@ -322,7 +343,21 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
 
         XCTAssertTrue(line.contains("cd '\(cwd.path)' && claude --permission-mode auto --append-system-prompt"))
         XCTAssertTrue(line.contains("'Set up GBrain'"))
+        XCTAssertFalse(line.contains("--model"))
         XCTAssertFalse(line.contains("\r\r"))
+    }
+
+    func testGBrainClaudeLaunchCanCarryExplicitModel() throws {
+        let cwd = try makeTemporaryDirectory()
+
+        let line = MarkdownChatPillCommand.shellStartupLineForGBrainSetup(
+            agent: .claude,
+            cwd: cwd.path,
+            userPrompt: "Set up GBrain",
+            model: "opus"
+        )
+
+        XCTAssertTrue(line.contains("cd '\(cwd.path)' && claude --permission-mode auto --model 'opus' --append-system-prompt"))
     }
 
     func testGBrainClaudeLaunchWithoutSelectedVaultDisablesAutoPermission() throws {
