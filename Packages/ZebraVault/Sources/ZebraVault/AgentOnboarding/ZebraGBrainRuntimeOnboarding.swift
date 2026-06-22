@@ -290,7 +290,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         \(helperPath) status --json
         \(helperPath) preflight --json
 
-        Follow the document exactly. Use `zebra-gbrain-runtime-onboarding report` before and after each section. Do not run a legacy interactive setup flow, do not prepare the GBrain source repo in Step 2, and do not invent install commands outside the helper contract.
+        Follow the document exactly. Use `zebra-gbrain-runtime-onboarding report` before and after each section. Do not run a legacy interactive setup flow, do not prepare the GBrain source repo in Step 2, and do not invent install commands outside the helper contract. If status or preflight reports `clt_install_required`, explain that macOS Command Line Tools must be installed and that a macOS installer prompt will open, then run `zebra-gbrain-runtime-onboarding recover-prerequisite clt`.
         """
     }
 
@@ -439,6 +439,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     ### 1. Baseline preflight
 
     가장 먼저 preflight를 실행한다. Preflight는 넓게 감지하되 아무것도 설치하지 않는다.
+    Command Line Tools 또는 `python3`가 없더라도 preflight/status 단계에서는
+    `xcode-select --install`을 실행하지 않는다.
 
     Preflight fact에는 다음을 포함한다:
 
@@ -497,14 +499,22 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     Python은 설치하지 않는다.
 
-    Command Line Tools가 없으면 다음을 trigger한다:
+    Command Line Tools가 없으면 먼저 사용자에게 다음 내용을 설명한다:
+
+    ```text
+    이제 macOS Command Line Tools가 필요합니다.
+    설치 창이 열리면 설치를 눌러주세요.
+    ```
+
+    그 다음에만 다음을 trigger한다:
 
     ```bash
     xcode-select --install
     ```
 
     이 작업은 recoverable이지만 blocking이다. 사용자가 macOS installer UI를 완료해야
-    하기 때문이다. `blockingReason: clt_install_required`를 기록한다.
+    하기 때문이다. `blockingReason: clt_install_required`를 기록한다. 이 명령은
+    `recover-prerequisite clt`에서만 실행한다.
 
     `bun`이 없으면 official Bun installer를 사용한다:
 
@@ -683,7 +693,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     Step 3는 GBrain source repo clone/reuse와 docs snapshot을 위해 `git`이 필요하다.
 
-    Command Line Tools 또는 usable `git`이 없으면 다음을 trigger한다:
+    Command Line Tools 또는 usable `git`이 없으면 먼저 사용자에게 macOS Command Line
+    Tools 설치 창이 열릴 것이고 설치를 승인해야 한다고 설명한 뒤 다음을 trigger한다:
 
     ```bash
     xcode-select --install
@@ -897,13 +908,22 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     print_shell_python_blocked_status() {
       reason="${1:-python3_missing}"
+      next_command="${2:-recover-prerequisite clt}"
+      case "${ZEBRA_ONBOARDING_LANGUAGE:-en}" in
+        ko*) user_message="이제 macOS Command Line Tools가 필요합니다. 설치 창이 열리면 설치를 눌러주세요." ;;
+        ja*) user_message="macOS Command Line Toolsが必要です。インストーラ画面が開いたらインストールを押してください。" ;;
+        *) user_message="macOS Command Line Tools are required. When the installer prompt opens, click Install." ;;
+      esac
       printf '{\n'
       printf '  "ok": false,\n'
       printf '  "statePath": "%s",\n' "$STATE"
       printf '  "blockingReason": "%s",\n' "$reason"
+      printf '  "nextRecommendedCommand": "%s",\n' "$next_command"
+      printf '  "userMessage": "%s",\n' "$user_message"
       printf '  "next": [\n'
-      printf '    "Install macOS Command Line Tools so /usr/bin/python3 can run.",\n'
-      printf '    "Then rerun Zebra Step 2 runtime setup."\n'
+      printf '    "Explain that macOS Command Line Tools are required and that an installer prompt will open.",\n'
+      printf '    "Run zebra-gbrain-runtime-onboarding recover-prerequisite clt.",\n'
+      printf '    "After the user completes the installer, rerun Zebra Step 2 runtime setup."\n'
       printf '  ]\n'
       printf '}\n'
     }
@@ -911,6 +931,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     request_shell_clt_install() {
       XCODE_SELECT_BIN="$(command -v xcode-select || printf '/usr/bin/xcode-select')"
       if "$XCODE_SELECT_BIN" --install >/dev/null 2>&1; then
+        foreground_shell_clt_installer
         write_shell_python_blocked_state "clt_install_required" "waiting_for_user" "xcode-select --install" "0" "1"
         printf '{\n  "ok": false,\n  "requiresUserAction": true,\n  "blockingReason": "clt_install_required",\n  "statePath": "%s"\n}\n' "$STATE"
         return 0
@@ -921,6 +942,32 @@ public struct ZebraGBrainRuntimeOnboardingStore {
       printf '{\n  "ok": false,\n  "requiresUserAction": true,\n  "blockingReason": "clt_manual_install_required",\n  "statePath": "%s"\n}\n' "$STATE"
       echo "xcode-select --install could not request Command Line Tools. Install CLT manually, then rerun Step 2." >&2
       return 1
+    }
+
+    foreground_shell_clt_installer() {
+      OSASCRIPT_BIN="$(command -v osascript || true)"
+      if [ -z "$OSASCRIPT_BIN" ]; then
+        return 0
+      fi
+
+      PGREP_BIN="$(command -v pgrep || true)"
+      if [ -n "$PGREP_BIN" ]; then
+        attempts="${ZEBRA_CLT_INSTALLER_FOREGROUND_ATTEMPTS:-10}"
+        sleep_seconds="${ZEBRA_CLT_INSTALLER_FOREGROUND_SLEEP:-0.2}"
+        i=0
+        while [ "$i" -lt "$attempts" ]; do
+          if "$PGREP_BIN" -f 'com.apple.dt.CommandLineTools.installondemand|Install Command Line Developer Tools|CommandLineTools' >/dev/null 2>&1; then
+            break
+          fi
+          sleep "$sleep_seconds" 2>/dev/null || sleep 1
+          i=$((i + 1))
+        done
+      fi
+
+      "$OSASCRIPT_BIN" -e 'tell application id "com.apple.dt.CommandLineTools.installondemand" to activate' >/dev/null 2>&1 \
+        || "$OSASCRIPT_BIN" -e 'tell application "Install Command Line Developer Tools" to activate' >/dev/null 2>&1 \
+        || true
+      return 0
     }
 
     PYTHON_BIN="$(command -v python3 || true)"
@@ -953,8 +1000,9 @@ public struct ZebraGBrainRuntimeOnboardingStore {
           exit 0
           ;;
         run|status|preflight|"")
-          request_shell_clt_install
-          exit "$?"
+          write_shell_python_blocked_state "clt_install_required" "failed" "" "" ""
+          print_shell_python_blocked_status "clt_install_required" "recover-prerequisite clt"
+          exit 0
           ;;
         *)
           write_shell_python_blocked_state "$PYTHON_BLOCK_REASON" "failed" "" "" ""
@@ -1312,6 +1360,36 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             }
         except Exception as exc:
             return {"ok": False, "code": -1, "stdout": "", "stderr": str(exc)}
+
+    def foreground_clt_installer():
+        osascript = shutil.which("osascript")
+        if not osascript:
+            return
+        pgrep = shutil.which("pgrep")
+        if pgrep:
+            try:
+                attempts = int(os.environ.get("ZEBRA_CLT_INSTALLER_FOREGROUND_ATTEMPTS", "10"))
+            except ValueError:
+                attempts = 10
+            try:
+                sleep_seconds = float(os.environ.get("ZEBRA_CLT_INSTALLER_FOREGROUND_SLEEP", "0.2"))
+            except ValueError:
+                sleep_seconds = 0.2
+            pattern = "com.apple.dt.CommandLineTools.installondemand|Install Command Line Developer Tools|CommandLineTools"
+            for _ in range(max(0, attempts)):
+                if run_process([pgrep, "-f", pattern], timeout=2).get("ok"):
+                    break
+                time.sleep(max(0.0, sleep_seconds))
+
+        result = run_process(
+            [osascript, "-e", 'tell application id "com.apple.dt.CommandLineTools.installondemand" to activate'],
+            timeout=5,
+        )
+        if not result.get("ok"):
+            run_process(
+                [osascript, "-e", 'tell application "Install Command Line Developer Tools" to activate'],
+                timeout=5,
+            )
 
     def has_interactive_tty():
         if os.environ.get("ZEBRA_GBRAIN_RUNTIME_ASSUME_TTY", "").strip() == "1":
@@ -2502,6 +2580,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     def recover_prerequisite(name):
         if name == "clt":
             result = run_process(["xcode-select", "--install"], timeout=30)
+            if result["ok"]:
+                foreground_clt_installer()
             blocking = "clt_install_required"
             record_attempt("recover-prerequisite:clt", "xcode-select --install", result, recoverable=True, blocking_reason=blocking)
             state = load_state()

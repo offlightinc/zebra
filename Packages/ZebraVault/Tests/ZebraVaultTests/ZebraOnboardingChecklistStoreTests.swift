@@ -770,18 +770,20 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(result.stdout.contains("Select LLM connection"))
     }
 
-    func testRuntimeHelperRequestsCLTInstallWhenPython3IsMissing() throws {
+    func testRuntimeHelperPreflightReportsCLTRequiredWithoutRequestingInstallWhenPython3IsMissing() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
         let noPythonBin = root.appendingPathComponent("no-python-bin", isDirectory: true)
+        let xcodeSelectCallLog = root.appendingPathComponent("xcode-select-called", isDirectory: false)
         try FileManager.default.createDirectory(at: noPythonBin, withIntermediateDirectories: true)
         try installFakeCommand(
             directory: noPythonBin,
             name: "xcode-select",
             content: """
             #!/bin/sh
+            echo "$*" >> '\(xcodeSelectCallLog.path)'
             exit 0
             """
         )
@@ -806,34 +808,38 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertEqual(payload["ok"] as? Bool, false)
-        XCTAssertEqual(payload["requiresUserAction"] as? Bool, true)
         XCTAssertEqual(payload["blockingReason"] as? String, "clt_install_required")
+        XCTAssertEqual(payload["nextRecommendedCommand"] as? String, "recover-prerequisite clt")
+        XCTAssertTrue((payload["userMessage"] as? String)?.contains("Command Line Tools") == true)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: xcodeSelectCallLog.path),
+            "preflight/status must not trigger xcode-select --install before the agent explains the CLT install prompt."
+        )
 
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
         )
         let progress = try XCTUnwrap(state["progress"] as? [String: Any])
-        let waitingForUser = try XCTUnwrap(progress["waitingForUser"] as? [String: Any])
         let lastFailure = try XCTUnwrap(progress["lastFailure"] as? [String: Any])
-        let attempts = try XCTUnwrap(state["attempts"] as? [[String: Any]])
         let preflight = try XCTUnwrap(state["preflight"] as? [String: Any])
         let facts = try XCTUnwrap(preflight["facts"] as? [String: Any])
         let python3 = try XCTUnwrap(facts["python3"] as? [String: Any])
 
-        XCTAssertEqual(progress["status"] as? String, "waiting_for_user")
-        XCTAssertEqual(waitingForUser["section"] as? String, "Recover common prerequisites")
+        XCTAssertEqual(progress["status"] as? String, "failed")
+        XCTAssertNil(progress["waitingForUser"])
         XCTAssertEqual(lastFailure["reason"] as? String, "clt_install_required")
-        XCTAssertEqual(attempts.first?["attemptedCommand"] as? String, "xcode-select --install")
+        XCTAssertNil(state["attempts"])
         XCTAssertEqual(python3["blockingNow"] as? Bool, true)
         XCTAssertEqual(python3["blockingReason"] as? String, "clt_install_required")
     }
 
-    func testRuntimeHelperRequestsManualCLTInstallWhenPython3IsUnusableCLTShim() throws {
+    func testRuntimeHelperPreflightDoesNotRequestManualCLTInstallWhenPython3IsUnusableCLTShim() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
         let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let xcodeSelectCallLog = root.appendingPathComponent("xcode-select-called", isDirectory: false)
         try installFakeCommand(
             directory: fakeBin,
             name: "python3",
@@ -848,6 +854,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             name: "xcode-select",
             content: """
             #!/bin/sh
+            echo "$*" >> '\(xcodeSelectCallLog.path)'
             echo 'xcode-select: error: No developer tools were found and no install could be requested' >&2
             exit 1
             """
@@ -867,25 +874,194 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
             ]
         )
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+        )
 
-        XCTAssertNotEqual(result.status, 0)
-        XCTAssertTrue(result.stdout.contains("clt_manual_install_required"))
-        XCTAssertTrue(result.stderr.contains("Install CLT manually"))
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["blockingReason"] as? String, "clt_install_required")
+        XCTAssertEqual(payload["nextRecommendedCommand"] as? String, "recover-prerequisite clt")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: xcodeSelectCallLog.path),
+            "preflight/status must not try xcode-select even when python3 is the CLT shim."
+        )
 
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
         )
         let progress = try XCTUnwrap(state["progress"] as? [String: Any])
         let lastFailure = try XCTUnwrap(progress["lastFailure"] as? [String: Any])
-        let attempts = try XCTUnwrap(state["attempts"] as? [[String: Any]])
         let preflight = try XCTUnwrap(state["preflight"] as? [String: Any])
         let facts = try XCTUnwrap(preflight["facts"] as? [String: Any])
         let python3 = try XCTUnwrap(facts["python3"] as? [String: Any])
 
-        XCTAssertEqual(lastFailure["reason"] as? String, "clt_manual_install_required")
-        XCTAssertEqual(attempts.first?["attemptedCommand"] as? String, "xcode-select --install")
+        XCTAssertEqual(progress["status"] as? String, "failed")
+        XCTAssertNil(progress["waitingForUser"])
+        XCTAssertEqual(lastFailure["reason"] as? String, "clt_install_required")
+        XCTAssertNil(state["attempts"])
         XCTAssertEqual(python3["present"] as? Bool, true)
-        XCTAssertEqual(python3["blockingReason"] as? String, "clt_manual_install_required")
+        XCTAssertEqual(python3["blockingReason"] as? String, "clt_install_required")
+    }
+
+    func testRuntimeHelperCLTRecoveryRequestsInstallWithoutUsablePython() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let xcodeSelectCallLog = root.appendingPathComponent("xcode-select-called", isDirectory: false)
+        let pgrepCallLog = root.appendingPathComponent("pgrep-called", isDirectory: false)
+        let osascriptCallLog = root.appendingPathComponent("osascript-called", isDirectory: false)
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "xcode-select",
+            content: """
+            #!/bin/sh
+            echo "$*" >> '\(xcodeSelectCallLog.path)'
+            exit 0
+            """
+        )
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "pgrep",
+            content: """
+            #!/bin/sh
+            echo "$*" >> '\(pgrepCallLog.path)'
+            exit 0
+            """
+        )
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "osascript",
+            content: """
+            #!/bin/sh
+            echo "$*" >> '\(osascriptCallLog.path)'
+            exit 0
+            """
+        )
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["recover-prerequisite", "clt"],
+            environment: [
+                "PATH": fakeBin.path,
+                "ZEBRA_CLT_INSTALLER_FOREGROUND_ATTEMPTS": "1",
+                "ZEBRA_CLT_INSTALLER_FOREGROUND_SLEEP": "0",
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            ]
+        )
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["requiresUserAction"] as? Bool, true)
+        XCTAssertEqual(payload["blockingReason"] as? String, "clt_install_required")
+        XCTAssertEqual(
+            try String(contentsOf: xcodeSelectCallLog, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+            "--install"
+        )
+        XCTAssertTrue(
+            try String(contentsOf: pgrepCallLog, encoding: .utf8).contains("com.apple.dt.CommandLineTools.installondemand")
+        )
+        XCTAssertEqual(
+            try String(contentsOf: osascriptCallLog, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+            "-e tell application id \"com.apple.dt.CommandLineTools.installondemand\" to activate"
+        )
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let waitingForUser = try XCTUnwrap(progress["waitingForUser"] as? [String: Any])
+        let lastFailure = try XCTUnwrap(progress["lastFailure"] as? [String: Any])
+        let attempts = try XCTUnwrap(state["attempts"] as? [[String: Any]])
+
+        XCTAssertEqual(progress["status"] as? String, "waiting_for_user")
+        XCTAssertEqual(waitingForUser["section"] as? String, "Recover common prerequisites")
+        XCTAssertEqual(lastFailure["reason"] as? String, "clt_install_required")
+        XCTAssertEqual(attempts.first?["attemptedCommand"] as? String, "xcode-select --install")
+    }
+
+    func testRuntimeHelperCLTRecoveryForegroundsInstallerWithUsablePython() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let xcodeSelectCallLog = root.appendingPathComponent("xcode-select-called", isDirectory: false)
+        let pgrepCallLog = root.appendingPathComponent("pgrep-called", isDirectory: false)
+        let osascriptCallLog = root.appendingPathComponent("osascript-called", isDirectory: false)
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "xcode-select",
+            content: """
+            #!/bin/sh
+            echo "$*" >> '\(xcodeSelectCallLog.path)'
+            exit 0
+            """
+        )
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "pgrep",
+            content: """
+            #!/bin/sh
+            echo "$*" >> '\(pgrepCallLog.path)'
+            exit 0
+            """
+        )
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "osascript",
+            content: """
+            #!/bin/sh
+            echo "$*" >> '\(osascriptCallLog.path)'
+            exit 0
+            """
+        )
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["recover-prerequisite", "clt"],
+            environment: [
+                "PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "ZEBRA_CLT_INSTALLER_FOREGROUND_ATTEMPTS": "1",
+                "ZEBRA_CLT_INSTALLER_FOREGROUND_SLEEP": "0",
+                "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            ]
+        )
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(payload["blockingReason"] as? String, "clt_install_required")
+        XCTAssertEqual(
+            try String(contentsOf: xcodeSelectCallLog, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+            "--install"
+        )
+        XCTAssertTrue(
+            try String(contentsOf: pgrepCallLog, encoding: .utf8).contains("com.apple.dt.CommandLineTools.installondemand")
+        )
+        XCTAssertEqual(
+            try String(contentsOf: osascriptCallLog, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+            "-e tell application id \"com.apple.dt.CommandLineTools.installondemand\" to activate"
+        )
     }
 
     func testRuntimeHelperCLTRecoveryWritesStateWithoutUsablePython() throws {

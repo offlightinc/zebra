@@ -113,6 +113,8 @@ zebra-gbrain-runtime-onboarding report --status completed --section "Baseline pr
 ### 1. Baseline preflight
 
 가장 먼저 preflight를 실행한다. Preflight는 넓게 감지하되 아무것도 설치하지 않는다.
+Command Line Tools 또는 `python3`가 없더라도 preflight/status 단계에서는
+`xcode-select --install`을 실행하지 않는다.
 
 Preflight fact에는 다음을 포함한다:
 
@@ -171,14 +173,22 @@ Agent는 선택되지 않은 runtime의 dependency를 설치하지 않는다.
 
 Python은 설치하지 않는다.
 
-Command Line Tools가 없으면 다음을 trigger한다:
+Command Line Tools가 없으면 먼저 사용자에게 다음 내용을 설명한다:
+
+```text
+이제 macOS Command Line Tools가 필요합니다.
+설치 창이 열리면 설치를 눌러주세요.
+```
+
+그 다음에만 다음을 trigger한다:
 
 ```bash
 xcode-select --install
 ```
 
 이 작업은 recoverable이지만 blocking이다. 사용자가 macOS installer UI를 완료해야
-하기 때문이다. `blockingReason: clt_install_required`를 기록한다.
+하기 때문이다. `blockingReason: clt_install_required`를 기록한다. 이 명령은
+`recover-prerequisite clt`에서만 실행한다.
 
 `bun`이 없으면 official Bun installer를 사용한다:
 
@@ -357,7 +367,8 @@ flow에서 curl을 따로 설치하지 않는다.
 
 Step 3는 GBrain source repo clone/reuse와 docs snapshot을 위해 `git`이 필요하다.
 
-Command Line Tools 또는 usable `git`이 없으면 다음을 trigger한다:
+Command Line Tools 또는 usable `git`이 없으면 먼저 사용자에게 macOS Command Line
+Tools 설치 창이 열릴 것이고 설치를 승인해야 한다고 설명한 뒤 다음을 trigger한다:
 
 ```bash
 xcode-select --install
