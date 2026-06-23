@@ -105,21 +105,21 @@ enum ZebraOnboardingLanguage: String, Equatable {
         switch self {
         case .en:
             return """
-            1. Open https://app.clawvisor.com/login and sign up or sign in with Google.
+            1. Open https://app.clawvisor.com/register and sign up or sign in with Google.
             2. In Clawvisor, use the left sidebar to open Agents, choose GBrain, and click Create GBrain agent.
             3. Continue through Google service authorization and task approval.
             4. When Clawvisor reaches the final Env vars step, paste the three exported env lines into this terminal.
             """
         case .ja:
             return """
-            1. https://app.clawvisor.com/login を開き、Googleでsign upまたはsign inしてください。
+            1. https://app.clawvisor.com/register を開き、Googleでsign upまたはsign inしてください。
             2. Clawvisorで左sidebarのAgentsを開き、GBrainを選択してCreate GBrain agentをクリックしてください。
             3. Google service authorizationとtask approvalを続けて完了してください。
             4. 最後のEnv vars stepに到達したら、3行のexport env linesをこのターミナルに貼り付けてください。
             """
         case .ko:
             return """
-            1. https://app.clawvisor.com/login 을 열고 Google로 sign up 또는 sign in 하세요.
+            1. https://app.clawvisor.com/register 을 열고 Google로 sign up 또는 sign in 하세요.
             2. Clawvisor에서 왼쪽 sidebar의 Agents를 열고 GBrain을 선택한 뒤 Create GBrain agent를 클릭하세요.
             3. Google service authorization과 task approval을 이어서 진행하세요.
             4. 마지막 Env vars step에 도달하면 세 줄의 export env lines를 이 터미널에 그대로 붙여넣으세요.

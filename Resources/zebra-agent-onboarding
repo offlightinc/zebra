@@ -206,7 +206,8 @@ msg_en() {
     install_claude_skip_brew) printf 'brew was not found. Skipping Homebrew fallback.\n' "$@" ;;
     install_claude_brew_failed) printf 'Claude Code Homebrew install did not complete.\n' "$@" ;;
     install_claude_need_node) printf 'Claude Code install fallbacks did not complete. Zebra will install Node.js/npm with the official macOS pkg, then retry npm install.\n' "$@" ;;
-    install_claude_node_opened) printf 'Node.js installer opened. Complete the installer, then return to this terminal and press Return.' "$@" ;;
+    install_claude_node_opened) printf 'Node.js installer opened. Complete the installer, then return to this terminal and press Enter.' "$@" ;;
+    install_claude_node_checking) printf 'Checking Node.js/npm...\n' "$@" ;;
     install_claude_node_verified) printf 'Node.js/npm verified. Retrying Claude Code npm install...\n' "$@" ;;
     install_claude_node_failed) printf 'Zebra could not verify Node.js/npm after the installer.\n' "$@" ;;
     install_npm_prefix_configuring) printf 'npm global install location is not writable. Zebra will use ~/.local for npm global installs...\n' "$@" ;;
@@ -302,7 +303,8 @@ msg_ko() {
     install_claude_skip_brew) printf 'brew를 찾지 못했습니다. Homebrew fallback을 건너뜁니다.\n' "$@" ;;
     install_claude_brew_failed) printf 'Claude Code Homebrew install이 완료되지 않았습니다.\n' "$@" ;;
     install_claude_need_node) printf 'Claude Code install fallback이 모두 완료되지 않았습니다. Zebra가 공식 Node.js macOS installer로 Node.js/npm을 설치한 뒤 npm install을 재시도합니다.\n' "$@" ;;
-    install_claude_node_opened) printf 'Node.js installer가 열렸습니다. 설치를 완료한 뒤 이 터미널로 돌아와 Return을 누르세요.' "$@" ;;
+    install_claude_node_opened) printf 'Node.js installer가 열렸습니다. 설치를 완료한 뒤 이 터미널로 돌아와 Enter 키를 누르세요.' "$@" ;;
+    install_claude_node_checking) printf 'Node.js/npm을 확인하는 중입니다...\n' "$@" ;;
     install_claude_node_verified) printf 'Node.js/npm을 확인했습니다. Claude Code npm install을 다시 시도합니다...\n' "$@" ;;
     install_claude_node_failed) printf 'Node.js/npm을 아직 확인하지 못했습니다.\n' "$@" ;;
     install_npm_prefix_configuring) printf 'npm global install 위치가 현재 사용자 권한으로 쓸 수 없습니다. Zebra가 ~/.local을 npm global install 위치로 설정합니다...\n' "$@" ;;
@@ -398,7 +400,8 @@ msg_ja() {
     install_claude_skip_brew) printf 'brewが見つかりません。Homebrew fallbackをスキップします。\n' "$@" ;;
     install_claude_brew_failed) printf 'Claude Code Homebrew installは完了しませんでした。\n' "$@" ;;
     install_claude_need_node) printf 'Claude Code install fallbackはすべて完了しませんでした。Zebraが公式Node.js macOS installerでNode.js/npmをインストールし、npm installを再試行します。\n' "$@" ;;
-    install_claude_node_opened) printf 'Node.js installerが開きました。インストールを完了してから、このターミナルに戻ってReturnを押してください。' "$@" ;;
+    install_claude_node_opened) printf 'Node.js installerが開きました。インストールを完了してから、このターミナルに戻ってEnterキーを押してください。' "$@" ;;
+    install_claude_node_checking) printf 'Node.js/npmを確認しています...\n' "$@" ;;
     install_claude_node_verified) printf 'Node.js/npmを確認しました。Claude Code npm installを再試行します...\n' "$@" ;;
     install_claude_node_failed) printf 'まだNode.js/npmを確認できませんでした。\n' "$@" ;;
     install_npm_prefix_configuring) printf 'npm global install先に現在のユーザーで書き込めません。Zebraが~/.localをnpm global install先に設定します...\n' "$@" ;;
@@ -728,6 +731,7 @@ recover_node_with_official_pkg() {
   msg install_claude_node_opened
   printf '\n'
   read -r _ || true
+  msg install_claude_node_checking
   export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
   command -v node >/dev/null 2>&1 || return 1
   command -v npm >/dev/null 2>&1 || return 1
