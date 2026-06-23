@@ -950,7 +950,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertFalse(prompt.contains("`bun install`, then `bun install -g .`"), prompt)
     }
 
-    func testRuntimeLauncherPromptRequiresKeyPromptBeforeConfigureEmbeddingKey() throws {
+    func testRuntimeLauncherPromptUsesCurrentSectionBodyForEmbeddingKeyStorage() throws {
         let root = try makeTemporaryDirectory()
         let docs = try writeGuardDocs(root: root)
         let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
@@ -995,10 +995,14 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
 
         let prompt = try launcherPrompt(from: launcherResult.stdout)
         XCTAssertTrue(prompt.contains("Zebra GBrain setup: current section is `Step 2: API Keys`."), prompt)
-        XCTAssertTrue(prompt.contains("First report the provider choice with `--embedding-decision provider_key --embedding-provider zeroentropy --embedding-key-env ZEROENTROPY_API_KEY`."), prompt)
-        XCTAssertTrue(prompt.contains("If Zebra rejects with `embedding_key_required`, show the returned `embeddingKeyPrompt` exactly."), prompt)
-        XCTAssertTrue(prompt.contains("Only after the user provides the key, run `zebra-gbrain-onboarding configure-embedding-key --provider zeroentropy`"), prompt)
-        XCTAssertFalse(prompt.contains("If the key is not available, run `zebra-gbrain-onboarding configure-embedding-key --provider zeroentropy`"), prompt)
+        XCTAssertTrue(prompt.contains("Show this exact key prompt next, before reporting the section:"), prompt)
+        XCTAssertTrue(prompt.contains("Enter ZEROENTROPY_API_KEY."), prompt)
+        XCTAssertTrue(prompt.contains("After the user provides the key, configure it using the saving instructions already present in this prompt's `INSTALL_FOR_AGENTS.md section body`."), prompt)
+        XCTAssertTrue(prompt.contains("Do not reread files or open separate docs for those instructions."), prompt)
+        XCTAssertTrue(prompt.contains("Then report this section with `--embedding-decision provider_key --embedding-provider zeroentropy --embedding-key-env ZEROENTROPY_API_KEY`."), prompt)
+        XCTAssertTrue(prompt.contains("Never write API key values to Zebra state, progress, report flags, logs, or summaries."), prompt)
+        XCTAssertTrue(prompt.contains("Zebra state records only provider metadata."), prompt)
+        XCTAssertFalse(prompt.contains("configure-embedding-key"), prompt)
     }
 
     func testWriteRuntimeLauncherMovesOpenClawPromptIntoLauncherScript() throws {
@@ -3760,7 +3764,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(decision["decision"] as? String, "provider_key")
         XCTAssertEqual(decision["provider"] as? String, "zeroentropy")
         XCTAssertEqual(decision["keyEnvName"] as? String, "ZEROENTROPY_API_KEY")
-        XCTAssertEqual(decision["keySource"] as? String, "env:ZEROENTROPY_API_KEY")
+        XCTAssertNil(decision["keySource"])
         XCTAssertNil(decision["apiKey"])
         XCTAssertNil(decision["key"])
         XCTAssertFalse(try String(contentsOf: stateURL, encoding: .utf8).contains("ambient-zeroentropy-key"))
@@ -3798,7 +3802,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(prompt.contains("4. defer embeddings"), prompt)
     }
 
-    func testReportRequiresSelectedEmbeddingProviderKeyWhenMissing() throws {
+    func testReportCompletesSelectedEmbeddingProviderWithoutKeySource() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
         let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: root.appendingPathComponent("brain").path)
@@ -3823,19 +3827,18 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 "--embedding-key-env", "OPENAI_API_KEY",
             ]
         )
-        let payload = try helperPayload(result.stdout)
-        let keyPrompt = try XCTUnwrap(payload["embeddingKeyPrompt"] as? String)
+        let progress = try progressObject(in: stateURL)
+        let decision = try XCTUnwrap(progress["embeddingDecision"] as? [String: Any])
 
-        XCTAssertNotEqual(result.exitCode, 0)
-        XCTAssertEqual(payload["reason"] as? String, "embedding_key_required")
-        XCTAssertEqual(payload["embeddingProvider"] as? String, "openai")
-        XCTAssertEqual(payload["embeddingKeyEnvName"] as? String, "OPENAI_API_KEY")
-        XCTAssertTrue(keyPrompt.contains("Enter OPENAI_API_KEY."), keyPrompt)
-        XCTAssertTrue(keyPrompt.contains("https://platform.openai.com/api-keys"), keyPrompt)
-        XCTAssertFalse(keyPrompt.contains("environment"), keyPrompt)
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertEqual(decision["decision"] as? String, "provider_key")
+        XCTAssertEqual(decision["provider"] as? String, "openai")
+        XCTAssertEqual(decision["keyEnvName"] as? String, "OPENAI_API_KEY")
+        XCTAssertNil(decision["keySource"])
+        XCTAssertTrue((progress["completedSections"] as? [String] ?? []).contains("Step 2: API Keys"))
     }
 
-    func testConfigureEmbeddingKeyReturnsKeyRequiredPayloadWhenNonInteractive() throws {
+    func testConfigureEmbeddingKeyCommandIsNotExposedByHelper() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
         let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: root.appendingPathComponent("brain").path)
@@ -3851,104 +3854,15 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let result = try runHelper(
             stateURL: stateURL,
             path: bin.path,
-            languageCode: "ko",
             arguments: [
                 "configure-embedding-key",
                 "--provider", "zeroentropy",
             ]
         )
-        let payload = try helperPayload(result.stdout)
-        let keyPrompt = try XCTUnwrap(payload["embeddingKeyPrompt"] as? String)
 
         XCTAssertNotEqual(result.exitCode, 0)
-        XCTAssertEqual(payload["ok"] as? Bool, false)
-        XCTAssertEqual(payload["reason"] as? String, "embedding_key_required")
-        XCTAssertEqual(payload["embeddingProvider"] as? String, "zeroentropy")
-        XCTAssertEqual(payload["embeddingKeyEnvName"] as? String, "ZEROENTROPY_API_KEY")
-        XCTAssertEqual(payload["command"] as? String, "zebra-gbrain-onboarding configure-embedding-key --provider zeroentropy")
-        XCTAssertTrue(keyPrompt.contains("ZEROENTROPY_API_KEY를 입력해 주세요."), keyPrompt)
-        XCTAssertTrue(keyPrompt.contains("https://dashboard.zeroentropy.dev"), keyPrompt)
-    }
-
-    func testConfigureEmbeddingKeyStoresEnvForReportAndRunGBrainWithoutLeakingSecret() throws {
-        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
-            throw XCTSkip("expect is required to drive the helper's /dev/tty prompts")
-        }
-
-        let root = try makeTemporaryDirectory()
-        let docs = try writeGuardDocs(root: root)
-        let stateURL = root.appendingPathComponent("state.json")
-        let store = ZebraGBrainOnboardingStore(
-            stateURL: stateURL,
-            homeDirectoryPath: root.path,
-            gbrainDocsRepoURL: docs,
-            environment: ["PATH": root.path]
-        )
-        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
-        let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
-        let sourceBin = sourceRepo.appendingPathComponent("bin", isDirectory: true)
-        try FileManager.default.createDirectory(at: sourceBin, withIntermediateDirectories: true)
-        let gbrain = sourceBin.appendingPathComponent("gbrain", isDirectory: false)
-        try """
-        #!/bin/sh
-        if [ "$1" = "--version" ]; then
-          echo "gbrain test"
-          exit 0
-        fi
-        if [ "$1" = "env-check" ]; then
-          if [ "${VOYAGE_API_KEY:-}" = "entered-voyage-key" ]; then
-            echo "env ok"
-            exit 0
-          fi
-          echo "missing VOYAGE_API_KEY" >&2
-          exit 65
-        fi
-        exit 64
-        """
-        .write(to: gbrain, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gbrain.path)
-        _ = try runHelper(
-            stateURL: stateURL,
-            path: root.path,
-            arguments: ["prepare-source-repo", "--path", sourceRepo.path]
-        )
-
-        let configure = try configureEmbeddingKeyWithTerminal(
-            stateURL: stateURL,
-            homePath: root.path,
-            provider: "voyage",
-            secret: "entered-voyage-key"
-        )
-        let report = try runHelper(
-            stateURL: stateURL,
-            path: root.path,
-            arguments: [
-                "report",
-                "--status", "completed",
-                "--section", "Step 2: API Keys",
-                "--embedding-decision", "provider_key",
-                "--embedding-provider", "voyage",
-                "--embedding-key-env", "VOYAGE_API_KEY",
-            ]
-        )
-        let run = try runHelper(
-            stateURL: stateURL,
-            path: root.path,
-            arguments: ["run-gbrain", "--", "env-check"]
-        )
-        let stateText = try String(contentsOf: stateURL, encoding: .utf8)
-
-        XCTAssertEqual(configure.exitCode, 0, "stdout: \(configure.stdout) stderr: \(configure.stderr)")
-        XCTAssertEqual(report.exitCode, 0, "stdout: \(report.stdout) stderr: \(report.stderr)")
-        XCTAssertEqual(run.exitCode, 0, "stdout: \(run.stdout) stderr: \(run.stderr)")
-        XCTAssertTrue(run.stdout.contains("env ok"), "stdout: \(run.stdout) stderr: \(run.stderr)")
-        XCTAssertFalse(configure.stdout.contains("entered-voyage-key"))
-        XCTAssertFalse(configure.stderr.contains("entered-voyage-key"))
-        XCTAssertFalse(report.stdout.contains("entered-voyage-key"))
-        XCTAssertFalse(report.stderr.contains("entered-voyage-key"))
-        XCTAssertFalse(run.stdout.contains("entered-voyage-key"))
-        XCTAssertFalse(run.stderr.contains("entered-voyage-key"))
-        XCTAssertFalse(stateText.contains("entered-voyage-key"))
+        XCTAssertTrue(result.stderr.contains("usage: zebra-gbrain-onboarding"), "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertFalse(result.stderr.contains("configure-embedding-key"), "stdout: \(result.stdout) stderr: \(result.stderr)")
     }
 
     func testReportGuardRejectsImportBeforeSearchModeCompletion() throws {
@@ -6240,35 +6154,6 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
     }
 
-    private func configureEmbeddingKeyWithTerminal(
-        stateURL: URL,
-        homePath: String,
-        provider: String,
-        secret: String
-    ) throws -> HelperRunResult {
-        let escapedSecret = secret
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\r", with: "\\r")
-            .replacingOccurrences(of: "\n", with: "\\n")
-        return try runHelperWithTerminalScript(
-            stateURL: stateURL,
-            homePath: homePath,
-            script: """
-            set timeout 60
-            spawn $env(HELPER_PATH) configure-embedding-key --provider \(provider)
-            expect {
-                "_API_KEY" { send "\(escapedSecret)\\r" }
-                timeout { exit 124 }
-                eof { exit 125 }
-            }
-            expect eof
-            set wait_status [wait]
-            exit [lindex $wait_status 3]
-            """
-        )
-    }
-
     private func runHelperWithTerminalScript(
         stateURL: URL,
         homePath: String,
@@ -6322,18 +6207,15 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             "--section", "Step 2: API Keys",
             "--embedding-decision", decision,
         ]
-        var environment: [String: String] = [:]
         if decision == "provider_key" {
             arguments.append(contentsOf: [
                 "--embedding-provider", "zeroentropy",
                 "--embedding-key-env", "ZEROENTROPY_API_KEY",
             ])
-            environment["ZEROENTROPY_API_KEY"] = "ambient-zeroentropy-key"
         }
         return try runHelper(
             stateURL: stateURL,
             path: path,
-            environment: environment,
             arguments: arguments
         )
     }

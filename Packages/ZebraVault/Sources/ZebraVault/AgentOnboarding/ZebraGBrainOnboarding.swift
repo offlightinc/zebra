@@ -101,7 +101,6 @@ public struct ZebraGBrainOnboardingStore {
         var decision: String?
         var provider: String?
         var keyEnvName: String?
-        var keySource: String?
         var confirmedAt: String?
     }
 
@@ -2181,12 +2180,10 @@ public struct ZebraGBrainOnboardingStore {
     fi
 
     "$PYTHON_BIN" - "$STATE" "$COMMAND" "$@" <<'PY'
-    import getpass
     import glob
     import json
     import os
     import re
-    import shlex
     import shutil
     import subprocess
     import sys
@@ -2944,11 +2941,11 @@ public struct ZebraGBrainOnboardingStore {
                 "Credential and embedding decision hard gates:",
                 "- Do not choose deferred/no-embedding mode unless the user explicitly chooses that path.",
                 "- " + embedding_provider_decision_options().replace("\\n", "\\n- "),
-                "- If the user chooses 1, use provider=zeroentropy and key env `ZEROENTROPY_API_KEY`. First report the provider choice with `--embedding-decision provider_key --embedding-provider zeroentropy --embedding-key-env ZEROENTROPY_API_KEY`. If Zebra rejects with `embedding_key_required`, show the returned `embeddingKeyPrompt` exactly. Only after the user provides the key, run `zebra-gbrain-onboarding configure-embedding-key --provider zeroentropy`, then rerun the same report.",
-                "- If the user chooses 2, use provider=openai and key env `OPENAI_API_KEY`. First report the provider choice with `--embedding-decision provider_key --embedding-provider openai --embedding-key-env OPENAI_API_KEY`. If Zebra rejects with `embedding_key_required`, show the returned `embeddingKeyPrompt` exactly. Only after the user provides the key, run `zebra-gbrain-onboarding configure-embedding-key --provider openai`, then rerun the same report.",
-                "- If the user chooses 3, use provider=voyage and key env `VOYAGE_API_KEY`. First report the provider choice with `--embedding-decision provider_key --embedding-provider voyage --embedding-key-env VOYAGE_API_KEY`. If Zebra rejects with `embedding_key_required`, show the returned `embeddingKeyPrompt` exactly. Only after the user provides the key, run `zebra-gbrain-onboarding configure-embedding-key --provider voyage`, then rerun the same report.",
+                "- If the user chooses 1, use provider=zeroentropy and key env `ZEROENTROPY_API_KEY`. Show this exact key prompt next, before reporting the section:\\n" + embedding_key_prompt("zeroentropy") + "\\nAfter the user provides the key, configure it using the saving instructions already present in this prompt's `INSTALL_FOR_AGENTS.md section body`. Do not reread files or open separate docs for those instructions. Then report this section with `--embedding-decision provider_key --embedding-provider zeroentropy --embedding-key-env ZEROENTROPY_API_KEY`.",
+                "- If the user chooses 2, use provider=openai and key env `OPENAI_API_KEY`. Show this exact key prompt next, before reporting the section:\\n" + embedding_key_prompt("openai") + "\\nAfter the user provides the key, configure it using the saving instructions already present in this prompt's `INSTALL_FOR_AGENTS.md section body`. Do not reread files or open separate docs for those instructions. Then report this section with `--embedding-decision provider_key --embedding-provider openai --embedding-key-env OPENAI_API_KEY`.",
+                "- If the user chooses 3, use provider=voyage and key env `VOYAGE_API_KEY`. Show this exact key prompt next, before reporting the section:\\n" + embedding_key_prompt("voyage") + "\\nAfter the user provides the key, configure it using the saving instructions already present in this prompt's `INSTALL_FOR_AGENTS.md section body`. Do not reread files or open separate docs for those instructions. Then report this section with `--embedding-decision provider_key --embedding-provider voyage --embedding-key-env VOYAGE_API_KEY`.",
                 "- If the user chooses 4, report this section with `--embedding-decision defer_embeddings`.",
-                "- After a key is configured through Zebra, run later GBrain commands that need the saved key through `zebra-gbrain-onboarding run-gbrain -- ...` so the saved key is loaded.",
+                "- Never write API key values to Zebra state, progress, report flags, logs, or summaries. Zebra state records only provider metadata.",
             ])
         elif role == "create_brain":
             common.extend([
@@ -3826,18 +3823,12 @@ public struct ZebraGBrainOnboardingStore {
             if key_env_name and key_env_name != expected_env_name:
                 return "invalid_embedding_key_env"
             key_env_name = expected_env_name
-            key_source = embedding_key_source(provider, key_env_name)
-            if not key_source:
-                state.setdefault("progress", {})["pendingEmbeddingProvider"] = provider
-                return "embedding_key_required"
             entry.update({
                 "provider": provider,
                 "keyEnvName": key_env_name,
-                "keySource": key_source,
             })
         progress = state.setdefault("progress", {})
         progress["embeddingDecision"] = entry
-        progress.pop("pendingEmbeddingProvider", None)
         return None
 
     def embedding_decision_recorded(state):
@@ -4460,7 +4451,7 @@ public struct ZebraGBrainOnboardingStore {
 
     def allowed_waiting_reasons(role):
         if role == "credentials":
-            return ["embedding_provider_required", "embedding_key_required"]
+            return ["embedding_provider_required"]
         if role == "create_brain":
             return ["topology_resolution", "brain_repo_target_resolution"]
         if role == "recurring_jobs":
@@ -4796,9 +4787,6 @@ public struct ZebraGBrainOnboardingStore {
             set_waiting_for_user(progress, section, "recurring_jobs_decision", "Choose defer, manual_scheduler, platform_scheduler_install, or autopilot_install.")
         elif reason == "embedding_provider_required":
             set_waiting_for_user(progress, section, "embedding_provider_required", "Choose ZEROENTROPY_API_KEY, OPENAI_API_KEY, VOYAGE_API_KEY, or defer embeddings.")
-        elif reason == "embedding_key_required":
-            provider = normalize_embedding_provider((state.get("progress") or {}).get("pendingEmbeddingProvider"))
-            set_waiting_for_user(progress, section, "embedding_key_required", "Enter the selected embedding provider key.")
         save_state(state)
         payload = {
             "ok": False,
@@ -4815,10 +4803,6 @@ public struct ZebraGBrainOnboardingStore {
                 "nextAction": "choose_embedding_provider",
                 "embeddingProviderPrompt": embedding_provider_decision_options(),
             })
-        elif reason == "embedding_key_required":
-            provider = normalize_embedding_provider((state.get("progress") or {}).get("pendingEmbeddingProvider"))
-            if provider in embedding_provider_env_names:
-                payload.update(embedding_key_prompt_payload(provider))
         elif reason == "bun_missing_for_launchd_autopilot":
             payload.update(launchd_bun_repair_payload(reason))
         elif reason == "brain_repo_initial_commit_missing":
@@ -4905,7 +4889,7 @@ public struct ZebraGBrainOnboardingStore {
                 and bool(flags.get("target") or flags.get("target_path"))
                 and flags.get("method") in allowed_methods
             )
-        if reason in {"embedding_provider_required", "embedding_key_required"}:
+        if reason == "embedding_provider_required":
             return role == "credentials" and status == "completed" and embedding_decision_recorded(state)
         waited_section = waiting_section(waiting)
         if (
@@ -4971,10 +4955,6 @@ public struct ZebraGBrainOnboardingStore {
                 reject_report(state, "embedding_decision_flags_not_allowed", section, status)
             embedding_error = apply_embedding_decision(candidate_state, flags)
             if embedding_error:
-                if embedding_error == "embedding_key_required":
-                    provider = normalize_embedding_provider(flags.get("embedding_provider"))
-                    if provider in embedding_provider_env_names:
-                        state.setdefault("progress", {})["pendingEmbeddingProvider"] = provider
                 reject_report(state, embedding_error, section, status)
         if topology_decision_flags_present(flags):
             if not (role == "create_brain" and status == "completed"):
@@ -5113,40 +5093,6 @@ public struct ZebraGBrainOnboardingStore {
                 env[key] = value
         return env
 
-    def write_gbrain_env_value(env_name, value):
-        if not re.match(r"^[A-Z][A-Z0-9_]*$", env_name or ""):
-            raise RuntimeError("invalid_embedding_key_env")
-        path = gbrain_env_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        existing_lines = []
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as handle:
-                existing_lines = handle.readlines()
-        replacement = f"{env_name}={shlex.quote(value)}\\n"
-        updated = []
-        replaced = False
-        for line in existing_lines:
-            stripped = line.lstrip()
-            if stripped.startswith(env_name + "="):
-                if not replaced:
-                    updated.append(replacement)
-                    replaced = True
-                continue
-            updated.append(line)
-        if not replaced:
-            if updated and not updated[-1].endswith("\\n"):
-                updated[-1] += "\\n"
-            updated.append(replacement)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as handle:
-            handle.writelines(updated)
-        os.replace(tmp, path)
-        try:
-            os.chmod(path, 0o600)
-        except Exception:
-            pass
-        return path
-
     def normalize_embedding_provider(provider):
         raw = (provider or "").strip().lower()
         if raw in {"zeroentropy", "zero-entropy", "zero_entropy", "ze", "zeroentropy_api_key", "zeroentropy-api-key"}:
@@ -5162,60 +5108,6 @@ public struct ZebraGBrainOnboardingStore {
             if candidate_env_name == env_name:
                 return provider
         return None
-
-    def embedding_key_source(provider, env_name=None):
-        provider = normalize_embedding_provider(provider)
-        expected_env_name = embedding_provider_env_names.get(provider)
-        env_name = env_name or expected_env_name
-        if not expected_env_name or env_name != expected_env_name:
-            return None
-        if os.environ.get(env_name):
-            return "env:" + env_name
-        if gbrain_env_values().get(env_name):
-            return "gbrain-env:" + env_name
-        return None
-
-    def embedding_key_prompt_payload(provider):
-        provider = normalize_embedding_provider(provider)
-        env_name = embedding_provider_env_names.get(provider) or ""
-        return {
-            "nextAction": "configure_embedding_key",
-            "embeddingProvider": provider,
-            "embeddingKeyEnvName": env_name,
-            "embeddingKeyPrompt": embedding_key_prompt(provider),
-            "command": f"zebra-gbrain-onboarding configure-embedding-key --provider {provider}",
-        }
-
-    def configure_embedding_key():
-        flags = parse_flags(args)
-        provider = normalize_embedding_provider(flags.get("provider"))
-        env_name = embedding_provider_env_names.get(provider)
-        if not env_name:
-            print(json.dumps({"ok": False, "reason": "invalid_embedding_provider"}, sort_keys=True))
-            sys.exit(1)
-        def reject_key_required():
-            payload = {
-                "ok": False,
-                "reason": "embedding_key_required",
-            }
-            payload.update(embedding_key_prompt_payload(provider))
-            print(json.dumps(payload, sort_keys=True))
-            sys.exit(1)
-        prompt = embedding_key_prompt(provider) + "\\n"
-        try:
-            value = getpass.getpass(prompt).strip()
-        except (EOFError, KeyboardInterrupt):
-            reject_key_required()
-        if not value:
-            reject_key_required()
-        path = write_gbrain_env_value(env_name, value)
-        print(json.dumps({
-            "ok": True,
-            "status": "configured",
-            "provider": provider,
-            "keyEnvName": env_name,
-            "envPath": path,
-        }, sort_keys=True))
 
     def doctor_failed_checks(result):
         if result.returncode == 0:
@@ -5732,12 +5624,6 @@ public struct ZebraGBrainOnboardingStore {
             sys.exit(1)
     elif command == "run-gbrain":
         run_gbrain()
-    elif command == "configure-embedding-key":
-        try:
-            configure_embedding_key()
-        except Exception as exc:
-            print(json.dumps({"ok": False, "reason": str(exc)}, sort_keys=True))
-            sys.exit(1)
     elif command == "report":
         report()
     elif command == "status":
@@ -5759,7 +5645,7 @@ public struct ZebraGBrainOnboardingStore {
     elif command == "create-initial-brain-commit":
         create_initial_brain_commit()
     else:
-        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|run-gbrain|configure-embedding-key|report|status|verify|recover-cycle-freshness|prepare-platform-scheduler|check-launchd-bun-path|repair-launchd-bun-path|create-initial-brain-commit> [options]", file=sys.stderr)
+        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|run-gbrain|report|status|verify|recover-cycle-freshness|prepare-platform-scheduler|check-launchd-bun-path|repair-launchd-bun-path|create-initial-brain-commit> [options]", file=sys.stderr)
         sys.exit(2)
     PY
     """
