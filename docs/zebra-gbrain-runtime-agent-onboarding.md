@@ -164,9 +164,9 @@ Agent는 현재 상태에 맞는 선택지만 설명한다:
 
 Agent는 선택되지 않은 runtime의 dependency를 설치하지 않는다.
 
-### 3. Recover common prerequisites
+### 3. Install common prerequisites
 
-선택된 runtime과 무관하게 Step 3에서 필요한 prerequisite만 복구한다:
+선택된 runtime과 무관하게 Step 3에서 필요한 prerequisite만 설치/준비한다:
 
 - Command Line Tools / `git`
 - `bun`
@@ -199,9 +199,9 @@ curl -fsSL https://bun.sh/install | bash
 `~/.bun/bin/bun --version`을 검증한다. 새 shell에서 `bun`이 PATH로 resolve되는지도
 기록한다.
 
-### 4. Recover selected-runtime prerequisites
+### 4. Install selected-runtime prerequisites
 
-선택된 runtime에 필요한 prerequisite만 복구한다.
+선택된 runtime에 필요한 prerequisite만 설치/준비한다.
 
 #### OpenClaw
 

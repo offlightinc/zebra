@@ -986,7 +986,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let attempts = try XCTUnwrap(state["attempts"] as? [[String: Any]])
 
         XCTAssertEqual(progress["status"] as? String, "waiting_for_user")
-        XCTAssertEqual(waitingForUser["section"] as? String, "Recover common prerequisites")
+        XCTAssertEqual(waitingForUser["section"] as? String, "Install common prerequisites")
         XCTAssertEqual(lastFailure["reason"] as? String, "clt_install_required")
         XCTAssertEqual(attempts.first?["attemptedCommand"] as? String, "xcode-select --install")
     }
@@ -1280,7 +1280,141 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         let progress = try XCTUnwrap(state["progress"] as? [String: Any])
         let waitingForUser = try XCTUnwrap(progress["waitingForUser"] as? [String: Any])
-        XCTAssertEqual(waitingForUser["section"] as? String, "Recover selected-runtime prerequisites")
+        XCTAssertEqual(waitingForUser["section"] as? String, "Install selected-runtime prerequisites")
+    }
+
+    func testRuntimeHelperNodeRecoveryDoesNotReopenInstallerWhileWaitingForUser() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let openLog = root.appendingPathComponent("open.log", isDirectory: false)
+        try installFakeNodeInstallerCommands(fakeBin: fakeBin, openLog: openLog)
+
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+        let environment = [
+            "PATH": "\(fakeBin.path):/usr/bin:/bin",
+            "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            "ZEBRA_NODE_PKG_URL": "https://example.invalid/node.pkg",
+        ]
+
+        let first = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["recover-prerequisite", "node"],
+            environment: environment
+        )
+        XCTAssertEqual(first.status, 0, "stdout:\n\(first.stdout)\nstderr:\n\(first.stderr)")
+        XCTAssertEqual(try nodeInstallerOpenCount(openLog), 1)
+
+        let second = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["recover-prerequisite", "node"],
+            environment: environment
+        )
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(second.stdout.utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(second.status, 0, "stdout:\n\(second.stdout)\nstderr:\n\(second.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["requiresUserAction"] as? Bool, true)
+        XCTAssertEqual(payload["blockingReason"] as? String, "node_pkg_install_required")
+        XCTAssertEqual(payload["alreadyRequested"] as? Bool, true)
+        let userMessage = try XCTUnwrap(payload["userMessage"] as? String)
+        XCTAssertTrue(userMessage.localizedCaseInsensitiveContains("install"))
+        XCTAssertFalse(userMessage.localizedCaseInsensitiveContains("recover"))
+        XCTAssertTrue(userMessage.localizedCaseInsensitiveContains("do not open the installer again"))
+        XCTAssertTrue(userMessage.localizedCaseInsensitiveContains("re-check the environment"))
+        XCTAssertEqual(try nodeInstallerOpenCount(openLog), 1)
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let waitingForUser = try XCTUnwrap(progress["waitingForUser"] as? [String: Any])
+        XCTAssertEqual(waitingForUser["section"] as? String, "Install selected-runtime prerequisites")
+    }
+
+    func testRuntimeHelperNodeRecoveryClearsWaitingStateWhenNodeAndNpmAreNowAvailable() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let openLog = root.appendingPathComponent("open.log", isDirectory: false)
+        try installFakeNodeInstallerCommands(fakeBin: fakeBin, openLog: openLog)
+
+        let store = ZebraGBrainRuntimeOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch())
+        let environment = [
+            "PATH": "\(fakeBin.path):/usr/bin:/bin",
+            "ZEBRA_GBRAIN_RUNTIME_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_RUNTIME_HOME": root.path,
+            "ZEBRA_NODE_PKG_URL": "https://example.invalid/node.pkg",
+        ]
+
+        let first = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["recover-prerequisite", "node"],
+            environment: environment
+        )
+        XCTAssertEqual(first.status, 0, "stdout:\n\(first.stdout)\nstderr:\n\(first.stderr)")
+        XCTAssertEqual(try nodeInstallerOpenCount(openLog), 1)
+
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "node",
+            content: """
+            #!/bin/sh
+            echo 'v22.0.0'
+            exit 0
+            """
+        )
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "npm",
+            content: """
+            #!/bin/sh
+            echo '10.0.0'
+            exit 0
+            """
+        )
+
+        let second = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["recover-prerequisite", "node"],
+            environment: environment
+        )
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(second.stdout.utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual(second.status, 0, "stdout:\n\(second.stdout)\nstderr:\n\(second.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(payload["alreadyInstalled"] as? Bool, true)
+        XCTAssertEqual(try nodeInstallerOpenCount(openLog), 1)
+
+        let preflight = try XCTUnwrap(payload["preflight"] as? [String: Any])
+        let facts = try XCTUnwrap(preflight["facts"] as? [String: Any])
+        let node = try XCTUnwrap(facts["node"] as? [String: Any])
+        let npm = try XCTUnwrap(facts["npm"] as? [String: Any])
+        XCTAssertEqual(node["ok"] as? Bool, true)
+        XCTAssertEqual(npm["ok"] as? Bool, true)
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        XCTAssertNil(progress["waitingForUser"])
     }
 
     func testRuntimeHelperOpenClawInstallSetsUserNpmPrefixWhenGlobalPrefixIsNotWritable() throws {
@@ -3394,6 +3528,42 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let script = directory.appendingPathComponent(name, isDirectory: false)
         try content.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+    }
+
+    private func installFakeNodeInstallerCommands(fakeBin: URL, openLog: URL) throws {
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "curl",
+            content: """
+            #!/bin/sh
+            output=
+            while [ "$#" -gt 0 ]; do
+              if [ "$1" = "-o" ]; then
+                shift
+                output="$1"
+              fi
+              shift || break
+            done
+            : > "$output"
+            exit 0
+            """
+        )
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "open",
+            content: """
+            #!/bin/sh
+            printf '%s\\n' "$*" >> '\(shellSingleQuoted(openLog.path))'
+            exit 0
+            """
+        )
+    }
+
+    private func nodeInstallerOpenCount(_ openLog: URL) throws -> Int {
+        guard FileManager.default.fileExists(atPath: openLog.path) else { return 0 }
+        return try String(contentsOf: openLog, encoding: .utf8)
+            .split(whereSeparator: \.isNewline)
+            .count
     }
 
     private static func runtimeOnboardingDocumentURL() -> URL {

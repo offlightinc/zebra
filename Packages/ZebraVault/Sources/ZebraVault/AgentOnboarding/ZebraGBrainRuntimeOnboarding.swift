@@ -490,9 +490,9 @@ public struct ZebraGBrainRuntimeOnboardingStore {
 
     Agent는 선택되지 않은 runtime의 dependency를 설치하지 않는다.
 
-    ### 3. Recover common prerequisites
+    ### 3. Install common prerequisites
 
-    선택된 runtime과 무관하게 Step 3에서 필요한 prerequisite만 복구한다:
+    선택된 runtime과 무관하게 Step 3에서 필요한 prerequisite만 설치/준비한다:
 
     - Command Line Tools / `git`
     - `bun`
@@ -525,9 +525,9 @@ public struct ZebraGBrainRuntimeOnboardingStore {
     `~/.bun/bin/bun --version`을 검증한다. 새 shell에서 `bun`이 PATH로 resolve되는지도
     기록한다.
 
-    ### 4. Recover selected-runtime prerequisites
+    ### 4. Install selected-runtime prerequisites
 
-    선택된 runtime에 필요한 prerequisite만 복구한다.
+    선택된 runtime에 필요한 prerequisite만 설치/준비한다.
 
     #### OpenClaw
 
@@ -860,7 +860,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         printf '    "currentSection": "Baseline preflight",\n'
         if [ -n "$waiting_note" ]; then
           printf '    "waitingForUser": {\n'
-          printf '      "section": "Recover common prerequisites",\n'
+          printf '      "section": "Install common prerequisites",\n'
           printf '      "note": "Install macOS Command Line Tools, then rerun Step 2.",\n'
           printf '      "createdAt": "%s"\n' "$DETECTED_AT"
           printf '    },\n'
@@ -2606,7 +2606,7 @@ public struct ZebraGBrainRuntimeOnboardingStore {
             state = load_state()
             progress = state.setdefault("progress", {})
             progress["waitingForUser"] = {
-                "section": "Recover common prerequisites",
+                "section": "Install common prerequisites",
                 "note": "Complete the macOS Command Line Tools installer, then rerun preflight.",
                 "createdAt": now(),
             }
@@ -2635,6 +2635,61 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         raise RuntimeError(f"unsupported_prerequisite:{name}")
 
     def recover_node_with_official_pkg():
+        preflight = write_preflight()
+        facts = preflight.get("facts") or {}
+        node_fact = facts.get("node") or {}
+        npm_fact = facts.get("npm") or {}
+        if node_fact.get("ok") and npm_fact.get("ok"):
+            state = load_state()
+            progress = state.setdefault("progress", {})
+            waiting = progress.get("waitingForUser") or {}
+            if waiting.get("section") in {"Recover selected-runtime prerequisites", "Install selected-runtime prerequisites"}:
+                progress.pop("waitingForUser", None)
+            progress["currentSection"] = "Install selected-runtime prerequisites"
+            progress["lastStatus"] = "completed"
+            progress["updatedAt"] = now()
+            progress.pop("lastFailure", None)
+            save_state(state)
+            return {
+                "ok": True,
+                "alreadyInstalled": True,
+                "preflight": preflight,
+                "userMessage": "Node.js and npm are installed and available. Continue with OpenClaw installation.",
+            }
+
+        state = load_state()
+        progress = state.setdefault("progress", {})
+        waiting = progress.get("waitingForUser") or {}
+        attempts = state.get("attempts") or []
+        node_install_already_requested = (
+            waiting.get("section") in {"Recover selected-runtime prerequisites", "Install selected-runtime prerequisites"}
+            and any(
+                attempt.get("kind") == "recover-prerequisite:node"
+                and attempt.get("blockingReason") == "node_pkg_install_required"
+                for attempt in attempts
+                if isinstance(attempt, dict)
+            )
+        )
+        if node_install_already_requested:
+            progress["waitingForUser"] = {
+                "section": "Install selected-runtime prerequisites",
+                "note": "Node.js/npm installer was already opened, but node and npm are not visible in this terminal yet. Do not open the installer again. Re-check the environment before asking the user to restart Step 2.",
+                "createdAt": waiting.get("createdAt") or now(),
+                "updatedAt": now(),
+            }
+            progress["currentSection"] = "Install selected-runtime prerequisites"
+            progress["lastStatus"] = "waiting_for_user"
+            progress["updatedAt"] = now()
+            save_state(state)
+            return {
+                "ok": False,
+                "requiresUserAction": True,
+                "alreadyRequested": True,
+                "blockingReason": "node_pkg_install_required",
+                "preflight": preflight,
+                "userMessage": "Node.js/npm installer was already opened, but node and npm are not visible in this terminal yet. Do not open the installer again. Re-check the environment before asking the user to restart Step 2.",
+            }
+
         node_pkg_url = os.environ.get("ZEBRA_NODE_PKG_URL", "").strip()
         download_dir = state_path.parent / "downloads"
         download_dir.mkdir(parents=True, exist_ok=True)
@@ -2670,8 +2725,8 @@ public struct ZebraGBrainRuntimeOnboardingStore {
         state = load_state()
         progress = state.setdefault("progress", {})
         progress["waitingForUser"] = {
-            "section": "Recover selected-runtime prerequisites",
-            "note": "Complete the official Node.js pkg installer, then rerun preflight.",
+            "section": "Install selected-runtime prerequisites",
+            "note": "Complete the official Node.js/npm installer, then rerun preflight.",
             "createdAt": now(),
         }
         save_state(state)
