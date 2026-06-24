@@ -2312,13 +2312,18 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
 
         XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertEqual(payload["nextSection"] as? String, "Step 8: Background Sync")
-        XCTAssertTrue(nextPrompt.contains("Recurring jobs are persistent background changes"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("This section sets up scheduled automatic work that keeps the brain up to date."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Choose how to keep the brain up to date:"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("Step 3 topology is `pglite`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended)"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("OpenClaw: `openclaw cron add`"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("Hermes: `hermes cron create`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot"), nextPrompt)
-        XCTAssertFalse(nextPrompt.contains("1. GBrain autopilot (recommended)"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. Manual setup"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("4. Do later"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended) -> `--recurring-jobs-decision platform_scheduler_install`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot -> `--recurring-jobs-decision autopilot_install`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. Manual setup -> `--recurring-jobs-decision manual_scheduler`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("4. Do later -> `--recurring-jobs-decision defer`"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("GBrain autopilot (recommended)"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("gbrain autopilot --install"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding run-gbrain -- autopilot --install"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding prepare-platform-scheduler"), nextPrompt)
@@ -2411,9 +2416,16 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             XCTAssertEqual(result.exitCode, 0, "topology=\(topology) stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
             XCTAssertEqual(payload["nextSection"] as? String, "Step 7: Recurring Jobs")
             XCTAssertTrue(nextPrompt.contains("Step 3 topology is `\(topology)`"), nextPrompt)
+            XCTAssertTrue(nextPrompt.contains("This section sets up scheduled automatic work that keeps the brain up to date."), nextPrompt)
+            XCTAssertTrue(nextPrompt.contains("Choose how to keep the brain up to date:"), nextPrompt)
             XCTAssertTrue(nextPrompt.contains("1. GBrain autopilot (recommended)"), nextPrompt)
             XCTAssertTrue(nextPrompt.contains("2. Platform scheduler"), nextPrompt)
-            XCTAssertTrue(nextPrompt.contains("3. System scheduler"), nextPrompt)
+            XCTAssertTrue(nextPrompt.contains("3. Manual setup"), nextPrompt)
+            XCTAssertTrue(nextPrompt.contains("4. Do later"), nextPrompt)
+            XCTAssertTrue(nextPrompt.contains("1. GBrain autopilot (recommended) -> `--recurring-jobs-decision autopilot_install`"), nextPrompt)
+            XCTAssertTrue(nextPrompt.contains("2. Platform scheduler -> `--recurring-jobs-decision platform_scheduler_install`"), nextPrompt)
+            XCTAssertTrue(nextPrompt.contains("3. Manual setup -> `--recurring-jobs-decision manual_scheduler`"), nextPrompt)
+            XCTAssertTrue(nextPrompt.contains("4. Do later -> `--recurring-jobs-decision defer`"), nextPrompt)
             XCTAssertFalse(nextPrompt.contains("1. Platform scheduler (recommended)"), nextPrompt)
         }
     }
@@ -2480,9 +2492,9 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertEqual(payload["nextSection"] as? String, "Step 7: Recurring Jobs")
         XCTAssertTrue(nextPrompt.contains("Step 3 topology is `pglite`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("This section sets up scheduled automatic work that keeps the brain up to date."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Choose how to keep the brain up to date:"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended)"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("OpenClaw: `openclaw cron add`"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("Hermes: `hermes cron create`"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("zebra-gbrain-onboarding prepare-platform-scheduler"), nextPrompt)
         XCTAssertFalse(nextPrompt.contains("openclaw cron create --name \"GBrain save\""), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("Create exactly these four core jobs"), nextPrompt)
@@ -2500,8 +2512,13 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(nextPrompt.contains("gbrain dream --dir '\(target.path)'"), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("--workdir \"\(target.path)\""), nextPrompt)
         XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("3. System scheduler"), nextPrompt)
-        XCTAssertFalse(nextPrompt.contains("1. GBrain autopilot (recommended)"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. Manual setup"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("4. Do later"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended) -> `--recurring-jobs-decision platform_scheduler_install`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot -> `--recurring-jobs-decision autopilot_install`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. Manual setup -> `--recurring-jobs-decision manual_scheduler`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("4. Do later -> `--recurring-jobs-decision defer`"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("GBrain autopilot (recommended)"), nextPrompt)
     }
 
     func testRecurringJobsPromptUsesKoreanForPGLiteRecommendationWhenLanguageIsKorean() throws {
@@ -2584,11 +2601,20 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
 
         XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertEqual(payload["nextSection"] as? String, "Step 7: Recurring Jobs")
-        XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended) — 선택한 agent의 scheduler를 사용합니다"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("OpenClaw: `openclaw cron add`"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("Hermes: `hermes cron create`"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot — 안정적인 agent scheduler가 없을 때 사용합니다"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("3. System scheduler — launchd/crontab/external cron. 고급 설정입니다"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("이 단계는 brain을 최신 상태로 유지하기 위한 정기 자동 작업을 설정하는 단계입니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("설정하면 Zebra가 주기적으로 새 변경사항을 가져오고, 검색용 데이터를 갱신하고, 상태를 점검합니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("지금 설정하지 않아도 Zebra는 계속 사용할 수 있고, 나중에 다시 켤 수 있습니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Step 3에서 PGLite를 선택했기 때문에 Platform scheduler를 추천합니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("brain을 최신 상태로 유지할 방식을 선택해 주세요:"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended) — 선택한 agent가 로컬 brain의 정기 작업을 실행합니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot — agent scheduler를 쓰기 어려울 때 GBrain이 정기 작업을 실행합니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. 직접 설정 — launchd, crontab, 외부 cron 등을 직접 구성합니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("4. 나중에 하기 — 지금은 정기 자동 작업을 설정하지 않습니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. Platform scheduler (recommended) -> `--recurring-jobs-decision platform_scheduler_install`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot -> `--recurring-jobs-decision autopilot_install`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. 직접 설정 -> `--recurring-jobs-decision manual_scheduler`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("4. 나중에 하기 -> `--recurring-jobs-decision defer`"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("GBrain autopilot (recommended)"), nextPrompt)
     }
 
     func testRecurringJobsPromptUsesKoreanForPostgresRecommendationWhenLanguageIsKorean() throws {
@@ -2671,9 +2697,89 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
 
         XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertEqual(payload["nextSection"] as? String, "Step 7: Recurring Jobs")
-        XCTAssertTrue(nextPrompt.contains("1. GBrain autopilot (recommended) — hosted 또는 durable database setup에 맞는 built-in daemon입니다"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("2. Platform scheduler — 사용자의 agent platform이 이미 recurring jobs를 맡고 있을 때만 사용합니다"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("3. System scheduler — launchd/crontab/Railway cron/external cron. 고급 배포용입니다"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("이 단계는 brain을 최신 상태로 유지하기 위한 정기 자동 작업을 설정하는 단계입니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Step 3에서 Postgres를 선택했기 때문에 GBrain autopilot을 추천합니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("brain을 최신 상태로 유지할 방식을 선택해 주세요:"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. GBrain autopilot (recommended) — durable database setup에 맞게 GBrain이 정기 작업을 실행합니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. Platform scheduler — 이미 agent scheduler를 운영 기준으로 쓰고 있을 때 선택합니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. 직접 설정 — launchd, crontab, Railway cron 등 외부 scheduler를 직접 구성합니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("4. 나중에 하기 — 지금은 정기 자동 작업을 설정하지 않습니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. GBrain autopilot (recommended) -> `--recurring-jobs-decision autopilot_install`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. Platform scheduler -> `--recurring-jobs-decision platform_scheduler_install`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. 직접 설정 -> `--recurring-jobs-decision manual_scheduler`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("4. 나중에 하기 -> `--recurring-jobs-decision defer`"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("Platform scheduler (recommended)"), nextPrompt)
+    }
+
+    func testRecurringJobsPromptHasNoRecommendationWhenTopologyIsUnknown() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root, includeCanonicalRecurringJobs: true)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: target.path)
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 1: Install GBrain",
+            ]
+        )
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path, decision: "provider_key")
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        _ = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3.5: Confirm search mode with the user (DO NOT SKIP)",
+            ]
+        )
+        try removeTopologyDecision(from: stateURL)
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 4: Import and Index",
+                "--source-id", "brain",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["nextSection"] as? String, "Step 7: Recurring Jobs")
+        XCTAssertTrue(nextPrompt.contains("Step 3 topology is `unknown`"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Zebra could not confirm the Step 3 database choice, so these options have no recommendation."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. Platform scheduler — the selected agent runs scheduled work for the brain."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. GBrain autopilot — GBrain runs scheduled work."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. Manual setup — configure launchd, crontab, or external cron yourself."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("4. Do later — do not set up scheduled automatic work now."), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("(recommended)"), nextPrompt)
     }
 
     func testReportCompletedForLastSectionReturnsVerifyPrompt() throws {
@@ -5958,6 +6064,16 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
     private func stateObject(in stateURL: URL) throws -> [String: Any] {
         let data = try Data(contentsOf: stateURL)
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func removeTopologyDecision(from stateURL: URL) throws {
+        let data = try Data(contentsOf: stateURL)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var progress = try XCTUnwrap(object["progress"] as? [String: Any])
+        progress.removeValue(forKey: "topologyDecision")
+        object["progress"] = progress
+        let updated = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try updated.write(to: stateURL, options: .atomic)
     }
 
     private func helperPayload(_ stdout: String) throws -> [String: Any] {

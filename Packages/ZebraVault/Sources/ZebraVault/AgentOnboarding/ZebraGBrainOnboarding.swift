@@ -2782,73 +2782,151 @@ public struct ZebraGBrainOnboardingStore {
             topology_decision_options_text(),
         ])
 
-    def recurring_jobs_options_text(state):
+    def recurring_jobs_intro_text():
         language = onboarding_language()
-        topology = topology_decision_value(state)
-        if topology == "pglite":
-            if language == "ko":
-                return "\\n".join([
-                    "1. Platform scheduler (recommended) — 선택한 agent의 scheduler를 사용합니다.",
-                    "   OpenClaw: `openclaw cron add` 또는 `openclaw cron create`.",
-                    "   Hermes: `hermes cron create` 또는 `hermes cron add`.",
-                    "2. GBrain autopilot — 안정적인 agent scheduler가 없을 때 사용합니다.",
-                    "3. System scheduler — launchd/crontab/external cron. 고급 설정입니다.",
-                ])
-            if language == "ja":
-                return "\\n".join([
-                    "1. Platform scheduler (recommended) — 選択したagentのschedulerを使用します。",
-                    "   OpenClaw: `openclaw cron add` or `openclaw cron create`.",
-                    "   Hermes: `hermes cron create` or `hermes cron add`.",
-                    "2. GBrain autopilot — 信頼できるagent schedulerがない場合に使用します。",
-                    "3. System scheduler — launchd/crontab/external cron。高度な設定です。",
-                ])
-            return "\\n".join([
-                "1. Platform scheduler (recommended) — use the selected agent's scheduler.",
-                "   OpenClaw: `openclaw cron add` or `openclaw cron create`.",
-                "   Hermes: `hermes cron create` or `hermes cron add`.",
-                "2. GBrain autopilot — use `gbrain autopilot --install` if there is no reliable agent scheduler.",
-                "3. System scheduler — launchd/crontab/external cron for advanced setups.",
-            ])
-        if topology in {"postgres", "supabase"}:
-            if language == "ko":
-                return "\\n".join([
-                    "1. GBrain autopilot (recommended) — hosted 또는 durable database setup에 맞는 built-in daemon입니다.",
-                    "2. Platform scheduler — 사용자의 agent platform이 이미 recurring jobs를 맡고 있을 때만 사용합니다.",
-                    "3. System scheduler — launchd/crontab/Railway cron/external cron. 고급 배포용입니다.",
-                ])
-            if language == "ja":
-                return "\\n".join([
-                    "1. GBrain autopilot (recommended) — hostedまたはdurable database setup向けのbuilt-in daemonです。",
-                    "2. Platform scheduler — ユーザーのagent platformがすでにrecurring jobsを管理している場合のみ使用します。",
-                    "3. System scheduler — launchd/crontab/Railway cron/external cron。高度なdeploy向けです。",
-                ])
-            return "\\n".join([
-                "1. GBrain autopilot (recommended) — built-in daemon for hosted or durable database setups.",
-                "2. Platform scheduler — use only if the user's agent platform already owns recurring jobs.",
-                "3. System scheduler — launchd/crontab/Railway cron/external cron for advanced deployments.",
-            ])
         if language == "ko":
             return "\\n".join([
-                "1. Platform scheduler — 선택한 agent의 scheduler를 사용합니다.",
-                "   OpenClaw: `openclaw cron add` 또는 `openclaw cron create`.",
-                "   Hermes: `hermes cron create` 또는 `hermes cron add`.",
-                "2. GBrain autopilot — `gbrain autopilot --install`을 사용합니다.",
-                "3. System scheduler — launchd/crontab/Railway cron/external cron. 고급 배포용입니다.",
+                "이 단계는 brain을 최신 상태로 유지하기 위한 정기 자동 작업을 설정하는 단계입니다.",
+                "설정하면 Zebra가 주기적으로 새 변경사항을 가져오고, 검색용 데이터를 갱신하고, 상태를 점검합니다.",
+                "지금 설정하지 않아도 Zebra는 계속 사용할 수 있고, 나중에 다시 켤 수 있습니다.",
             ])
         if language == "ja":
             return "\\n".join([
-                "1. Platform scheduler — 選択したagentのschedulerを使用します。",
-                "   OpenClaw: `openclaw cron add` or `openclaw cron create`.",
-                "   Hermes: `hermes cron create` or `hermes cron add`.",
-                "2. GBrain autopilot — `gbrain autopilot --install`を使用します。",
-                "3. System scheduler — launchd/crontab/Railway cron/external cron。高度なdeploy向けです。",
+                "この段階はbrainを最新の状態に保つための定期自動作業を設定します。",
+                "設定すると、Zebraが定期的に新しい変更を取り込み、検索用データを更新し、状態を確認します。",
+                "今設定しなくてもZebraは使い続けられ、後から有効にできます。",
             ])
         return "\\n".join([
-            "1. Platform scheduler — use the selected agent's scheduler.",
-            "   OpenClaw: `openclaw cron add` or `openclaw cron create`.",
-            "   Hermes: `hermes cron create` or `hermes cron add`.",
-            "2. GBrain autopilot — use `gbrain autopilot --install`.",
-            "3. System scheduler — launchd/crontab/Railway cron/external cron for advanced deployments.",
+            "This section sets up scheduled automatic work that keeps the brain up to date.",
+            "When enabled, Zebra periodically pulls new changes, refreshes search data, and checks health.",
+            "You can keep using Zebra if you skip it now, and turn it on later.",
+        ])
+
+    def recurring_jobs_choice_prompt_text():
+        language = onboarding_language()
+        if language == "ko":
+            return "brain을 최신 상태로 유지할 방식을 선택해 주세요:"
+        if language == "ja":
+            return "brainを最新の状態に保つ方法を選んでください:"
+        return "Choose how to keep the brain up to date:"
+
+    def recurring_jobs_topology_recommendation_text(state):
+        language = onboarding_language()
+        topology = topology_decision_value(state)
+        if language == "ko":
+            if topology == "pglite":
+                return "Step 3에서 PGLite를 선택했기 때문에 Platform scheduler를 추천합니다."
+            if topology == "postgres":
+                return "Step 3에서 Postgres를 선택했기 때문에 GBrain autopilot을 추천합니다."
+            if topology == "supabase":
+                return "Step 3에서 Supabase를 선택했기 때문에 GBrain autopilot을 추천합니다."
+            return "Step 3 database 선택을 확인할 수 없어 추천 없이 옵션을 보여줍니다."
+        if language == "ja":
+            if topology == "pglite":
+                return "Step 3でPGLiteを選んだため、Platform schedulerをおすすめします。"
+            if topology == "postgres":
+                return "Step 3でPostgresを選んだため、GBrain autopilotをおすすめします。"
+            if topology == "supabase":
+                return "Step 3でSupabaseを選んだため、GBrain autopilotをおすすめします。"
+            return "Step 3のdatabase選択を確認できないため、推奨なしで選択肢を表示します。"
+        if topology == "pglite":
+            return "Because Step 3 used PGLite, Zebra recommends Platform scheduler."
+        if topology == "postgres":
+            return "Because Step 3 used Postgres, Zebra recommends GBrain autopilot."
+        if topology == "supabase":
+            return "Because Step 3 used Supabase, Zebra recommends GBrain autopilot."
+        return "Zebra could not confirm the Step 3 database choice, so these options have no recommendation."
+
+    def recurring_jobs_option_records(state):
+        language = onboarding_language()
+        topology = topology_decision_value(state)
+        def record(label, decision, description):
+            return {
+                "label": label,
+                "decision": decision,
+                "description": description,
+            }
+        if topology == "pglite":
+            if language == "ko":
+                return [
+                    record("Platform scheduler (recommended)", "platform_scheduler_install", "선택한 agent가 로컬 brain의 정기 작업을 실행합니다."),
+                    record("GBrain autopilot", "autopilot_install", "agent scheduler를 쓰기 어려울 때 GBrain이 정기 작업을 실행합니다."),
+                    record("직접 설정", "manual_scheduler", "launchd, crontab, 외부 cron 등을 직접 구성합니다."),
+                    record("나중에 하기", "defer", "지금은 정기 자동 작업을 설정하지 않습니다."),
+                ]
+            if language == "ja":
+                return [
+                    record("Platform scheduler (recommended)", "platform_scheduler_install", "選択したagentがローカルbrainの定期作業を実行します。"),
+                    record("GBrain autopilot", "autopilot_install", "agent schedulerを使いにくい場合にGBrainが定期作業を実行します。"),
+                    record("直接設定", "manual_scheduler", "launchd、crontab、外部cronなどを自分で構成します。"),
+                    record("後で行う", "defer", "今は定期自動作業を設定しません。"),
+                ]
+            return [
+                record("Platform scheduler (recommended)", "platform_scheduler_install", "the selected agent runs scheduled work for the local brain."),
+                record("GBrain autopilot", "autopilot_install", "GBrain runs scheduled work when an agent scheduler is hard to use."),
+                record("Manual setup", "manual_scheduler", "configure launchd, crontab, or external cron yourself."),
+                record("Do later", "defer", "do not set up scheduled automatic work now."),
+            ]
+        if topology in {"postgres", "supabase"}:
+            if language == "ko":
+                return [
+                    record("GBrain autopilot (recommended)", "autopilot_install", "durable database setup에 맞게 GBrain이 정기 작업을 실행합니다."),
+                    record("Platform scheduler", "platform_scheduler_install", "이미 agent scheduler를 운영 기준으로 쓰고 있을 때 선택합니다."),
+                    record("직접 설정", "manual_scheduler", "launchd, crontab, Railway cron 등 외부 scheduler를 직접 구성합니다."),
+                    record("나중에 하기", "defer", "지금은 정기 자동 작업을 설정하지 않습니다."),
+                ]
+            if language == "ja":
+                return [
+                    record("GBrain autopilot (recommended)", "autopilot_install", "durable database setupに合わせてGBrainが定期作業を実行します。"),
+                    record("Platform scheduler", "platform_scheduler_install", "すでにagent schedulerを運用基準として使っている場合に選びます。"),
+                    record("直接設定", "manual_scheduler", "launchd、crontab、Railway cronなど外部schedulerを自分で構成します。"),
+                    record("後で行う", "defer", "今は定期自動作業を設定しません。"),
+                ]
+            return [
+                record("GBrain autopilot (recommended)", "autopilot_install", "GBrain runs scheduled work for durable database setups."),
+                record("Platform scheduler", "platform_scheduler_install", "choose this when an agent scheduler is already the operating standard."),
+                record("Manual setup", "manual_scheduler", "configure launchd, crontab, Railway cron, or another external scheduler yourself."),
+                record("Do later", "defer", "do not set up scheduled automatic work now."),
+            ]
+        if language == "ko":
+            return [
+                record("Platform scheduler", "platform_scheduler_install", "선택한 agent가 brain의 정기 작업을 실행합니다."),
+                record("GBrain autopilot", "autopilot_install", "GBrain이 정기 작업을 실행합니다."),
+                record("직접 설정", "manual_scheduler", "launchd, crontab, 외부 cron 등을 직접 구성합니다."),
+                record("나중에 하기", "defer", "지금은 정기 자동 작업을 설정하지 않습니다."),
+            ]
+        if language == "ja":
+            return [
+                record("Platform scheduler", "platform_scheduler_install", "選択したagentがbrainの定期作業を実行します。"),
+                record("GBrain autopilot", "autopilot_install", "GBrainが定期作業を実行します。"),
+                record("直接設定", "manual_scheduler", "launchd、crontab、外部cronなどを自分で構成します。"),
+                record("後で行う", "defer", "今は定期自動作業を設定しません。"),
+            ]
+        return [
+            record("Platform scheduler", "platform_scheduler_install", "the selected agent runs scheduled work for the brain."),
+            record("GBrain autopilot", "autopilot_install", "GBrain runs scheduled work."),
+            record("Manual setup", "manual_scheduler", "configure launchd, crontab, or external cron yourself."),
+            record("Do later", "defer", "do not set up scheduled automatic work now."),
+        ]
+
+    def recurring_jobs_options_text(state):
+        records = recurring_jobs_option_records(state)
+        lines = [
+            recurring_jobs_intro_text(),
+            recurring_jobs_topology_recommendation_text(state),
+            recurring_jobs_choice_prompt_text(),
+        ]
+        lines.extend([
+            f"{index}. {record['label']} — {record['description']}"
+            for index, record in enumerate(records, start=1)
+        ])
+        return "\\n".join(lines)
+
+    def recurring_jobs_decision_mapping_text(state):
+        records = recurring_jobs_option_records(state)
+        return "\\n".join([
+            f"  {index}. {record['label']} -> `--recurring-jobs-decision {record['decision']}`"
+            for index, record in enumerate(records, start=1)
         ])
 
     def user_decision_gate_prompt(state, section_title):
@@ -3012,12 +3090,14 @@ public struct ZebraGBrainOnboardingStore {
             common.extend([
                 "",
                 "Recurring jobs hard gates:",
-                "- Recurring jobs are persistent background changes, not prerequisites for import/index or final verify.",
+                "- This section installs or defers scheduled automatic work that keeps the brain up to date; it is not a prerequisite for import/index or final verify.",
                 f"- Step 3 topology is `{topology_decision_value(state) or 'unknown'}`.",
                 f"- Recurring jobs target key is `{recurring_target_key or '__unresolved__'}`.",
                 f"- Recurring jobs target path is `{recurring_repo}`.",
-                "- Ask the user to choose recurring-job runner using exactly these numbered options:",
+                "- Ask the user how to keep the brain up to date using exactly these numbered options:",
                 recurring_jobs_options_text(state),
+                "- Map the user's selected number exactly as follows:",
+                recurring_jobs_decision_mapping_text(state),
                 "- Do not run `gbrain autopilot --install`, `gbrain autopilot install`, `launchctl`, `cron`, `crontab`, `systemd`, or scheduler installation/start commands until the user explicitly chooses that path.",
                 "- First run `zebra-gbrain-onboarding report --status waiting_for_user --section " + json.dumps(section_title) + " --reason recurring_jobs_decision --note \\\"Choose defer, manual_scheduler, platform_scheduler_install, or autopilot_install\\\"` and ask the user to choose.",
                 "- If the user chooses `defer`, do not install or start any background service; report completed with `--recurring-jobs-decision defer`.",
@@ -3026,7 +3106,7 @@ public struct ZebraGBrainOnboardingStore {
                 "- If `check-launchd-bun-path` reports `bun_missing_for_launchd_autopilot`, run `zebra-gbrain-onboarding repair-launchd-bun-path`, then rerun `zebra-gbrain-onboarding check-launchd-bun-path`.",
                 "- Only after `check-launchd-bun-path` returns ok, run `zebra-gbrain-onboarding run-gbrain -- autopilot --install --repo " + recurring_repo_arg + "`, then report completed with `--recurring-jobs-decision autopilot_install`.",
                 "- If the user chooses `platform_scheduler_install`, first record approval with `zebra-gbrain-onboarding report --status started --section " + json.dumps(section_title) + " --recurring-jobs-decision platform_scheduler_install`, then run `zebra-gbrain-onboarding prepare-platform-scheduler` to install/start only the selected runtime's scheduler service.",
-                "- Do not run `openclaw gateway install`, `openclaw gateway start`, `hermes gateway install`, or `hermes gateway start` directly; use `zebra-gbrain-onboarding prepare-platform-scheduler` so Zebra can verify Step 7 approval first.",
+                "- Do not run `openclaw gateway install`, `openclaw gateway start`, `hermes gateway install`, or `hermes gateway start` directly; use `zebra-gbrain-onboarding prepare-platform-scheduler` so Zebra can verify recurring jobs approval first.",
                 "- After `prepare-platform-scheduler` returns ok, create the GBrain core recurring jobs using the selected runtime scheduler only. Do not create the old single `GBrain save` job.",
                 "- Create exactly these four core jobs for the selected runtime: Live sync every 15 minutes, Auto-update daily, Dream cycle nightly, and Weekly health weekly.",
                 "- Footer save status uses only the Live sync job; auto-update, dream cycle, and weekly health must not be treated as footer save status jobs.",
