@@ -85,16 +85,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private var didStartGBrainDocsPrefetch = false
     private var lastKnownGBrainRecurringJobsCompleted: Bool?
 #if DEBUG
-    private static let developmentCompletedStepIDsDefaultsKey = "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
     private static let developmentIncompleteStepIDsDefaultsKey = "ZebraOnboardingChecklistStore.developmentIncompleteStepIDs"
-    private static let developmentManuallyCompletableStepIDs: Set<ZebraOnboardingChecklistStepID> = [
-        .gbrainRuntime,
-        .gbrain,
-        .adapter,
-        .ingest,
-        .goals,
-    ]
-    private var developmentCompletedStepIDs: Set<ZebraOnboardingChecklistStepID> = []
     private var developmentIncompleteStepIDs: Set<ZebraOnboardingChecklistStepID> = []
 #endif
 #if os(macOS)
@@ -152,7 +143,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             homeDirectoryPath: homeDirectoryPath
         )
 #if DEBUG
-        self.developmentCompletedStepIDs = Self.loadDevelopmentCompletedStepIDs()
         self.developmentIncompleteStepIDs = Self.loadDevelopmentIncompleteStepIDs()
 #endif
         refreshDetectedCompletion()
@@ -293,25 +283,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             }
         }
     }
-
-#if DEBUG
-    /// DEVELOPMENT-ONLY TEMPORARY OVERRIDE.
-    /// Steps 2-6 do not have final completion validators yet. Keep this path
-    /// DEBUG-only so local development can hide the checklist without teaching
-    /// production builds that these steps are actually complete.
-    public func developmentToggleStepCompleted(_ stepID: ZebraOnboardingChecklistStepID) {
-        guard Self.developmentManuallyCompletableStepIDs.contains(stepID) else { return }
-        if completedStepIDs.contains(stepID) {
-            developmentCompletedStepIDs.remove(stepID)
-            developmentIncompleteStepIDs.insert(stepID)
-        } else {
-            developmentCompletedStepIDs.insert(stepID)
-            developmentIncompleteStepIDs.remove(stepID)
-        }
-        saveDevelopmentOverrideStepIDs()
-        refreshDetectedCompletion()
-    }
-#endif
 
     public func refreshDetectedCompletion() {
         let runtimeCompletion = runtimeCompletionResult()
@@ -651,10 +622,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 #endif
 
 #if DEBUG
-    private static func loadDevelopmentCompletedStepIDs() -> Set<ZebraOnboardingChecklistStepID> {
-        loadDevelopmentStepIDs(defaultsKey: developmentCompletedStepIDsDefaultsKey)
-    }
-
     private static func loadDevelopmentIncompleteStepIDs() -> Set<ZebraOnboardingChecklistStepID> {
         loadDevelopmentStepIDs(defaultsKey: developmentIncompleteStepIDsDefaultsKey)
     }
@@ -664,18 +631,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         return Set(
             rawValues
                 .compactMap(ZebraOnboardingChecklistStepID.init(rawValue:))
-                .filter { developmentManuallyCompletableStepIDs.contains($0) }
-        )
-    }
-
-    private func saveDevelopmentOverrideStepIDs() {
-        UserDefaults.standard.set(
-            developmentCompletedStepIDs.map(\.rawValue).sorted(),
-            forKey: Self.developmentCompletedStepIDsDefaultsKey
-        )
-        UserDefaults.standard.set(
-            developmentIncompleteStepIDs.map(\.rawValue).sorted(),
-            forKey: Self.developmentIncompleteStepIDsDefaultsKey
         )
     }
 
@@ -683,16 +638,12 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         to completed: inout Set<ZebraOnboardingChecklistStepID>
     ) {
         completed.subtract(developmentIncompleteStepIDs)
-        completed.formUnion(developmentCompletedStepIDs)
     }
 #endif
 
     private func isDevelopmentCompleted(_ stepID: ZebraOnboardingChecklistStepID) -> Bool {
-#if DEBUG
-        return developmentCompletedStepIDs.contains(stepID)
-#else
+        _ = stepID
         return false
-#endif
     }
 
     private var isClawvisorEmailConfigured: Bool {
@@ -1209,12 +1160,8 @@ public struct ZebraOnboardingChecklistCard: View {
     private func developmentToggleAction(
         for stepID: ZebraOnboardingChecklistStepID
     ) -> (() -> Void)? {
-#if DEBUG
-        guard stepID != .agent else { return nil }
-        return { store.developmentToggleStepCompleted(stepID) }
-#else
+        _ = stepID
         return nil
-#endif
     }
 
     private func toggleSubstepListAction(
@@ -1403,10 +1350,6 @@ private struct ZebraOnboardingChecklistRow: View {
                 .truncationMode(.tail)
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            guard !snapshot.isRunning else { return }
-            onDevelopmentToggle?()
-        }
     }
 
     private var showsGBrainSubsteps: Bool {

@@ -497,9 +497,6 @@ public struct ZebraGBrainOnboardingStore {
         if clearStaleLegacyWaitingForUserIfNeeded(in: &state, receipt: receipt, selectedVaultPath: selectedVaultPath) {
             writeState(state)
         }
-        if let waitingForUser = blockingWaitingForUser(in: state, receipt: receipt, selectedVaultPath: selectedVaultPath) {
-            return CompletionResult(isComplete: false, reasons: ["waiting_for_user:\(waitingForUser)"])
-        }
         guard let resolved = resolveTarget(in: receipt, selectedVaultPath: selectedVaultPath) else {
             return CompletionResult(isComplete: false, reasons: ["receipt_target_missing"])
         }
@@ -526,12 +523,6 @@ public struct ZebraGBrainOnboardingStore {
         if !reasons.isEmpty {
             return CompletionResult(isComplete: false, reasons: reasons)
         }
-        if activeRunRequiresImportIndexCompletion(in: state),
-           !hasCompletedImportIndex(in: state) {
-            reasons.append("import_index_not_completed")
-            return CompletionResult(isComplete: false, reasons: reasons)
-        }
-
         let live = liveVerificationResult(target: resolved.target, vaultPath: vaultPath, sourceId: sourceId)
         if preservesCompletedReceiptOnTransientFailure(receipt: receipt, live: live, targetKey: resolved.key) {
             return CompletionResult(isComplete: true, reasons: [])
@@ -549,9 +540,6 @@ public struct ZebraGBrainOnboardingStore {
         }
         if clearStaleLegacyWaitingForUserIfNeeded(in: &state, receipt: receipt, selectedVaultPath: selectedVaultPath) {
             writeState(state)
-        }
-        if let waitingForUser = blockingWaitingForUser(in: state, receipt: receipt, selectedVaultPath: selectedVaultPath) {
-            return CompletionResult(isComplete: false, reasons: ["waiting_for_user:\(waitingForUser)"])
         }
         guard let resolved = resolveTarget(in: receipt, selectedVaultPath: selectedVaultPath) else {
             return CompletionResult(isComplete: false, reasons: ["receipt_target_missing"])
@@ -577,11 +565,6 @@ public struct ZebraGBrainOnboardingStore {
             reasons.append("source_not_registered")
             return CompletionResult(isComplete: false, reasons: reasons)
         }
-        if activeRunRequiresImportIndexCompletion(in: state),
-           !hasCompletedImportIndex(in: state) {
-            reasons.append("import_index_not_completed")
-            return CompletionResult(isComplete: false, reasons: reasons)
-        }
         guard receiptIsComplete(receipt, selectedVaultPath: selectedVaultPath) else {
             reasons.append("receipt_incomplete")
             return CompletionResult(isComplete: false, reasons: reasons)
@@ -603,19 +586,6 @@ public struct ZebraGBrainOnboardingStore {
             return nil
         }
         return vaultPath
-    }
-
-    private func activeRunRequiresImportIndexCompletion(in state: State) -> Bool {
-        guard let progress = state.progress else { return false }
-        return state.currentRunId != nil
-            || progress.nextSection != nil
-            || progress.waitingForUser != nil
-            || !(progress.completedSections ?? []).isEmpty
-    }
-
-    private func hasCompletedImportIndex(in state: State) -> Bool {
-        guard let completedSections = state.progress?.completedSections else { return false }
-        return completedSections.contains { Self.isImportIndexSectionTitle($0) }
     }
 
     private func completedSectionHasRole(
@@ -2628,7 +2598,18 @@ public struct ZebraGBrainOnboardingStore {
             if title in completed or normalize_title(title) in completed_normalized:
                 continue
             return title
-        return "verify"
+        return "complete" if verify_section_completed(state) else "verify"
+
+    def verify_section_completed(state):
+        progress = state.get("progress") or {}
+        completed = progress.get("completedSections") or []
+        for title in completed:
+            normalized = normalize_title(title)
+            if normalized == "verify":
+                return True
+            if "step 9" in normalized and "verify" in normalized:
+                return True
+        return False
 
     def section_body_for_prompt(state, section_title):
         entry, _ = section_entry(state, section_title)
@@ -3137,6 +3118,8 @@ public struct ZebraGBrainOnboardingStore {
     def build_section_prompt(state, section_title):
         if section_title == "verify":
             return build_verify_prompt(state)
+        if section_title == "complete":
+            return build_complete_prompt(state)
         body = section_body_for_prompt(state, section_title)
         return "\\n\\n".join([
             f"Zebra GBrain setup: current section is `{section_title}`.",
@@ -3157,13 +3140,41 @@ public struct ZebraGBrainOnboardingStore {
         target_path = (target or {}).get("vaultPath") or "<brain repo path>"
         source_id = (target or {}).get("sourceId") or "<source id>"
         method = ((target or {}).get("targetResolution") or progress.get("targetResolution") or {}).get("method") or "<targetResolution.method>"
+        if receipt_verify_complete(state):
+            return "\\n".join([
+                "Zebra GBrain setup: final verification already passed.",
+                "",
+                "Do not run `zebra-gbrain-onboarding verify` again.",
+                "Finish the Zebra UI completion state now by running:",
+                "`zebra-gbrain-onboarding report --status completed --section \\\"verify\\\"`",
+                "After the report succeeds, follow the returned `nextPrompt`.",
+            ])
         return "\\n".join([
             "Zebra GBrain setup: INSTALL_FOR_AGENTS.md sections are complete. Run final verification now.",
             "",
             "Do not say setup is complete until verify returns `complete: true`.",
             f"Run: zebra-gbrain-onboarding verify --target {shell_quote(target_path)} --source-id {shell_quote(source_id)} --method {shell_quote(method)}",
             "If a profile was selected, include `--profile-id <profile>`.",
+            "Only after verify returns `complete: true`, immediately run `zebra-gbrain-onboarding report --status completed --section \\\"verify\\\"` so Zebra marks the UI complete.",
             "If verify fails, repair the reported reasons and rerun verify.",
+        ])
+
+    def build_complete_prompt(state):
+        if receipt_verify_complete(state) and not verify_section_completed(state):
+            return "\\n".join([
+                "Zebra GBrain setup verification is complete, but Zebra still needs the final UI completion report.",
+                "",
+                "Do not run `zebra-gbrain-onboarding verify` again.",
+                "Run exactly:",
+                "`zebra-gbrain-onboarding report --status completed --section \\\"verify\\\"`",
+                "Then follow the returned `nextPrompt`.",
+            ])
+        return "\\n".join([
+            "Zebra GBrain setup is complete.",
+            "",
+            "Do not run `zebra-gbrain-onboarding verify` again.",
+            "Do not run any more onboarding commands.",
+            "Briefly tell the user that Zebra GBrain setup is complete, then stop.",
         ])
 
     def next_prompt_payload(state):
@@ -3671,6 +3682,8 @@ public struct ZebraGBrainOnboardingStore {
 
     def known_title_role(title):
         normalized = normalize_title(title)
+        if normalized == "verify":
+            return "verify"
         if "step 1" in normalized and ("install gbrain" in normalized or "install cli" in normalized):
             return "install"
         if "step 2" in normalized and ("api key" in normalized or "credential" in normalized):

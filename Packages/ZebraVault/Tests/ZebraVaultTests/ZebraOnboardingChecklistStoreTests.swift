@@ -149,19 +149,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDevelopmentToggleCanForceCompletedRuntimeStepIncomplete() throws {
+    func testStoredDevelopmentCompletedOverrideDoesNotCompleteRuntimeStep() throws {
         let root = try makeTemporaryDirectory()
-        let executable = try installFakeRuntime(root: root, name: "hermes")
         let runtimeStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
         let gbrainStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
-        try writeCompletedRuntimeState(
-            stateURL: runtimeStateURL,
-            runtime: "hermes",
-            executablePath: executable.path
+
+        UserDefaults.standard.set(
+            [ZebraOnboardingChecklistStepID.gbrainRuntime.rawValue],
+            forKey: "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
         )
 
         let store = ZebraOnboardingChecklistStore(
@@ -170,18 +169,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             gbrainOnboardingStateURL: gbrainStateURL
         )
 
-        XCTAssertTrue(store.completedStepIDs.contains(.gbrainRuntime))
-
-        store.developmentToggleStepCompleted(.gbrainRuntime)
-
-        XCTAssertFalse(
-            store.completedStepIDs.contains(.gbrainRuntime),
-            "DEBUG manual toggle should be able to force a receipt-completed step back to incomplete."
-        )
-
-        store.developmentToggleStepCompleted(.gbrainRuntime)
-
-        XCTAssertTrue(store.completedStepIDs.contains(.gbrainRuntime))
+        XCTAssertFalse(store.completedStepIDs.contains(.gbrainRuntime))
+        XCTAssertFalse(try XCTUnwrap(store.snapshots.first { $0.id == .gbrainRuntime }).isDevelopmentCompleted)
     }
 
     func testSelectedRuntimeForGBrainSetupReadsCompletedReceipt() throws {
@@ -2903,17 +2892,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(store.completedStepIDs.contains(.email))
     }
 
-#if DEBUG
     @MainActor
-    func testEmailStepCannotBeCompletedByDevelopmentToggle() throws {
+    func testStoredDevelopmentCompletedOverrideDoesNotCompleteEmailStep() throws {
         let root = try makeTemporaryDirectory()
-        let store = makeChecklistStore(homeURL: root)
+        UserDefaults.standard.set(
+            [ZebraOnboardingChecklistStepID.email.rawValue],
+            forKey: "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
+        )
 
-        store.developmentToggleStepCompleted(.email)
+        let store = makeChecklistStore(homeURL: root)
 
         XCTAssertFalse(store.completedStepIDs.contains(.email))
     }
-#endif
 
 #if os(macOS)
     @MainActor
