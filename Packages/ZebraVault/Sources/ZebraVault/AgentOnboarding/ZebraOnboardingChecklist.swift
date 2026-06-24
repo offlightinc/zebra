@@ -1215,7 +1215,7 @@ public struct ZebraOnboardingChecklistRailButton: View {
         Group {
             if store.isVisible {
                 Button(action: action) {
-                    Image(systemName: "checklist")
+                    Image(systemName: "list.number")
                         .font(.system(size: 16, weight: .regular))
                         .foregroundColor(isCardCollapsed ? BVColor.fgMute : BVColor.fg)
                         .frame(width: 36, height: 36)
