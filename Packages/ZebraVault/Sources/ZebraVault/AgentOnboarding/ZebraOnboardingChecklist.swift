@@ -1088,16 +1088,19 @@ public struct ZebraOnboardingChecklistCard: View {
     @ObservedObject private var store: ZebraOnboardingChecklistStore
     private let onStartStep: (ZebraOnboardingChecklistStepID) -> Void
     private let onStopStep: ((ZebraOnboardingChecklistStepID) -> Void)?
+    private let onCollapse: (() -> Void)?
     @State private var collapsedSubstepStepIDs: Set<ZebraOnboardingChecklistStepID> = []
 
     public init(
         store: ZebraOnboardingChecklistStore,
         onStartStep: @escaping (ZebraOnboardingChecklistStepID) -> Void,
-        onStopStep: ((ZebraOnboardingChecklistStepID) -> Void)? = nil
+        onStopStep: ((ZebraOnboardingChecklistStepID) -> Void)? = nil,
+        onCollapse: (() -> Void)? = nil
     ) {
         self.store = store
         self.onStartStep = onStartStep
         self.onStopStep = onStopStep
+        self.onCollapse = onCollapse
     }
 
     public var body: some View {
@@ -1148,8 +1151,12 @@ public struct ZebraOnboardingChecklistCard: View {
                 .foregroundColor(BVColor.fg)
                 .lineLimit(1)
             Spacer(minLength: 0)
+            if let onCollapse {
+                ZebraOnboardingChecklistCollapseButton(action: onCollapse)
+            }
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
         .padding(.vertical, 10)
         .overlay(
             Rectangle()
@@ -1221,6 +1228,97 @@ public struct ZebraOnboardingChecklistCard: View {
                 collapsedSubstepStepIDs.insert(snapshot.id)
             }
         }
+    }
+}
+
+public struct ZebraOnboardingChecklistRailButton: View {
+    @ObservedObject private var store: ZebraOnboardingChecklistStore
+    private let isCardCollapsed: Bool
+    private let action: () -> Void
+
+    public init(
+        store: ZebraOnboardingChecklistStore,
+        isCardCollapsed: Bool,
+        action: @escaping () -> Void
+    ) {
+        self.store = store
+        self.isCardCollapsed = isCardCollapsed
+        self.action = action
+    }
+
+    public var body: some View {
+        Group {
+            if store.isVisible {
+                Button(action: action) {
+                    Image(systemName: "checklist")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundColor(isCardCollapsed ? BVColor.fgMute : BVColor.fg)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(isCardCollapsed ? Color.clear : BVColor.bgHover)
+                        )
+                        .contentShape(Rectangle())
+                        .overlay(alignment: .topTrailing) {
+                            if isCardCollapsed {
+                                progressBadge
+                                    .offset(x: 6, y: -3)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .help(helpText)
+                .accessibilityLabel(helpText)
+                .accessibilityIdentifier("ZebraOnboardingChecklistRailButton")
+            }
+        }
+    }
+
+    private var progressBadge: some View {
+        Text("\(store.completedCount)/\(store.totalCount)")
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .monospacedDigit()
+            .foregroundColor(ZebraOnboardingChecklistPalette.startText)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(ZebraOnboardingChecklistPalette.accent)
+            )
+            .accessibilityHidden(true)
+    }
+
+    private var helpText: String {
+        if isCardCollapsed {
+            return String(
+                localized: "brain.onboarding.checklist.show",
+                defaultValue: "Show Start Zebra"
+            )
+        }
+        return String(
+            localized: "brain.onboarding.checklist.hide",
+            defaultValue: "Hide Start Zebra"
+        )
+    }
+}
+
+private struct ZebraOnboardingChecklistCollapseButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(BVColor.fgFaint)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(String(localized: "brain.onboarding.checklist.hide", defaultValue: "Hide Start Zebra"))
+        .accessibilityLabel(
+            String(localized: "brain.onboarding.checklist.hide", defaultValue: "Hide Start Zebra")
+        )
+        .accessibilityIdentifier("ZebraOnboardingChecklistCollapseButton")
     }
 }
 

@@ -31,6 +31,8 @@ struct ZebraSidebarBody: View {
     @State private var lastRuntimeInteractiveAuthLaunchByKey: [String: Date] = [:]
     @State private var lastAppliedGBrainTargetVaultPath: String?
     @State private var suppressedAutoSelectedVaultPathForBrainSaveRefresh: String?
+    @AppStorage("ZebraOnboardingChecklistCard.isCollapsed")
+    private var isOnboardingChecklistCollapsed = false
     private static let runtimeInteractiveAuthAutoRetryInterval: TimeInterval = 120
 
     var body: some View {
@@ -44,6 +46,15 @@ struct ZebraSidebarBody: View {
                     // cmux app module 의 internal struct (ContentView.swift) —
                     // 같은 module 이라 여기서 직접 instantiate.
                     VStack(spacing: 4) {
+                        ZebraOnboardingChecklistRailButton(
+                            store: onboardingChecklistStore,
+                            isCardCollapsed: isOnboardingChecklistCollapsed,
+                            action: {
+                                withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
+                                    isOnboardingChecklistCollapsed.toggle()
+                                }
+                            }
+                        )
                         SidebarHelpMenuButton(
                             buttonSize: 36,
                             iconSize: 16,
@@ -66,7 +77,15 @@ struct ZebraSidebarBody: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 .overlay(alignment: .bottom) {
-                    onboardingChecklistOverlay
+                    if !isOnboardingChecklistCollapsed {
+                        onboardingChecklistOverlay
+                            .transition(
+                                .asymmetric(
+                                    insertion: .move(edge: .leading).combined(with: .opacity),
+                                    removal: .move(edge: .leading).combined(with: .opacity)
+                                )
+                            )
+                    }
                 }
             footer
         }
@@ -126,6 +145,11 @@ struct ZebraSidebarBody: View {
             },
             onStopStep: { stepID in
                 stopOnboardingChecklistStep(stepID)
+            },
+            onCollapse: {
+                withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
+                    isOnboardingChecklistCollapsed = true
+                }
             }
         )
         .padding(8)
