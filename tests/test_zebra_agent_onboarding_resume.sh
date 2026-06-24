@@ -180,13 +180,63 @@ add_fake_installer_for_agent() {
   cat > "$HOME_DIR/.local/bin/curl" <<FAKE
 #!/usr/bin/env bash
 set -euo pipefail
-cat <<'INSTALL'
+output=""
+while [[ "\$#" -gt 0 ]]; do
+  case "\$1" in
+    -o)
+      output="\${2:-}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [[ -n "\$output" ]]; then
+  cat > "\$output" <<'INSTALL'
 #!/usr/bin/env sh
 set -eu
 mkdir -p "\$HOME/.local/bin"
 cp "$source" "\$HOME/.local/bin/$binary"
 chmod +x "\$HOME/.local/bin/$binary"
+printf 'Codex CLI 0.142.0 installed successfully.\n'
+case "\${CODEX_NON_INTERACTIVE:-}" in
+  1|true|TRUE|yes|YES) ;;
+  *)
+    if { : > /dev/tty; } 2>/dev/null; then
+      printf 'Start Codex now? [y/N] ' > /dev/tty
+      read answer < /dev/tty || answer=""
+    else
+      printf 'Start Codex now? [y/N] '
+      read answer || answer=""
+    fi
+    test "\$answer" = "n"
+    ;;
+esac
 INSTALL
+else
+  cat <<'INSTALL'
+#!/usr/bin/env sh
+set -eu
+mkdir -p "\$HOME/.local/bin"
+cp "$source" "\$HOME/.local/bin/$binary"
+chmod +x "\$HOME/.local/bin/$binary"
+printf 'Codex CLI 0.142.0 installed successfully.\n'
+case "\${CODEX_NON_INTERACTIVE:-}" in
+  1|true|TRUE|yes|YES) ;;
+  *)
+    if { : > /dev/tty; } 2>/dev/null; then
+      printf 'Start Codex now? [y/N] ' > /dev/tty
+      read answer < /dev/tty || answer=""
+    else
+      printf 'Start Codex now? [y/N] '
+      read answer || answer=""
+    fi
+    test "\$answer" = "n"
+    ;;
+esac
+INSTALL
+fi
 FAKE
   chmod +x "$HOME_DIR/.local/bin/curl"
   cat > "$HOME_DIR/.local/bin/npm" <<'FAKE'
@@ -279,24 +329,6 @@ add_fake_codex_official_and_standalone_installers() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "\$*" >> "$CASE_DIR/curl.log"
-for arg in "\$@"; do
-  case "\$arg" in
-    https://chatgpt.com/codex/install.sh)
-      cat <<'INSTALL'
-#!/usr/bin/env sh
-set -eu
-mkdir -p "\$HOME/.local/bin"
-cat > "\$HOME/.local/bin/codex" <<'CODEX'
-#!/usr/bin/env bash
-printf 'official codex should not run\n' >&2
-exit 66
-CODEX
-chmod +x "\$HOME/.local/bin/codex"
-INSTALL
-      exit 0
-      ;;
-  esac
-done
 output=""
 url=""
 while [[ "\$#" -gt 0 ]]; do
@@ -315,6 +347,33 @@ while [[ "\$#" -gt 0 ]]; do
   esac
 done
 case "\$url" in
+  https://chatgpt.com/codex/install.sh)
+    cat > "\$output" <<'INSTALL'
+#!/usr/bin/env sh
+set -eu
+mkdir -p "\$HOME/.local/bin"
+cat > "\$HOME/.local/bin/codex" <<'CODEX'
+#!/usr/bin/env bash
+printf 'official codex should not run\n' >&2
+exit 66
+CODEX
+chmod +x "\$HOME/.local/bin/codex"
+printf 'Codex CLI 0.142.0 installed successfully.\n'
+case "\${CODEX_NON_INTERACTIVE:-}" in
+  1|true|TRUE|yes|YES) ;;
+  *)
+    if { : > /dev/tty; } 2>/dev/null; then
+      printf 'Start Codex now? [y/N] ' > /dev/tty
+      read answer < /dev/tty || answer=""
+    else
+      printf 'Start Codex now? [y/N] '
+      read answer || answer=""
+    fi
+    test "\$answer" = "n"
+    ;;
+esac
+INSTALL
+    ;;
   *codex-aarch64-apple-darwin.tar.gz)
     cp "$CASE_DIR/releases/codex-aarch64-apple-darwin.tar.gz" "\$output"
     ;;
@@ -348,20 +407,6 @@ add_fake_codex_official_hidden_and_standalone_installers() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "\$*" >> "$CASE_DIR/curl.log"
-for arg in "\$@"; do
-  case "\$arg" in
-    https://chatgpt.com/codex/install.sh)
-      cat <<'INSTALL'
-#!/usr/bin/env sh
-set -eu
-mkdir -p "\$HOME/.codex/bin"
-cp "$source" "\$HOME/.codex/bin/codex"
-chmod +x "\$HOME/.codex/bin/codex"
-INSTALL
-      exit 0
-      ;;
-  esac
-done
 output=""
 url=""
 while [[ "\$#" -gt 0 ]]; do
@@ -380,6 +425,29 @@ while [[ "\$#" -gt 0 ]]; do
   esac
 done
 case "\$url" in
+  https://chatgpt.com/codex/install.sh)
+    cat > "\$output" <<'INSTALL'
+#!/usr/bin/env sh
+set -eu
+mkdir -p "\$HOME/.codex/bin"
+cp "$source" "\$HOME/.codex/bin/codex"
+chmod +x "\$HOME/.codex/bin/codex"
+printf 'Codex CLI 0.142.0 installed successfully.\n'
+case "\${CODEX_NON_INTERACTIVE:-}" in
+  1|true|TRUE|yes|YES) ;;
+  *)
+    if { : > /dev/tty; } 2>/dev/null; then
+      printf 'Start Codex now? [y/N] ' > /dev/tty
+      read answer < /dev/tty || answer=""
+    else
+      printf 'Start Codex now? [y/N] '
+      read answer || answer=""
+    fi
+    test "\$answer" = "n"
+    ;;
+esac
+INSTALL
+    ;;
   *codex-aarch64-apple-darwin.tar.gz)
     cp "$CASE_DIR/releases/codex-aarch64-apple-darwin.tar.gz" "\$output"
     ;;
@@ -775,6 +843,32 @@ run_onboarding_chained() {
   RUN_OUTPUT="$(cat "$output_file")"
 }
 
+run_onboarding_tty_script() {
+  local expect_script="$1"
+  local output_file="$CASE_DIR/output-tty.txt"
+  set +e
+  HOME="$HOME_DIR" \
+    ZEBRA_APP_SUPPORT_DIR="$APP_DIR" \
+    ZEBRA_AGENT_ONBOARDING_INCLUDE_GLOBAL_PATHS=0 \
+    ZEBRA_AGENT_READINESS_POLL_INTERVAL_SECONDS=1 \
+    ZEBRA_AGENT_ANTIGRAVITY_AUTH_CHECK_BACKOFF_SECONDS=1 \
+    ZEBRA_ONBOARDING_LANGUAGE="$TEST_ONBOARDING_LANGUAGE" \
+    ZEBRA_AGENT_ONBOARDING_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE="$TEST_FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE" \
+    ZEBRA_FAKE_AGENT_LOG="$FAKE_LOG" \
+    ZEBRA_FAKE_READY_AGENTS="$READY_AGENTS" \
+    ZEBRA_FAKE_HOLD_FILE="$FAKE_HOLD_FILE" \
+    ZEBRA_FAKE_RELEASE_FILE="$FAKE_RELEASE_FILE" \
+    SCRIPT="$SCRIPT" \
+    WORK_DIR="$WORK_DIR" \
+    CONTINUE_COMMAND_FILE="$CONTINUE_COMMAND_FILE" \
+    TERM=xterm \
+    PATH="/usr/bin:/bin" \
+    /usr/bin/expect -c "$expect_script" >"$output_file" 2>&1
+  RUN_STATUS=$?
+  set -e
+  RUN_OUTPUT="$(cat "$output_file")"
+}
+
 run_onboarding_async() {
   local input="$1"
   RUN_OUTPUT_FILE="$CASE_DIR/output-async.txt"
@@ -915,6 +1009,118 @@ test_korean_language_keeps_agent_terms_in_english() {
   assert_contains "$RUN_OUTPUT" "Zebra onboarding을 위해 Codex를 시작합니다." "korean launch message"
   assert_contains "$RUN_OUTPUT" "provider CLI" "technical CLI term stays English"
   assert_not_contains "$RUN_OUTPUT" "Which agent should Zebra use by default?" "english primary prompt is not used"
+}
+
+test_korean_tty_primary_choice_uses_selector() {
+  [[ -x /usr/bin/expect ]] || return 0
+  setup_case korean-tty-selector
+  TEST_ONBOARDING_LANGUAGE="ko"
+  add_fake_agent codex
+  set_ready_agents codex
+
+  run_onboarding_tty_script '
+    set timeout 10
+    spawn $env(SCRIPT) run --cwd $env(WORK_DIR)
+    expect {
+      "위/아래 방향키 또는 j/k로 이동하고 Enter로 선택하세요." { send "j" }
+      timeout { exit 124 }
+      eof { exit 125 }
+    }
+    expect -exact {> Codex [installed]}
+    after 100
+    send "\r"
+    expect {
+      "Zebra onboarding을 위해 Codex를 시작합니다." {}
+      timeout { exit 124 }
+      eof { exit 125 }
+    }
+    close
+    wait
+    exit 0
+  '
+
+  assert_eq "$RUN_STATUS" "0" "korean tty selector status"
+  assert_contains "$RUN_OUTPUT" "어떤 agent를 Zebra의 default로 사용할까요?" "korean tty primary prompt"
+  assert_contains "$RUN_OUTPUT" "위/아래 방향키 또는 j/k로 이동하고 Enter로 선택하세요." "korean tty selector hint"
+  assert_contains "$RUN_OUTPUT" "> Claude Code [not installed]" "tty selector renders active row without number"
+  assert_contains "$RUN_OUTPUT" "Zebra onboarding을 위해 Codex를 시작합니다." "tty selector launches selected Codex"
+  assert_not_contains "$RUN_OUTPUT" "선택 [1-3]:" "tty selector does not show numeric prompt"
+  assert_not_contains "$RUN_OUTPUT" "1. Claude Code [not installed]" "tty selector does not render numbered primary row"
+}
+
+test_korean_tty_installer_confirm_defaults_to_yes() {
+  [[ -x /usr/bin/expect ]] || return 0
+  setup_case korean-tty-installer-yes
+  TEST_ONBOARDING_LANGUAGE="ko"
+
+  run_onboarding_tty_script '
+    set timeout 10
+    spawn $env(SCRIPT) run --cwd $env(WORK_DIR)
+    expect {
+      "위/아래 방향키 또는 j/k로 이동하고 Enter로 선택하세요." { send "j" }
+      timeout { exit 124 }
+      eof { exit 125 }
+    }
+    expect -exact {> Codex [not installed]}
+    send "\r"
+    expect {
+      "지금 installer를 실행할까요?" {}
+      timeout { exit 124 }
+      eof { exit 125 }
+    }
+    after 300
+    send "\r"
+    expect {
+      "Codex install 중" {}
+      timeout { exit 124 }
+      eof { exit 125 }
+    }
+    close
+    wait
+    exit 0
+  '
+
+  assert_eq "$RUN_STATUS" "0" "korean tty installer yes default status"
+  assert_contains "$RUN_OUTPUT" "지금 installer를 실행할까요?" "installer confirm selector title"
+  assert_contains "$RUN_OUTPUT" "> 예, installer 실행" "yes is first/default"
+  assert_not_contains "$RUN_OUTPUT" "지금 installer를 실행할까요? [y/N]:" "tty installer prompt does not use y/N"
+}
+
+test_korean_tty_installer_confirm_can_select_no() {
+  [[ -x /usr/bin/expect ]] || return 0
+  setup_case korean-tty-installer-no
+  TEST_ONBOARDING_LANGUAGE="ko"
+
+  run_onboarding_tty_script '
+    set timeout 10
+    spawn $env(SCRIPT) run --cwd $env(WORK_DIR)
+    expect {
+      "위/아래 방향키 또는 j/k로 이동하고 Enter로 선택하세요." { send "j" }
+      timeout { exit 124 }
+      eof { exit 125 }
+    }
+    expect -exact {> Codex [not installed]}
+    send "\r"
+    expect {
+      "지금 installer를 실행할까요?" {}
+      timeout { exit 124 }
+      eof { exit 125 }
+    }
+    after 300
+    send "j\r"
+    expect {
+      "installer를 실행하지 않았습니다." {}
+      timeout { exit 124 }
+      eof { exit 125 }
+    }
+    close
+    wait
+    exit 0
+  '
+
+  assert_eq "$RUN_STATUS" "0" "korean tty installer no selection status"
+  assert_contains "$RUN_OUTPUT" "> 아니요, installer 건너뛰기" "no can be selected with j"
+  assert_contains "$RUN_OUTPUT" "installer를 실행하지 않았습니다." "no selection skips installer"
 }
 
 test_korean_language_applies_to_unknown_option_error() {
@@ -1291,6 +1497,8 @@ test_missing_codex_install_then_polling_completes() {
   finish_onboarding_async
 
   assert_eq "$RUN_STATUS" "0" "post-install onboarding status"
+  assert_contains "$RUN_OUTPUT" "Codex CLI 0.142.0 installed successfully." "official installer success output remains"
+  assert_not_contains "$RUN_OUTPUT" "Start Codex now? [y/N]" "official installer start prompt is suppressed"
   assert_contains "$RUN_OUTPUT" "Install complete. Re-scanning..." "post-install rescan message"
   assert_contains "$RUN_OUTPUT" "Codex found at" "installed codex is found after rescan"
   assert_contains "$RUN_OUTPUT" "Updated shell startup files so codex is available in new terminals." "post-install shell path message"
@@ -1396,6 +1604,8 @@ test_codex_auto_exposes_hidden_official_install_to_new_shells() {
   finish_onboarding_async
 
   assert_eq "$RUN_STATUS" "0" "hidden official onboarding status"
+  assert_contains "$RUN_OUTPUT" "Codex CLI 0.142.0 installed successfully." "hidden official installer success output remains"
+  assert_not_contains "$RUN_OUTPUT" "Start Codex now? [y/N]" "hidden official start prompt is suppressed"
   curl_log="$(cat "$CASE_DIR/curl.log")"
   assert_contains "$curl_log" "https://chatgpt.com/codex/install.sh" "auto mode tries official installer first"
   assert_not_contains "$curl_log" "github.com/openai/codex/releases/latest/download/codex-" "visible hidden official install does not need GitHub fallback"
@@ -1505,6 +1715,9 @@ test_waiting_for_continue_can_choose_another_agent
 test_choose_install_target_resumes_install_menu
 test_fresh_choice_lists_missing_agents
 test_korean_language_keeps_agent_terms_in_english
+test_korean_tty_primary_choice_uses_selector
+test_korean_tty_installer_confirm_defaults_to_yes
+test_korean_tty_installer_confirm_can_select_no
 test_korean_language_applies_to_unknown_option_error
 test_declined_install_can_choose_another_agent_for_any_agent
 test_failed_install_resume_can_choose_another_agent_for_any_agent

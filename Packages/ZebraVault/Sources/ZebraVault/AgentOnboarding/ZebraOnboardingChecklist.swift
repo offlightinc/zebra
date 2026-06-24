@@ -888,15 +888,19 @@ public enum ZebraOnboardingChecklistCommand {
 
     static func gbrainSetupRuntimeStartupLine(
         launch: ZebraGBrainOnboardingStore.LaunchContext,
-        runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime
+        runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime,
+        language: ZebraOnboardingLanguage = ZebraOnboardingLanguage.current()
     ) -> String {
         let prepareSourceRepoPrefix = [
+            "printf '%s\\n' \(ZebraAgentLaunchCommand.shellQuote(language.gbrainSourceRepoPrepareMessage))",
             "zebra-gbrain-onboarding prepare-source-repo",
             "eval \"$(zebra-gbrain-onboarding active-source-env)\"",
+            "printf '%s\\n' \(ZebraAgentLaunchCommand.shellQuote(language.gbrainRuntimeLauncherPrepareMessage))",
         ].joined(separator: " && ") + " && "
         let startupLine = gbrainSetupSelectedRuntimeCommand(
             launch: launch,
-            runtime: runtime
+            runtime: runtime,
+            language: language
         )
         return "\(launch.shellEnvironmentPrefix)\(prepareSourceRepoPrefix)\(startupLine)"
     }
@@ -931,19 +935,33 @@ public enum ZebraOnboardingChecklistCommand {
 
     private static func gbrainSetupSelectedRuntimeCommand(
         launch: ZebraGBrainOnboardingStore.LaunchContext,
-        runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime
+        runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime,
+        language: ZebraOnboardingLanguage = .en
     ) -> String {
         let executable = ZebraAgentLaunchCommand.shellQuote(runtime.executablePath)
         let runId = ZebraAgentLaunchCommand.shellQuote(launch.runId)
+        let runtimeDisplayName = gbrainRuntimeDisplayName(runtime.runtime)
+        let startMessage = "printf '%s\\n' \(ZebraAgentLaunchCommand.shellQuote(language.gbrainRuntimeStartMessage(runtimeDisplayName: runtimeDisplayName)))"
         switch runtime.runtime {
         case "openclaw":
             let agentID = openClawAgentID(runId: launch.runId)
             let sessionKey = "agent:\(agentID):\(launch.runId)"
-            return "eval \"$(zebra-gbrain-onboarding write-runtime-launcher --runtime 'openclaw' --executable \(executable) --run-id \(runId) --agent-id \(ZebraAgentLaunchCommand.shellQuote(agentID)) --session \(ZebraAgentLaunchCommand.shellQuote(sessionKey)))\" && \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\"\r"
+            return "eval \"$(zebra-gbrain-onboarding write-runtime-launcher --runtime 'openclaw' --executable \(executable) --run-id \(runId) --agent-id \(ZebraAgentLaunchCommand.shellQuote(agentID)) --session \(ZebraAgentLaunchCommand.shellQuote(sessionKey)))\" && \(startMessage) && \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\"\r"
         case "hermes":
-            return "eval \"$(zebra-gbrain-onboarding write-runtime-launcher --runtime 'hermes' --executable \(executable) --run-id \(runId))\" && \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\"\r"
+            return "eval \"$(zebra-gbrain-onboarding write-runtime-launcher --runtime 'hermes' --executable \(executable) --run-id \(runId))\" && \(startMessage) && \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\"\r"
         default:
             return "echo 'Unsupported OpenClaw/Hermes runtime for GBrain setup: \(runtime.runtime)' >&2 && exit 1\r"
+        }
+    }
+
+    private static func gbrainRuntimeDisplayName(_ runtime: String) -> String {
+        switch runtime {
+        case "openclaw":
+            return "OpenClaw"
+        case "hermes":
+            return "Hermes"
+        default:
+            return runtime
         }
     }
 

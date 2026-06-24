@@ -3299,6 +3299,9 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
         XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertTrue(result.stdout.contains("activeGBrainBinding"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("Clone into this path"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("Preparing GBrain source repo at: \(homeRepo.path)"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertFalse(result.stdout.contains("Y/n"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let state = try stateObject(in: stateURL)
         let binding = try XCTUnwrap(state["activeGBrainBinding"] as? [String: Any])
 
@@ -3332,12 +3335,59 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
         XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertTrue(result.stdout.contains("activeGBrainBinding"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("Use this repo"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("Using GBrain source repo: \(homeRepo.path)"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertFalse(result.stdout.contains("Y/n"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let state = try stateObject(in: stateURL)
         let binding = try XCTUnwrap(state["activeGBrainBinding"] as? [String: Any])
 
         XCTAssertEqual(binding["sourceRepoPath"] as? String, homeRepo.path)
         XCTAssertEqual(binding["sourceRepoStatus"] as? String, "reused")
         XCTAssertFalse(FileManager.default.fileExists(atPath: homeRepo.appendingPathComponent("node_modules").path))
+    }
+
+    func testPrepareSourceRepoWithTerminalAbortMenuRowAborts() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's terminal prompt")
+        }
+
+        let root = try makeTemporaryDirectory()
+        _ = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let result = try runHelperWithTerminalScript(
+            stateURL: stateURL,
+            homePath: root.path,
+            script: """
+            set timeout 10
+            spawn $env(HELPER_PATH) prepare-source-repo
+            expect {
+                "Use Up/Down" { send "jj\\r" }
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect {
+                "GBrain source repo preparation was aborted" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect eof
+            set wait_status [wait]
+            exit [lindex $wait_status 3]
+            """
+        )
+
+        XCTAssertNotEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertNil(try stateObject(in: stateURL)["activeGBrainBinding"])
+        XCTAssertEqual(try progressObject(in: stateURL)["lastFailure"] as? String, "source_repo_prepare_aborted")
     }
 
     func testPrepareSourceRepoWithTerminalRejectsInvalidCustomPathBeforeBinding() throws {
@@ -3369,15 +3419,45 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             homePath: root.path,
             extraEnvironment: ["INVALID_CUSTOM_PATH": invalidCustomPath.path],
             script: """
-            set timeout 60
+            set timeout 10
             spawn $env(HELPER_PATH) prepare-source-repo
-            expect "Y/n"
-            send "n\\r"
-            expect "A different GBrain source repo path is required"
-            expect "Custom GBrain source repo path"
+            expect {
+                "Use this repo" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            send "j\\r"
+            expect {
+                "Waiting for a custom GBrain source repo path" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect {
+                "A different GBrain source repo path is required" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect {
+                "Custom GBrain source repo path" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
             send "$env(INVALID_CUSTOM_PATH)\\r"
-            expect "Choose:"
-            send "q\\r"
+            expect {
+                "Clone into" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect {
+                "Retry this same path" { send "q" }
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect {
+                "GBrain source repo preparation was aborted" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
             expect eof
             set wait_status [wait]
             exit [lindex $wait_status 3]
@@ -3386,9 +3466,11 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
 
         XCTAssertNotEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertTrue(result.stdout.contains("\(invalidCustomPath.path) is not a GBrain source repo."), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
-        XCTAssertTrue(result.stdout.contains("[1] Clone into \(invalidCustomPath.path)/gbrain"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
-        XCTAssertTrue(result.stdout.contains("[2] Retry this same path"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
-        XCTAssertTrue(result.stdout.contains("[3] Choose another path"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("Clone into \(invalidCustomPath.path)/gbrain"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("Retry this same path"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("Choose another path"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertFalse(result.stdout.contains("Y/n"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertFalse(result.stdout.contains("Choose:"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertNil(try stateObject(in: stateURL)["activeGBrainBinding"])
         XCTAssertEqual(try progressObject(in: stateURL)["lastFailure"] as? String, "source_repo_prepare_aborted")
         XCTAssertFalse(FileManager.default.fileExists(atPath: invalidCustomPath.appendingPathComponent("gbrain").path))
@@ -3415,15 +3497,41 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             stateURL: stateURL,
             homePath: root.path,
             script: """
-            set timeout 60
+            set timeout 10
             spawn $env(HELPER_PATH) prepare-source-repo
-            expect "Y/n"
-            send "n\\r"
-            expect "A different GBrain source repo path is required"
-            expect "Custom GBrain source repo path"
+            expect {
+                "Use this repo" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            send "j\\r"
+            expect {
+                "Waiting for a custom GBrain source repo path" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect {
+                "A different GBrain source repo path is required" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect {
+                "Custom GBrain source repo path" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
             send "Users/han/project\\r"
-            expect "Custom path must start with / or ~"
+            expect {
+                "Custom path must start with / or ~" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
             send "q\\r"
+            expect {
+                "GBrain source repo preparation was aborted" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
             expect eof
             set wait_status [wait]
             exit [lindex $wait_status 3]
@@ -3431,6 +3539,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
 
         XCTAssertNotEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertFalse(result.stdout.contains("Y/n"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertNil(try stateObject(in: stateURL)["activeGBrainBinding"])
         XCTAssertEqual(try progressObject(in: stateURL)["lastFailure"] as? String, "source_repo_prepare_aborted")
     }
@@ -3459,12 +3568,29 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             homePath: root.path,
             extraEnvironment: ["ZEBRA_GBRAIN_SOURCE_REMOTE": remote.path],
             script: """
-            set timeout 60
+            set timeout 10
             spawn $env(HELPER_PATH) prepare-source-repo
-            expect "Y/n"
-            send "n\\r"
-            expect "A different GBrain source repo path is required"
-            expect "Custom GBrain source repo path"
+            expect {
+                "Use this repo" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            send "j\\r"
+            expect {
+                "Waiting for a custom GBrain source repo path" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect {
+                "A different GBrain source repo path is required" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect {
+                "Custom GBrain source repo path" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
             send "~/project-gbrain\\r"
             expect eof
             set wait_status [wait]
@@ -3475,8 +3601,95 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let binding = try XCTUnwrap(state["activeGBrainBinding"] as? [String: Any])
 
         XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("Preparing GBrain source repo at: \(customRepo.path)"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertFalse(result.stdout.contains("Y/n"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertEqual(binding["sourceRepoPath"] as? String, customRepo.path)
         XCTAssertEqual(binding["sourceRepoStatus"] as? String, "cloned")
+    }
+
+    func testPrepareSourceRepoWithTerminalDumbTermUsesNumericFallback() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's terminal prompt")
+        }
+
+        let root = try makeTemporaryDirectory()
+        let homeRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let result = try runHelperWithTerminalScript(
+            stateURL: stateURL,
+            homePath: root.path,
+            extraEnvironment: ["TERM": "dumb"],
+            script: """
+            set timeout 60
+            spawn $env(HELPER_PATH) prepare-source-repo
+            expect "Selection:"
+            send "1\\r"
+            expect eof
+            set wait_status [wait]
+            exit [lindex $wait_status 3]
+            """
+        )
+        let state = try stateObject(in: stateURL)
+        let binding = try XCTUnwrap(state["activeGBrainBinding"] as? [String: Any])
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("Using GBrain source repo: \(homeRepo.path)"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertFalse(result.stdout.contains("Y/n"), "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(binding["sourceRepoPath"] as? String, homeRepo.path)
+    }
+
+    func testPrepareSourceRepoWithTerminalDumbTermAbortMenuNumberAborts() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to drive the helper's terminal prompt")
+        }
+
+        let root = try makeTemporaryDirectory()
+        _ = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+
+        XCTAssertNotNil(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let result = try runHelperWithTerminalScript(
+            stateURL: stateURL,
+            homePath: root.path,
+            extraEnvironment: ["TERM": "dumb"],
+            script: """
+            set timeout 10
+            spawn $env(HELPER_PATH) prepare-source-repo
+            expect {
+                "Selection:" { send "3\\r" }
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect {
+                "GBrain source repo preparation was aborted" {}
+                timeout { exit 124 }
+                eof { exit 125 }
+            }
+            expect eof
+            set wait_status [wait]
+            exit [lindex $wait_status 3]
+            """
+        )
+
+        XCTAssertNotEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertNil(try stateObject(in: stateURL)["activeGBrainBinding"])
+        XCTAssertEqual(try progressObject(in: stateURL)["lastFailure"] as? String, "source_repo_prepare_aborted")
     }
 
     func testDynamicGBrainSetupCommandUsesSourceRepoShellCwd() {
@@ -6422,7 +6635,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             set timeout 60
             spawn $env(HELPER_PATH) prepare-source-repo
             expect {
-                "Y/n" { send "\(escapedReply)" }
+                "Use Up/Down" { send "\(escapedReply)" }
                 timeout { exit 124 }
                 eof { exit 125 }
             }

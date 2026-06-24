@@ -1846,23 +1846,29 @@ public struct ZebraGBrainOnboardingStore {
           MISSING_HOME_2="이 경로에 GBrain repo를 clone할까요?"
           INVALID_REPO_SUFFIX="는 GBrain source repo가 아닙니다."
           INVALID_EXISTING_NOTE="이 경로는 이미 존재하므로 Zebra가 자동으로 삭제하거나 덮어쓰지 않습니다."
-          CHOOSE_LABEL="선택하세요:"
-          OPTION_RETRY_SAME_PATH="[1] 이 path를 비우거나 백업한 뒤 같은 path 재확인"
-          OPTION_OTHER_PATH="[2] 다른 path 선택"
-          OPTION_SUBDIR_CLONE_PREFIX="[1] "
-          OPTION_SUBDIR_CLONE_SUFFIX=" 에 clone"
-          OPTION_CUSTOM_RETRY="[2] 이 path를 비우거나 백업한 뒤 같은 path 재확인"
-          OPTION_CUSTOM_OTHER="[3] 다른 path 선택"
-          OPTION_ABORT="[q] 중단"
-          CHOICE_PROMPT="> "
+          ACTION_PROMPT="작업을 선택하세요"
+          OPTION_USE_REPO="이 repo를 사용합니다."
+          OPTION_CLONE_RECOMMENDED="이 경로에 clone 합니다."
+          OPTION_RETRY_SAME_PATH="이 path를 비우거나 백업한 뒤 같은 path를 재확인합니다"
+          OPTION_OTHER_PATH="다른 path를 선택합니다."
+          OPTION_SUBDIR_CLONE_PREFIX="이 하위 경로에 clone 합니다: "
+          OPTION_SUBDIR_CLONE_SUFFIX=""
+          OPTION_CUSTOM_RETRY="이 path를 비우거나 백업한 뒤 같은 path를 재확인합니다"
+          OPTION_CUSTOM_OTHER="다른 path를 선택합니다."
+          OPTION_ABORT="중단합니다."
+          MENU_HINT="위/아래 방향키 또는 j/k로 이동하고 Enter로 선택하세요. q로 중단합니다."
+          FALLBACK_CHOICE_PROMPT="선택 번호: "
           CUSTOM_REQUIRED="다른 GBrain source repo path가 필요합니다. 절대 경로를 입력하세요. 예: /path/to/gbrain-source 또는 ~/gbrain-source"
           CUSTOM_PROMPT="GBrain source repo custom path: "
           CUSTOM_PATH_FORMAT_ERROR="custom path는 / 또는 ~로 시작해야 합니다. 예: /path/to/gbrain-source 또는 ~/gbrain-source"
           INVALID_SUBDIR="선택한 하위 디렉토리도 사용할 수 없습니다:"
-          YES_NO_PROMPT=" [Y/n]: "
           UNAVAILABLE_MESSAGE="GBrain source repo path를 입력할 수 있는 terminal stdin이 없습니다."
           EMPTY_CUSTOM_PATH="custom path가 비어 있습니다."
           ABORTED_MESSAGE="GBrain source repo 준비를 중단했습니다."
+          USING_SOURCE_PREFIX="GBrain source repo를 사용합니다: "
+          PREPARING_SOURCE_PREFIX="GBrain source repo를 준비합니다: "
+          RECHECKING_SOURCE_PREFIX="GBrain source repo path를 다시 확인합니다: "
+          WAITING_CUSTOM_MESSAGE="custom GBrain source repo path 입력을 기다립니다..."
           ;;
         *)
           PROMPT_UNAVAILABLE="No terminal stdin is available for the GBrain source repo path prompt."
@@ -1874,23 +1880,29 @@ public struct ZebraGBrainOnboardingStore {
           MISSING_HOME_2="Clone the GBrain repo into this path?"
           INVALID_REPO_SUFFIX=" is not a GBrain source repo."
           INVALID_EXISTING_NOTE="This path already exists, so Zebra will not delete or overwrite it automatically."
-          CHOOSE_LABEL="Choose:"
-          OPTION_RETRY_SAME_PATH="[1] Retry this same path after you clear or back it up"
-          OPTION_OTHER_PATH="[2] Choose another path"
-          OPTION_SUBDIR_CLONE_PREFIX="[1] Clone into "
+          ACTION_PROMPT="Choose an action"
+          OPTION_USE_REPO="Use this repo"
+          OPTION_CLONE_RECOMMENDED="Clone into this path"
+          OPTION_RETRY_SAME_PATH="Retry this same path after you clear or back it up"
+          OPTION_OTHER_PATH="Choose another path"
+          OPTION_SUBDIR_CLONE_PREFIX="Clone into "
           OPTION_SUBDIR_CLONE_SUFFIX=""
-          OPTION_CUSTOM_RETRY="[2] Retry this same path after you clear or back it up"
-          OPTION_CUSTOM_OTHER="[3] Choose another path"
-          OPTION_ABORT="[q] Abort"
-          CHOICE_PROMPT="> "
+          OPTION_CUSTOM_RETRY="Retry this same path after you clear or back it up"
+          OPTION_CUSTOM_OTHER="Choose another path"
+          OPTION_ABORT="Abort"
+          MENU_HINT="Use Up/Down or j/k, then Enter. Press q to abort."
+          FALLBACK_CHOICE_PROMPT="Selection: "
           CUSTOM_REQUIRED="A different GBrain source repo path is required. Enter an absolute path, for example /path/to/gbrain-source or ~/gbrain-source."
           CUSTOM_PROMPT="Custom GBrain source repo path: "
           CUSTOM_PATH_FORMAT_ERROR="Custom path must start with / or ~, for example /path/to/gbrain-source or ~/gbrain-source."
           INVALID_SUBDIR="The selected subdirectory is also unavailable:"
-          YES_NO_PROMPT=" [Y/n]: "
           UNAVAILABLE_MESSAGE="No terminal stdin is available for the GBrain source repo path prompt."
           EMPTY_CUSTOM_PATH="Custom path is empty."
           ABORTED_MESSAGE="GBrain source repo preparation was aborted."
+          USING_SOURCE_PREFIX="Using GBrain source repo: "
+          PREPARING_SOURCE_PREFIX="Preparing GBrain source repo at: "
+          RECHECKING_SOURCE_PREFIX="Rechecking GBrain source repo path: "
+          WAITING_CUSTOM_MESSAGE="Waiting for a custom GBrain source repo path..."
           ;;
       esac
       if [ ! -t 0 ]; then
@@ -1935,24 +1947,205 @@ public struct ZebraGBrainOnboardingStore {
         echo "occupied_invalid"
       }
 
-      zebra_read_reply() {
-        "$PYTHON_BIN" -c 'import sys
-    try:
-        import readline  # noqa: F401
-    except Exception:
-        pass
+            zebra_read_reply() {
+              "$PYTHON_BIN" -c 'import sys
     sys.stderr.write(sys.argv[1])
     sys.stderr.flush()
     try:
-        value = input()
-    except (EOFError, KeyboardInterrupt, UnicodeDecodeError):
+        with open("/dev/tty", "r", encoding="utf-8", errors="replace") as tty:
+            value = tty.readline()
+    except (OSError, KeyboardInterrupt, UnicodeDecodeError):
         sys.exit(1)
+    if value == "":
+        sys.exit(1)
+    value = value.rstrip("\\r\\n")
     print(value)
     ' "$1" || {
           echo "$UNAVAILABLE_MESSAGE" >&2
           exit 1
-        }
-      }
+              }
+            }
+
+            zebra_select_menu() {
+              MENU_OUTPUT="$("$PYTHON_BIN" - "$MENU_HINT" "$FALLBACK_CHOICE_PROMPT" "$@" <<'PY_MENU'
+    import os
+    import select
+    import sys
+    import termios
+
+    hint = sys.argv[1]
+    fallback_prompt = sys.argv[2]
+    prompt = sys.argv[3]
+    options = sys.argv[4:]
+
+    if not options:
+        sys.exit(1)
+
+    try:
+        tty_fd = os.open("/dev/tty", os.O_RDONLY)
+    except OSError:
+        sys.exit(1)
+    tty_file = os.fdopen(os.dup(tty_fd), "r", encoding="utf-8", errors="replace", buffering=1)
+
+    def print_fallback():
+        print("", file=sys.stderr)
+        print(prompt, file=sys.stderr)
+        for offset, label in enumerate(options, start=1):
+            print(f"  {offset}. {label}", file=sys.stderr)
+
+    def fallback():
+        print_fallback()
+        while True:
+            try:
+                sys.stderr.write(fallback_prompt)
+                sys.stderr.flush()
+                reply = tty_file.readline()
+            except (KeyboardInterrupt, UnicodeDecodeError):
+                sys.exit(1)
+            if reply == "":
+                sys.exit(1)
+            reply = reply.strip().lower()
+            if reply in {"q", "quit", "abort"}:
+                print("abort")
+                return
+            if reply.isdigit():
+                index = int(reply)
+                if 1 <= index <= len(options):
+                    print(index)
+                    return
+            print(f"Enter a number from 1 to {len(options)}, or q to abort.", file=sys.stderr)
+
+    if os.environ.get("TERM", "").lower() == "dumb":
+        fallback()
+        sys.exit(0)
+
+    stdin_fd = tty_fd
+    if not os.isatty(stdin_fd):
+        sys.exit(1)
+
+    selected = 0
+    line_count = len(options) + 4
+
+    def render(first=False):
+        if not first:
+            sys.stderr.write(f"\\x1b[{line_count}F")
+        sys.stderr.write("\\x1b[J")
+        sys.stderr.write("\\n")
+        sys.stderr.write(prompt + "\\n")
+        sys.stderr.write(hint + "\\n\\n")
+        for index, label in enumerate(options):
+            marker = "> " if index == selected else "  "
+            sys.stderr.write(f"{marker}{label}\\n")
+        sys.stderr.flush()
+
+    try:
+        old_settings = termios.tcgetattr(stdin_fd)
+    except termios.error:
+        fallback()
+        sys.exit(0)
+
+    try:
+        new_settings = old_settings[:]
+        new_settings[3] = new_settings[3] & ~(termios.ECHO | termios.ICANON)
+        new_settings[6][termios.VMIN] = 1
+        new_settings[6][termios.VTIME] = 0
+        termios.tcsetattr(stdin_fd, termios.TCSADRAIN, new_settings)
+        sys.stderr.write("\\x1b[?25l")
+        sys.stderr.flush()
+        render(first=True)
+        while True:
+            ch = os.read(stdin_fd, 1).decode("utf-8", errors="ignore")
+            if ch in {"\\r", "\\n"}:
+                sys.stderr.write("\\n")
+                sys.stderr.flush()
+                print(selected + 1)
+                break
+            if ch in {"q", "Q"}:
+                sys.stderr.write("\\n")
+                sys.stderr.flush()
+                print("abort")
+                break
+            if ch == "\\x03":
+                raise KeyboardInterrupt
+            if ch == "\\x1b":
+                sequence = ""
+                ready, _, _ = select.select([stdin_fd], [], [], 0.02)
+                while ready and len(sequence) < 2:
+                    sequence += os.read(stdin_fd, 1).decode("utf-8", errors="ignore")
+                    ready, _, _ = select.select([stdin_fd], [], [], 0.02)
+                if sequence == "[A":
+                    selected = (selected - 1) % len(options)
+                    render()
+                    continue
+                if sequence == "[B":
+                    selected = (selected + 1) % len(options)
+                    render()
+                    continue
+                sys.stderr.write("\\n")
+                sys.stderr.flush()
+                print("abort")
+                break
+            if ch in {"k", "K"}:
+                selected = (selected - 1) % len(options)
+                render()
+                continue
+            if ch in {"j", "J"}:
+                selected = (selected + 1) % len(options)
+                render()
+                continue
+            if ch.isdigit():
+                index = int(ch)
+                if 1 <= index <= len(options):
+                    selected = index - 1
+                    render()
+                    continue
+    finally:
+        sys.stderr.write("\\x1b[?25h")
+        sys.stderr.flush()
+        try:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            pass
+    PY_MENU
+              )" || {
+                echo "$UNAVAILABLE_MESSAGE" >&2
+                exit 1
+              }
+              printf '%s\\n' "$MENU_OUTPUT"
+            }
+
+            zebra_menu_or_abort() {
+              MENU_SELECTION="$(zebra_select_menu "$@")"
+              case "$MENU_SELECTION" in
+                abort)
+                  zebra_abort
+                  ;;
+              esac
+              LAST_OPTION=""
+              for MENU_OPTION in "$@"; do
+                LAST_OPTION="$MENU_OPTION"
+              done
+              if [ "$LAST_OPTION" = "$OPTION_ABORT" ] && [ "$MENU_SELECTION" = "$(($# - 1))" ]; then
+                zebra_abort
+              fi
+              printf '%s\\n' "$MENU_SELECTION"
+            }
+
+            zebra_note_using_source() {
+              printf '%s%s\\n' "$USING_SOURCE_PREFIX" "$1" >&2
+            }
+
+            zebra_note_preparing_source() {
+              printf '%s%s\\n' "$PREPARING_SOURCE_PREFIX" "$1" >&2
+            }
+
+            zebra_note_rechecking_source() {
+              printf '%s%s\\n' "$RECHECKING_SOURCE_PREFIX" "$1" >&2
+            }
+
+            zebra_note_waiting_custom_source() {
+              printf '%s\\n' "$WAITING_CUSTOM_MESSAGE" >&2
+            }
 
       zebra_record_prepare_aborted() {
         "$PYTHON_BIN" - "$STATE" <<'PY_ABORT' || true
@@ -1986,9 +2179,9 @@ public struct ZebraGBrainOnboardingStore {
         exit 1
       }
 
-      zebra_choose_custom_source() {
-        while :; do
-          CUSTOM_INPUT="$(zebra_trim_input "$(zebra_read_reply "$CUSTOM_PROMPT")")"
+            zebra_choose_custom_source() {
+              while :; do
+                CUSTOM_INPUT="$(zebra_trim_input "$(zebra_read_reply "$CUSTOM_PROMPT")")"
           if [ -z "$CUSTOM_INPUT" ]; then
             echo "$EMPTY_CUSTOM_PATH" >&2
             continue
@@ -2003,55 +2196,66 @@ public struct ZebraGBrainOnboardingStore {
             continue
           fi
           CUSTOM_PATH="$(zebra_expand_path "$CUSTOM_INPUT")"
-          CUSTOM_STATUS="$(zebra_classify_source_repo "$CUSTOM_PATH")"
-          case "$CUSTOM_STATUS" in
-            missing|empty|valid)
-              SELECTED_SOURCE="$CUSTOM_PATH"
-              return
-              ;;
-            occupied_invalid)
-              while :; do
-                SUBDIR_PATH="$(zebra_expand_path "$CUSTOM_PATH/gbrain")"
-                printf '\\n%s%s\\n%s\\n\\n%s\\n%s%s%s\\n%s\\n%s\\n%s\\n' \
-                  "$CUSTOM_PATH" "$INVALID_REPO_SUFFIX" \
-                  "$INVALID_EXISTING_NOTE" \
-                  "$CHOOSE_LABEL" \
-                  "$OPTION_SUBDIR_CLONE_PREFIX" "$SUBDIR_PATH" "$OPTION_SUBDIR_CLONE_SUFFIX" \
-                  "$OPTION_CUSTOM_RETRY" \
-                  "$OPTION_CUSTOM_OTHER" \
-                  "$OPTION_ABORT" >&2
-                CUSTOM_CHOICE="$(zebra_read_reply "$CHOICE_PROMPT")"
-                case "$(printf '%s' "$CUSTOM_CHOICE" | tr '[:upper:]' '[:lower:]')" in
-                  1)
-                    SUBDIR_STATUS="$(zebra_classify_source_repo "$SUBDIR_PATH")"
-                    case "$SUBDIR_STATUS" in
-                      missing|empty|valid)
-                        SELECTED_SOURCE="$SUBDIR_PATH"
-                        return
-                        ;;
+                CUSTOM_STATUS="$(zebra_classify_source_repo "$CUSTOM_PATH")"
+                case "$CUSTOM_STATUS" in
+                  valid)
+                    zebra_note_using_source "$CUSTOM_PATH"
+                    SELECTED_SOURCE="$CUSTOM_PATH"
+                    return
+                    ;;
+                  missing|empty)
+                    zebra_note_preparing_source "$CUSTOM_PATH"
+                    SELECTED_SOURCE="$CUSTOM_PATH"
+                    return
+                    ;;
+                  occupied_invalid)
+                    while :; do
+                      SUBDIR_PATH="$(zebra_expand_path "$CUSTOM_PATH/gbrain")"
+                      printf '\\n%s%s\\n%s\\n' \
+                        "$CUSTOM_PATH" "$INVALID_REPO_SUFFIX" \
+                        "$INVALID_EXISTING_NOTE" >&2
+                      CUSTOM_CHOICE="$(zebra_menu_or_abort "$ACTION_PROMPT" \
+                        "$OPTION_SUBDIR_CLONE_PREFIX$SUBDIR_PATH$OPTION_SUBDIR_CLONE_SUFFIX" \
+                        "$OPTION_CUSTOM_RETRY" \
+                        "$OPTION_CUSTOM_OTHER" \
+                        "$OPTION_ABORT")"
+                      case "$CUSTOM_CHOICE" in
+                        1)
+                          SUBDIR_STATUS="$(zebra_classify_source_repo "$SUBDIR_PATH")"
+                          case "$SUBDIR_STATUS" in
+                            missing|empty|valid)
+                              zebra_note_preparing_source "$SUBDIR_PATH"
+                              SELECTED_SOURCE="$SUBDIR_PATH"
+                              return
+                              ;;
                       *)
                         printf '%s\\n%s\\n' "$INVALID_SUBDIR" "$SUBDIR_PATH" >&2
                         ;;
                     esac
+                          ;;
+                        2)
+                          zebra_note_rechecking_source "$CUSTOM_PATH"
+                          CUSTOM_STATUS="$(zebra_classify_source_repo "$CUSTOM_PATH")"
+                          case "$CUSTOM_STATUS" in
+                            valid)
+                              zebra_note_using_source "$CUSTOM_PATH"
+                              SELECTED_SOURCE="$CUSTOM_PATH"
+                              return
+                              ;;
+                            missing|empty)
+                              zebra_note_preparing_source "$CUSTOM_PATH"
+                              SELECTED_SOURCE="$CUSTOM_PATH"
+                              return
+                              ;;
+                          esac
+                          ;;
+                        3)
+                          zebra_note_waiting_custom_source
+                          break
+                          ;;
+                      esac
+                    done
                     ;;
-                  2)
-                    CUSTOM_STATUS="$(zebra_classify_source_repo "$CUSTOM_PATH")"
-                    case "$CUSTOM_STATUS" in
-                      missing|empty|valid)
-                        SELECTED_SOURCE="$CUSTOM_PATH"
-                        return
-                        ;;
-                    esac
-                    ;;
-                  3)
-                    break
-                    ;;
-                  q|quit|abort)
-                    zebra_abort
-                    ;;
-                esac
-              done
-              ;;
           esac
         done
       }
@@ -2069,73 +2273,72 @@ public struct ZebraGBrainOnboardingStore {
 
         while :; do
           RECOMMENDED_STATUS="$(zebra_classify_source_repo "$RECOMMENDED_SOURCE")"
-          case "$RECOMMENDED_STATUS" in
-            valid)
-              printf '\\n%s\\n%s\\n%s' "$VALID_HOME_1" "$RECOMMENDED_SOURCE" "$VALID_HOME_2" >&2
-              HOME_REPLY="$(zebra_read_reply "$YES_NO_PROMPT")"
-              case "$(printf '%s' "$HOME_REPLY" | tr '[:upper:]' '[:lower:]')" in
-                ""|y|yes)
-                  SELECTED_SOURCE="$RECOMMENDED_SOURCE"
-                  return
-                  ;;
-                n|no|c|custom)
-                  printf '\\n%s\\n' "$CUSTOM_REQUIRED" >&2
-                  zebra_choose_custom_source
-                  return
-                  ;;
-                q|quit|abort)
-                  zebra_abort
-                  ;;
-              esac
-              ;;
-            missing|empty)
-              printf '\\n%s\\n%s\\n%s' "$MISSING_HOME_1" "$RECOMMENDED_SOURCE" "$MISSING_HOME_2" >&2
-              HOME_REPLY="$(zebra_read_reply "$YES_NO_PROMPT")"
-              case "$(printf '%s' "$HOME_REPLY" | tr '[:upper:]' '[:lower:]')" in
-                ""|y|yes)
-                  SELECTED_SOURCE="$RECOMMENDED_SOURCE"
-                  return
-                  ;;
-                n|no|c|custom)
-                  printf '\\n%s\\n' "$CUSTOM_REQUIRED" >&2
-                  zebra_choose_custom_source
-                  return
-                  ;;
-                q|quit|abort)
-                  zebra_abort
-                  ;;
-              esac
-              ;;
-            occupied_invalid)
-              while :; do
-                printf '\\n%s%s\\n%s\\n\\n%s\\n%s\\n%s\\n%s\\n' \
-                  "$RECOMMENDED_SOURCE" "$INVALID_REPO_SUFFIX" \
-                  "$INVALID_EXISTING_NOTE" \
-                  "$CHOOSE_LABEL" \
-                  "$OPTION_RETRY_SAME_PATH" \
-                  "$OPTION_OTHER_PATH" \
-                  "$OPTION_ABORT" >&2
-                HOME_CHOICE="$(zebra_read_reply "$CHOICE_PROMPT")"
-                case "$(printf '%s' "$HOME_CHOICE" | tr '[:upper:]' '[:lower:]')" in
-                  1)
-                    RECOMMENDED_STATUS="$(zebra_classify_source_repo "$RECOMMENDED_SOURCE")"
-                    case "$RECOMMENDED_STATUS" in
-                      missing|empty|valid)
+                case "$RECOMMENDED_STATUS" in
+                  valid)
+                    printf '\\n%s\\n%s\\n' "$VALID_HOME_1" "$RECOMMENDED_SOURCE" >&2
+                    HOME_REPLY="$(zebra_menu_or_abort "$VALID_HOME_2" "$OPTION_USE_REPO" "$OPTION_OTHER_PATH" "$OPTION_ABORT")"
+                    case "$HOME_REPLY" in
+                      1)
+                        zebra_note_using_source "$RECOMMENDED_SOURCE"
                         SELECTED_SOURCE="$RECOMMENDED_SOURCE"
+                        return
+                        ;;
+                      2)
+                        zebra_note_waiting_custom_source
+                        printf '%s\\n' "$CUSTOM_REQUIRED" >&2
+                        zebra_choose_custom_source
                         return
                         ;;
                     esac
                     ;;
-                  2)
-                    zebra_choose_custom_source
-                    return
+                  missing|empty)
+                    printf '\\n%s\\n%s\\n' "$MISSING_HOME_1" "$RECOMMENDED_SOURCE" >&2
+                    HOME_REPLY="$(zebra_menu_or_abort "$MISSING_HOME_2" "$OPTION_CLONE_RECOMMENDED" "$OPTION_OTHER_PATH" "$OPTION_ABORT")"
+                    case "$HOME_REPLY" in
+                      1)
+                        zebra_note_preparing_source "$RECOMMENDED_SOURCE"
+                        SELECTED_SOURCE="$RECOMMENDED_SOURCE"
+                        return
+                        ;;
+                      2)
+                        zebra_note_waiting_custom_source
+                        printf '%s\\n' "$CUSTOM_REQUIRED" >&2
+                        zebra_choose_custom_source
+                        return
+                        ;;
+                    esac
                     ;;
-                  q|quit|abort)
-                    zebra_abort
+                  occupied_invalid)
+                    while :; do
+                      printf '\\n%s%s\\n%s\\n' \
+                        "$RECOMMENDED_SOURCE" "$INVALID_REPO_SUFFIX" \
+                        "$INVALID_EXISTING_NOTE" >&2
+                      HOME_CHOICE="$(zebra_menu_or_abort "$ACTION_PROMPT" "$OPTION_RETRY_SAME_PATH" "$OPTION_OTHER_PATH" "$OPTION_ABORT")"
+                      case "$HOME_CHOICE" in
+                        1)
+                          zebra_note_rechecking_source "$RECOMMENDED_SOURCE"
+                          RECOMMENDED_STATUS="$(zebra_classify_source_repo "$RECOMMENDED_SOURCE")"
+                          case "$RECOMMENDED_STATUS" in
+                            valid)
+                              zebra_note_using_source "$RECOMMENDED_SOURCE"
+                              SELECTED_SOURCE="$RECOMMENDED_SOURCE"
+                              return
+                              ;;
+                            missing|empty)
+                              zebra_note_preparing_source "$RECOMMENDED_SOURCE"
+                              SELECTED_SOURCE="$RECOMMENDED_SOURCE"
+                              return
+                              ;;
+                          esac
+                          ;;
+                        2)
+                          zebra_note_waiting_custom_source
+                          zebra_choose_custom_source
+                          return
+                          ;;
+                      esac
+                    done
                     ;;
-                esac
-              done
-              ;;
           esac
         done
       }
@@ -2290,17 +2493,11 @@ public struct ZebraGBrainOnboardingStore {
     def clone_source_repo(path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         result = subprocess.run(
-            ["git", "clone", source_remote(), path],
+            ["git", "clone", "--progress", source_remote(), path],
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             timeout=1200,
         )
         if result.returncode != 0:
-            if result.stdout:
-                print(result.stdout)
-            if result.stderr:
-                print(result.stderr, file=sys.stderr)
             raise RuntimeError("gbrain_source_repo_clone_failed")
 
     def docs_paths():

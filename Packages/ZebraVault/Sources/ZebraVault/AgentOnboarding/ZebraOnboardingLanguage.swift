@@ -90,6 +90,39 @@ enum ZebraOnboardingLanguage: String, Equatable {
         }
     }
 
+    var gbrainSourceRepoPrepareMessage: String {
+        switch self {
+        case .en:
+            return "Preparing the GBrain source repo..."
+        case .ja:
+            return "GBrain source repoを準備しています..."
+        case .ko:
+            return "GBrain source repo를 준비합니다..."
+        }
+    }
+
+    var gbrainRuntimeLauncherPrepareMessage: String {
+        switch self {
+        case .en:
+            return "Preparing the selected runtime launcher..."
+        case .ja:
+            return "選択したruntime launcherを準備しています..."
+        case .ko:
+            return "선택한 runtime launcher를 준비합니다..."
+        }
+    }
+
+    func gbrainRuntimeStartMessage(runtimeDisplayName: String) -> String {
+        switch self {
+        case .en:
+            return "Starting \(runtimeDisplayName) for Zebra GBrain setup..."
+        case .ja:
+            return "Zebra GBrain setupのために\(runtimeDisplayName)を開始します..."
+        case .ko:
+            return "Zebra GBrain setup을 위해 \(runtimeDisplayName)를 시작합니다..."
+        }
+    }
+
     var clawvisorFlowPresentationInstruction: String {
         switch self {
         case .en:

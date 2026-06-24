@@ -336,6 +336,51 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertLessThan(launcherRange.lowerBound, launchRange.lowerBound)
     }
 
+    func testGBrainStartupLineExecutesSelectedHermesRuntimeAfterSourceRepoSelection() throws {
+        let root = try makeTemporaryDirectory()
+        let sourceRepo = try writeFakeGBrainSourceRepo(root: root)
+        let runtimeLog = root.appendingPathComponent("hermes.log", isDirectory: false)
+        let executable = try installFakeRuntimeLogger(root: root, name: "hermes", log: runtimeLog)
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en-US"]
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let runtime = ZebraGBrainRuntimeOnboardingStore.SelectedRuntime(
+            runtime: "hermes",
+            executablePath: executable.path
+        )
+        let line = ZebraOnboardingChecklistCommand.gbrainSetupRuntimeStartupLine(
+            launch: launch,
+            runtime: runtime,
+            language: .en
+        )
+
+        let command = String(line.dropLast())
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-lc", command],
+            environment: [
+                "HOME": root.path,
+                "ZEBRA_GBRAIN_SOURCE_REPO": sourceRepo.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("Preparing the GBrain source repo..."), result.stdout)
+        XCTAssertTrue(result.stdout.contains("Preparing the selected runtime launcher..."), result.stdout)
+        XCTAssertTrue(result.stdout.contains("Starting Hermes for Zebra GBrain setup..."), result.stdout)
+        let log = try String(contentsOf: runtimeLog, encoding: .utf8)
+        XCTAssertTrue(log.contains("chat --tui --source zebra-gbrain-onboarding --query"), log)
+        XCTAssertTrue(log.contains("Zebra GBrain setup is starting."), log)
+    }
+
     func testGBrainStartupLineUsesOpenClawRuntimeWhenSelected() throws {
         let launch = ZebraGBrainOnboardingStore.LaunchContext(
             launchDirectory: "/tmp/zebra-gbrain-work",
@@ -3511,6 +3556,51 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         try scriptContent.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         return script
+    }
+
+    private func installFakeRuntimeLogger(root: URL, name: String, log: URL) throws -> URL {
+        let directory = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let script = directory.appendingPathComponent(name, isDirectory: false)
+        let scriptContent = """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo '\(name) test'
+          exit 0
+        fi
+        printf '%s\\n' "$*" >> '\(shellSingleQuoted(log.path))'
+        exit 0
+        """
+        try scriptContent.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    private func writeFakeGBrainSourceRepo(root: URL, name: String = "gbrain") throws -> URL {
+        let repo = root.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        try """
+        {"scripts":{"test":"true"}}
+        """.write(
+            to: repo.appendingPathComponent("package.json", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        try """
+        # INSTALL_FOR_AGENTS
+
+        ## Step 1: Install GBrain
+        Run setup.
+        """.write(
+            to: repo.appendingPathComponent("INSTALL_FOR_AGENTS.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent("skills", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        return repo
     }
 
     private func installFakeCommand(directory: URL, name: String, content: String) throws {

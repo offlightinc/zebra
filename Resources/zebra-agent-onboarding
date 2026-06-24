@@ -88,6 +88,7 @@ MISSING_AGENTS=()
 BROKEN_AGENTS=()
 MENU_AGENTS=()
 PROMPT_RESULT=""
+PROMPT_CHOICE=""
 RESOLVE_STATUS=""
 RESOLVE_PATH=""
 RESOLVE_BROKEN_REASON=""
@@ -185,9 +186,12 @@ msg_en() {
     checking_readiness) printf 'Checking %s readiness...\n' "$@" ;;
     choose_install_target_title) printf 'Choose the agent Zebra should use:' "$@" ;;
     choose_recovery_action) printf '\nChoose a recovery action:\n' "$@" ;;
+    choose_recovery_action_title) printf 'Choose a recovery action' "$@" ;;
     continue_choose_another) printf '  2. Choose another agent\n' "$@" ;;
+    continue_choose_another_label) printf 'Choose another agent' "$@" ;;
     continue_did_not_finish) printf '\n%s did not finish Zebra setup.\n' "$@" ;;
     continue_try_again) printf '  1. Try %s again\n' "$@" ;;
+    continue_try_again_label) printf 'Try %s again' "$@" ;;
     enter_number) printf 'Enter a number from 1 to %s.\n' "$@" ;;
     install_complete_rescan) printf '\nInstall complete. Re-scanning...\n' "$@" ;;
     install_failed_title) printf '\n%s install did not complete.\n' "$@" ;;
@@ -206,7 +210,7 @@ msg_en() {
     install_claude_skip_brew) printf 'brew was not found. Skipping Homebrew fallback.\n' "$@" ;;
     install_claude_brew_failed) printf 'Claude Code Homebrew install did not complete.\n' "$@" ;;
     install_claude_need_node) printf 'Claude Code install fallbacks did not complete. Zebra will install Node.js/npm with the official macOS pkg, then retry npm install.\n' "$@" ;;
-    install_claude_node_opened) printf 'Node.js installer opened. Complete the installer, then return to this terminal and press Enter.' "$@" ;;
+    install_claude_node_opened) printf 'Node.js installer opened. Complete the installer, then return to this terminal and press Return.' "$@" ;;
     install_claude_node_checking) printf 'Checking Node.js/npm...\n' "$@" ;;
     install_claude_node_verified) printf 'Node.js/npm verified. Retrying Claude Code npm install...\n' "$@" ;;
     install_claude_node_failed) printf 'Zebra could not verify Node.js/npm after the installer.\n' "$@" ;;
@@ -225,11 +229,14 @@ msg_en() {
     install_codex_method_succeeded) printf 'Codex install succeeded via %s.\n' "$@" ;;
     install_press_return) printf 'Press Return to continue.' "$@" ;;
     install_retry) printf '  1. Retry %s install\n' "$@" ;;
+    install_retry_label) printf 'Retry %s install' "$@" ;;
     install_show_manual) printf '  3. Show manual install command\n' "$@" ;;
+    install_show_manual_label) printf 'Show manual install command' "$@" ;;
     installing) printf '\nInstalling %s...\n\n' "$@" ;;
     mark_ready_complete) printf 'Zebra onboarding marked ready for %s.\n' "$@" ;;
     mark_ready_requires_agent) printf 'mark-ready requires --agent claude|codex|antigravity\n' "$@" ;;
     mark_ready_requires_run_id) printf 'mark-ready requires --run-id\n' "$@" ;;
+    menu_hint) printf 'Use Up/Down or j/k, then Enter.' "$@" ;;
     no_selection) printf '\nNo selection received.\n' "$@" ;;
     no_onboarding_state) printf 'no onboarding state found at %s\n' "$@" ;;
     primary_missing) printf '\nZebra could not find your saved primary agent: %s.\n' "$@" ;;
@@ -238,13 +245,18 @@ msg_en() {
     readiness_failed) printf '\nZebra could not verify %s readiness yet.\n' "$@" ;;
     readiness_verified) printf '\nZebra verified %s readiness. Onboarding is complete.\n' "$@" ;;
     recovery_choose_another) printf '  2. Choose another agent\n' "$@" ;;
+    recovery_choose_another_label) printf 'Choose another agent' "$@" ;;
     recovery_reinstall) printf '  1. Reinstall %s\n' "$@" ;;
+    recovery_reinstall_label) printf 'Reinstall %s' "$@" ;;
     resume_agent) printf 'Resuming Zebra agent onboarding for %s.\n\n' "$@" ;;
     resume_install_selection) printf 'Resuming Zebra agent onboarding at install selection.\n' "$@" ;;
     resume_interrupted_install) printf 'Resuming Zebra agent onboarding after an interrupted %s install.\n' "$@" ;;
     resume_primary_selection) printf 'Resuming Zebra agent onboarding at primary-agent selection.\n' "$@" ;;
     resume_recovery) printf 'Resuming Zebra agent onboarding recovery for %s.\n' "$@" ;;
     run_installer_confirm) printf 'Run this installer now? [y/N]: ' "$@" ;;
+    run_installer_title) printf 'Run this installer now?' "$@" ;;
+    run_installer_yes) printf 'Yes, run installer' "$@" ;;
+    run_installer_no) printf 'No, skip installer' "$@" ;;
     selection_prompt) printf 'Selection [1-%s]: ' "$@" ;;
     start_agent) printf '\nStarting %s for Zebra onboarding.\n' "$@" ;;
     state_broken) printf 'needs repair' "$@" ;;
@@ -282,9 +294,12 @@ msg_ko() {
     checking_readiness) printf '%s readiness를 확인하는 중입니다...\n' "$@" ;;
     choose_install_target_title) printf 'Zebra에서 사용할 agent를 선택하세요:' "$@" ;;
     choose_recovery_action) printf '\nrecovery action을 선택하세요:\n' "$@" ;;
+    choose_recovery_action_title) printf 'recovery action을 선택하세요' "$@" ;;
     continue_choose_another) printf '  2. 다른 agent 선택\n' "$@" ;;
+    continue_choose_another_label) printf '다른 agent 선택' "$@" ;;
     continue_did_not_finish) printf '\n%s가 Zebra setup을 완료하지 못했습니다.\n' "$@" ;;
     continue_try_again) printf '  1. %s 다시 시도\n' "$@" ;;
+    continue_try_again_label) printf '%s 다시 시도' "$@" ;;
     enter_number) printf '1부터 %s까지의 숫자를 입력하세요.\n' "$@" ;;
     install_complete_rescan) printf '\ninstall이 완료되었습니다. 다시 scan합니다...\n' "$@" ;;
     install_failed_title) printf '\n%s install이 완료되지 않았습니다.\n' "$@" ;;
@@ -322,11 +337,14 @@ msg_ko() {
     install_codex_method_succeeded) printf '%s 경로로 Codex install이 완료되었습니다.\n' "$@" ;;
     install_press_return) printf '계속하려면 Return을 누르세요.' "$@" ;;
     install_retry) printf '  1. %s install 재시도\n' "$@" ;;
+    install_retry_label) printf '%s install 재시도' "$@" ;;
     install_show_manual) printf '  3. manual install command 보기\n' "$@" ;;
+    install_show_manual_label) printf 'manual install command 보기' "$@" ;;
     installing) printf '\n%s install 중...\n\n' "$@" ;;
     mark_ready_complete) printf 'Zebra onboarding marked ready for %s.\n' "$@" ;;
     mark_ready_requires_agent) printf 'mark-ready에는 --agent claude|codex|antigravity가 필요합니다.\n' "$@" ;;
     mark_ready_requires_run_id) printf 'mark-ready에는 --run-id가 필요합니다.\n' "$@" ;;
+    menu_hint) printf '위/아래 방향키 또는 j/k로 이동하고 Enter로 선택하세요.' "$@" ;;
     no_selection) printf '\n선택값을 받지 못했습니다.\n' "$@" ;;
     no_onboarding_state) printf '%s에 onboarding state가 없습니다.\n' "$@" ;;
     primary_missing) printf '\n저장된 primary agent를 찾지 못했습니다: %s.\n' "$@" ;;
@@ -335,13 +353,18 @@ msg_ko() {
     readiness_failed) printf '\n아직 %s readiness를 확인하지 못했습니다.\n' "$@" ;;
     readiness_verified) printf '\nZebra가 %s readiness를 확인했습니다. Onboarding is complete.\n' "$@" ;;
     recovery_choose_another) printf '  2. 다른 agent 선택\n' "$@" ;;
+    recovery_choose_another_label) printf '다른 agent 선택' "$@" ;;
     recovery_reinstall) printf '  1. %s reinstall\n' "$@" ;;
+    recovery_reinstall_label) printf '%s reinstall' "$@" ;;
     resume_agent) printf '%s Zebra agent onboarding을 이어서 진행합니다.\n\n' "$@" ;;
     resume_install_selection) printf 'install selection에서 Zebra agent onboarding을 이어서 진행합니다.\n' "$@" ;;
     resume_interrupted_install) printf '중단된 %s install 이후 Zebra agent onboarding을 이어서 진행합니다.\n' "$@" ;;
     resume_primary_selection) printf 'primary-agent selection에서 Zebra agent onboarding을 이어서 진행합니다.\n' "$@" ;;
     resume_recovery) printf '%s recovery로 Zebra agent onboarding을 이어서 진행합니다.\n' "$@" ;;
     run_installer_confirm) printf '지금 installer를 실행할까요? [y/N]: ' "$@" ;;
+    run_installer_title) printf '지금 installer를 실행할까요?' "$@" ;;
+    run_installer_yes) printf '예, installer 실행' "$@" ;;
+    run_installer_no) printf '아니요, installer 건너뛰기' "$@" ;;
     selection_prompt) printf '선택 [1-%s]: ' "$@" ;;
     start_agent) printf '\nZebra onboarding을 위해 %s를 시작합니다.\n' "$@" ;;
     state_broken) printf 'needs repair' "$@" ;;
@@ -379,9 +402,12 @@ msg_ja() {
     checking_readiness) printf '%s readinessを確認しています...\n' "$@" ;;
     choose_install_target_title) printf 'Zebraで使うagentを選択してください:' "$@" ;;
     choose_recovery_action) printf '\nrecovery actionを選択してください:\n' "$@" ;;
+    choose_recovery_action_title) printf 'recovery actionを選択してください' "$@" ;;
     continue_choose_another) printf '  2. 別のagentを選択\n' "$@" ;;
+    continue_choose_another_label) printf '別のagentを選択' "$@" ;;
     continue_did_not_finish) printf '\n%sはZebra setupを完了できませんでした。\n' "$@" ;;
     continue_try_again) printf '  1. %sを再試行\n' "$@" ;;
+    continue_try_again_label) printf '%sを再試行' "$@" ;;
     enter_number) printf '1から%sまでの数字を入力してください。\n' "$@" ;;
     install_complete_rescan) printf '\ninstallが完了しました。再scanします...\n' "$@" ;;
     install_failed_title) printf '\n%s installは完了しませんでした。\n' "$@" ;;
@@ -419,11 +445,14 @@ msg_ja() {
     install_codex_method_succeeded) printf '%s経由でCodex installが完了しました。\n' "$@" ;;
     install_press_return) printf '続けるにはReturnを押してください。' "$@" ;;
     install_retry) printf '  1. %s installを再試行\n' "$@" ;;
+    install_retry_label) printf '%s installを再試行' "$@" ;;
     install_show_manual) printf '  3. manual install commandを表示\n' "$@" ;;
+    install_show_manual_label) printf 'manual install commandを表示' "$@" ;;
     installing) printf '\n%s install中...\n\n' "$@" ;;
     mark_ready_complete) printf 'Zebra onboarding marked ready for %s.\n' "$@" ;;
     mark_ready_requires_agent) printf 'mark-readyには--agent claude|codex|antigravityが必要です。\n' "$@" ;;
     mark_ready_requires_run_id) printf 'mark-readyには--run-idが必要です。\n' "$@" ;;
+    menu_hint) printf '上下キーまたはj/kで移動し、Enterで選択してください。' "$@" ;;
     no_selection) printf '\n選択を受け取れませんでした。\n' "$@" ;;
     no_onboarding_state) printf '%sにonboarding stateがありません。\n' "$@" ;;
     primary_missing) printf '\n保存済みのprimary agentが見つかりません: %s.\n' "$@" ;;
@@ -432,13 +461,18 @@ msg_ja() {
     readiness_failed) printf '\nまだ%s readinessを確認できませんでした。\n' "$@" ;;
     readiness_verified) printf '\nZebraが%s readinessを確認しました。Onboarding is complete.\n' "$@" ;;
     recovery_choose_another) printf '  2. 別のagentを選択\n' "$@" ;;
+    recovery_choose_another_label) printf '別のagentを選択' "$@" ;;
     recovery_reinstall) printf '  1. %sをreinstall\n' "$@" ;;
+    recovery_reinstall_label) printf '%sをreinstall' "$@" ;;
     resume_agent) printf '%sのZebra agent onboardingを再開します。\n\n' "$@" ;;
     resume_install_selection) printf 'install selectionでZebra agent onboardingを再開します。\n' "$@" ;;
     resume_interrupted_install) printf '中断された%s installの後からZebra agent onboardingを再開します。\n' "$@" ;;
     resume_primary_selection) printf 'primary-agent selectionでZebra agent onboardingを再開します。\n' "$@" ;;
     resume_recovery) printf '%s recoveryでZebra agent onboardingを再開します。\n' "$@" ;;
     run_installer_confirm) printf '今installerを実行しますか? [y/N]: ' "$@" ;;
+    run_installer_title) printf '今installerを実行しますか?' "$@" ;;
+    run_installer_yes) printf 'はい、installerを実行' "$@" ;;
+    run_installer_no) printf 'いいえ、installerをスキップ' "$@" ;;
     selection_prompt) printf '選択 [1-%s]: ' "$@" ;;
     start_agent) printf '\nZebra onboardingのために%sを起動します。\n' "$@" ;;
     state_broken) printf 'needs repair' "$@" ;;
@@ -845,13 +879,31 @@ run_claude_installer_chain() {
   return 1
 }
 
+run_codex_official_installer() {
+  local tmpdir script output status
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/zebra-codex-official.XXXXXX")" || return 1
+  script="$tmpdir/install.sh"
+  if ! curl -fsSL https://chatgpt.com/codex/install.sh -o "$script"; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  chmod +x "$script" 2>/dev/null || true
+  set +e
+  output="$(CODEX_NON_INTERACTIVE=1 sh "$script" 2>&1)"
+  status="$?"
+  set -e
+  rm -rf "$tmpdir"
+  printf '%s\n' "$output" | sed '/^Start Codex now[?] \[y\/N\]/d'
+  return "$status"
+}
+
 run_codex_installer_chain() {
   set -o pipefail
   if [[ "$FORCE_CODEX_OFFICIAL_INSTALLER_FAILURE" == "1" ]]; then
     msg install_codex_skip_official
   else
     msg install_codex_try_official
-    if curl -fsSL https://chatgpt.com/codex/install.sh | sh; then
+    if run_codex_official_installer; then
       if agent_is_available_to_zebra codex; then
         msg install_codex_method_succeeded "official installer"
         return 0
@@ -1687,11 +1739,207 @@ print_menu_agent_state() {
   esac
 }
 
+menu_agent_label() {
+  local agent="$1"
+  printf '%s' "$(display_name "$agent")"
+  print_menu_agent_state "$agent"
+}
+
+render_tty_agent_menu() {
+  local title="$1"
+  local selected="$2"
+  local first="${3:-0}"
+  local count="${#MENU_AGENTS[@]}"
+  local line_count=$((count + 4))
+  local i marker
+  if [[ "$first" -eq 0 ]]; then
+    printf '\033[%sF' "$line_count"
+  fi
+  printf '\033[J'
+  printf '\n%s\n' "$title"
+  msg menu_hint
+  printf '\n\n'
+  for i in "${!MENU_AGENTS[@]}"; do
+    if [[ "$i" -eq "$selected" ]]; then
+      marker="> "
+    else
+      marker="  "
+    fi
+    printf '%s%s\n' "$marker" "$(menu_agent_label "${MENU_AGENTS[$i]}")"
+  done
+}
+
+restore_tty_prompt() {
+  local stty_state="${1:-}"
+  printf '\033[?25h'
+  if [[ -n "$stty_state" ]]; then
+    stty "$stty_state" 2>/dev/null || true
+  fi
+}
+
+prompt_menu_tty() {
+  local title="$1"
+  local count="${#MENU_AGENTS[@]}"
+  local selected=0
+  local key rest choice stty_state
+  [[ "$count" -gt 0 ]] || return 1
+  PROMPT_RESULT=""
+  stty_state="$(stty -g 2>/dev/null || true)"
+  if [[ -n "$stty_state" ]]; then
+    stty -echo -icanon min 1 time 0 2>/dev/null || true
+  fi
+  printf '\033[?25l'
+  render_tty_agent_menu "$title" "$selected" 1
+  while true; do
+    if ! IFS= read -rsn1 key; then
+      restore_tty_prompt "$stty_state"
+      msg no_selection >&2
+      return 1
+    fi
+    case "$key" in
+      ''|$'\r'|$'\n')
+        printf '\n'
+        restore_tty_prompt "$stty_state"
+        PROMPT_RESULT="${MENU_AGENTS[$selected]}"
+        return 0
+        ;;
+      $'\e')
+        rest=""
+        IFS= read -rsn2 -t 1 rest || true
+        case "$rest" in
+          '[A')
+            selected=$(((selected + count - 1) % count))
+            render_tty_agent_menu "$title" "$selected"
+            ;;
+          '[B')
+            selected=$(((selected + 1) % count))
+            render_tty_agent_menu "$title" "$selected"
+            ;;
+        esac
+        ;;
+      k|K)
+        selected=$(((selected + count - 1) % count))
+        render_tty_agent_menu "$title" "$selected"
+        ;;
+      j|J)
+        selected=$(((selected + 1) % count))
+        render_tty_agent_menu "$title" "$selected"
+        ;;
+      [1-9])
+        choice="$key"
+        if [[ "$choice" -ge 1 && "$choice" -le "$count" ]]; then
+          printf '\n'
+          restore_tty_prompt "$stty_state"
+          PROMPT_RESULT="${MENU_AGENTS[$((choice - 1))]}"
+          return 0
+        fi
+        ;;
+    esac
+  done
+}
+
+render_tty_choice_menu() {
+  local title="$1"
+  local selected="$2"
+  local first="${3:-0}"
+  shift 3 || true
+  local labels=("$@")
+  local count="${#labels[@]}"
+  local line_count=$((count + 4))
+  local i marker
+  if [[ "$first" -eq 0 ]]; then
+    printf '\033[%sF' "$line_count"
+  fi
+  printf '\033[J'
+  printf '\n%s\n' "$title"
+  msg menu_hint
+  printf '\n\n'
+  for i in "${!labels[@]}"; do
+    if [[ "$i" -eq "$selected" ]]; then
+      marker="> "
+    else
+      marker="  "
+    fi
+    printf '%s%s\n' "$marker" "${labels[$i]}"
+  done
+}
+
+prompt_choice_tty() {
+  local title="$1"
+  shift || true
+  local labels=("$@")
+  local count="${#labels[@]}"
+  local selected=0
+  local key rest choice stty_state
+  [[ "$count" -gt 0 ]] || return 1
+  PROMPT_CHOICE=""
+  stty_state="$(stty -g 2>/dev/null || true)"
+  if [[ -n "$stty_state" ]]; then
+    stty -echo -icanon min 1 time 0 2>/dev/null || true
+  fi
+  printf '\033[?25l'
+  render_tty_choice_menu "$title" "$selected" 1 "${labels[@]}"
+  while true; do
+    if ! IFS= read -rsn1 key; then
+      restore_tty_prompt "$stty_state"
+      msg no_selection >&2
+      return 1
+    fi
+    case "$key" in
+      ''|$'\r'|$'\n')
+        printf '\n'
+        restore_tty_prompt "$stty_state"
+        PROMPT_CHOICE="$((selected + 1))"
+        return 0
+        ;;
+      $'\e')
+        rest=""
+        IFS= read -rsn2 -t 1 rest || true
+        case "$rest" in
+          '[A')
+            selected=$(((selected + count - 1) % count))
+            render_tty_choice_menu "$title" "$selected" 0 "${labels[@]}"
+            ;;
+          '[B')
+            selected=$(((selected + 1) % count))
+            render_tty_choice_menu "$title" "$selected" 0 "${labels[@]}"
+            ;;
+        esac
+        ;;
+      k|K)
+        selected=$(((selected + count - 1) % count))
+        render_tty_choice_menu "$title" "$selected" 0 "${labels[@]}"
+        ;;
+      j|J)
+        selected=$(((selected + 1) % count))
+        render_tty_choice_menu "$title" "$selected" 0 "${labels[@]}"
+        ;;
+      [1-9])
+        choice="$key"
+        if [[ "$choice" -ge 1 && "$choice" -le "$count" ]]; then
+          printf '\n'
+          restore_tty_prompt "$stty_state"
+          PROMPT_CHOICE="$choice"
+          return 0
+        fi
+        ;;
+    esac
+  done
+}
+
+can_use_tty_selector() {
+  [[ -t 0 && "${TERM:-}" != "dumb" ]]
+}
+
 prompt_menu() {
   local title="$1"
   local count="${#MENU_AGENTS[@]}"
   local i choice
   PROMPT_RESULT=""
+  if can_use_tty_selector; then
+    prompt_menu_tty "$title"
+    return
+  fi
   printf '\n%s\n\n' "$title"
   for i in "${!MENU_AGENTS[@]}"; do
     printf '  %s. %s' "$((i + 1))" "$(display_name "${MENU_AGENTS[$i]}")"
@@ -1767,12 +2015,20 @@ primary_missing_flow() {
   msg primary_missing "$(display_name "$saved")"
   print_candidates
   while true; do
+    if can_use_tty_selector; then
+      prompt_choice_tty \
+        "$(msg choose_recovery_action_title)" \
+        "$(msg recovery_reinstall_label "$(display_name "$saved")")" \
+        "$(msg recovery_choose_another_label)" || return 1
+      choice="$PROMPT_CHOICE"
+    else
     msg choose_recovery_action
     msg recovery_reinstall "$(display_name "$saved")"
     msg recovery_choose_another
     msg selection_prompt 2
     if ! read -r choice; then
       return 1
+    fi
     fi
     case "$choice" in
       1)
@@ -1799,15 +2055,29 @@ run_installer() {
   else
     msg install_official_prompt "$(display_name "$agent")" "$command_label"
   fi
-  msg run_installer_confirm
-  read -r answer || answer=""
-  case "$answer" in
-    y|Y|yes|YES|Yes) ;;
-    *)
+  if can_use_tty_selector; then
+    prompt_choice_tty \
+      "$(msg run_installer_title)" \
+      "$(msg run_installer_yes)" \
+      "$(msg run_installer_no)" || return 1
+    case "$PROMPT_CHOICE" in
+      1) ;;
+      *)
+        INSTALL_RESULT=declined
+        return 1
+        ;;
+    esac
+  else
+    msg run_installer_confirm
+    read -r answer || answer=""
+    case "$answer" in
+      y|Y|yes|YES|Yes) ;;
+      *)
       INSTALL_RESULT=declined
       return 1
       ;;
-  esac
+    esac
+  fi
 
   clear_state_error
   SELECTED_AGENT="$agent"
@@ -1864,12 +2134,22 @@ install_failure_menu() {
   manual_label="$(manual_install_command "$agent")"
   INSTALL_FAILURE_ACTION=""
   while true; do
+    if can_use_tty_selector; then
+      msg install_failed_title "$(display_name "$agent")"
+      prompt_choice_tty \
+        "$(msg choose_recovery_action_title)" \
+        "$(msg install_retry_label "$(display_name "$agent")")" \
+        "$(msg continue_choose_another_label)" \
+        "$(msg install_show_manual_label)" || return 1
+      choice="$PROMPT_CHOICE"
+    else
     msg install_failed_title "$(display_name "$agent")"
     msg install_retry "$(display_name "$agent")"
     msg continue_choose_another
     msg install_show_manual
     msg selection_prompt 3
     read -r choice || return 1
+    fi
     case "$choice" in
       1)
         INSTALL_FAILURE_ACTION=retry
@@ -2381,11 +2661,20 @@ post_launch_continue_menu() {
   local choice
   write_state waiting_for_continue "$agent"
   while true; do
+    if can_use_tty_selector; then
+      msg continue_did_not_finish "$(display_name "$agent")"
+      prompt_choice_tty \
+        "$(msg choose_recovery_action_title)" \
+        "$(msg continue_try_again_label "$(display_name "$agent")")" \
+        "$(msg continue_choose_another_label)" || return 1
+      choice="$PROMPT_CHOICE"
+    else
     msg continue_did_not_finish "$(display_name "$agent")"
     msg continue_try_again "$(display_name "$agent")"
     msg continue_choose_another
     msg selection_prompt 2
     read -r choice || return 1
+    fi
     case "$choice" in
       1)
         launch_selected_agent "$agent"
