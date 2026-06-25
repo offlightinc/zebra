@@ -24,6 +24,7 @@ struct cmuxApp: App {
 
     init() {
         UITestLaunchManifest.applyIfPresent()
+        let zebraAppearanceLaunchSeed = ZebraAppearanceDefaults.prepareLaunchSeed()
 
         if SocketControlSettings.shouldBlockUntaggedDebugLaunch() {
             Self.terminateForMissingLaunchTag()
@@ -31,6 +32,7 @@ struct cmuxApp: App {
 
         Self.configureGhosttyEnvironment()
         _ = KeyboardShortcutSettings.settingsFileStore
+        ZebraAppearanceDefaults.finishLaunchSeed(zebraAppearanceLaunchSeed)
 
         // Apply saved language preference before any UI loads
         LanguageSettings.apply(LanguageSettings.languageAtLaunch)
