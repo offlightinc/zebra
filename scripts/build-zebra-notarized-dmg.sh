@@ -14,6 +14,7 @@ APP_ENTITLEMENTS="${ZEBRA_APP_ENTITLEMENTS:-zebra.release.entitlements}"
 HELPER_ENTITLEMENTS="${ZEBRA_HELPER_ENTITLEMENTS:-cmux-helper.entitlements}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 SKIP_BUILD=0
+SKIP_SIGN=0
 SKIP_NOTARIZE=0
 
 usage() {
@@ -26,6 +27,7 @@ Builds a Developer ID signed Zebra.app and creates a DMG. Notarization runs when
 Options:
   --notary-profile <name>  Keychain profile created by xcrun notarytool store-credentials.
   --skip-build             Reuse the existing build-zebra-release app.
+  --skip-sign              Skip app and DMG signing for local packaging tests.
   --skip-notarize          Create a signed DMG without notarizing it.
   -h, --help               Show this help.
 
@@ -53,6 +55,11 @@ while [[ $# -gt 0 ]]; do
       SKIP_BUILD=1
       shift
       ;;
+    --skip-sign)
+      SKIP_SIGN=1
+      SKIP_NOTARIZE=1
+      shift
+      ;;
     --skip-notarize)
       SKIP_NOTARIZE=1
       shift
@@ -74,6 +81,29 @@ require_tool() {
     echo "error: missing required tool: $1" >&2
     exit 1
   }
+}
+
+require_create_dmg() {
+  local help
+  local version
+  help="$(create-dmg --help 2>&1 || true)"
+  version="$(create-dmg --version 2>&1 || true)"
+
+  if [[ "$help" != *"<output_name.dmg> <source_folder>"* ]] \
+    || [[ "$help" != *"--app-drop-link"* ]] \
+    || [[ "$help" != *"--codesign"* ]]; then
+    cat >&2 <<EOF
+error: unsupported create-dmg command.
+Expected the shell create-dmg tool that supports:
+  create-dmg [options] <output_name.dmg> <source_folder>
+  --app-drop-link
+  --codesign
+
+Found:
+${version:-$help}
+EOF
+    exit 1
+  fi
 }
 
 sign_path() {
@@ -107,10 +137,13 @@ create_dmg_with_hdiutil() {
   size_mb=$((size_kb / 1024 + 160))
 
   cleanup() {
-    if [[ "$attached" -eq 1 ]]; then
+    trap - RETURN
+    if [[ "${attached:-0}" -eq 1 && -n "${mount_path:-}" ]]; then
       hdiutil detach "$mount_path" >/dev/null 2>&1 || true
     fi
-    rm -rf "$temp_dir"
+    if [[ -n "${temp_dir:-}" ]]; then
+      rm -rf "$temp_dir"
+    fi
   }
   trap cleanup RETURN
 
@@ -118,10 +151,46 @@ create_dmg_with_hdiutil() {
   hdiutil attach "$work_dmg" -mountpoint "$mount_path" -nobrowse
   attached=1
   ditto "$app_path" "${mount_path}/${APP_NAME}.app"
-  /usr/bin/codesign --verify --deep --strict --verbose=2 "${mount_path}/${APP_NAME}.app"
+  ln -s /Applications "${mount_path}/Applications"
+  if [[ "$SKIP_SIGN" -eq 0 ]]; then
+    /usr/bin/codesign --verify --deep --strict --verbose=2 "${mount_path}/${APP_NAME}.app"
+  fi
   hdiutil detach "$mount_path"
   attached=0
   hdiutil convert "$work_dmg" -format UDZO -o "$dmg_path" -ov
+}
+
+create_zebra_dmg() {
+  local app_path="$1"
+  local dmg_path="$2"
+  local staging_dir
+  local create_dmg_args
+
+  staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/zebra-dmg-stage.XXXXXX")"
+
+  ditto "$app_path" "${staging_dir}/${APP_NAME}.app"
+
+  create_dmg_args=(
+    --volname "$APP_NAME"
+    --window-size 560 360
+    --icon-size 128
+    --icon "${APP_NAME}.app" 150 170
+    --hide-extension "${APP_NAME}.app"
+    --app-drop-link 410 170
+  )
+
+  if [[ "$SKIP_SIGN" -eq 0 ]]; then
+    create_dmg_args+=(--codesign "$SIGNING_IDENTITY")
+  fi
+
+  if ! create-dmg "${create_dmg_args[@]}" "$dmg_path" "$staging_dir"; then
+    rm -rf "$staging_dir"
+    echo "==> create-dmg failed; retrying with hdiutil fallback"
+    create_dmg_with_hdiutil "$app_path" "$dmg_path"
+    return
+  fi
+
+  rm -rf "$staging_dir"
 }
 
 require_tool xcodebuild
@@ -130,6 +199,7 @@ require_tool ditto
 require_tool xcrun
 require_tool create-dmg
 require_tool hdiutil
+require_create_dmg
 
 if [[ ! -f "$APP_ENTITLEMENTS" ]]; then
   echo "error: app entitlements not found: $APP_ENTITLEMENTS" >&2
@@ -186,46 +256,50 @@ fi
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$INFO_PLIST" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$INFO_PLIST"
 
-echo "==> signing helpers"
-if [[ -d "$APP_PATH/Contents/Resources/bin" ]]; then
-  while IFS= read -r -d '' helper; do
-    [[ -x "$helper" ]] || continue
-    echo "    $(basename "$helper")"
-    sign_path "$helper" "$HELPER_ENTITLEMENTS"
-  done < <(find "$APP_PATH/Contents/Resources/bin" -type f -print0)
+if [[ "$SKIP_SIGN" -eq 0 ]]; then
+  echo "==> signing helpers"
+  if [[ -d "$APP_PATH/Contents/Resources/bin" ]]; then
+    while IFS= read -r -d '' helper; do
+      [[ -x "$helper" ]] || continue
+      echo "    $(basename "$helper")"
+      sign_path "$helper" "$HELPER_ENTITLEMENTS"
+    done < <(find "$APP_PATH/Contents/Resources/bin" -type f -print0)
+  fi
+
+  echo "==> signing plugins"
+  if [[ -d "$APP_PATH/Contents/PlugIns" ]]; then
+    while IFS= read -r -d '' plugin; do
+      /usr/bin/codesign \
+        --force \
+        --options runtime \
+        --timestamp \
+        --sign "$SIGNING_IDENTITY" \
+        --deep \
+        "$plugin"
+    done < <(find "$APP_PATH/Contents/PlugIns" -mindepth 1 -maxdepth 1 -print0)
+  fi
+
+  echo "==> signing frameworks"
+  if [[ -d "$APP_PATH/Contents/Frameworks" ]]; then
+    while IFS= read -r -d '' framework; do
+      /usr/bin/codesign \
+        --force \
+        --options runtime \
+        --timestamp \
+        --sign "$SIGNING_IDENTITY" \
+        --deep \
+        "$framework"
+    done < <(find "$APP_PATH/Contents/Frameworks" -mindepth 1 -maxdepth 1 -print0)
+  fi
+
+  echo "==> signing app"
+  sign_path "$APP_PATH" "$APP_ENTITLEMENTS"
+
+  echo "==> verifying signature"
+  /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+else
+  echo "==> skipped signing; local packaging test mode"
 fi
-
-echo "==> signing plugins"
-if [[ -d "$APP_PATH/Contents/PlugIns" ]]; then
-  while IFS= read -r -d '' plugin; do
-    /usr/bin/codesign \
-      --force \
-      --options runtime \
-      --timestamp \
-      --sign "$SIGNING_IDENTITY" \
-      --deep \
-      "$plugin"
-  done < <(find "$APP_PATH/Contents/PlugIns" -mindepth 1 -maxdepth 1 -print0)
-fi
-
-echo "==> signing frameworks"
-if [[ -d "$APP_PATH/Contents/Frameworks" ]]; then
-  while IFS= read -r -d '' framework; do
-    /usr/bin/codesign \
-      --force \
-      --options runtime \
-      --timestamp \
-      --sign "$SIGNING_IDENTITY" \
-      --deep \
-      "$framework"
-  done < <(find "$APP_PATH/Contents/Frameworks" -mindepth 1 -maxdepth 1 -print0)
-fi
-
-echo "==> signing app"
-sign_path "$APP_PATH" "$APP_ENTITLEMENTS"
-
-echo "==> verifying signature"
-/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 mkdir -p "$DIST_DIR"
 rm -f "$DMG_PATH"
@@ -243,18 +317,17 @@ if [[ "$SKIP_NOTARIZE" -eq 0 && -n "$NOTARY_PROFILE" ]]; then
 fi
 
 echo "==> creating DMG"
-if ! create-dmg --codesign "$SIGNING_IDENTITY" "$DMG_PATH" "$APP_PATH"; then
-  echo "==> create-dmg failed; retrying with hdiutil fallback"
-  create_dmg_with_hdiutil "$APP_PATH" "$DMG_PATH"
-fi
+create_zebra_dmg "$APP_PATH" "$DMG_PATH"
 
-echo "==> signing DMG"
-/usr/bin/codesign \
-  --force \
-  --timestamp \
-  --sign "$SIGNING_IDENTITY" \
-  "$DMG_PATH"
-/usr/bin/codesign --verify --strict --verbose=2 "$DMG_PATH"
+if [[ "$SKIP_SIGN" -eq 0 ]]; then
+  echo "==> signing DMG"
+  /usr/bin/codesign \
+    --force \
+    --timestamp \
+    --sign "$SIGNING_IDENTITY" \
+    "$DMG_PATH"
+  /usr/bin/codesign --verify --strict --verbose=2 "$DMG_PATH"
+fi
 
 if [[ "$SKIP_NOTARIZE" -eq 0 && -n "$NOTARY_PROFILE" ]]; then
   echo "==> notarizing DMG"
