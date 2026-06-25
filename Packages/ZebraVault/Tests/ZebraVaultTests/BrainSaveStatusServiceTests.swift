@@ -2,6 +2,38 @@ import XCTest
 @testable import ZebraVault
 
 final class BrainSaveStatusServiceTests: XCTestCase {
+    func testGBrainConfigWithRemoteMCPUsesThinClientMode() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gbrainHome = root.appendingPathComponent(".gbrain", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let configURL = gbrainHome.appendingPathComponent("config.json", isDirectory: false)
+        try """
+        {
+          "remote_mcp": {
+            "url": "https://example.test/mcp"
+          }
+        }
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        XCTAssertTrue(GBrainConfig.usesRemoteMCP(configURL: configURL))
+    }
+
+    func testGBrainConfigWithDirectDatabaseDoesNotUseThinClientMode() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gbrainHome = root.appendingPathComponent(".gbrain", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let configURL = gbrainHome.appendingPathComponent("config.json", isDirectory: false)
+        try """
+        {
+          "database_url": "postgresql://user:pass@example.test/gbrain"
+        }
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        XCTAssertFalse(GBrainConfig.usesRemoteMCP(configURL: configURL))
+    }
+
     func testGBrainActiveLockMapsToSaving() {
         let snapshot = BrainSaveStatusMapper.map(gbrain: .success(report(activeLocks: 1)))
 
@@ -777,6 +809,13 @@ final class BrainSaveStatusServiceTests: XCTestCase {
         for _ in 0..<100 where service.isRefreshing {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+    }
+
+    private func makeTemporaryDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BrainSaveStatusServiceTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 }
 

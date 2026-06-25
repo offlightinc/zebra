@@ -674,3 +674,143 @@ public final class BrainSyncService: ObservableObject {
         }
     }
 }
+
+@MainActor
+public final class BrainSyncRuntimeRegistry {
+    public static let shared = BrainSyncRuntimeRegistry()
+
+    private struct Entry {
+        let service: BrainSyncService
+        var selectionCount: Int
+    }
+
+    private var entries: [String: Entry] = [:]
+    private let startService: @MainActor (BrainSyncService) -> Void
+    private let stopService: @MainActor (BrainSyncService, TimeInterval) -> Void
+
+    init(
+        startService: @MainActor @escaping (BrainSyncService) -> Void = { $0.start() },
+        stopService: @MainActor @escaping (BrainSyncService, TimeInterval) -> Void = { $0.stop(graceful: $1) }
+    ) {
+        self.startService = startService
+        self.stopService = stopService
+    }
+
+    public func acquire(vaultRoot: String?) -> BrainSyncService? {
+        guard let vaultRoot = Self.normalizedVaultRoot(vaultRoot) else { return nil }
+        if var entry = entries[vaultRoot] {
+            entry.selectionCount += 1
+            entries[vaultRoot] = entry
+            return entry.service
+        }
+
+        let service = BrainSyncService()
+        service.bind(vaultRoot: vaultRoot)
+        entries[vaultRoot] = Entry(service: service, selectionCount: 1)
+        startService(service)
+        return service
+    }
+
+    public func release(vaultRoot: String?, graceful: TimeInterval = 0) {
+        guard let vaultRoot = Self.normalizedVaultRoot(vaultRoot),
+              var entry = entries[vaultRoot] else { return }
+        entry.selectionCount -= 1
+        if entry.selectionCount <= 0 {
+            entries[vaultRoot] = nil
+            stopService(entry.service, graceful)
+        } else {
+            entries[vaultRoot] = entry
+        }
+    }
+
+    func selectionCount(for vaultRoot: String?) -> Int {
+        guard let vaultRoot = Self.normalizedVaultRoot(vaultRoot),
+              let entry = entries[vaultRoot] else { return 0 }
+        return entry.selectionCount
+    }
+
+    static func normalizedVaultRoot(_ path: String?) -> String? {
+        guard let path, !path.isEmpty else { return nil }
+        let expanded = (path as NSString).expandingTildeInPath
+        let standardized = URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL.path
+        guard standardized.count > 1, standardized.hasSuffix("/") else { return standardized }
+        return String(standardized.dropLast())
+    }
+}
+
+@MainActor
+public final class BrainSyncSelectionService: ObservableObject {
+    @Published public private(set) var currentService: BrainSyncService?
+
+    private let registry: BrainSyncRuntimeRegistry
+    private var selectedVaultRoot: String?
+    private var acquiredVaultRoot: String?
+    private var syncEnabled = false
+    private var vaultCancellable: AnyCancellable?
+
+    public convenience init() {
+        self.init(registry: .shared)
+    }
+
+    init(registry: BrainSyncRuntimeRegistry) {
+        self.registry = registry
+    }
+
+    deinit {
+        if let acquiredVaultRoot {
+            let registry = registry
+            Task { @MainActor in
+                registry.release(vaultRoot: acquiredVaultRoot, graceful: 0)
+            }
+        }
+        vaultCancellable?.cancel()
+    }
+
+    public func attachVaultSource(_ vault: VerticalTabsSidebarVaultState) {
+        vaultCancellable?.cancel()
+        updateSelectedVaultRoot(vault.selectedVaultPath)
+        vaultCancellable = vault.$selectedVaultPath
+            .removeDuplicates()
+            .sink { [weak self] newPath in
+                Task { @MainActor in self?.updateSelectedVaultRoot(newPath) }
+            }
+    }
+
+    public func setSyncEnabled(_ enabled: Bool) {
+        guard enabled != syncEnabled else { return }
+        syncEnabled = enabled
+        reconcileCurrentService()
+    }
+
+    private func updateSelectedVaultRoot(_ vaultRoot: String?) {
+        selectedVaultRoot = BrainSyncRuntimeRegistry.normalizedVaultRoot(vaultRoot)
+        reconcileCurrentService()
+    }
+
+    private func reconcileCurrentService() {
+        guard syncEnabled else {
+            if let acquiredVaultRoot {
+                registry.release(vaultRoot: acquiredVaultRoot, graceful: 0)
+                self.acquiredVaultRoot = nil
+            }
+            currentService = nil
+            return
+        }
+
+        guard let selectedVaultRoot else {
+            if let acquiredVaultRoot {
+                registry.release(vaultRoot: acquiredVaultRoot, graceful: 0)
+                self.acquiredVaultRoot = nil
+            }
+            currentService = nil
+            return
+        }
+
+        guard selectedVaultRoot != acquiredVaultRoot else { return }
+        if let acquiredVaultRoot {
+            registry.release(vaultRoot: acquiredVaultRoot, graceful: 0)
+        }
+        currentService = registry.acquire(vaultRoot: selectedVaultRoot)
+        acquiredVaultRoot = selectedVaultRoot
+    }
+}

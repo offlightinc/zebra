@@ -1,5 +1,22 @@
 import Foundation
 
+public enum GBrainConfig {
+    public static func configURL(homeDirectoryPath: String = NSHomeDirectory()) -> URL {
+        URL(fileURLWithPath: homeDirectoryPath, isDirectory: true)
+            .appendingPathComponent(".gbrain", isDirectory: true)
+            .appendingPathComponent("config.json", isDirectory: false)
+    }
+
+    public static func usesRemoteMCP(configURL: URL = configURL()) -> Bool {
+        guard let data = try? Data(contentsOf: configURL),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any] else {
+            return false
+        }
+        return dictionary["remote_mcp"] is [String: Any]
+    }
+}
+
 public enum BrainSaveFailureSource: String, Equatable, Sendable {
     case gbrainStatus
     case openClawCron

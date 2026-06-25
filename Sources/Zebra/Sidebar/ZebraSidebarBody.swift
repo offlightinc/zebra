@@ -21,10 +21,12 @@ struct ZebraSidebarBody: View {
     @EnvironmentObject var goalsViewState: GoalsViewState
     @EnvironmentObject var emailListStore: ZebraEmailListStore
     @EnvironmentObject var emailDetailStore: ZebraEmailDetailStore
+    @EnvironmentObject var brainSyncService: BrainSyncSelectionService
     @EnvironmentObject var brainSaveStatusService: BrainSaveStatusService
     @EnvironmentObject var onboardingChecklistStore: ZebraOnboardingChecklistStore
     @Environment(\.zebra) private var zebra
     @State private var observedOnboardingCompletedStepIDs: Set<ZebraOnboardingChecklistStepID>?
+    @State private var usesGBrainThinClient = GBrainConfig.usesRemoteMCP()
     @State private var pendingGBrainRuntimeStartAfterAgentLaunch = false
     @State private var pendingChainedGBrainRuntimeRunningAfterAgentLaunch = false
     @State private var launchedRuntimeInteractiveAuthRequestIDs: Set<String> = []
@@ -92,7 +94,9 @@ struct ZebraSidebarBody: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             onboardingChecklistStore.activateCompletionWatching()
-            refreshBrainSaveStatus()
+            if !refreshGBrainClientMode() {
+                refreshBrainSaveStatus()
+            }
             refreshOnboardingChecklist()
             startRuntimeInteractiveAuthIfNeeded(onboardingChecklistStore.pendingRuntimeInteractiveAuthRequest)
             observedOnboardingCompletedStepIDs = onboardingChecklistStore.completedStepIDs
@@ -116,10 +120,14 @@ struct ZebraSidebarBody: View {
             syncSelectedVaultToResolvedGBrainTargetBeforeImportIndexStart()
         }
         .onChange(of: onboardingChecklistStore.gbrainRecurringJobsCompletionRevision) { _ in
-            refreshBrainSaveStatusAfterRecurringJobsCompletion()
+            if !refreshGBrainClientMode() {
+                refreshBrainSaveStatusAfterRecurringJobsCompletion()
+            }
         }
         .onChange(of: vaultState.selectedVaultPath) { selectedVaultPath in
-            if selectedVaultPath == suppressedAutoSelectedVaultPathForBrainSaveRefresh {
+            if refreshGBrainClientMode() {
+                suppressedAutoSelectedVaultPathForBrainSaveRefresh = nil
+            } else if selectedVaultPath == suppressedAutoSelectedVaultPathForBrainSaveRefresh {
                 suppressedAutoSelectedVaultPathForBrainSaveRefresh = nil
             } else {
                 refreshBrainSaveStatus()
@@ -159,8 +167,13 @@ struct ZebraSidebarBody: View {
     private var footer: some View {
         VerticalTabsSidebarFooter(
             vaultState: vaultState,
+            brainSync: brainSyncService,
             brainSaveStatus: brainSaveStatusService,
+            usesGBrainThinClient: usesGBrainThinClient,
             onSendFeedback: slots.onSendFeedback,
+            onBrainSyncFailureAgent: { agent, failedAt, failure in
+                startBrainSyncFailureAgent(agent: agent, failedAt: failedAt, failure: failure)
+            },
             onBrainSaveFailureAgent: { agent, failedAt, failure in
                 startBrainSaveFailureAgent(agent: agent, failedAt: failedAt, failure: failure)
             }
@@ -655,6 +668,14 @@ struct ZebraSidebarBody: View {
             emailConnectionRepairState: emailListStore.connectionRepairState,
             emailConnectionVerified: emailListStore.hasVerifiedConnection
         )
+    }
+
+    @discardableResult
+    private func refreshGBrainClientMode() -> Bool {
+        let isThinClient = GBrainConfig.usesRemoteMCP()
+        usesGBrainThinClient = isThinClient
+        brainSyncService.setSyncEnabled(isThinClient)
+        return isThinClient
     }
 
     private func refreshBrainSaveStatus() {

@@ -29,9 +29,7 @@ struct ZebraServices {
     let goalsViewState: GoalsViewState
     let email: ZebraEmailListStore
     let emailDetail: ZebraEmailDetailStore
-    // Legacy direct sync service intentionally not constructed while the
-    // sidebar footer is backed by agent/GBrain save status.
-    // let brainSync: BrainSyncService
+    let brainSync: BrainSyncSelectionService
     let brainSaveStatus: BrainSaveStatusService
     let onboardingChecklist: ZebraOnboardingChecklistStore
 
@@ -55,13 +53,10 @@ struct ZebraServices {
         MinimalModeSidebarTitlebarControlsMetrics.extraLeadingInset =
             VerticalTabsSidebarModeRail.fixedWidth
         let vault = VerticalTabsSidebarVaultState()
+        let brainSync = BrainSyncSelectionService()
+        brainSync.attachVaultSource(vault)
+        brainSync.setSyncEnabled(GBrainConfig.usesRemoteMCP())
         let brainSaveStatus = BrainSaveStatusService()
-        // Legacy direct sync path remains in ZebraVault for future
-        // multi-device/person sync work, but the app no longer constructs or
-        // injects BrainSyncService while agent/GBrain save status owns the
-        // sidebar footer.
-        // let brainSync = BrainSyncService()
-        // brainSync.attachVaultSource(vault)
         let email = ZebraEmailListStore()
         let agentTerminals = ZebraAgentTerminalRegistry()
         let emailDetail = ZebraEmailDetailStore(
@@ -88,7 +83,7 @@ struct ZebraServices {
             goalsViewState: GoalsViewState(),
             email: email,
             emailDetail: emailDetail,
-            // brainSync: brainSync,
+            brainSync: brainSync,
             brainSaveStatus: brainSaveStatus,
             onboardingChecklist: ZebraOnboardingChecklistStore(),
             panelControllers: MarkdownPanelControllerRegistry(),
@@ -123,7 +118,7 @@ struct ZebraServices {
             .environmentObject(goalsViewState)
             .environmentObject(email)
             .environmentObject(emailDetail)
-            // .environmentObject(brainSync)
+            .environmentObject(brainSync)
             .environmentObject(brainSaveStatus)
             .environmentObject(onboardingChecklist)
     }

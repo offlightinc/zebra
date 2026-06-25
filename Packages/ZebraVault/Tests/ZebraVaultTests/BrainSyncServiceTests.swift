@@ -3,6 +3,46 @@ import XCTest
 
 @MainActor
 final class BrainSyncServiceTests: XCTestCase {
+    func testRuntimeRegistrySharesOneServicePerVaultRoot() throws {
+        var startedVaults: [String] = []
+        var stoppedVaults: [String] = []
+        let registry = BrainSyncRuntimeRegistry(
+            startService: { service in startedVaults.append(service.vaultRoot ?? "") },
+            stopService: { service, _ in stoppedVaults.append(service.vaultRoot ?? "") }
+        )
+
+        let first = try XCTUnwrap(registry.acquire(vaultRoot: "/tmp/zebra-vault-a"))
+        let second = try XCTUnwrap(registry.acquire(vaultRoot: "/tmp/zebra-vault-a/"))
+
+        XCTAssertTrue(first === second)
+        XCTAssertEqual(startedVaults, ["/tmp/zebra-vault-a"])
+        XCTAssertEqual(registry.selectionCount(for: "/tmp/zebra-vault-a"), 2)
+
+        registry.release(vaultRoot: "/tmp/zebra-vault-a")
+        XCTAssertEqual(stoppedVaults, [])
+        XCTAssertEqual(registry.selectionCount(for: "/tmp/zebra-vault-a"), 1)
+
+        registry.release(vaultRoot: "/tmp/zebra-vault-a/")
+        XCTAssertEqual(stoppedVaults, ["/tmp/zebra-vault-a"])
+        XCTAssertEqual(registry.selectionCount(for: "/tmp/zebra-vault-a"), 0)
+    }
+
+    func testRuntimeRegistryAllowsDifferentVaultRoots() throws {
+        var startedVaults: [String] = []
+        let registry = BrainSyncRuntimeRegistry(
+            startService: { service in startedVaults.append(service.vaultRoot ?? "") },
+            stopService: { _, _ in }
+        )
+
+        let first = try XCTUnwrap(registry.acquire(vaultRoot: "/tmp/zebra-vault-a"))
+        let second = try XCTUnwrap(registry.acquire(vaultRoot: "/tmp/zebra-vault-b"))
+
+        XCTAssertFalse(first === second)
+        XCTAssertEqual(startedVaults, ["/tmp/zebra-vault-a", "/tmp/zebra-vault-b"])
+        XCTAssertEqual(registry.selectionCount(for: "/tmp/zebra-vault-a"), 1)
+        XCTAssertEqual(registry.selectionCount(for: "/tmp/zebra-vault-b"), 1)
+    }
+
     func testAlreadyRunningReasonTagIsNotClassifiedAsSuccess() {
         let failure = BrainSyncService.classifyFailure(
             stderr: "[REASON:alreadyRunning] brain sync already running: lock=/tmp/zebra-brain-sync.1.lock age=42s",

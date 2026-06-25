@@ -10903,8 +10903,11 @@ private struct SidebarFooterButtons: View {
 
 struct VerticalTabsSidebarFooter: View {
     @ObservedObject var vaultState: VerticalTabsSidebarVaultState
+    @ObservedObject var brainSync: BrainSyncSelectionService
     @ObservedObject var brainSaveStatus: BrainSaveStatusService
+    let usesGBrainThinClient: Bool
     let onSendFeedback: () -> Void
+    let onBrainSyncFailureAgent: (MarkdownPillAgent, Date, BrainSyncService.Failure) -> Void
     let onBrainSaveFailureAgent: (MarkdownPillAgent, Date?, BrainSaveFailure) -> Void
 
     var body: some View {
@@ -10917,11 +10920,21 @@ struct VerticalTabsSidebarFooter: View {
             VerticalTabsSidebarVaultMenu(vaultState: vaultState)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            BrainSaveStatusIndicatorView(
-                service: brainSaveStatus,
-                onFailureAgentSelect: onBrainSaveFailureAgent
-            )
-            .fixedSize(horizontal: true, vertical: false)
+            if usesGBrainThinClient {
+                if let currentBrainSync = brainSync.currentService {
+                    BrainSyncIndicatorView(
+                        service: currentBrainSync,
+                        onFailureAgentSelect: onBrainSyncFailureAgent
+                    )
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+            } else {
+                BrainSaveStatusIndicatorView(
+                    service: brainSaveStatus,
+                    onFailureAgentSelect: onBrainSaveFailureAgent
+                )
+                .fixedSize(horizontal: true, vertical: false)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.leading, 6)
