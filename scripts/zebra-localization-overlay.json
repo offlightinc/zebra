@@ -1,0 +1,20 @@
+{
+  "brandSource": "cmux",
+  "brandName": "Zebra",
+  "tables": {
+    "Localizable": {
+      "replaceBrandInKeys": [
+        "dialog.enableNotifications.title",
+        "dialog.enableNotifications.message",
+        "dialog.quitCmux.title",
+        "menu.quitCmux",
+        "statusMenu.showCmux",
+        "menu.app.about",
+        "sidebar.help.welcome"
+      ],
+      "fixedValues": {
+        "about.appName": "Zebra"
+      }
+    }
+  }
+}

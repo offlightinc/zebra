@@ -196,6 +196,7 @@ create_zebra_dmg() {
 require_tool xcodebuild
 require_tool codesign
 require_tool ditto
+require_tool python3
 require_tool xcrun
 require_tool create-dmg
 require_tool hdiutil
@@ -255,6 +256,11 @@ fi
   || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_NAME" "$INFO_PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$INFO_PLIST" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$INFO_PLIST"
+
+echo "==> applying Zebra localization overlay"
+python3 scripts/apply-zebra-localization-overlay.py \
+  "$APP_PATH" \
+  --overlay scripts/zebra-localization-overlay.json
 
 if [[ "$SKIP_SIGN" -eq 0 ]]; then
   echo "==> signing helpers"

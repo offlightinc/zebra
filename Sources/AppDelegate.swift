@@ -7314,12 +7314,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func sendWelcomeCommandWhenReady(to workspace: Workspace, markShownOnSend: Bool = false) {
-        let command = markShownOnSend ? automaticWelcomeCommand() : "cmux welcome\n"
+        let command = markShownOnSend ? automaticWelcomeCommand() : manualWelcomeCommand()
         sendTextWhenReady(command, to: workspace) {
             if markShownOnSend {
                 UserDefaults.standard.set(true, forKey: WelcomeSettings.shownKey)
             }
         }
+    }
+
+    private func manualWelcomeCommand() -> String {
+        ZebraAgentOnboardingScriptCommand.shellStartupLine(
+            command: .run,
+            cwd: NSHomeDirectory()
+        ) ?? "cmux welcome\n"
     }
 
     private func automaticWelcomeCommand() -> String {
