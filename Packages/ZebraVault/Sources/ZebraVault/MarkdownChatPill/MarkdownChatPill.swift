@@ -435,6 +435,9 @@ public enum MarkdownChatPillLayout {
 
 public struct MarkdownChatPill: View {
     private static let expandedChipMaxWidth: CGFloat = 320
+    private static let controlChipHeight: CGFloat = 26
+    private static let collapsedShellPadding: CGFloat = 8
+    private static let expandedShellPadding: CGFloat = 14
     private static let agentDropdownWidth: CGFloat = 300
     private static let agentDropdownHeight: CGFloat = 160
     private static let agentDropdownGap: CGFloat = 12
@@ -585,7 +588,10 @@ public struct MarkdownChatPill: View {
         isSlashMode && (matchingSkills?.isEmpty == false)
     }
     private var shellPadding: CGFloat {
-        isExpanded ? 14 : 8
+        isExpanded ? Self.expandedShellPadding : Self.collapsedShellPadding
+    }
+    private var contextChipCornerRadius: CGFloat {
+        Self.controlChipHeight / 2
     }
     private var expandedOpacity: Double {
         isExpanded ? 1 : 0
@@ -1047,12 +1053,13 @@ public struct MarkdownChatPill: View {
         .padding(.leading, 8)
         .padding(.trailing, 10)
         .padding(.vertical, 4)
+        .frame(height: Self.controlChipHeight)
         .background(MarkdownPillPalette.accent.opacity(0.10))
         .overlay(
-            RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: contextChipCornerRadius, style: .continuous)
                 .stroke(MarkdownPillPalette.accent.opacity(0.25), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: contextChipCornerRadius, style: .continuous))
         .fixedSize(horizontal: false, vertical: true)
     }
 
