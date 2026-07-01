@@ -1,14 +1,43 @@
 import Foundation
 
-struct ZebraGBrainOnboardingSectionSnapshot: Identifiable, Equatable {
+struct ZebraOnboardingChecklistSubstepSnapshot: Identifiable, Equatable {
     let id: String
     let title: String
+    let detail: String?
     let isCompleted: Bool
     let isActive: Bool
     let isWaitingForUser: Bool
     let isRunning: Bool
     let showsStart: Bool
     let wasStartedBefore: Bool
+    let isAttention: Bool
+    let isSkipped: Bool
+
+    init(
+        id: String,
+        title: String,
+        detail: String? = nil,
+        isCompleted: Bool,
+        isActive: Bool,
+        isWaitingForUser: Bool,
+        isRunning: Bool,
+        showsStart: Bool,
+        wasStartedBefore: Bool,
+        isAttention: Bool = false,
+        isSkipped: Bool = false
+    ) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.isCompleted = isCompleted
+        self.isActive = isActive
+        self.isWaitingForUser = isWaitingForUser
+        self.isRunning = isRunning
+        self.showsStart = showsStart
+        self.wasStartedBefore = wasStartedBefore
+        self.isAttention = isAttention
+        self.isSkipped = isSkipped
+    }
 }
 
 public struct ZebraGBrainOnboardingStore {
@@ -364,7 +393,7 @@ public struct ZebraGBrainOnboardingStore {
         isParentRunning: Bool,
         showsStartForActiveSection: Bool,
         wasStartedBefore: Bool
-    ) -> [ZebraGBrainOnboardingSectionSnapshot] {
+    ) -> [ZebraOnboardingChecklistSubstepSnapshot] {
         guard let state = loadState() else {
             return []
         }
@@ -386,7 +415,7 @@ public struct ZebraGBrainOnboardingStore {
         let activeNormalizedTitle = activeTitle.map(Self.normalizedSectionTitle)
         let sourceIsActive = !sourcePrepared
 
-        let prepareSourceSnapshot = ZebraGBrainOnboardingSectionSnapshot(
+        let prepareSourceSnapshot = ZebraOnboardingChecklistSubstepSnapshot(
             id: Self.prepareSourceRepoSectionID,
             title: Self.prepareSourceRepoSectionTitle(),
             isCompleted: sourcePrepared,
@@ -406,7 +435,7 @@ public struct ZebraGBrainOnboardingStore {
             let isWaitingForUser = waitingSection == section.title
                 || (waitingNormalizedTitle != nil && waitingNormalizedTitle == normalizedTitle)
 
-            return ZebraGBrainOnboardingSectionSnapshot(
+            return ZebraOnboardingChecklistSubstepSnapshot(
                 id: section.hash.isEmpty ? section.title : section.hash,
                 title: section.title,
                 isCompleted: isCompleted,

@@ -116,7 +116,7 @@ struct ZebraSidebarBody: View {
         .onChange(of: onboardingChecklistStore.pendingRuntimeInteractiveAuthRequest) { request in
             startRuntimeInteractiveAuthIfNeeded(request)
         }
-        .onChange(of: onboardingChecklistStore.gbrainSubstepSnapshotRevision) { _ in
+        .onChange(of: onboardingChecklistStore.substepSnapshotRevision) { _ in
             syncSelectedVaultToResolvedGBrainTargetBeforeImportIndexStart()
         }
         .onChange(of: onboardingChecklistStore.gbrainRecurringJobsCompletionRevision) { _ in

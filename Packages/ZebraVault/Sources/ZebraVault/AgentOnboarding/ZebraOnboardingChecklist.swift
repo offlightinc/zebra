@@ -24,7 +24,7 @@ public struct ZebraOnboardingChecklistStepSnapshot: Identifiable, Equatable {
     public let isRunning: Bool
     public let showsStart: Bool
     public let wasStartedBefore: Bool
-    let gbrainSubsteps: [ZebraGBrainOnboardingSectionSnapshot]
+    let substeps: [ZebraOnboardingChecklistSubstepSnapshot]
 }
 
 @MainActor
@@ -103,7 +103,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     @Published public private(set) var activeStepID: ZebraOnboardingChecklistStepID?
     @Published public private(set) var runningStepID: ZebraOnboardingChecklistStepID?
     @Published public private(set) var pendingRuntimeInteractiveAuthRequest: ZebraGBrainRuntimeOnboardingStore.InteractiveAuthRequest?
-    @Published public private(set) var gbrainSubstepSnapshotRevision = 0
+    @Published public private(set) var substepSnapshotRevision = 0
     @Published public private(set) var gbrainRecurringJobsCompletionRevision = 0
 
     public init(
@@ -209,20 +209,25 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     }
 
     public var snapshots: [ZebraOnboardingChecklistStepSnapshot] {
-        _ = gbrainSubstepSnapshotRevision
+        _ = substepSnapshotRevision
         let firstIncomplete = Self.steps.first { !completedStepIDs.contains($0.id) }?.id
         return Self.steps.map { step in
             let showsStart = firstIncomplete == step.id && runningStepID != step.id
             let wasStartedBefore = startedStepIDs.contains(step.id)
             let shouldProjectGBrainSubsteps = step.id == .gbrain
                 && (runningStepID == .gbrain || wasStartedBefore)
-            let gbrainSubsteps = shouldProjectGBrainSubsteps
-                ? gbrainOnboardingStore.sectionSnapshotsFromCachedState(
+            let substeps: [ZebraOnboardingChecklistSubstepSnapshot]
+            if shouldProjectGBrainSubsteps {
+                substeps = gbrainOnboardingStore.sectionSnapshotsFromCachedState(
                     isParentRunning: runningStepID == .gbrain,
                     showsStartForActiveSection: showsStart,
                     wasStartedBefore: wasStartedBefore
                 )
-                : []
+            } else if step.id == .sourceOnboarding {
+                substeps = sourceOnboardingSubstepsFromCachedState()
+            } else {
+                substeps = []
+            }
             return ZebraOnboardingChecklistStepSnapshot(
                 id: step.id,
                 number: step.number,
@@ -232,7 +237,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                 isRunning: runningStepID == step.id,
                 showsStart: showsStart,
                 wasStartedBefore: wasStartedBefore,
-                gbrainSubsteps: gbrainSubsteps
+                substeps: substeps
             )
         }
     }
@@ -324,7 +329,9 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                 for: .adapter,
                 result: adapterCompletionResult(selectedVaultPath: selectedVaultPath)
             )
-        case .sourceOnboarding, .goals:
+        case .sourceOnboarding:
+            invalidateSubstepSnapshots()
+        case .goals:
             break
         }
     }
@@ -402,7 +409,11 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     }
 
     private func invalidateGBrainSubstepSnapshots() {
-        gbrainSubstepSnapshotRevision &+= 1
+        invalidateSubstepSnapshots()
+    }
+
+    private func invalidateSubstepSnapshots() {
+        substepSnapshotRevision &+= 1
     }
 
     private func refreshGBrainRecurringJobsCompletionSignal() {
@@ -554,6 +565,60 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(ZebraSourceOnboardingState.self, from: data)
+    }
+
+    func sourceOnboardingSubstepsFromCachedState() -> [ZebraOnboardingChecklistSubstepSnapshot] {
+        guard let state = loadSourceOnboardingState() else { return [] }
+        var substeps: [ZebraOnboardingChecklistSubstepSnapshot] = []
+
+        let orderedSourceIDs = state.progress.normalizedSourceList
+            + state.progress.sourceRows.keys
+                .filter { !state.progress.normalizedSourceList.contains($0) }
+                .sorted()
+        for sourceID in orderedSourceIDs {
+            guard let row = state.progress.sourceRows[sourceID] else { continue }
+            substeps.append(sourceRowSubstep(row))
+        }
+
+        for unsupported in state.progress.unsupportedInputs {
+            substeps.append(unsupportedSourceSubstep(unsupported))
+        }
+
+        return substeps
+    }
+
+    private func sourceRowSubstep(
+        _ row: ZebraSourceOnboardingState.SourceRow
+    ) -> ZebraOnboardingChecklistSubstepSnapshot {
+        return ZebraOnboardingChecklistSubstepSnapshot(
+            id: "source-row-\(row.id)",
+            title: row.displayName ?? row.id,
+            detail: nil,
+            isCompleted: false,
+            isActive: false,
+            isWaitingForUser: row.selectionState == "pending_confirmation",
+            isRunning: row.status == "running",
+            showsStart: false,
+            wasStartedBefore: true,
+            isAttention: row.status == "attention"
+        )
+    }
+
+    private func unsupportedSourceSubstep(
+        _ unsupported: ZebraSourceOnboardingState.UnsupportedSourceInput
+    ) -> ZebraOnboardingChecklistSubstepSnapshot {
+        ZebraOnboardingChecklistSubstepSnapshot(
+            id: "unsupported-source-\(unsupported.normalizedValue)",
+            title: unsupported.displayName ?? unsupported.rawValue,
+            detail: nil,
+            isCompleted: false,
+            isActive: false,
+            isWaitingForUser: true,
+            isRunning: false,
+            showsStart: false,
+            wasStartedBefore: true,
+            isAttention: true
+        )
     }
 
     private func writeSourceOnboardingState(_ state: ZebraSourceOnboardingState) throws {
@@ -715,6 +780,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             WatchedCompletionFile(url: gbrainRuntimeOnboardingStateURL, stepID: .gbrainRuntime),
             WatchedCompletionFile(url: gbrainOnboardingStateURL, stepID: .gbrain),
             WatchedCompletionFile(url: gbrainAdapterOnboardingStateURL, stepID: .adapter),
+            WatchedCompletionFile(url: sourceOnboardingStateURL, stepID: .sourceOnboarding),
             WatchedCompletionFile(url: clawvisorEmailEnvURL, stepID: .sourceOnboarding),
         ]
     }
@@ -1349,7 +1415,7 @@ public struct ZebraOnboardingChecklistCard: View {
     private func toggleSubstepListAction(
         for snapshot: ZebraOnboardingChecklistStepSnapshot
     ) -> (() -> Void)? {
-        guard !snapshot.gbrainSubsteps.isEmpty else { return nil }
+        guard !snapshot.substeps.isEmpty else { return nil }
         return {
             if collapsedSubstepStepIDs.contains(snapshot.id) {
                 collapsedSubstepStepIDs.remove(snapshot.id)
@@ -1467,8 +1533,8 @@ private struct ZebraOnboardingChecklistRow: View {
     var body: some View {
         VStack(spacing: 0) {
             mainRow
-            if showsExpandedGBrainSubsteps {
-                gbrainSubstepList
+            if showsExpandedSubsteps {
+                substepList
             }
         }
         .accessibilityElement(children: .contain)
@@ -1481,8 +1547,8 @@ private struct ZebraOnboardingChecklistRow: View {
             toggleHitArea
             Spacer(minLength: 0)
 
-            if shouldMoveStartToGBrainSubstep {
-                gbrainSubstepProgressBadge
+            if shouldMoveStartToSubstep {
+                substepProgressBadge
                 substepListToggleButton
             } else if snapshot.showsStart {
                 ZebraOnboardingChecklistStartButton(
@@ -1491,7 +1557,7 @@ private struct ZebraOnboardingChecklistRow: View {
                     action: onStart
                 )
             } else if canToggleSubstepList {
-                gbrainSubstepProgressBadge
+                substepProgressBadge
                 substepListToggleButton
             }
 
@@ -1516,6 +1582,8 @@ private struct ZebraOnboardingChecklistRow: View {
                 isRunning: snapshot.isRunning,
                 isCompleted: snapshot.isCompleted,
                 isDevelopmentCompleted: snapshot.isDevelopmentCompleted,
+                isAttention: false,
+                isSkipped: false,
                 hovering: hovering,
                 onStop: onStop,
                 onDevelopmentToggle: nil,
@@ -1534,26 +1602,31 @@ private struct ZebraOnboardingChecklistRow: View {
         .contentShape(Rectangle())
     }
 
-    private var showsGBrainSubsteps: Bool {
-        !snapshot.gbrainSubsteps.isEmpty
-            && (snapshot.isActive || snapshot.isRunning || snapshot.gbrainSubsteps.contains { $0.isActive })
+    private var showsSubsteps: Bool {
+        !snapshot.substeps.isEmpty
+            && (
+                snapshot.isActive
+                    || snapshot.isRunning
+                    || snapshot.wasStartedBefore
+                    || snapshot.substeps.contains { $0.isActive || $0.isAttention }
+            )
     }
 
-    private var showsExpandedGBrainSubsteps: Bool {
-        showsGBrainSubsteps && !isSubstepListCollapsed
+    private var showsExpandedSubsteps: Bool {
+        showsSubsteps && !isSubstepListCollapsed
     }
 
-    private var shouldMoveStartToGBrainSubstep: Bool {
-        showsGBrainSubsteps && snapshot.gbrainSubsteps.contains { $0.showsStart || $0.isRunning }
+    private var shouldMoveStartToSubstep: Bool {
+        showsSubsteps && snapshot.substeps.contains { $0.showsStart || $0.isRunning }
     }
 
     private var canToggleSubstepList: Bool {
-        showsGBrainSubsteps && onToggleSubstepList != nil
+        showsSubsteps && onToggleSubstepList != nil
     }
 
-    private var gbrainSubstepList: some View {
+    private var substepList: some View {
         VStack(spacing: 0) {
-            ForEach(snapshot.gbrainSubsteps) { substep in
+            ForEach(snapshot.substeps) { substep in
                 ZebraOnboardingChecklistSubstepRow(
                     snapshot: substep,
                     onStart: onStart,
@@ -1573,9 +1646,9 @@ private struct ZebraOnboardingChecklistRow: View {
         }
     }
 
-    private var gbrainSubstepProgressBadge: some View {
-        let completed = snapshot.gbrainSubsteps.filter(\.isCompleted).count
-        let total = snapshot.gbrainSubsteps.count
+    private var substepProgressBadge: some View {
+        let completed = snapshot.substeps.filter(\.isCompleted).count
+        let total = snapshot.substeps.count
         return Text("\(completed)/\(total)")
             .font(.system(size: 10, weight: .semibold, design: .monospaced))
             .monospacedDigit()
@@ -1642,7 +1715,7 @@ private struct ZebraOnboardingChecklistRow: View {
 }
 
 private struct ZebraOnboardingChecklistSubstepRow: View {
-    let snapshot: ZebraGBrainOnboardingSectionSnapshot
+    let snapshot: ZebraOnboardingChecklistSubstepSnapshot
     let onStart: () -> Void
     let onStop: (() -> Void)?
 
@@ -1654,6 +1727,8 @@ private struct ZebraOnboardingChecklistSubstepRow: View {
                 isRunning: snapshot.isRunning,
                 isCompleted: snapshot.isCompleted,
                 isDevelopmentCompleted: false,
+                isAttention: snapshot.isAttention,
+                isSkipped: snapshot.isSkipped,
                 hovering: hovering,
                 onStop: onStop,
                 onDevelopmentToggle: nil,
@@ -1662,12 +1737,21 @@ private struct ZebraOnboardingChecklistSubstepRow: View {
             )
             .frame(width: 12, height: 12)
 
-            Text(snapshot.title)
-                .font(.system(size: 11, weight: snapshot.isActive ? .semibold : .regular))
-                .foregroundColor(snapshot.isCompleted ? BVColor.fgMute : BVColor.fg)
-                .strikethrough(snapshot.isCompleted, color: BVColor.fgMute.opacity(0.65))
-                .lineLimit(1)
-                .truncationMode(.tail)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(snapshot.title)
+                    .font(.system(size: 11, weight: snapshot.isActive ? .semibold : .regular))
+                    .foregroundColor(snapshot.isCompleted || snapshot.isSkipped ? BVColor.fgMute : BVColor.fg)
+                    .strikethrough(snapshot.isCompleted, color: BVColor.fgMute.opacity(0.65))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let detail = snapshot.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundColor(BVColor.fgMute)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
 
             Spacer(minLength: 0)
 
@@ -1709,6 +1793,8 @@ private struct ZebraOnboardingChecklistStatusIndicator: View {
     let isRunning: Bool
     let isCompleted: Bool
     let isDevelopmentCompleted: Bool
+    let isAttention: Bool
+    let isSkipped: Bool
     let hovering: Bool
     let onStop: (() -> Void)?
     let onDevelopmentToggle: (() -> Void)?
@@ -1739,6 +1825,12 @@ private struct ZebraOnboardingChecklistStatusIndicator: View {
                 completedCheckbox
                     .frame(width: 13, height: 13)
             }
+        } else if isAttention {
+            attentionIndicator
+                .frame(width: 13, height: 13)
+        } else if isSkipped {
+            skippedCheckbox
+                .frame(width: 13, height: 13)
         } else if onDevelopmentToggle != nil {
             developmentToggleButton(label: emptyCheckbox)
         } else {
@@ -1772,6 +1864,21 @@ private struct ZebraOnboardingChecklistStatusIndicator: View {
     private var emptyCheckbox: some View {
         RoundedRectangle(cornerRadius: 3, style: .continuous)
             .stroke(BVColor.fgGhost, lineWidth: 1.3)
+    }
+
+    private var skippedCheckbox: some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .stroke(BVColor.fgGhost.opacity(0.65), lineWidth: 1.2)
+    }
+
+    private var attentionIndicator: some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .stroke(ZebraOnboardingChecklistPalette.accent, lineWidth: 1.3)
+            .overlay(
+                Text("!")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundColor(ZebraOnboardingChecklistPalette.accent)
+            )
     }
 }
 

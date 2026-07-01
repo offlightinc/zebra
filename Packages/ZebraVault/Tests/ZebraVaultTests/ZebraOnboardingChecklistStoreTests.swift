@@ -722,6 +722,23 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(confirmed.progress.sourceRows["obsidian"]?.selectionState, "confirmed")
         XCTAssertEqual(confirmed.progress.sourceRows["gmail"]?.selectionState, "confirmed")
 
+        let sourceSnapshot = try XCTUnwrap(store.snapshots.first { $0.id == .sourceOnboarding })
+        let sourceSubsteps = sourceSnapshot.substeps
+        XCTAssertNil(sourceSubsteps.first { $0.id == "source-confirmation" })
+        let obsidianSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "source-row-obsidian" })
+        let gmailSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "source-row-gmail" })
+        let slackSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "unsupported-source-slack" })
+        XCTAssertNil(sourceSubsteps.first { $0.id == "gmail-readiness" })
+
+        XCTAssertEqual(obsidianSubstep.title, "Obsidian")
+        XCTAssertNil(obsidianSubstep.detail)
+        XCTAssertFalse(obsidianSubstep.isCompleted)
+        XCTAssertEqual(gmailSubstep.title, "Gmail")
+        XCTAssertNil(gmailSubstep.detail)
+        XCTAssertEqual(slackSubstep.title, "Slack")
+        XCTAssertNil(slackSubstep.detail)
+        XCTAssertTrue(slackSubstep.isAttention)
+
         let status = try runProcess(
             executableURL: helperURL,
             arguments: ["status", "--json"],
@@ -904,20 +921,20 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         XCTAssertTrue(beforeStart.isActive)
         XCTAssertTrue(beforeStart.showsStart)
-        XCTAssertEqual(beforeStart.gbrainSubsteps, [])
+        XCTAssertEqual(beforeStart.substeps, [])
 
         store.beginLaunch(stepID: .gbrain)
         store.cancelRunning(stepID: .gbrain)
 
         let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
-        let prepare = try XCTUnwrap(gbrain.gbrainSubsteps.first { $0.title == "Check and clone GBrain repo" })
-        let install = try XCTUnwrap(gbrain.gbrainSubsteps.first { $0.title == "Step 1: Install GBrain" })
-        let credentials = try XCTUnwrap(gbrain.gbrainSubsteps.first { $0.title == "Step 2: API Keys" })
-        let future = try XCTUnwrap(gbrain.gbrainSubsteps.first { $0.title == "Step 3: Create the Brain" })
+        let prepare = try XCTUnwrap(gbrain.substeps.first { $0.title == "Check and clone GBrain repo" })
+        let install = try XCTUnwrap(gbrain.substeps.first { $0.title == "Step 1: Install GBrain" })
+        let credentials = try XCTUnwrap(gbrain.substeps.first { $0.title == "Step 2: API Keys" })
+        let future = try XCTUnwrap(gbrain.substeps.first { $0.title == "Step 3: Create the Brain" })
 
         XCTAssertTrue(gbrain.isActive)
         XCTAssertTrue(gbrain.showsStart)
-        XCTAssertEqual(gbrain.gbrainSubsteps.map(\.title), [
+        XCTAssertEqual(gbrain.substeps.map(\.title), [
             "Check and clone GBrain repo",
             "Step 1: Install GBrain",
             "Step 2: API Keys",
@@ -981,7 +998,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             "GBrain progress changes should redraw substeps even when top-level completion stays unchanged."
         )
         let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
-        XCTAssertEqual(gbrain.gbrainSubsteps.map(\.title), [
+        XCTAssertEqual(gbrain.substeps.map(\.title), [
             "Check and clone GBrain repo",
             "Step 1: Install GBrain",
             "Step 2: API Keys",
