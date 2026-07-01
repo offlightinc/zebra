@@ -93,23 +93,84 @@ extension ZebraSourceOnboardingState {
     struct Progress: Codable, Equatable, Sendable {
         var rawSourceInput: String?
         var normalizedSourceList: [String]
-        var confirmedOrder: [String]
+        var unsupportedInputs: [UnsupportedSourceInput]
+        var sourceConfirmation: SourceConfirmation?
         var sourceRows: [String: SourceRow]
         var pendingQuestion: PendingQuestion?
+        // Deferred source-order slices:
+        // var importanceOrder: [String]
+        // var finalExecutionOrder: [String]
 
         init(
             rawSourceInput: String? = nil,
             normalizedSourceList: [String] = [],
-            confirmedOrder: [String] = [],
+            unsupportedInputs: [UnsupportedSourceInput] = [],
+            sourceConfirmation: SourceConfirmation? = nil,
             sourceRows: [String: SourceRow] = [:],
             pendingQuestion: PendingQuestion? = nil
         ) {
             self.rawSourceInput = rawSourceInput
             self.normalizedSourceList = normalizedSourceList
-            self.confirmedOrder = confirmedOrder
+            self.unsupportedInputs = unsupportedInputs
+            self.sourceConfirmation = sourceConfirmation
             self.sourceRows = sourceRows
             self.pendingQuestion = pendingQuestion
         }
+
+        private enum CodingKeys: String, CodingKey {
+            case rawSourceInput
+            case normalizedSourceList
+            case unsupportedInputs
+            case sourceConfirmation
+            case sourceRows
+            case pendingQuestion
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            rawSourceInput = try container.decodeIfPresent(String.self, forKey: .rawSourceInput)
+            normalizedSourceList = try container.decodeIfPresent(
+                [String].self,
+                forKey: .normalizedSourceList
+            ) ?? []
+            unsupportedInputs = try container.decodeIfPresent(
+                [UnsupportedSourceInput].self,
+                forKey: .unsupportedInputs
+            ) ?? []
+            sourceConfirmation = try container.decodeIfPresent(
+                SourceConfirmation.self,
+                forKey: .sourceConfirmation
+            )
+            sourceRows = try container.decodeIfPresent(
+                [String: SourceRow].self,
+                forKey: .sourceRows
+            ) ?? [:]
+            pendingQuestion = try container.decodeIfPresent(
+                PendingQuestion.self,
+                forKey: .pendingQuestion
+            )
+        }
+    }
+
+    struct UnsupportedSourceInput: Codable, Equatable, Sendable {
+        var rawValue: String
+        var normalizedValue: String
+        var displayName: String?
+        var reason: String
+    }
+
+    struct SourceConfirmation: Codable, Equatable, Sendable {
+        var sourceIDs: [String]
+        var prompt: String
+        var status: SourceConfirmationStatus
+        var confirmedAt: Date?
+        var updatedAt: Date?
+    }
+
+    enum SourceConfirmationStatus: String, Codable, Equatable, Sendable {
+        case pending
+        case confirmed
+        case rejected
     }
 
     struct SourceRow: Codable, Equatable, Sendable {

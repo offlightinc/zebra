@@ -74,6 +74,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     private let gbrainRuntimeOnboardingStateURL: URL
     private let gbrainOnboardingStateURL: URL
     private let gbrainAdapterOnboardingStateURL: URL
+    private let sourceOnboardingStateURL: URL
     private var selectedVaultPath: String?
     private var emailConnectionRepairState: ZebraEmailConnectionRepairState?
     private var emailConnectionVerified = false
@@ -112,7 +113,8 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         agentPreferenceURL: URL = ZebraAgentPreferenceStore.defaultPreferencesURL(),
         gbrainRuntimeOnboardingStateURL: URL = ZebraGBrainRuntimeOnboardingStore.defaultStateURL(),
         gbrainOnboardingStateURL: URL = ZebraGBrainOnboardingStore.defaultStateURL(),
-        gbrainAdapterOnboardingStateURL: URL = ZebraGBrainAdapterOnboardingStore.defaultStateURL()
+        gbrainAdapterOnboardingStateURL: URL = ZebraGBrainAdapterOnboardingStore.defaultStateURL(),
+        sourceOnboardingStateURL: URL? = nil
     ) {
         self.fileManager = fileManager
         self.homeDirectoryPath = Self.standardizedPath(homeDirectoryPath)
@@ -124,6 +126,8 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         self.gbrainRuntimeOnboardingStateURL = gbrainRuntimeOnboardingStateURL
         self.gbrainOnboardingStateURL = gbrainOnboardingStateURL
         self.gbrainAdapterOnboardingStateURL = gbrainAdapterOnboardingStateURL
+        self.sourceOnboardingStateURL = sourceOnboardingStateURL
+            ?? ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: homeDirectoryPath)
         self.gbrainRuntimeOnboardingStore = ZebraGBrainRuntimeOnboardingStore(
             stateURL: gbrainRuntimeOnboardingStateURL,
             fileManager: fileManager,
@@ -491,6 +495,79 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         )
     }
 
+    func recordSourceOnboardingInput(
+        _ rawSourceInput: String,
+        now: Date = Date()
+    ) throws -> ZebraSourceOnboardingState {
+        let normalized = ZebraSourceOnboardingCatalog.normalize(rawSourceInput: rawSourceInput)
+        var state = sourceOnboardingPreviewState(now: now)
+        state.status = normalized.unsupportedInputs.isEmpty ? .running : .attention
+        state.progress = ZebraSourceOnboardingState.Progress(
+            rawSourceInput: normalized.rawSourceInput,
+            normalizedSourceList: normalized.normalizedSourceList,
+            unsupportedInputs: normalized.unsupportedInputs,
+            sourceConfirmation: ZebraSourceOnboardingState.SourceConfirmation(
+                sourceIDs: normalized.normalizedSourceList,
+                prompt: normalized.confirmationPrompt,
+                status: .pending,
+                confirmedAt: nil,
+                updatedAt: now
+            ),
+            sourceRows: normalized.sourceRows,
+            pendingQuestion: ZebraSourceOnboardingState.PendingQuestion(
+                prompt: normalized.confirmationPrompt,
+                status: "pending_source_confirmation",
+                askedAt: now
+            )
+        )
+        try writeSourceOnboardingState(state)
+        return state
+    }
+
+    func confirmSourceOnboardingSources(now: Date = Date()) throws -> ZebraSourceOnboardingState {
+        var state = loadSourceOnboardingState() ?? sourceOnboardingPreviewState(now: now)
+        let sourceIDs = state.progress.normalizedSourceList
+        let prompt = state.progress.sourceConfirmation?.prompt
+            ?? ZebraSourceOnboardingCatalog.confirmationPrompt(for: sourceIDs)
+        state.status = state.progress.unsupportedInputs.isEmpty ? .ready : .attention
+        state.progress.sourceConfirmation = ZebraSourceOnboardingState.SourceConfirmation(
+            sourceIDs: sourceIDs,
+            prompt: prompt,
+            status: .confirmed,
+            confirmedAt: now,
+            updatedAt: now
+        )
+        state.progress.pendingQuestion = nil
+        for id in sourceIDs {
+            guard var row = state.progress.sourceRows[id] else { continue }
+            row.selectionState = "confirmed"
+            row.updatedAt = now
+            state.progress.sourceRows[id] = row
+        }
+        state.updatedAt = now
+        try writeSourceOnboardingState(state)
+        return state
+    }
+
+    func loadSourceOnboardingState() -> ZebraSourceOnboardingState? {
+        guard let data = try? Data(contentsOf: sourceOnboardingStateURL) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(ZebraSourceOnboardingState.self, from: data)
+    }
+
+    private func writeSourceOnboardingState(_ state: ZebraSourceOnboardingState) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(state)
+        try fileManager.createDirectory(
+            at: sourceOnboardingStateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: sourceOnboardingStateURL, options: .atomic)
+    }
+
     func gmailSourceReadiness() -> ZebraSourceOnboardingState.GmailReadiness {
         let envPath = clawvisorEmailEnvURL.path
         if let repair = emailConnectionRepairState {
@@ -800,10 +877,16 @@ public enum ZebraOnboardingChecklistCommand {
                 selectedVaultPath: selectedVaultPath
             ).flatMap { standaloneLaunchPlan($0.startupLine) }
         case .sourceOnboarding:
+            guard let launch = ZebraSourceOnboardingHelper().prepareLaunch(
+                selectedVaultPath: selectedVaultPath
+            ) else {
+                return nil
+            }
             return standaloneLaunchPlan(
                 agentStartupLine(
-                    cwd: cwd,
-                    prompt: sourceOnboardingBoundaryPrompt(selectedVaultPath: selectedVaultPath)
+                    cwd: launch.launchDirectory,
+                    prompt: sourceOnboardingBoundaryPrompt(selectedVaultPath: selectedVaultPath),
+                    shellEnvironmentPrefix: launch.shellEnvironmentPrefix
                 )
             )
         case .goals:
@@ -837,26 +920,26 @@ public enum ZebraOnboardingChecklistCommand {
 
         Scope for this run:
         - Use the Step 3 GBrain setup receipt as the primary target readiness source.
-        - Create or update the Source Onboarding state file as compact product state, not a run report.
-        - Record the selected vault path and GBrain target context.
-        - Represent Gmail as a Step 4 source candidate backed by the existing Clawvisor Gmail connection path.
-        - Ask the user which sources they want to onboard first and record those source candidates.
-        - Stop after recording the source candidates and the next required implementation capability.
+        - Ask which sources Zebra should understand for this first source intake.
+        - Normalize source aliases into source candidates when Zebra can handle them.
+        - Treat sources Zebra cannot handle yet as unsupported inputs.
+        - Use the zebra-source-onboarding helper as the Source Onboarding state write path.
 
-        State file shape:
-        - Use only these top-level keys unless the user gives a new schema: schemaVersion, status, entryContext, sourceReadiness, progress, updatedAt.
-        - Use status values from this set: not_started, ready, running, attention, completed. While waiting for source selection, use status=running and record the pending question under progress.pendingQuestion.
-        - Put selectedVaultPath, gbrainTargetPath, gbrainTargetKey, gbrainReceiptPath, gbrainTargetStatus, gbrainWarnings, liveProbe, and adapter readiness under entryContext.
-        - Put Gmail readiness under sourceReadiness.gmail. If you inspect a local email artifact, record only a compact localArtifact summary; do not paste full table lists, counts, or SQL output unless the user asks.
-        - Put candidate source ids and source rows under progress.normalizedSourceList and progress.sourceRows. If you need an onboarding step label, use "Step 4: Source Onboarding", not "Step 4: Import and Index".
-        - Do not copy full GBrain receipts, graph citations, backlinks, natural-language summaries, or prompt transcripts into this JSON state.
+        Helper flow:
+        1. Run zebra-source-onboarding status --json first to create or inspect the current compact state.
+        2. If status shows a pending source confirmation, ask that confirmation question before collecting new source input.
+        3. If no source input has been recorded yet, ask the user for free-text source input.
+        4. Run zebra-source-onboarding intake with the raw answer and your extracted candidates.
+           Example:
+           zebra-source-onboarding intake --raw "옵시디언, 지메일 슬랙" --candidate obsidian=옵시디언 --candidate gmail=지메일 --unsupported slack=슬랙
+        5. Ask the source-list confirmation question from the helper output.
+        6. Run zebra-source-onboarding confirm --answer yes or zebra-source-onboarding confirm --answer no.
+        7. Run zebra-source-onboarding status --json and report the saved state path plus compact saved-state summary.
 
         GBrain live probe policy:
-        - Do not run parallel gbrain commands.
-        - Do not run live gbrain CLI probes if the Step 3 receipt is complete and consistent.
-        - If the receipt is missing or contradictory and a live read-only probe is necessary, run one command at a time with --timeout=3600s.
-        - If a live probe times out once, stop probing and record it as deferred.
-        - Do not run recovery, warm-up, integration, smoke-test, or ingest commands in this run.
+        - Prefer the Step 3 receipt when it is complete and consistent.
+        - If the receipt is missing or contradictory and a live read-only probe is necessary, run one command with --timeout=3600s.
+        - If that live probe times out, record it as deferred.
         """
     }
 
