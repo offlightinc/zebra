@@ -359,10 +359,6 @@ struct ZebraSidebarBody: View {
         guard let workspace = tabManager.selectedWorkspace else {
             return
         }
-        if stepID == .email {
-            startOnboardingChecklistEmailStep(in: workspace)
-            return
-        }
         if stepID == .gbrain {
             syncSelectedVaultToResolvedGBrainTargetBeforeImportIndexStart()
         }
@@ -545,7 +541,7 @@ struct ZebraSidebarBody: View {
         }
     }
 
-    private func startOnboardingChecklistEmailStep(in workspace: Workspace) {
+    private func startSourceOnboardingGmailIntegrationStep(in workspace: Workspace) {
         guard let agentTerminals = zebra?.agentTerminals else { return }
         guard let agent = ZebraClawvisorOnboardingCommand.readyPrimaryAgent() else {
             startAgentOnboardingStep(in: workspace)
@@ -556,10 +552,10 @@ struct ZebraSidebarBody: View {
             openClawvisorLaunchPreparationFailure(in: workspace, agent: launchPlan.agent)
             return
         }
-        onboardingChecklistStore.beginLaunch(stepID: .email)
+        onboardingChecklistStore.beginLaunch(stepID: .sourceOnboarding)
         workspace.openZebraAgentTerminal(
             startupLine: launchPlan.startupLine,
-            source: .onboardingChecklist(.email),
+            source: .onboardingChecklist(.sourceOnboarding),
             agent: launchPlan.agent,
             anchor: .focusAnchored,
             markedBy: agentTerminals
@@ -613,9 +609,7 @@ struct ZebraSidebarBody: View {
 
     private func onboardingChecklistAgent(for stepID: ZebraOnboardingChecklistStepID) -> MarkdownPillAgent? {
         switch stepID {
-        case .agent, .gbrainRuntime, .adapter, .ingest, .goals:
-            return MarkdownPillAgent.defaultAgent()
-        case .email:
+        case .agent, .gbrainRuntime, .sourceOnboarding, .adapter, .goals:
             return MarkdownPillAgent.defaultAgent()
         case .gbrain:
             return nil

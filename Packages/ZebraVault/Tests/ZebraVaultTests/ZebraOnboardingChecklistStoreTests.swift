@@ -31,9 +31,54 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         XCTAssertEqual(
             store.snapshots.map { $0.id },
-            [.agent, .gbrainRuntime, .gbrain, .adapter, .email]
+            [.agent, .gbrainRuntime, .gbrain, .sourceOnboarding, .adapter]
         )
         XCTAssertEqual(store.snapshots.map { $0.number }, [1, 2, 3, 4, 5])
+    }
+
+    @MainActor
+    func testSourceOnboardingIsActiveImmediatelyAfterGBrainCompletion() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let agentStateURL = onboardingDirectory.appendingPathComponent("agent-cli-state.json", isDirectory: false)
+        let agentPreferenceURL = root
+            .appendingPathComponent("agent", isDirectory: true)
+            .appendingPathComponent("preferences.json", isDirectory: false)
+        let runtimeStateURL = onboardingDirectory.appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try writeAgentReadinessState(onboardingDirectory: onboardingDirectory, agent: "codex", method: "path")
+        try writeAgentPreferences(agentPreferenceURL)
+        try writeCompletedRuntimeState(
+            stateURL: runtimeStateURL,
+            runtime: "hermes",
+            executablePath: executable.path
+        )
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: vault.path,
+            executablePath: executable.path
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            agentOnboardingStateURL: agentStateURL,
+            agentPreferenceURL: agentPreferenceURL,
+            gbrainRuntimeOnboardingStateURL: runtimeStateURL,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+        store.syncExternalState(selectedVaultPath: vault.path)
+
+        let sourceOnboarding = try XCTUnwrap(store.snapshots.first { $0.id == .sourceOnboarding })
+
+        XCTAssertTrue(store.completedStepIDs.contains(.agent))
+        XCTAssertTrue(store.completedStepIDs.contains(.gbrainRuntime))
+        XCTAssertTrue(store.completedStepIDs.contains(.gbrain))
+        XCTAssertFalse(store.completedStepIDs.contains(.sourceOnboarding))
+        XCTAssertTrue(sourceOnboarding.isActive)
+        XCTAssertTrue(sourceOnboarding.showsStart)
     }
 
     @MainActor
@@ -451,6 +496,35 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(line.contains("line two"), line)
         XCTAssertFalse(line.contains("--message"), line)
         XCTAssertTrue(line.contains("zebra-gbrain-onboarding write-runtime-launcher"), line)
+    }
+
+    func testSourceOnboardingLaunchPlanStartsFirstSliceOnly() throws {
+        let selectedVaultPath = "/tmp/zebra-brain"
+        let launch = try XCTUnwrap(
+            ZebraOnboardingChecklistCommand.launchPlan(
+                for: .sourceOnboarding,
+                selectedVaultPath: selectedVaultPath
+            )
+        )
+        let line = launch.startupLine
+
+        XCTAssertTrue(line.contains("Source Onboarding"), line)
+        XCTAssertTrue(line.contains("source-onboarding-state.json"), line)
+        XCTAssertTrue(line.contains(selectedVaultPath), line)
+        XCTAssertTrue(line.contains("GBrain target context"), line)
+        XCTAssertTrue(line.contains("gbrain_target_missing"), line)
+        XCTAssertTrue(line.contains("Step 3 GBrain setup receipt"), line)
+        XCTAssertTrue(line.contains("Ask the user which sources they want to onboard first"), line)
+        XCTAssertTrue(line.contains("record those source candidates"), line)
+        XCTAssertTrue(line.contains("compact product state"), line)
+        XCTAssertTrue(line.contains("progress.pendingQuestion"), line)
+        XCTAssertTrue(line.contains("Step 4: Source Onboarding"), line)
+        XCTAssertTrue(line.contains("--timeout=3600s"), line)
+        XCTAssertTrue(line.contains("Do not run parallel gbrain commands"), line)
+        XCTAssertTrue(line.contains("not \"Step 4: Import and Index\""), line)
+        XCTAssertFalse(line.contains("Do not start source interviews"), line)
+        XCTAssertFalse(line.contains("run a limited initial ingest"), line)
+        XCTAssertFalse(line.contains("ZebraClawvisorOnboardingCommand"), line)
     }
 
     @MainActor
@@ -2813,17 +2887,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testEmailStepDoesNotCompleteFromExternalConnectedCache() throws {
+    func testStandaloneEmailAndIngestStepsAreNotEnabled() throws {
         let root = try makeTemporaryDirectory()
         let store = makeChecklistStore(homeURL: root)
 
         store.syncExternalState(selectedVaultPath: nil)
 
-        XCTAssertFalse(store.completedStepIDs.contains(.email))
+        XCTAssertFalse(store.snapshots.map(\.id.rawValue).contains("email"))
+        XCTAssertFalse(store.snapshots.map(\.id.rawValue).contains("ingest"))
     }
 
     @MainActor
-    func testEmailStepDoesNotCompleteFromClawvisorEnvBeforeVerifiedConnection() throws {
+    func testGmailSourceReadinessIsUnverifiedFromClawvisorEnvBeforeVerifiedConnection() throws {
         let root = try makeTemporaryDirectory()
         try writeClawvisorEnv(
             """
@@ -2836,11 +2911,12 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         let store = makeChecklistStore(homeURL: root)
 
-        XCTAssertFalse(store.completedStepIDs.contains(.email))
+        XCTAssertEqual(store.gmailSourceReadiness().status, .unverified)
+        XCTAssertFalse(store.completedStepIDs.contains(.sourceOnboarding))
     }
 
     @MainActor
-    func testEmailStepCompletesFromClawvisorEnvAfterVerifiedConnection() throws {
+    func testGmailSourceReadinessIsReadyFromClawvisorEnvAfterVerifiedConnection() throws {
         let root = try makeTemporaryDirectory()
         try writeClawvisorEnv(
             """
@@ -2857,11 +2933,44 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             emailConnectionVerified: true
         )
 
-        XCTAssertTrue(store.completedStepIDs.contains(.email))
+        XCTAssertEqual(store.gmailSourceReadiness().status, .ready)
+        XCTAssertFalse(store.completedStepIDs.contains(.sourceOnboarding))
     }
 
     @MainActor
-    func testEmailStepCompletesFromExportedClawvisorEnvAfterVerifiedConnection() throws {
+    func testSourceOnboardingPreviewStateIncludesGmailReadinessBoundary() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=https://app.clawvisor.com
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            CLAWVISOR_TASK_ID=task_test
+            """,
+            homeURL: root
+        )
+
+        let store = makeChecklistStore(homeURL: root)
+        store.syncExternalState(
+            selectedVaultPath: nil,
+            emailConnectionVerified: true
+        )
+
+        let state = store.sourceOnboardingPreviewState(now: Date(timeIntervalSince1970: 1_800_000_000))
+
+        XCTAssertEqual(state.schemaVersion, 1)
+        XCTAssertEqual(state.status, .attention)
+        XCTAssertEqual(state.entryContext.gbrainTargetMissingReason, "gbrain_target_missing")
+        XCTAssertEqual(state.entryContext.gbrainReceiptPath?.hasSuffix("gbrain-setup-state.json"), true)
+        XCTAssertEqual(state.entryContext.liveProbe.ran, false)
+        XCTAssertEqual(state.sourceReadiness.gmail.status, .ready)
+        XCTAssertEqual(state.sourceReadiness.gmail.connectionPath, "existing_clawvisor_gmail_connection_path")
+        XCTAssertTrue(state.sourceReadiness.gmail.envPath.hasSuffix(".gbrain/.env"))
+        XCTAssertTrue(state.progress.normalizedSourceList.isEmpty)
+        XCTAssertTrue(state.progress.sourceRows.isEmpty)
+    }
+
+    @MainActor
+    func testGmailSourceReadinessIsReadyFromExportedClawvisorEnvAfterVerifiedConnection() throws {
         let root = try makeTemporaryDirectory()
         try writeClawvisorEnv(
             """
@@ -2878,11 +2987,12 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             emailConnectionVerified: true
         )
 
-        XCTAssertTrue(store.completedStepIDs.contains(.email))
+        XCTAssertEqual(store.gmailSourceReadiness().status, .ready)
+        XCTAssertFalse(store.completedStepIDs.contains(.sourceOnboarding))
     }
 
     @MainActor
-    func testEmailStepDoesNotCompleteWhenConnectionRepairIsActive() throws {
+    func testGmailSourceReadinessNeedsAttentionWhenConnectionRepairIsActive() throws {
         let root = try makeTemporaryDirectory()
         try writeClawvisorEnv(
             """
@@ -2900,11 +3010,14 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             emailConnectionVerified: true
         )
 
-        XCTAssertFalse(store.completedStepIDs.contains(.email))
+        let readiness = store.gmailSourceReadiness()
+        XCTAssertEqual(readiness.status, .attention)
+        XCTAssertEqual(readiness.repairKind, ZebraEmailConnectionRepairState.Kind.taskPendingApproval.rawValue)
+        XCTAssertFalse(store.completedStepIDs.contains(.sourceOnboarding))
     }
 
     @MainActor
-    func testEmailStepDoesNotCompleteWhenClawvisorTaskIdIsMissing() throws {
+    func testGmailSourceReadinessIsMissingWhenClawvisorTaskIdIsMissing() throws {
         let root = try makeTemporaryDirectory()
         try writeClawvisorEnv(
             """
@@ -2916,11 +3029,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         let store = makeChecklistStore(homeURL: root)
 
-        XCTAssertFalse(store.completedStepIDs.contains(.email))
+        XCTAssertEqual(store.gmailSourceReadiness().status, .missingEnv)
     }
 
     @MainActor
-    func testEmailStepDoesNotCompleteFromOldClawvisorGmailTaskEnvOnly() throws {
+    func testGmailSourceReadinessIsMissingFromOldClawvisorGmailTaskEnvOnly() throws {
         let root = try makeTemporaryDirectory()
         try writeClawvisorEnv(
             """
@@ -2934,20 +3047,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         let store = makeChecklistStore(homeURL: root)
 
-        XCTAssertFalse(store.completedStepIDs.contains(.email))
+        XCTAssertEqual(store.gmailSourceReadiness().status, .missingEnv)
     }
 
     @MainActor
-    func testStoredDevelopmentCompletedOverrideDoesNotCompleteEmailStep() throws {
+    func testStoredDevelopmentCompletedOverrideDoesNotReviveEmailStep() throws {
         let root = try makeTemporaryDirectory()
         UserDefaults.standard.set(
-            [ZebraOnboardingChecklistStepID.email.rawValue],
+            ["email"],
             forKey: "ZebraOnboardingChecklistStore.developmentCompletedStepIDs"
         )
 
         let store = makeChecklistStore(homeURL: root)
 
-        XCTAssertFalse(store.completedStepIDs.contains(.email))
+        XCTAssertFalse(store.snapshots.map(\.id.rawValue).contains("email"))
+        XCTAssertFalse(store.completedStepIDs.contains(.sourceOnboarding))
     }
 
 #if os(macOS)

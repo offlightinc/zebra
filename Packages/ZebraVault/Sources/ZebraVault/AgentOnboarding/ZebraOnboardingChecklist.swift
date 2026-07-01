@@ -8,9 +8,8 @@ public enum ZebraOnboardingChecklistStepID: String, CaseIterable, Identifiable, 
     case agent
     case gbrainRuntime
     case gbrain
+    case sourceOnboarding
     case adapter
-    case email
-    case ingest
     case goals
 
     public var id: String { rawValue }
@@ -55,13 +54,12 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
 #endif
 
     private static let steps: [StepDefinition] = [
-        StepDefinition(id: .agent,         number: 1, staleTimeout: 5 * 60),
-        StepDefinition(id: .gbrainRuntime, number: 2, staleTimeout: 10 * 60),
-        StepDefinition(id: .gbrain,        number: 3, staleTimeout: 15 * 60),
-        StepDefinition(id: .adapter,       number: 4, staleTimeout: 5 * 60),
-        StepDefinition(id: .email,         number: 5, staleTimeout: 5 * 60),
-        // StepDefinition(id: .ingest,        number: 6, staleTimeout: 5 * 60),
-        // StepDefinition(id: .goals,         number: 7, staleTimeout: 5 * 60),
+        StepDefinition(id: .agent,            number: 1, staleTimeout: 5 * 60),
+        StepDefinition(id: .gbrainRuntime,    number: 2, staleTimeout: 10 * 60),
+        StepDefinition(id: .gbrain,           number: 3, staleTimeout: 15 * 60),
+        StepDefinition(id: .sourceOnboarding, number: 4, staleTimeout: 5 * 60),
+        StepDefinition(id: .adapter,          number: 5, staleTimeout: 5 * 60),
+        // StepDefinition(id: .goals,            number: 6, staleTimeout: 5 * 60),
     ]
     private static let enabledStepIDs = Set(steps.map(\.id))
 
@@ -298,8 +296,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             agentCompleted: agentCompletionResult().isComplete,
             gbrainRuntimeCompletion: runtimeCompletion,
             gbrainCompleted: cachedGBrainCompletion.isComplete,
-            gbrainAdapterCompleted: adapterCompletion.isComplete,
-            emailCompleted: emailCompletionResult().isComplete
+            gbrainAdapterCompleted: adapterCompletion.isComplete
         )
     }
 
@@ -323,9 +320,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                 for: .adapter,
                 result: adapterCompletionResult(selectedVaultPath: selectedVaultPath)
             )
-        case .email:
-            applyDetectedCompletion(for: .email, result: emailCompletionResult())
-        case .ingest, .goals:
+        case .sourceOnboarding, .goals:
             break
         }
     }
@@ -342,8 +337,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         agentCompleted: Bool,
         gbrainRuntimeCompletion: StepCompletionResult,
         gbrainCompleted: Bool,
-        gbrainAdapterCompleted: Bool,
-        emailCompleted: Bool
+        gbrainAdapterCompleted: Bool
     ) {
         var completed = Set<ZebraOnboardingChecklistStepID>()
 
@@ -358,9 +352,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         }
         if gbrainAdapterCompleted {
             completed.insert(.adapter)
-        }
-        if emailCompleted {
-            completed.insert(.email)
         }
 #if DEBUG
         applyDevelopmentCompletionOverrides(to: &completed)
@@ -472,9 +463,72 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         return StepCompletionResult(isComplete: result.isComplete, reasons: result.reasons)
     }
 
-    private func emailCompletionResult() -> StepCompletionResult {
-        StepCompletionResult(
-            isComplete: emailConnectionRepairState == nil && isClawvisorEmailConfigured,
+    func sourceOnboardingPreviewState(now: Date = Date()) -> ZebraSourceOnboardingState {
+        let gbrainTargetPath = resolvedGBrainTargetVaultPath()
+        let adapterCompletion = adapterCompletionResult(selectedVaultPath: selectedVaultPath)
+        return ZebraSourceOnboardingState(
+            status: gbrainTargetPath == nil ? .attention : .ready,
+            entryContext: ZebraSourceOnboardingState.EntryContext(
+                selectedVaultPath: selectedVaultPath,
+                gbrainTargetPath: gbrainTargetPath,
+                gbrainTargetKey: gbrainTargetPath.map { "vault:\($0)" },
+                gbrainReceiptPath: gbrainOnboardingStateURL.path,
+                gbrainTargetStatus: gbrainTargetPath == nil ? nil : "receipt_target_available",
+                gbrainTargetMissingReason: gbrainTargetPath == nil ? "gbrain_target_missing" : nil,
+                gbrainWarnings: [],
+                liveProbe: ZebraSourceOnboardingState.LiveProbe(
+                    ran: false,
+                    status: nil,
+                    reason: gbrainTargetPath == nil ? "gbrain_target_missing" : "step3_receipt_available"
+                ),
+                adapterReady: adapterCompletion.isComplete,
+                adapterReadinessReasons: adapterCompletion.reasons
+            ),
+            sourceReadiness: ZebraSourceOnboardingState.SourceReadiness(
+                gmail: gmailSourceReadiness()
+            ),
+            updatedAt: now
+        )
+    }
+
+    func gmailSourceReadiness() -> ZebraSourceOnboardingState.GmailReadiness {
+        let envPath = clawvisorEmailEnvURL.path
+        if let repair = emailConnectionRepairState {
+            return ZebraSourceOnboardingState.GmailReadiness(
+                status: .attention,
+                connectionPath: "existing_clawvisor_gmail_connection_path",
+                envPath: envPath,
+                localArtifact: nil,
+                repairKind: repair.kind.rawValue,
+                reasons: ["connection_repair_active"]
+            )
+        }
+        guard clawvisorEmailEnvHasRequiredKeys else {
+            return ZebraSourceOnboardingState.GmailReadiness(
+                status: .missingEnv,
+                connectionPath: "existing_clawvisor_gmail_connection_path",
+                envPath: envPath,
+                localArtifact: nil,
+                repairKind: nil,
+                reasons: ["clawvisor_email_env_missing_or_incomplete"]
+            )
+        }
+        guard emailConnectionVerified else {
+            return ZebraSourceOnboardingState.GmailReadiness(
+                status: .unverified,
+                connectionPath: "existing_clawvisor_gmail_connection_path",
+                envPath: envPath,
+                localArtifact: nil,
+                repairKind: nil,
+                reasons: ["email_connection_unverified"]
+            )
+        }
+        return ZebraSourceOnboardingState.GmailReadiness(
+            status: .ready,
+            connectionPath: "existing_clawvisor_gmail_connection_path",
+            envPath: envPath,
+            localArtifact: nil,
+            repairKind: nil,
             reasons: []
         )
     }
@@ -584,7 +638,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             WatchedCompletionFile(url: gbrainRuntimeOnboardingStateURL, stepID: .gbrainRuntime),
             WatchedCompletionFile(url: gbrainOnboardingStateURL, stepID: .gbrain),
             WatchedCompletionFile(url: gbrainAdapterOnboardingStateURL, stepID: .adapter),
-            WatchedCompletionFile(url: clawvisorEmailEnvURL, stepID: .email),
+            WatchedCompletionFile(url: clawvisorEmailEnvURL, stepID: .sourceOnboarding),
         ]
     }
 
@@ -646,10 +700,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         return false
     }
 
-    private var isClawvisorEmailConfigured: Bool {
-        guard emailConnectionVerified else {
-            return false
-        }
+    private var clawvisorEmailEnvHasRequiredKeys: Bool {
         guard let raw = try? String(contentsOf: clawvisorEmailEnvURL, encoding: .utf8) else {
             return false
         }
@@ -748,18 +799,11 @@ public enum ZebraOnboardingChecklistCommand {
             return ZebraGBrainAdapterOnboardingStore().prepareLaunch(
                 selectedVaultPath: selectedVaultPath
             ).flatMap { standaloneLaunchPlan($0.startupLine) }
-        case .email:
-            guard let agent = ZebraClawvisorOnboardingCommand.readyPrimaryAgent() else {
-                return nil
-            }
-            return standaloneLaunchPlan(ZebraClawvisorOnboardingCommand.launchPlan(agent: agent).startupLine)
-        case .ingest:
+        case .sourceOnboarding:
             return standaloneLaunchPlan(
                 agentStartupLine(
                     cwd: cwd,
-                    prompt: """
-                    Help me finish Zebra onboarding for ingest sources in this vault. Check which sources are already present, recommend the smallest useful first source set, connect or document the missing credentials, then run a limited initial ingest if the local tooling is available. Keep all writes within the active brain vault.
-                    """
+                    prompt: sourceOnboardingBoundaryPrompt(selectedVaultPath: selectedVaultPath)
                 )
             )
         case .goals:
@@ -772,6 +816,48 @@ public enum ZebraOnboardingChecklistCommand {
                 )
             )
         }
+    }
+
+    private static func sourceOnboardingBoundaryPrompt(selectedVaultPath: String?) -> String {
+        let statePath = ZebraSourceOnboardingState.defaultStateURL().path
+        let vaultContext = selectedVaultPath ?? "not selected"
+        let gbrainTargetPath = ZebraGBrainOnboardingStore().resolvedBrainRepoTargetPath()
+        let gbrainTargetContext = gbrainTargetPath ?? "missing: gbrain_target_missing"
+        return """
+        Start Zebra Source Onboarding for the active brain.
+
+        State file path:
+        \(statePath)
+
+        Selected vault path:
+        \(vaultContext)
+
+        GBrain target context:
+        \(gbrainTargetContext)
+
+        Scope for this run:
+        - Use the Step 3 GBrain setup receipt as the primary target readiness source.
+        - Create or update the Source Onboarding state file as compact product state, not a run report.
+        - Record the selected vault path and GBrain target context.
+        - Represent Gmail as a Step 4 source candidate backed by the existing Clawvisor Gmail connection path.
+        - Ask the user which sources they want to onboard first and record those source candidates.
+        - Stop after recording the source candidates and the next required implementation capability.
+
+        State file shape:
+        - Use only these top-level keys unless the user gives a new schema: schemaVersion, status, entryContext, sourceReadiness, progress, updatedAt.
+        - Use status values from this set: not_started, ready, running, attention, completed. While waiting for source selection, use status=running and record the pending question under progress.pendingQuestion.
+        - Put selectedVaultPath, gbrainTargetPath, gbrainTargetKey, gbrainReceiptPath, gbrainTargetStatus, gbrainWarnings, liveProbe, and adapter readiness under entryContext.
+        - Put Gmail readiness under sourceReadiness.gmail. If you inspect a local email artifact, record only a compact localArtifact summary; do not paste full table lists, counts, or SQL output unless the user asks.
+        - Put candidate source ids and source rows under progress.normalizedSourceList and progress.sourceRows. If you need an onboarding step label, use "Step 4: Source Onboarding", not "Step 4: Import and Index".
+        - Do not copy full GBrain receipts, graph citations, backlinks, natural-language summaries, or prompt transcripts into this JSON state.
+
+        GBrain live probe policy:
+        - Do not run parallel gbrain commands.
+        - Do not run live gbrain CLI probes if the Step 3 receipt is complete and consistent.
+        - If the receipt is missing or contradictory and a live read-only probe is necessary, run one command at a time with --timeout=3600s.
+        - If a live probe times out once, stop probing and record it as deferred.
+        - Do not run recovery, warm-up, integration, smoke-test, or ingest commands in this run.
+        """
     }
 
     private static func agentLaunchPlan(
@@ -1152,20 +1238,15 @@ public struct ZebraOnboardingChecklistCard: View {
                 localized: "brain.onboarding.checklist.step.gbrain",
                 defaultValue: "Check GBrain and link the vault/profile"
             )
+        case .sourceOnboarding:
+            return String(
+                localized: "brain.onboarding.checklist.step.sourceOnboarding",
+                defaultValue: "Source Onboarding"
+            )
         case .adapter:
             return String(
                 localized: "brain.onboarding.checklist.step.adapter",
                 defaultValue: "Clone and install gbrain-adapter"
-            )
-        case .email:
-            return String(
-                localized: "brain.onboarding.checklist.step.email",
-                defaultValue: "Connect email"
-            )
-        case .ingest:
-            return String(
-                localized: "brain.onboarding.checklist.step.ingest",
-                defaultValue: "Connect ingest sources and run initial ingest"
             )
         case .goals:
             return String(
