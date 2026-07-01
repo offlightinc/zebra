@@ -105,7 +105,7 @@ It stores:
 - `source`
   - `.markdownFile(path)`
   - `.emailThread(id)`
-  - `.clawvisorOnboarding`
+  - `.onboardingChecklist(.sourceOnboarding)`
   - `.brainSyncFailure`
 - selected `agent`
 - `createdAt`
@@ -329,7 +329,7 @@ Current behavior:
 
 - Prepares the Clawvisor onboarding startup command.
 - Calls `openZebraAgentTerminal(...)`.
-- Uses `source: .clawvisorOnboarding`.
+- Uses `source: .onboardingChecklist(.sourceOnboarding)`.
 - Uses `.focusAnchored`.
 
 ### Brain sync failure/debug agent

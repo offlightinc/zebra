@@ -546,7 +546,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(line.contains("ingest commands"), line)
         XCTAssertFalse(line.contains("Do not start source interviews"), line)
         XCTAssertFalse(line.contains("run a limited initial ingest"), line)
-        XCTAssertFalse(line.contains("ZebraClawvisorOnboardingCommand"), line)
+        XCTAssertFalse(line.contains("zebra-source-onboarding gmail verify-connection"), line)
     }
 
     func testSourceOnboardingCatalogNormalizesFreeTextAliasesInMentionOrder() {
@@ -801,6 +801,183 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let payload = try jsonObject(from: status.stdout)
         XCTAssertEqual(payload["statePath"] as? String, stateURL.path)
         XCTAssertEqual(payload["normalizedSourceList"] as? [String], [])
+    }
+
+    @MainActor
+    func testSourceOnboardingGmailHelperVerifyEnvWritesMissingState() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+        ]
+
+        let result = try runProcess(
+            executableURL: helperURL,
+            arguments: ["gmail", "verify-env"],
+            environment: environment
+        )
+
+        XCTAssertEqual(result.status, 1, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.sourceReadiness.gmail.status, .missingEnv)
+        XCTAssertEqual(
+            Set(loaded.sourceReadiness.gmail.reasons),
+            Set(["missing:CLAWVISOR_URL,CLAWVISOR_AGENT_TOKEN,CLAWVISOR_TASK_ID"])
+        )
+        XCTAssertTrue(loaded.sourceReadiness.gmail.envPath.hasSuffix(".gbrain/.env"))
+    }
+
+    @MainActor
+    func testSourceOnboardingGmailHelperIgnoresAmbientEnvWithoutPersistedEnv() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "CLAWVISOR_URL": "https://app.clawvisor.com",
+            "CLAWVISOR_AGENT_TOKEN": "ambient_token",
+            "CLAWVISOR_TASK_ID": "ambient_task",
+        ]
+
+        let result = try runProcess(
+            executableURL: helperURL,
+            arguments: ["gmail", "verify-env"],
+            environment: environment
+        )
+
+        XCTAssertEqual(result.status, 1, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.sourceReadiness.gmail.status, .missingEnv)
+    }
+
+    @MainActor
+    func testSourceOnboardingGmailHelperVerifyEnvWritesUnverifiedState() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            export CLAWVISOR_URL="https://app.clawvisor.com"
+            export CLAWVISOR_AGENT_TOKEN="cvis_test"
+            export CLAWVISOR_TASK_ID="task_test"
+            """,
+            homeURL: root
+        )
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+        ]
+
+        let result = try runProcess(
+            executableURL: helperURL,
+            arguments: ["gmail", "verify-env"],
+            environment: environment
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.sourceReadiness.gmail.status, .unverified)
+        XCTAssertEqual(loaded.sourceReadiness.gmail.connectionPath, "clawvisor_env_available")
+        XCTAssertEqual(loaded.sourceReadiness.gmail.reasons, ["email_connection_unverified"])
+    }
+
+    @MainActor
+    func testSourceOnboardingGmailHelperVerifyConnectionWritesAttentionForBadURL() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=not a valid url
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            CLAWVISOR_TASK_ID=task_test
+            """,
+            homeURL: root
+        )
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+        ]
+
+        let result = try runProcess(
+            executableURL: helperURL,
+            arguments: ["gmail", "verify-connection"],
+            environment: environment
+        )
+
+        XCTAssertEqual(result.status, 1, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertFalse(result.stderr.contains("Traceback"), result.stderr)
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.sourceReadiness.gmail.status, .attention)
+        XCTAssertEqual(loaded.sourceReadiness.gmail.repairKind, "task_request_failed")
+        XCTAssertTrue(loaded.sourceReadiness.gmail.reasons.first?.hasPrefix("task_request_failed:") == true)
     }
 
     @MainActor

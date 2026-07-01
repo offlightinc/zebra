@@ -217,7 +217,7 @@ struct ZebraSidebarBody: View {
     /// recovery guidance 가 모두 주입된 상태. 사용자는 그 다음부터 agent 와
     /// 자연어로 대화하며 해결.
     ///
-    /// `startClawvisorOnboardingAgent` 와 같은 결로, 그 패턴을 그대로 따라간다.
+    /// Source Onboarding Gmail agent launch와 같은 결로, 그 패턴을 그대로 따라간다.
     private func startBrainSyncFailureAgent(
         agent: MarkdownPillAgent,
         failedAt: Date,
@@ -285,7 +285,10 @@ struct ZebraSidebarBody: View {
                         errorMessage: emailListStore.lastError,
                         connectionRepairState: emailListStore.connectionRepairState,
                         selectedThreadId: emailDetailStore.selectedThreadId,
-                        onConnect: { startClawvisorOnboardingAgent() },
+                        onConnect: {
+                            guard let workspace = tabManager.selectedWorkspace else { return }
+                            startSourceOnboardingGmailIntegrationStep(in: workspace)
+                        },
                         onRefresh: { Task { await emailListStore.refresh() } },
                         onSelectThread: openEmailThread,
                         onCreateLabel: { emailListStore.localLabel(named: $0) }
@@ -308,31 +311,6 @@ struct ZebraSidebarBody: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .animation(.easeOut(duration: 0.15), value: modeState.selectedMode)
         .animation(.easeOut(duration: 0.15), value: modeState.listVisible)
-    }
-
-    /// Launch a fresh terminal tab in the focused pane, drop the user into
-    /// their primary agent, and seed a prompt that walks them through
-    /// signing up at Clawvisor and writing `~/.gbrain/.env`. Replaces the
-    /// previous direct-OAuth flow.
-    private func startClawvisorOnboardingAgent() {
-        guard let workspace = tabManager.selectedWorkspace else { return }
-        guard let agentTerminals = zebra?.agentTerminals else { return }
-        guard let agent = ZebraClawvisorOnboardingCommand.readyPrimaryAgent() else {
-            startAgentOnboardingStep(in: workspace)
-            return
-        }
-        let launchPlan = ZebraClawvisorOnboardingCommand.launchPlan(agent: agent)
-        guard launchPlan.launchEnvironmentReady else {
-            openClawvisorLaunchPreparationFailure(in: workspace, agent: launchPlan.agent)
-            return
-        }
-        workspace.openZebraAgentTerminal(
-            startupLine: launchPlan.startupLine,
-            source: .clawvisorOnboarding,
-            agent: launchPlan.agent,
-            anchor: .focusAnchored,
-            markedBy: agentTerminals
-        )
     }
 
     private func stopOnboardingChecklistStep(_ stepID: ZebraOnboardingChecklistStepID) {
@@ -543,11 +521,11 @@ struct ZebraSidebarBody: View {
 
     private func startSourceOnboardingGmailIntegrationStep(in workspace: Workspace) {
         guard let agentTerminals = zebra?.agentTerminals else { return }
-        guard let agent = ZebraClawvisorOnboardingCommand.readyPrimaryAgent() else {
+        guard let agent = ZebraSourceOnboardingGmailCommand.readyPrimaryAgent() else {
             startAgentOnboardingStep(in: workspace)
             return
         }
-        let launchPlan = ZebraClawvisorOnboardingCommand.launchPlan(agent: agent)
+        let launchPlan = ZebraSourceOnboardingGmailCommand.launchPlan(agent: agent)
         guard launchPlan.launchEnvironmentReady else {
             openClawvisorLaunchPreparationFailure(in: workspace, agent: launchPlan.agent)
             return

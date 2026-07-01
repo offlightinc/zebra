@@ -378,7 +378,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
     func testClawvisorCodexOnboardingLaunchCarriesPrompt() throws {
         let cwd = try makeTemporaryDirectory()
 
-        let line = ZebraClawvisorOnboardingCommand.shellStartupLine(
+        let line = ZebraSourceOnboardingGmailCommand.shellStartupLine(
             agent: .codex,
             launchDirectory: cwd.path
         )
@@ -398,7 +398,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(line.contains("authoritative setup packet"))
         XCTAssertFalse(line.contains("read the setup packet"))
         XCTAssertFalse(line.contains("setup packet is at"))
-        XCTAssertFalse(line.contains("zebra-clawvisor-email-onboarding status"))
+        XCTAssertFalse(line.contains("zebra-source-onboarding gmail status"))
         XCTAssertFalse(line.contains("On your first response, run"))
         XCTAssertFalse(line.contains("waitingForUser"))
         XCTAssertFalse(line.contains("nextSection"))
@@ -411,7 +411,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
     func testClawvisorClaudeOnboardingLaunchUsesSessionAutoPermission() throws {
         let cwd = try makeTemporaryDirectory()
 
-        let line = ZebraClawvisorOnboardingCommand.shellStartupLine(
+        let line = ZebraSourceOnboardingGmailCommand.shellStartupLine(
             agent: .claude,
             launchDirectory: cwd.path
         )
@@ -423,7 +423,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
     }
 
     func testClawvisorEmailPromptInjectsLocalizedConnectionSteps() {
-        let korean = ZebraClawvisorOnboardingCommand.gbrainAgentSystemPrompt(
+        let korean = ZebraSourceOnboardingGmailCommand.gbrainAgentSystemPrompt(
             agentDisplayName: "Codex",
             language: .ko
         )
@@ -437,14 +437,14 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
             korean.range(of: "Zebra는 Clawvisor를 통해")!.lowerBound,
             korean.range(of: "1. https://app.clawvisor.com/register")!.lowerBound
         )
-        XCTAssertTrue(korean.contains("zebra-clawvisor-email-onboarding verify-connection"))
+        XCTAssertTrue(korean.contains("zebra-source-onboarding gmail verify-connection"))
         XCTAssertTrue(korean.contains("Do not search the web for Clawvisor API docs"))
         XCTAssertFalse(korean.contains("GET $CLAWVISOR_URL/api/tasks/$CLAWVISOR_TASK_ID"))
         XCTAssertTrue(korean.contains("use concise Korean prose"))
         XCTAssertFalse(korean.contains("read the setup packet"))
         XCTAssertFalse(korean.contains("authoritative setup packet"))
 
-        let english = ZebraClawvisorOnboardingCommand.gbrainAgentSystemPrompt(
+        let english = ZebraSourceOnboardingGmailCommand.gbrainAgentSystemPrompt(
             agentDisplayName: "Codex",
             language: .en
         )
@@ -464,11 +464,11 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         let configURL = try makeTemporaryDirectory()
             .appendingPathComponent("config.toml", isDirectory: false)
 
-        XCTAssertTrue(ZebraClawvisorOnboardingCommand.markCodexProjectTrusted(
+        XCTAssertTrue(ZebraSourceOnboardingGmailCommand.markCodexProjectTrusted(
             cwd: cwd.path,
             configURL: configURL
         ))
-        XCTAssertTrue(ZebraClawvisorOnboardingCommand.markCodexProjectTrusted(
+        XCTAssertTrue(ZebraSourceOnboardingGmailCommand.markCodexProjectTrusted(
             cwd: cwd.path,
             configURL: configURL
         ))
@@ -487,7 +487,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
             .appendingPathComponent("config.toml", isDirectory: false)
         let onboardingDirectoryURL = try makeTemporaryDirectory()
 
-        let plan = ZebraClawvisorOnboardingCommand.launchPlan(
+        let plan = ZebraSourceOnboardingGmailCommand.launchPlan(
             agent: .codex,
             launchDirectory: cwd.path,
             codexConfigURL: configURL,
@@ -507,7 +507,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         let onboardingDirectoryURL = try makeTemporaryDirectory()
         try FileManager.default.createDirectory(at: configURL, withIntermediateDirectories: true)
 
-        let plan = ZebraClawvisorOnboardingCommand.launchPlan(
+        let plan = ZebraSourceOnboardingGmailCommand.launchPlan(
             agent: .codex,
             launchDirectory: cwd.path,
             codexConfigURL: configURL,
@@ -525,11 +525,11 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            ZebraClawvisorOnboardingCommand.resolveFlowKind(agent: .claude, selectedRuntime: runtime),
+            ZebraSourceOnboardingGmailCommand.resolveFlowKind(agent: .claude, selectedRuntime: runtime),
             .claudeCode
         )
         XCTAssertEqual(
-            ZebraClawvisorOnboardingCommand.resolveFlowKind(agent: .codex, selectedRuntime: runtime),
+            ZebraSourceOnboardingGmailCommand.resolveFlowKind(agent: .codex, selectedRuntime: runtime),
             .genericAgent
         )
     }
@@ -541,16 +541,16 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            ZebraClawvisorOnboardingCommand.resolveFlowKind(agent: .claude, selectedRuntime: runtime),
+            ZebraSourceOnboardingGmailCommand.resolveFlowKind(agent: .claude, selectedRuntime: runtime),
             .claudeCode
         )
         XCTAssertEqual(
-            ZebraClawvisorOnboardingCommand.resolveFlowKind(agent: .codex, selectedRuntime: runtime),
+            ZebraSourceOnboardingGmailCommand.resolveFlowKind(agent: .codex, selectedRuntime: runtime),
             .genericAgent
         )
     }
 
-    func testClawvisorLaunchPlanWritesSetupPacketStateAndHelper() throws {
+    func testSourceOnboardingGmailLaunchPlanWritesSetupPacketAndHelper() throws {
         let cwd = try makeTemporaryDirectory()
         let configURL = try makeTemporaryDirectory()
             .appendingPathComponent("config.toml", isDirectory: false)
@@ -560,7 +560,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
             executablePath: "/tmp/openclaw"
         )
 
-        let plan = ZebraClawvisorOnboardingCommand.launchPlan(
+        let plan = ZebraSourceOnboardingGmailCommand.launchPlan(
             agent: .codex,
             launchDirectory: cwd.path,
             codexConfigURL: configURL,
@@ -582,11 +582,12 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(setupPacket.contains("3. Continue through Google service authorization"))
         XCTAssertTrue(setupPacket.contains("4. When Clawvisor reaches the final Env vars step"))
         XCTAssertTrue(setupPacket.contains("CLAWVISOR_TASK_ID"))
-        XCTAssertTrue(setupPacket.contains("zebra-clawvisor-email-onboarding verify-connection"))
+        XCTAssertTrue(setupPacket.contains("zebra-source-onboarding gmail verify-connection"))
+        XCTAssertTrue(setupPacket.contains("Source Onboarding state"))
         XCTAssertFalse(setupPacket.contains("GET $CLAWVISOR_URL/api/tasks/$CLAWVISOR_TASK_ID"))
         XCTAssertFalse(setupPacket.contains("OpenClaw integration guide"))
-        XCTAssertFalse(setupPacket.contains("On your first response, run `zebra-clawvisor-email-onboarding status`"))
-        XCTAssertFalse(setupPacket.contains("zebra-clawvisor-email-onboarding status"))
+        XCTAssertFalse(setupPacket.contains("On your first response, run `zebra-source-onboarding gmail status`"))
+        XCTAssertFalse(setupPacket.contains("zebra-source-onboarding gmail status"))
         XCTAssertFalse(setupPacket.contains("continue from `waitingForUser`"))
         XCTAssertFalse(setupPacket.contains("waitingForUser"))
         XCTAssertFalse(setupPacket.contains("`nextSection`"))
@@ -595,26 +596,26 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(setupPacket.contains("report --status started"))
         XCTAssertFalse(setupPacket.contains("CLAWVISOR_GMAIL_TASK_ID"))
         XCTAssertFalse(setupPacket.contains("ZEBRA_CLAWVISOR_GMAIL_ACCOUNT"))
-        XCTAssertFalse(plan.startupLine.contains("zebra-clawvisor-email-onboarding status"))
+        XCTAssertFalse(plan.startupLine.contains("zebra-source-onboarding gmail status"))
         XCTAssertFalse(plan.startupLine.contains("authoritative setup packet"))
         XCTAssertFalse(plan.startupLine.contains("read the setup packet"))
         XCTAssertFalse(plan.startupLine.contains("setup packet is at"))
         XCTAssertFalse(plan.startupLine.contains("waitingForUser"))
         XCTAssertFalse(plan.startupLine.contains("nextSection"))
-
-        let stateData = try Data(contentsOf: URL(fileURLWithPath: plan.statePath))
-        let state = try XCTUnwrap(JSONSerialization.jsonObject(with: stateData) as? [String: Any])
-        XCTAssertEqual(state["primaryAgent"] as? String, "codex")
-        XCTAssertEqual(state["selectedRuntime"] as? String, "openclaw")
-        XCTAssertEqual(state["flowKind"] as? String, "genericAgent")
-        XCTAssertEqual(state["completedSections"] as? [String], [])
+        XCTAssertTrue(plan.startupLine.contains("ZEBRA_SOURCE_ONBOARDING_STATE"))
+        XCTAssertTrue(plan.startupLine.contains("zebra-source-onboarding"))
+        XCTAssertEqual(
+            plan.statePath,
+            onboardingDirectoryURL
+                .appendingPathComponent("source-onboarding-state.json", isDirectory: false)
+                .path
+        )
 
         XCTAssertEqual(try octalPermissions(atPath: setupPacketPath), 0o600)
-        XCTAssertEqual(try octalPermissions(atPath: plan.statePath), 0o600)
         XCTAssertEqual(
             try octalPermissions(
                 atPath: onboardingDirectoryURL
-                    .appendingPathComponent("bin/zebra-clawvisor-email-onboarding")
+                    .appendingPathComponent("bin/zebra-source-onboarding")
                     .path
             ),
             0o755
@@ -632,7 +633,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         trust_level = "untrusted"
         """.write(to: configURL, atomically: true, encoding: .utf8)
 
-        XCTAssertTrue(ZebraClawvisorOnboardingCommand.markCodexProjectTrusted(
+        XCTAssertTrue(ZebraSourceOnboardingGmailCommand.markCodexProjectTrusted(
             cwd: cwd.path,
             configURL: configURL
         ))
@@ -646,7 +647,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
     func testClawvisorAntigravityOnboardingLaunchCarriesPrompt() throws {
         let cwd = try makeTemporaryDirectory()
 
-        let line = ZebraClawvisorOnboardingCommand.shellStartupLine(
+        let line = ZebraSourceOnboardingGmailCommand.shellStartupLine(
             agent: .antigravity,
             launchDirectory: cwd.path
         )
@@ -663,7 +664,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(line.contains("authoritative setup packet"))
         XCTAssertFalse(line.contains("read the setup packet"))
         XCTAssertFalse(line.contains("setup packet is at"))
-        XCTAssertFalse(line.contains("zebra-clawvisor-email-onboarding status"))
+        XCTAssertFalse(line.contains("zebra-source-onboarding gmail status"))
         XCTAssertFalse(line.contains("On your first response, run"))
         XCTAssertFalse(line.contains("waitingForUser"))
         XCTAssertFalse(line.contains("nextSection"))
@@ -676,21 +677,21 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         let preferences = ZebraAgentPreferences(primaryAgent: .codex)
 
         XCTAssertEqual(
-            ZebraClawvisorOnboardingCommand.readyPrimaryAgent(
+            ZebraSourceOnboardingGmailCommand.readyPrimaryAgent(
                 preferences: preferences,
                 candidates: [agentCandidate(id: .codex, installState: .installed, authState: .configPresent)]
             ),
             .codex
         )
-        XCTAssertNil(ZebraClawvisorOnboardingCommand.readyPrimaryAgent(
+        XCTAssertNil(ZebraSourceOnboardingGmailCommand.readyPrimaryAgent(
             preferences: ZebraAgentPreferences(primaryAgent: nil),
             candidates: [agentCandidate(id: .codex, installState: .installed, authState: .configPresent)]
         ))
-        XCTAssertNil(ZebraClawvisorOnboardingCommand.readyPrimaryAgent(
+        XCTAssertNil(ZebraSourceOnboardingGmailCommand.readyPrimaryAgent(
             preferences: preferences,
             candidates: [agentCandidate(id: .codex, installState: .missing, authState: .configPresent)]
         ))
-        XCTAssertNil(ZebraClawvisorOnboardingCommand.readyPrimaryAgent(
+        XCTAssertNil(ZebraSourceOnboardingGmailCommand.readyPrimaryAgent(
             preferences: preferences,
             candidates: [agentCandidate(id: .codex, installState: .installed, authState: .unknown)]
         ))

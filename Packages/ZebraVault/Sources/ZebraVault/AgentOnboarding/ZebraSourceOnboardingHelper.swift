@@ -105,6 +105,10 @@ struct ZebraSourceOnboardingHelper {
     import json
     import os
     import sys
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    import uuid
     from datetime import datetime, timezone
     from pathlib import Path
 
@@ -214,36 +218,97 @@ struct ZebraSourceOnboardingHelper {
                 keys.add(key)
         return keys
 
+    def local_email_artifact():
+        artifact_path = home / "Library/Application Support/zebra/email.sqlite"
+        if not artifact_path.exists():
+            return None
+        return {
+            "kind": "sqlite",
+            "path": str(artifact_path),
+            "exists": True,
+        }
+
+    def gmail_readiness_record(status, env_path, connection_path=None, repair_kind=None, reasons=None):
+        return {
+            "status": status,
+            "connectionPath": connection_path,
+            "envPath": str(env_path),
+            "localArtifact": local_email_artifact(),
+            "repairKind": repair_kind,
+            "reasons": reasons or [],
+        }
+
     def gmail_readiness():
         env_path = home / ".gbrain/.env"
         required = {"CLAWVISOR_URL", "CLAWVISOR_AGENT_TOKEN", "CLAWVISOR_TASK_ID"}
         keys = parse_env_keys(env_path)
         has_required = required.issubset(keys)
-        artifact_path = home / "Library/Application Support/zebra/email.sqlite"
-        artifact = None
-        if artifact_path.exists():
-            artifact = {
-                "kind": "sqlite",
-                "path": str(artifact_path),
-                "exists": True,
-            }
         if has_required:
-            return {
-                "status": "unverified",
-                "connectionPath": "existing_clawvisor_gmail_connection_path",
-                "envPath": str(env_path),
-                "localArtifact": artifact,
-                "repairKind": None,
-                "reasons": ["email_connection_unverified"],
-            }
+            return gmail_readiness_record(
+                "unverified",
+                env_path,
+                connection_path="existing_clawvisor_gmail_connection_path",
+                reasons=["email_connection_unverified"],
+            )
+        return gmail_readiness_record(
+            "missing_env",
+            env_path,
+            reasons=["clawvisor_email_env_missing_or_incomplete"],
+        )
+
+    def default_state(timestamp=None):
+        timestamp = timestamp or now()
         return {
-            "status": "missing_env",
-            "connectionPath": None,
-            "envPath": str(env_path),
-            "localArtifact": artifact,
-            "repairKind": None,
-            "reasons": ["clawvisor_email_env_missing_or_incomplete"],
+            "schemaVersion": 1,
+            "status": "attention" if entry_context().get("gbrainTargetMissingReason") else "ready",
+            "entryContext": entry_context(),
+            "sourceReadiness": {"gmail": gmail_readiness()},
+            "progress": {
+                "rawSourceInput": None,
+                "normalizedSourceList": [],
+                "uncatalogedSources": [],
+                "sourceConfirmation": None,
+                "sourceRows": {},
+                "pendingQuestion": None,
+            },
+            "updatedAt": timestamp,
         }
+
+    def load_or_create_state():
+        state = load_json(state_path)
+        if not state:
+            return default_state()
+        migrate_source_state(state)
+        state.setdefault("schemaVersion", 1)
+        state.setdefault("status", "ready")
+        state.setdefault("entryContext", entry_context())
+        state.setdefault("sourceReadiness", {})
+        state.setdefault("progress", {
+            "rawSourceInput": None,
+            "normalizedSourceList": [],
+            "uncatalogedSources": [],
+            "sourceConfirmation": None,
+            "sourceRows": {},
+            "pendingQuestion": None,
+        })
+        return state
+
+    def update_gmail_readiness(status, env_path, connection_path=None, repair_kind=None, reasons=None):
+        state = load_or_create_state()
+        source_readiness = state.get("sourceReadiness")
+        if not isinstance(source_readiness, dict):
+            source_readiness = {}
+        source_readiness["gmail"] = gmail_readiness_record(
+            status,
+            env_path,
+            connection_path=connection_path,
+            repair_kind=repair_kind,
+            reasons=reasons,
+        )
+        state["sourceReadiness"] = source_readiness
+        state["updatedAt"] = now()
+        save_json(state)
+        return state
 
     def resolve_gbrain_target():
         gbrain = load_json(gbrain_state_path)
@@ -284,6 +349,219 @@ struct ZebraSourceOnboardingHelper {
             "adapterReady": bool(adapter_receipt.get("complete")),
             "adapterReadinessReasons": adapter_receipt.get("reasons") if isinstance(adapter_receipt.get("reasons"), list) else [],
         }
+
+    def strip_optional_quotes(value):
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            return value[1:-1]
+        return value
+
+    def dotenv_values():
+        env_path = home / ".gbrain/.env"
+        values = {}
+        raw = env_path.read_text(encoding="utf-8")
+        for line in raw.splitlines():
+            text = line.strip()
+            if not text or text.startswith("#") or "=" not in text:
+                continue
+            if text.startswith("export "):
+                text = text[len("export "):].lstrip()
+            key, value = text.split("=", 1)
+            key = key.strip()
+            if key:
+                values[key] = strip_optional_quotes(value)
+        return env_path, values
+
+    def persisted_env():
+        try:
+            env_path, values = dotenv_values()
+        except Exception:
+            env_path = home / ".gbrain/.env"
+            values = {}
+        return env_path, values
+
+    def request_json(method, url, token, body=None):
+        try:
+            data = None
+            headers = {"Authorization": "Bearer " + token}
+            if body is not None:
+                data = json.dumps(body).encode("utf-8")
+                headers["Content-Type"] = "application/json"
+            request = urllib.request.Request(url, data=data, headers=headers, method=method)
+            with urllib.request.urlopen(request, timeout=30) as response:
+                raw = response.read().decode("utf-8")
+                return response.status, json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as error:
+            raw = error.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception:
+                payload = {"error": raw}
+            return error.code, payload
+        except Exception as error:
+            return 0, {"error": type(error).__name__, "detail": str(error)}
+
+    def is_gmail_service(service):
+        service = (service or "").strip()
+        return service == "google.gmail" or service.startswith("google.gmail:")
+
+    def gmail_service_from_task(value):
+        if isinstance(value, dict):
+            service = value.get("service")
+            if isinstance(service, str) and is_gmail_service(service):
+                return service
+            actions = value.get("authorized_actions")
+            if isinstance(actions, list):
+                for action in actions:
+                    service = gmail_service_from_task(action)
+                    if service:
+                        return service
+            for key in ("task", "data", "result"):
+                service = gmail_service_from_task(value.get(key))
+                if service:
+                    return service
+        if isinstance(value, list):
+            for item in value:
+                service = gmail_service_from_task(item)
+                if service:
+                    return service
+        return ""
+
+    def gmail_verify_env():
+        env_path, env = persisted_env()
+        required = [
+            "CLAWVISOR_URL",
+            "CLAWVISOR_AGENT_TOKEN",
+            "CLAWVISOR_TASK_ID",
+        ]
+        missing = [key for key in required if not env.get(key, "").strip()]
+        if missing:
+            update_gmail_readiness(
+                "missing_env",
+                env_path,
+                reasons=["missing:" + ",".join(missing)],
+            )
+        else:
+            update_gmail_readiness(
+                "unverified",
+                env_path,
+                connection_path="clawvisor_env_available",
+                reasons=["email_connection_unverified"],
+            )
+        print(json.dumps({"ok": not missing, "missing": missing, "path": str(env_path)}, sort_keys=True))
+        return 0 if not missing else 1
+
+    def gmail_verify_connection():
+        env_path, env = persisted_env()
+        required = ["CLAWVISOR_URL", "CLAWVISOR_AGENT_TOKEN", "CLAWVISOR_TASK_ID"]
+        missing = [key for key in required if not env.get(key, "").strip()]
+        if missing:
+            update_gmail_readiness(
+                "missing_env",
+                env_path,
+                reasons=["missing:" + ",".join(missing)],
+            )
+            print(json.dumps({"ok": False, "stage": "env", "missing": missing, "path": str(env_path)}, sort_keys=True))
+            return 1
+        base_url = env["CLAWVISOR_URL"].strip().rstrip("/")
+        token = env["CLAWVISOR_AGENT_TOKEN"].strip()
+        task_id = env["CLAWVISOR_TASK_ID"].strip()
+        task_url = base_url + "/api/tasks/" + urllib.parse.quote(task_id, safe="")
+        status, task = request_json("GET", task_url, token)
+        if status == 0:
+            reason = "task_request_failed:" + str(task.get("error") if isinstance(task, dict) else "request_failed")
+            update_gmail_readiness(
+                "attention",
+                env_path,
+                connection_path="clawvisor_task:" + task_id,
+                repair_kind="task_request_failed",
+                reasons=[reason],
+            )
+            print(json.dumps({"ok": False, "stage": "task", "status": status, "response": task}, sort_keys=True))
+            return 1
+        if status < 200 or status >= 300:
+            update_gmail_readiness(
+                "attention",
+                env_path,
+                connection_path="clawvisor_task:" + task_id,
+                repair_kind="task_lookup_failed",
+                reasons=["task_http_status:" + str(status)],
+            )
+            print(json.dumps({"ok": False, "stage": "task", "status": status, "response": task}, sort_keys=True))
+            return 1
+        service = gmail_service_from_task(task)
+        if not service:
+            update_gmail_readiness(
+                "attention",
+                env_path,
+                connection_path="clawvisor_task:" + task_id,
+                repair_kind="gmail_service_missing",
+                reasons=["no_authorized_google_gmail_service"],
+            )
+            print(json.dumps({"ok": False, "stage": "task", "reason": "no authorized google.gmail service"}, sort_keys=True))
+            return 1
+        gateway_body = {
+            "task_id": task_id,
+            "session_id": str(uuid.uuid4()),
+            "service": service,
+            "action": "list_messages",
+            "params": {"query": "newer_than:7d", "max_results": 1},
+            "reason": "Verify Zebra can read Gmail through the approved Clawvisor task before marking Source Onboarding Gmail integration complete.",
+        }
+        gateway_url = base_url + "/api/gateway/request?wait=true"
+        status, gateway = request_json("POST", gateway_url, token, gateway_body)
+        if status == 0:
+            reason = "gateway_request_failed:" + str(gateway.get("error") if isinstance(gateway, dict) else "request_failed")
+            update_gmail_readiness(
+                "attention",
+                env_path,
+                connection_path="clawvisor_task:" + task_id + "#" + service,
+                repair_kind="gateway_request_failed",
+                reasons=[reason],
+            )
+            print(json.dumps({"ok": False, "stage": "gateway", "status": status, "service": service, "response": gateway}, sort_keys=True))
+            return 1
+        if status < 200 or status >= 300:
+            update_gmail_readiness(
+                "attention",
+                env_path,
+                connection_path="clawvisor_task:" + task_id + "#" + service,
+                repair_kind="gateway_failed",
+                reasons=["gateway_http_status:" + str(status)],
+            )
+            print(json.dumps({"ok": False, "stage": "gateway", "status": status, "service": service, "response": gateway}, sort_keys=True))
+            return 1
+        gateway_status = gateway.get("status") if isinstance(gateway, dict) else None
+        if gateway_status and gateway_status not in ("executed", "approved", "completed", "success"):
+            update_gmail_readiness(
+                "attention",
+                env_path,
+                connection_path="clawvisor_task:" + task_id + "#" + service,
+                repair_kind="gateway_pending_or_rejected",
+                reasons=["gateway_status:" + str(gateway_status)],
+            )
+            print(json.dumps({"ok": False, "stage": "gateway", "status": gateway_status, "service": service, "response": gateway}, sort_keys=True))
+            return 1
+        update_gmail_readiness(
+            "ready",
+            env_path,
+            connection_path="clawvisor_task:" + task_id + "#" + service,
+            reasons=[],
+        )
+        print(json.dumps({"ok": True, "service": service, "taskId": task_id}, sort_keys=True))
+        return 0
+
+    def gmail_command():
+        if not args:
+            print("gmail requires a subcommand", file=sys.stderr)
+            return 2
+        subcommand = args[0]
+        if subcommand == "verify-env":
+            return gmail_verify_env()
+        if subcommand == "verify-connection":
+            return gmail_verify_connection()
+        print("unknown gmail subcommand: " + subcommand, file=sys.stderr)
+        return 2
 
     def split_pair(value):
         if "=" in value:
@@ -524,22 +802,7 @@ struct ZebraSourceOnboardingHelper {
     def status():
         state = load_json(state_path)
         if not state:
-            timestamp = now()
-            state = {
-                "schemaVersion": 1,
-                "status": "attention" if entry_context().get("gbrainTargetMissingReason") else "ready",
-                "entryContext": entry_context(),
-                "sourceReadiness": {"gmail": gmail_readiness()},
-                "progress": {
-                    "rawSourceInput": None,
-                    "normalizedSourceList": [],
-                    "uncatalogedSources": [],
-                    "sourceConfirmation": None,
-                    "sourceRows": {},
-                    "pendingQuestion": None,
-                },
-                "updatedAt": timestamp,
-            }
+            state = default_state()
             save_json(state)
         elif migrate_source_state(state):
             save_json(state)
@@ -551,6 +814,8 @@ struct ZebraSourceOnboardingHelper {
         intake()
     elif command == "confirm":
         confirm()
+    elif command == "gmail":
+        sys.exit(gmail_command())
     elif command == "status":
         status()
     else:

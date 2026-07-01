@@ -4,7 +4,6 @@ import Foundation
 public enum ZebraAgentTerminalSource: Hashable, Sendable {
     case markdownFile(String)
     case emailThread(String)
-    case clawvisorOnboarding
     case brainSyncFailure
     case brainSaveFailure
     case onboardingChecklist(ZebraOnboardingChecklistStepID)

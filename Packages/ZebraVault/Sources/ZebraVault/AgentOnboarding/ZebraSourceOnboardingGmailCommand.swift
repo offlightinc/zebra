@@ -1,15 +1,9 @@
 import Foundation
 
 /// Builds the shell command that drops the user into their primary agent
-/// with a prompt that walks them through the Clawvisor GBrain env handoff.
-/// Used by the email sidebar's "Connect" CTA and the
-/// onboarding checklist email step so the flow lives inside an agent terminal
-/// instead of a separate Settings form.
-///
-/// Modeled after `MarkdownChatPillCommand.shellStartupLine` but with no
-/// dependency on a markdown file or surface context — the system prompt is
-/// self-contained.
-public enum ZebraClawvisorOnboardingCommand {
+/// with a prompt that walks them through the Step 4 Gmail source integration
+/// via Clawvisor's GBrain env handoff.
+public enum ZebraSourceOnboardingGmailCommand {
     public enum FlowKind: String, Equatable, Sendable {
         case claudeCode
         case genericAgent
@@ -63,7 +57,7 @@ public enum ZebraClawvisorOnboardingCommand {
                 agent: agent,
                 flowKind: flowKind,
                 setupPacketPath: setup.setupPacketPath,
-                helperDirectoryPath: setup.helperDirectoryPath,
+                shellEnvironmentPrefix: setup.shellEnvironmentPrefix,
                 launchDirectory: environment.launchDirectory
             ),
             setupPacketPath: setup.setupPacketPath,
@@ -156,7 +150,7 @@ public enum ZebraClawvisorOnboardingCommand {
     ) -> String {
         let cwd = launchDirectory ?? self.launchDirectory()
         let flowKind = resolveFlowKind(agent: agent, selectedRuntime: nil)
-        return "\(agentInvocation(agent: agent, flowKind: flowKind, setupPacketPath: nil, helperDirectoryPath: nil, cwd: cwd))\r"
+        return "\(agentInvocation(agent: agent, flowKind: flowKind, setupPacketPath: nil, shellEnvironmentPrefix: nil, cwd: cwd))\r"
     }
 
     /// `~/.gbrain` — a scoped onboarding directory rather than the user's
@@ -210,56 +204,56 @@ public enum ZebraClawvisorOnboardingCommand {
             targetDescription = "\(agent.agentKind.displayName) via the Clawvisor generic agent flow"
         }
         return """
-        # Zebra Clawvisor Email Onboarding Instructions
+        # Zebra Source Onboarding Gmail Instructions
 
-        These are the instructions for the current Zebra email onboarding run.
+        These are the instructions for the current Step 4 Gmail source integration run.
 
         - Primary terminal agent: \(agent.agentKind.displayName)
         - GBrain runtime receipt: \(selectedRuntime?.runtime ?? "none")
         - Clawvisor email flow kind: \(flowKind.rawValue)
         - Clawvisor integration target: \(targetDescription)
-        - Completion source of truth: canonical Clawvisor env plus Zebra's email repair state
+        - Completion source of truth: `zebra-source-onboarding gmail ...` updating Source Onboarding state
         - Required env keys: `CLAWVISOR_URL`, `CLAWVISOR_AGENT_TOKEN`, `CLAWVISOR_TASK_ID`
 
         ## Important behavior
 
-        This is not a state-tracked onboarding wizard. Do not inspect local onboarding progress before instructing the user, and do not infer the user's current Clawvisor UI step. Use the instructions below as a setup guide, and only perform verification after the user pastes the three env lines.
+        Do not infer the user's current Clawvisor UI step. Use the instructions below as a setup guide, and only perform verification after the user pastes the three env lines. The helper CLI is the only state write path for Gmail source progress.
 
         \(flowInstructions(flowKind: flowKind, agent: agent, language: language))
         """
     }
 
     static func initialUserPrompt(for agent: MarkdownPillAgent) -> String {
-        "Help me connect my Gmail to Zebra through Clawvisor using \(agent.agentKind.displayName)."
+        "Help me connect Gmail as a Zebra Source Onboarding source through Clawvisor using \(agent.agentKind.displayName)."
     }
 
     private static func shellStartupLine(
         agent: MarkdownPillAgent,
         flowKind: FlowKind,
         setupPacketPath: String?,
-        helperDirectoryPath: String?,
+        shellEnvironmentPrefix: String?,
         launchDirectory: String
     ) -> String {
-        "\(agentInvocation(agent: agent, flowKind: flowKind, setupPacketPath: setupPacketPath, helperDirectoryPath: helperDirectoryPath, cwd: launchDirectory))\r"
+        "\(agentInvocation(agent: agent, flowKind: flowKind, setupPacketPath: setupPacketPath, shellEnvironmentPrefix: shellEnvironmentPrefix, cwd: launchDirectory))\r"
     }
 
     private static func agentInvocation(
         agent: MarkdownPillAgent,
         flowKind: FlowKind,
         setupPacketPath: String?,
-        helperDirectoryPath: String?,
+        shellEnvironmentPrefix: String?,
         cwd: String
     ) -> String {
         let resolvedCwd = validLaunchDirectoryCwd(cwd) ?? NSHomeDirectory()
         let systemPrompt = systemPrompt(flowKind: flowKind, agent: agent, setupPacketPath: setupPacketPath)
         let userPrompt = singleLineShellArgument(initialUserPrompt(for: agent))
         let visiblePrompt = "\(systemPrompt)\n\n\(userPrompt)"
-        let pathPrefix = helperDirectoryPath.map { "export PATH=\(shellQuote($0)):\"$PATH\" && " } ?? ""
+        let environmentPrefix = shellEnvironmentPrefix ?? ""
 
         switch agent {
         case .codex:
             var parts = [
-                "cd \(shellQuote(resolvedCwd)) && \(pathPrefix)codex",
+                "cd \(shellQuote(resolvedCwd)) && \(environmentPrefix)codex",
                 "-C \(shellQuote(resolvedCwd))",
             ]
             if let trustOverride = codexFolderTrustOverride(for: resolvedCwd) {
@@ -270,9 +264,9 @@ public enum ZebraClawvisorOnboardingCommand {
             parts.append(shellQuote(visiblePrompt))
             return parts.joined(separator: " ")
         case .claude:
-            return "cd \(shellQuote(resolvedCwd)) && \(pathPrefix)claude --permission-mode auto --append-system-prompt \(shellQuote(systemPrompt)) \(shellQuote(userPrompt))"
+            return "cd \(shellQuote(resolvedCwd)) && \(environmentPrefix)claude --permission-mode auto --append-system-prompt \(shellQuote(systemPrompt)) \(shellQuote(userPrompt))"
         case .antigravity:
-            return "cd \(shellQuote(resolvedCwd)) && \(pathPrefix)agy --prompt-interactive --add-dir \(shellQuote(resolvedCwd)) \(shellQuote(visiblePrompt))"
+            return "cd \(shellQuote(resolvedCwd)) && \(environmentPrefix)agy --prompt-interactive --add-dir \(shellQuote(resolvedCwd)) \(shellQuote(visiblePrompt))"
         }
     }
 
@@ -391,20 +385,7 @@ public enum ZebraClawvisorOnboardingCommand {
     private struct SetupContext {
         let statePath: String
         let setupPacketPath: String?
-        let helperDirectoryPath: String?
-    }
-
-    private struct EmailOnboardingState: Codable {
-        var schemaVersion: Int
-        var currentRunId: String
-        var primaryAgent: String
-        var selectedRuntime: String?
-        var flowKind: String
-        var completedSections: [String]
-        var nextSection: String?
-        var waitingForUser: String?
-        var lastFailure: String?
-        var updatedAt: String
+        let shellEnvironmentPrefix: String?
     }
 
     private static func prepareSetupContext(
@@ -414,20 +395,18 @@ public enum ZebraClawvisorOnboardingCommand {
         onboardingDirectoryURL: URL
     ) -> SetupContext {
         let stateURL = onboardingDirectoryURL
-            .appendingPathComponent("clawvisor-email-state.json", isDirectory: false)
-        let helperURL = installHelperScript(onboardingDirectoryURL: onboardingDirectoryURL)
-        let existingState = loadState(stateURL: stateURL)
+            .appendingPathComponent("source-onboarding-state.json", isDirectory: false)
+        let helperLaunch = ZebraSourceOnboardingHelper(stateURL: stateURL)
+            .prepareLaunch(selectedVaultPath: nil)
         let runId = UUID().uuidString.lowercased()
-        let completedSections = existingState?.completedSections ?? []
-        let nextSection = existingState?.nextSection ?? firstSectionTitle(flowKind: flowKind)
         let packet = setupPacketContent(
             flowKind: flowKind,
             agent: agent,
             selectedRuntime: selectedRuntime,
-            completedSections: completedSections,
-            nextSection: nextSection,
-            waitingForUser: existingState?.waitingForUser,
-            lastFailure: existingState?.lastFailure,
+            completedSections: [],
+            nextSection: firstSectionTitle(flowKind: flowKind),
+            waitingForUser: nil,
+            lastFailure: nil,
             language: .current()
         )
         let packetURL = writeSetupPacket(
@@ -435,46 +414,11 @@ public enum ZebraClawvisorOnboardingCommand {
             runId: runId,
             onboardingDirectoryURL: onboardingDirectoryURL
         )
-        let state = EmailOnboardingState(
-            schemaVersion: 1,
-            currentRunId: runId,
-            primaryAgent: agent.agentKind.rawValue,
-            selectedRuntime: selectedRuntime?.runtime,
-            flowKind: flowKind.rawValue,
-            completedSections: completedSections,
-            nextSection: nextSection,
-            waitingForUser: existingState?.waitingForUser,
-            lastFailure: existingState?.lastFailure,
-            updatedAt: isoNow()
-        )
-        writeState(state, to: stateURL)
         return SetupContext(
             statePath: stateURL.path,
             setupPacketPath: packetURL?.path,
-            helperDirectoryPath: helperURL?.deletingLastPathComponent().path
+            shellEnvironmentPrefix: helperLaunch?.shellEnvironmentPrefix
         )
-    }
-
-    private static func loadState(stateURL: URL) -> EmailOnboardingState? {
-        guard let data = try? Data(contentsOf: stateURL) else { return nil }
-        return try? JSONDecoder().decode(EmailOnboardingState.self, from: data)
-    }
-
-    private static func writeState(_ state: EmailOnboardingState, to stateURL: URL) {
-        do {
-            try FileManager.default.createDirectory(
-                at: stateURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(state)
-            try data.write(to: stateURL, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
-        } catch {
-            return
-        }
     }
 
     private static func writeSetupPacket(
@@ -483,7 +427,7 @@ public enum ZebraClawvisorOnboardingCommand {
         onboardingDirectoryURL: URL
     ) -> URL? {
         let directory = onboardingDirectoryURL
-            .appendingPathComponent("clawvisor-email-setup-packets", isDirectory: true)
+            .appendingPathComponent("source-onboarding-gmail-setup-packets", isDirectory: true)
         let url = directory.appendingPathComponent("\(runId).md", isDirectory: false)
         do {
             try FileManager.default.createDirectory(
@@ -493,23 +437,6 @@ public enum ZebraClawvisorOnboardingCommand {
             )
             try content.write(to: url, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            return url
-        } catch {
-            return nil
-        }
-    }
-
-    private static func installHelperScript(onboardingDirectoryURL: URL) -> URL? {
-        let directory = onboardingDirectoryURL.appendingPathComponent("bin", isDirectory: true)
-        let url = directory.appendingPathComponent("zebra-clawvisor-email-onboarding", isDirectory: false)
-        do {
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            try helperScript.write(to: url, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
             return url
         } catch {
             return nil
@@ -534,240 +461,13 @@ public enum ZebraClawvisorOnboardingCommand {
         }
     }
 
-    private static func isoNow() -> String {
-        ISO8601DateFormatter().string(from: Date())
-    }
-
-    private static let helperScript = """
-    #!/bin/sh
-    set -eu
-
-    STATE="${ZEBRA_CLAWVISOR_EMAIL_STATE:-$HOME/Library/Application Support/zebra/onboarding/clawvisor-email-state.json}"
-    COMMAND="${1:-status}"
-    if [ $# -gt 0 ]; then
-      shift
-    fi
-
-    PYTHON_BIN="$(command -v python3 || true)"
-    if [ -z "$PYTHON_BIN" ]; then
-      echo "python3 is required for zebra-clawvisor-email-onboarding" >&2
-      exit 1
-    fi
-
-    "$PYTHON_BIN" - "$STATE" "$COMMAND" "$@" <<'PY'
-    import json
-    import os
-    import sys
-    import urllib.error
-    import urllib.parse
-    import urllib.request
-    import uuid
-    from datetime import datetime, timezone
-    from pathlib import Path
-
-    state_path = Path(sys.argv[1]).expanduser()
-    command = sys.argv[2] if len(sys.argv) > 2 else "status"
-    args = sys.argv[3:]
-
-    def now():
-        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-    def load_state():
-        try:
-            with state_path.open("r", encoding="utf-8") as handle:
-                return json.load(handle)
-        except Exception:
-            return {"schemaVersion": 1, "completedSections": []}
-
-    def save_state(state):
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = state_path.with_suffix(state_path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as handle:
-            json.dump(state, handle, indent=2, sort_keys=True)
-            handle.write("\\n")
-        os.replace(tmp, state_path)
-        os.chmod(state_path, 0o600)
-
-    def option(name, default=""):
-        flag = "--" + name
-        if flag not in args:
-            return default
-        index = args.index(flag)
-        if index + 1 >= len(args):
-            return default
-        return args[index + 1]
-
-    def strip_optional_quotes(value):
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            return value[1:-1]
-        return value
-
-    def dotenv_values():
-        env_path = Path.home() / ".gbrain" / ".env"
-        values = {}
-        raw = env_path.read_text(encoding="utf-8")
-        for line in raw.splitlines():
-            text = line.strip()
-            if not text or text.startswith("#") or "=" not in text:
-                continue
-            if text.startswith("export "):
-                text = text[len("export "):].lstrip()
-            key, value = text.split("=", 1)
-            key = key.strip()
-            if key:
-                values[key] = strip_optional_quotes(value)
-        return env_path, values
-
-    def merged_env():
-        try:
-            env_path, values = dotenv_values()
-        except Exception:
-            env_path = Path.home() / ".gbrain" / ".env"
-            values = {}
-        merged = dict(os.environ)
-        for key, value in values.items():
-            if not merged.get(key):
-                merged[key] = value
-        return env_path, merged
-
-    def verify_env():
-        env_path, env = merged_env()
-        required = [
-            "CLAWVISOR_URL",
-            "CLAWVISOR_AGENT_TOKEN",
-            "CLAWVISOR_TASK_ID",
-        ]
-        missing = [key for key in required if not env.get(key, "").strip()]
-        print(json.dumps({"ok": not missing, "missing": missing, "path": str(env_path)}, sort_keys=True))
-        return 0 if not missing else 1
-
-    def request_json(method, url, token, body=None):
-        data = None
-        headers = {"Authorization": "Bearer " + token}
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                raw = response.read().decode("utf-8")
-                return response.status, json.loads(raw) if raw else {}
-        except urllib.error.HTTPError as error:
-            raw = error.read().decode("utf-8", errors="replace")
-            try:
-                payload = json.loads(raw) if raw else {}
-            except Exception:
-                payload = {"error": raw}
-            return error.code, payload
-
-    def is_gmail_service(service):
-        service = (service or "").strip()
-        return service == "google.gmail" or service.startswith("google.gmail:")
-
-    def gmail_service_from_task(value):
-        if isinstance(value, dict):
-            service = value.get("service")
-            if isinstance(service, str) and is_gmail_service(service):
-                return service
-            actions = value.get("authorized_actions")
-            if isinstance(actions, list):
-                for action in actions:
-                    service = gmail_service_from_task(action)
-                    if service:
-                        return service
-            for key in ("task", "data", "result"):
-                service = gmail_service_from_task(value.get(key))
-                if service:
-                    return service
-        if isinstance(value, list):
-            for item in value:
-                service = gmail_service_from_task(item)
-                if service:
-                    return service
-        return ""
-
-    def verify_connection():
-        env_path, env = merged_env()
-        required = ["CLAWVISOR_URL", "CLAWVISOR_AGENT_TOKEN", "CLAWVISOR_TASK_ID"]
-        missing = [key for key in required if not env.get(key, "").strip()]
-        if missing:
-            print(json.dumps({"ok": False, "stage": "env", "missing": missing, "path": str(env_path)}, sort_keys=True))
-            return 1
-        base_url = env["CLAWVISOR_URL"].strip().rstrip("/")
-        token = env["CLAWVISOR_AGENT_TOKEN"].strip()
-        task_id = env["CLAWVISOR_TASK_ID"].strip()
-        task_url = base_url + "/api/tasks/" + urllib.parse.quote(task_id, safe="")
-        status, task = request_json("GET", task_url, token)
-        if status < 200 or status >= 300:
-            print(json.dumps({"ok": False, "stage": "task", "status": status, "response": task}, sort_keys=True))
-            return 1
-        service = gmail_service_from_task(task)
-        if not service:
-            print(json.dumps({"ok": False, "stage": "task", "reason": "no authorized google.gmail service"}, sort_keys=True))
-            return 1
-        gateway_body = {
-            "task_id": task_id,
-            "session_id": str(uuid.uuid4()),
-            "service": service,
-            "action": "list_messages",
-            "params": {"query": "newer_than:7d", "max_results": 1},
-            "reason": "Verify Zebra can read Gmail through the approved Clawvisor task before marking email integration complete.",
-        }
-        gateway_url = base_url + "/api/gateway/request?wait=true"
-        status, gateway = request_json("POST", gateway_url, token, gateway_body)
-        if status < 200 or status >= 300:
-            print(json.dumps({"ok": False, "stage": "gateway", "status": status, "service": service, "response": gateway}, sort_keys=True))
-            return 1
-        gateway_status = gateway.get("status") if isinstance(gateway, dict) else None
-        if gateway_status and gateway_status not in ("executed", "approved", "completed", "success"):
-            print(json.dumps({"ok": False, "stage": "gateway", "status": gateway_status, "service": service, "response": gateway}, sort_keys=True))
-            return 1
-        print(json.dumps({"ok": True, "service": service, "taskId": task_id}, sort_keys=True))
-        return 0
-
-    if command == "status":
-        print(json.dumps(load_state(), indent=2, sort_keys=True))
-        raise SystemExit(0)
-
-    if command == "verify-env":
-        raise SystemExit(verify_env())
-
-    if command == "verify-connection":
-        raise SystemExit(verify_connection())
-
-    if command == "report":
-        status = option("status")
-        section = option("section")
-        note = option("note")
-        if not status or not section:
-            print("report requires --status and --section", file=sys.stderr)
-            raise SystemExit(2)
-        state = load_state()
-        completed = list(state.get("completedSections") or [])
-        if status == "completed" and section not in completed:
-            completed.append(section)
-        state["completedSections"] = completed
-        state["nextSection"] = "" if status == "completed" else section
-        state["waitingForUser"] = note if status == "waiting_for_user" else None
-        state["lastFailure"] = note if status == "failed" else None
-        state["updatedAt"] = now()
-        save_state(state)
-        print(json.dumps({"ok": True, "status": status, "section": section}, sort_keys=True))
-        raise SystemExit(0)
-
-    print("unknown command: " + command, file=sys.stderr)
-    raise SystemExit(2)
-    PY
-    """
-
     static func gbrainAgentSystemPrompt(
         agentDisplayName: String,
         language: ZebraOnboardingLanguage = .current()
     ) -> String {
         """
-You are Zebra's Clawvisor onboarding helper. The user just clicked
-"Gmail 연결" in Zebra and was dropped into this \(agentDisplayName)
+You are Zebra's Source Onboarding Gmail helper. The user just started
+Gmail source onboarding in Zebra and was dropped into this \(agentDisplayName)
 session.
 
 Your job is to guide the user through Clawvisor's **Connect an Agent →
@@ -799,8 +499,8 @@ When the user pastes the env lines:
      `CLAWVISOR_TASK_ID`. Ignore old Zebra-only keys if they appear.
   2. Upsert only those three canonical keys into Zebra's env file while
      preserving unrelated lines, then restrict the file permissions.
-  3. Run `zebra-clawvisor-email-onboarding verify-env`.
-  4. Run `zebra-clawvisor-email-onboarding verify-connection`.
+  3. Run `zebra-source-onboarding gmail verify-env`.
+  4. Run `zebra-source-onboarding gmail verify-connection`.
      This helper performs the Clawvisor task lookup and Gmail gateway smoke
      check for you. Do not search the web for Clawvisor API docs and do not
      hand-write curl calls for this verification.

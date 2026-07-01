@@ -214,7 +214,7 @@ final class MarkdownSidebarOpeningTests: XCTestCase {
     @MainActor
     func testZebraSidebarMarkdownOpenSkipsNonChatPillAgentPanes() throws {
         try assertZebraSidebarMarkdownOpenSkipsAgentPane(
-            source: .clawvisorOnboarding,
+            source: .onboardingChecklist(.sourceOnboarding),
             agent: .claude
         )
         try assertZebraSidebarMarkdownOpenSkipsAgentPane(
@@ -226,7 +226,7 @@ final class MarkdownSidebarOpeningTests: XCTestCase {
     @MainActor
     func testStandaloneAgentLaunchCreatesCompanionSplitInsteadOfMarkingFocusedContentPane() throws {
         try assertStandaloneAgentLaunchCreatesCompanionSplit(
-            source: .clawvisorOnboarding,
+            source: .onboardingChecklist(.sourceOnboarding),
             agent: .claude
         )
         try assertStandaloneAgentLaunchCreatesCompanionSplit(
