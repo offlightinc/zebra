@@ -95,17 +95,20 @@ extension ZebraSourceOnboardingState {
         var normalizedSourceList: [String]
         var uncatalogedSources: [UncatalogedSource]
         var sourceConfirmation: SourceConfirmation?
+        var executionOrder: [String]?
+        var activeSourceID: String?
         var sourceRows: [String: SourceRow]
         var pendingQuestion: PendingQuestion?
-        // Deferred source-order slices:
+        // Deferred source-order slice:
         // var importanceOrder: [String]
-        // var finalExecutionOrder: [String]
 
         init(
             rawSourceInput: String? = nil,
             normalizedSourceList: [String] = [],
             uncatalogedSources: [UncatalogedSource] = [],
             sourceConfirmation: SourceConfirmation? = nil,
+            executionOrder: [String]? = nil,
+            activeSourceID: String? = nil,
             sourceRows: [String: SourceRow] = [:],
             pendingQuestion: PendingQuestion? = nil
         ) {
@@ -113,6 +116,8 @@ extension ZebraSourceOnboardingState {
             self.normalizedSourceList = normalizedSourceList
             self.uncatalogedSources = uncatalogedSources
             self.sourceConfirmation = sourceConfirmation
+            self.executionOrder = executionOrder
+            self.activeSourceID = activeSourceID
             self.sourceRows = sourceRows
             self.pendingQuestion = pendingQuestion
         }
@@ -123,6 +128,8 @@ extension ZebraSourceOnboardingState {
             case uncatalogedSources
             case unsupportedInputs
             case sourceConfirmation
+            case executionOrder
+            case activeSourceID
             case sourceRows
             case pendingQuestion
         }
@@ -145,6 +152,8 @@ extension ZebraSourceOnboardingState {
                 SourceConfirmation.self,
                 forKey: .sourceConfirmation
             )
+            executionOrder = try container.decodeIfPresent([String].self, forKey: .executionOrder)
+            activeSourceID = try container.decodeIfPresent(String.self, forKey: .activeSourceID)
             sourceRows = try container.decodeIfPresent(
                 [String: SourceRow].self,
                 forKey: .sourceRows
@@ -161,6 +170,8 @@ extension ZebraSourceOnboardingState {
             try container.encode(normalizedSourceList, forKey: .normalizedSourceList)
             try container.encode(uncatalogedSources, forKey: .uncatalogedSources)
             try container.encodeIfPresent(sourceConfirmation, forKey: .sourceConfirmation)
+            try container.encodeIfPresent(executionOrder, forKey: .executionOrder)
+            try container.encodeIfPresent(activeSourceID, forKey: .activeSourceID)
             try container.encode(sourceRows, forKey: .sourceRows)
             try container.encodeIfPresent(pendingQuestion, forKey: .pendingQuestion)
         }
@@ -194,7 +205,46 @@ extension ZebraSourceOnboardingState {
         var phase: String?
         var status: String
         var selectionState: String?
+        var playbookID: String?
+        var playbookVersion: String?
+        var playbookStepID: String?
+        var attentionReason: String?
+        var skipReason: String?
+        var resultSummary: String?
+        var runStatePath: String?
         var updatedAt: Date?
+
+        init(
+            id: String,
+            displayName: String? = nil,
+            type: String? = nil,
+            phase: String? = nil,
+            status: String,
+            selectionState: String? = nil,
+            playbookID: String? = nil,
+            playbookVersion: String? = nil,
+            playbookStepID: String? = nil,
+            attentionReason: String? = nil,
+            skipReason: String? = nil,
+            resultSummary: String? = nil,
+            runStatePath: String? = nil,
+            updatedAt: Date? = nil
+        ) {
+            self.id = id
+            self.displayName = displayName
+            self.type = type
+            self.phase = phase
+            self.status = status
+            self.selectionState = selectionState
+            self.playbookID = playbookID
+            self.playbookVersion = playbookVersion
+            self.playbookStepID = playbookStepID
+            self.attentionReason = attentionReason
+            self.skipReason = skipReason
+            self.resultSummary = resultSummary
+            self.runStatePath = runStatePath
+            self.updatedAt = updatedAt
+        }
     }
 
     struct PendingQuestion: Codable, Equatable, Sendable {

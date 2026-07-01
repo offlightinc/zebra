@@ -518,12 +518,16 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(line.contains("zebra-source-onboarding intake"), line)
         XCTAssertTrue(line.contains("zebra-source-onboarding confirm --answer yes"), line)
         XCTAssertTrue(line.contains("zebra-source-onboarding status --json"), line)
+        XCTAssertTrue(line.contains("zebra-source-onboarding next"), line)
         XCTAssertTrue(line.contains("status --json first"), line)
         XCTAssertTrue(line.contains("pending source confirmation"), line)
         XCTAssertTrue(line.contains("which sources Zebra should understand for this first source intake"), line)
         XCTAssertTrue(line.contains("Normalize source aliases into source candidates"), line)
         XCTAssertTrue(line.contains("uncataloged sources"), line)
         XCTAssertTrue(line.contains("must include every source the user named"), line)
+        XCTAssertTrue(line.contains("Gmail/Clawvisor runner"), line)
+        XCTAssertTrue(line.contains("Do not implement or start Notion, Obsidian, or iMessage runners"), line)
+        XCTAssertTrue(line.contains("nextPromptPath"), line)
         XCTAssertFalse(line.contains("unsupported inputs"), line)
         XCTAssertFalse(line.contains("--unsupported"), line)
         XCTAssertTrue(line.contains("saved state path"), line)
@@ -541,8 +545,6 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(line.contains("final ingest execution order"), line)
         XCTAssertFalse(line.contains("Do not write progress.importanceOrder"), line)
         XCTAssertFalse(line.contains("Do not run recovery"), line)
-        XCTAssertFalse(line.contains("source-specific integration"), line)
-        XCTAssertFalse(line.contains("smoke-test"), line)
         XCTAssertFalse(line.contains("ingest commands"), line)
         XCTAssertFalse(line.contains("Do not start source interviews"), line)
         XCTAssertFalse(line.contains("run a limited initial ingest"), line)
@@ -804,6 +806,166 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSourceOnboardingHelperNextStartsGmailRunnerAndWritesPromptPath() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+        ]
+
+        let intake = try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "지메일", "--candidate", "gmail=지메일"],
+            environment: environment
+        )
+        XCTAssertEqual(intake.status, 0, "stdout:\n\(intake.stdout)\nstderr:\n\(intake.stderr)")
+        let confirm = try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        )
+        XCTAssertEqual(confirm.status, 0, "stdout:\n\(confirm.stdout)\nstderr:\n\(confirm.stderr)")
+
+        let next = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+
+        XCTAssertEqual(next.status, 0, "stdout:\n\(next.stdout)\nstderr:\n\(next.stderr)")
+        let payload = try jsonObject(from: next.stdout)
+        XCTAssertEqual(payload["nextSourceID"] as? String, "gmail")
+        XCTAssertEqual(payload["nextPlaybookID"] as? String, "gmail.clawvisor-gbrain")
+        XCTAssertEqual(payload["nextPlaybookVersion"] as? String, "v1")
+        XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "connect_clawvisor")
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+        let nextPromptPath = try XCTUnwrap(payload["nextPromptPath"] as? String)
+        let promptFile = try String(contentsOfFile: nextPromptPath, encoding: .utf8)
+        XCTAssertEqual(promptFile.trimmingCharacters(in: .whitespacesAndNewlines), nextPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertTrue(nextPrompt.contains("Do not start Notion, Obsidian, iMessage"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("Zebra는 Clawvisor를 통해 Gmail, Calendar, Contacts 접근 권한을 안전하게 연결합니다."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("아래 순서대로 진행하세요."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("1. https://app.clawvisor.com/register 을 열고 Google로 sign up 또는 sign in 하세요."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("2. Clawvisor에서 왼쪽 sidebar의 Agents를 열고 GBrain을 선택한 뒤 Create GBrain agent를 클릭하세요."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("3. Google service authorization과 task approval을 이어서 진행하세요."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("4. 마지막 Env vars step에 도달하면 세 줄의 export env lines를 이 터미널에 그대로 붙여넣으세요."), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("zebra-source-onboarding gmail verify-env"), nextPrompt)
+
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.status, .running)
+        XCTAssertEqual(loaded.progress.executionOrder, ["gmail"])
+        XCTAssertEqual(loaded.progress.activeSourceID, "gmail")
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.status, "running")
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.phase, "connect")
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.playbookID, "gmail.clawvisor-gbrain")
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.playbookVersion, "v1")
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.playbookStepID, "connect_clawvisor")
+    }
+
+    @MainActor
+    func testSourceOnboardingGmailVerifyEnvAdvancesRunnerToVerifyConnection() throws {
+        let root = try makeTemporaryDirectory()
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=https://app.clawvisor.com
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            CLAWVISOR_TASK_ID=task_test
+            """,
+            homeURL: root
+        )
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+        ]
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "지메일", "--candidate", "gmail=지메일"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        ).status, 0)
+
+        let result = try runProcess(
+            executableURL: helperURL,
+            arguments: ["gmail", "verify-env"],
+            environment: environment
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        let payload = try jsonObject(from: result.stdout)
+        XCTAssertEqual(payload["nextSourceID"] as? String, "gmail")
+        XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "verify_connection")
+        let nextPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+        let nextPromptPath = try XCTUnwrap(payload["nextPromptPath"] as? String)
+        XCTAssertTrue(nextPrompt.contains("zebra-source-onboarding gmail verify-connection"), nextPrompt)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: nextPromptPath))
+
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.sourceReadiness.gmail.status, .unverified)
+        XCTAssertEqual(loaded.progress.activeSourceID, "gmail")
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.status, "running")
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.phase, "smoke")
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.playbookStepID, "verify_connection")
+
+        let resumed = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+        XCTAssertEqual(resumed.status, 0, "stdout:\n\(resumed.stdout)\nstderr:\n\(resumed.stderr)")
+        let resumedPayload = try jsonObject(from: resumed.stdout)
+        XCTAssertEqual(resumedPayload["nextSourceID"] as? String, "gmail")
+        XCTAssertEqual(resumedPayload["nextPlaybookStepID"] as? String, "verify_connection")
+        let resumedState = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(resumedState.progress.sourceRows["gmail"]?.phase, "smoke")
+        XCTAssertEqual(resumedState.progress.sourceRows["gmail"]?.playbookStepID, "verify_connection")
+    }
+
+    @MainActor
     func testSourceOnboardingGmailHelperVerifyEnvWritesMissingState() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
@@ -965,6 +1127,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
             "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
         ]
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "지메일", "--candidate", "gmail=지메일"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        ).status, 0)
 
         let result = try runProcess(
             executableURL: helperURL,
@@ -974,10 +1151,16 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         XCTAssertEqual(result.status, 1, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertFalse(result.stderr.contains("Traceback"), result.stderr)
+        let payload = try jsonObject(from: result.stdout)
+        XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "verify_connection")
+        XCTAssertNotNil(payload["nextPromptPath"])
         let loaded = try readSourceOnboardingState(at: stateURL)
         XCTAssertEqual(loaded.sourceReadiness.gmail.status, .attention)
         XCTAssertEqual(loaded.sourceReadiness.gmail.repairKind, "task_request_failed")
         XCTAssertTrue(loaded.sourceReadiness.gmail.reasons.first?.hasPrefix("task_request_failed:") == true)
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.status, "attention")
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.phase, "smoke")
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.playbookStepID, "verify_connection")
     }
 
     @MainActor

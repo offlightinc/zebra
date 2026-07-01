@@ -298,6 +298,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         let cachedGBrainCompletion = gbrainCompletionResultFromCachedReceipt(
             selectedVaultPath: selectedVaultPath
         )
+        let sourceOnboardingCompletion = sourceOnboardingCompletionResult()
         let adapterCompletion = adapterCompletionResult(
             selectedVaultPath: selectedVaultPath
         )
@@ -305,6 +306,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             agentCompleted: agentCompletionResult().isComplete,
             gbrainRuntimeCompletion: runtimeCompletion,
             gbrainCompleted: cachedGBrainCompletion.isComplete,
+            sourceOnboardingCompleted: sourceOnboardingCompletion.isComplete,
             gbrainAdapterCompleted: adapterCompletion.isComplete
         )
     }
@@ -330,6 +332,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                 result: adapterCompletionResult(selectedVaultPath: selectedVaultPath)
             )
         case .sourceOnboarding:
+            applyDetectedCompletion(for: .sourceOnboarding, result: sourceOnboardingCompletionResult())
             invalidateSubstepSnapshots()
         case .goals:
             break
@@ -348,6 +351,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         agentCompleted: Bool,
         gbrainRuntimeCompletion: StepCompletionResult,
         gbrainCompleted: Bool,
+        sourceOnboardingCompleted: Bool,
         gbrainAdapterCompleted: Bool
     ) {
         var completed = Set<ZebraOnboardingChecklistStepID>()
@@ -360,6 +364,9 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         }
         if gbrainCompleted {
             completed.insert(.gbrain)
+        }
+        if sourceOnboardingCompleted {
+            completed.insert(.sourceOnboarding)
         }
         if gbrainAdapterCompleted {
             completed.insert(.adapter)
@@ -567,6 +574,31 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         return try? decoder.decode(ZebraSourceOnboardingState.self, from: data)
     }
 
+    private func sourceOnboardingCompletionResult() -> StepCompletionResult {
+        guard let state = loadSourceOnboardingState() else {
+            return StepCompletionResult(isComplete: false, reasons: ["source_onboarding_state_missing"])
+        }
+        guard state.status == .completed else {
+            return StepCompletionResult(isComplete: false, reasons: ["source_onboarding_not_completed"])
+        }
+        let executionOrder = state.progress.executionOrder ?? state.progress.normalizedSourceList
+        guard !executionOrder.isEmpty else {
+            return StepCompletionResult(isComplete: false, reasons: ["source_execution_order_missing"])
+        }
+        for sourceID in executionOrder {
+            guard let row = state.progress.sourceRows[sourceID] else {
+                return StepCompletionResult(isComplete: false, reasons: ["source_row_missing:\(sourceID)"])
+            }
+            guard row.status == "checked" || row.status == "skipped" else {
+                return StepCompletionResult(isComplete: false, reasons: ["source_row_incomplete:\(sourceID)"])
+            }
+        }
+        if state.progress.sourceRows.values.contains(where: { $0.status == "attention" }) {
+            return StepCompletionResult(isComplete: false, reasons: ["source_row_attention"])
+        }
+        return StepCompletionResult(isComplete: true, reasons: [])
+    }
+
     func sourceOnboardingSubstepsFromCachedState() -> [ZebraOnboardingChecklistSubstepSnapshot] {
         guard let state = loadSourceOnboardingState() else { return [] }
         var substeps: [ZebraOnboardingChecklistSubstepSnapshot] = []
@@ -594,13 +626,14 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             id: "source-row-\(row.id)",
             title: row.displayName ?? row.id,
             detail: nil,
-            isCompleted: false,
+            isCompleted: row.status == "checked",
             isActive: false,
             isWaitingForUser: row.selectionState == "pending_confirmation",
             isRunning: row.status == "running",
             showsStart: false,
             wasStartedBefore: true,
-            isAttention: row.status == "attention"
+            isAttention: row.status == "attention",
+            isSkipped: row.status == "skipped"
         )
     }
 
@@ -991,6 +1024,9 @@ public enum ZebraOnboardingChecklistCommand {
         - Keep inputs that are not in the current catalog as uncataloged sources; do not describe them to the user as unavailable or impossible.
         - The source-list confirmation question must include every source the user named, including uncataloged sources.
         - Use the zebra-source-onboarding helper as the Source Onboarding state write path.
+        - After source-list confirmation, run only the Gmail/Clawvisor runner if Gmail is the next active source.
+        - Do not implement or start Notion, Obsidian, or iMessage runners in this session.
+        - Do not edit source-onboarding-state.json directly; continue only from helper stdout `nextPrompt` and use `nextPromptPath` only as the file fallback.
 
         Helper flow:
         1. Run zebra-source-onboarding status --json first to create or inspect the current compact state.
@@ -1001,7 +1037,9 @@ public enum ZebraOnboardingChecklistCommand {
            zebra-source-onboarding intake --raw "옵시디언, 지메일 슬랙" --candidate obsidian=옵시디언 --candidate gmail=지메일 --uncataloged slack=슬랙
         5. Ask the source-list confirmation question from the helper output.
         6. Run zebra-source-onboarding confirm --answer yes or zebra-source-onboarding confirm --answer no.
-        7. Run zebra-source-onboarding status --json and report the saved state path plus compact saved-state summary.
+        7. If the confirmation was yes, run zebra-source-onboarding next.
+        8. If `next` returns a Gmail `nextPrompt`, follow that prompt exactly until Gmail is checked or needs attention.
+        9. Run zebra-source-onboarding status --json and report the saved state path plus compact saved-state summary.
 
         GBrain live probe policy:
         - Prefer the Step 3 receipt when it is complete and consistent.
