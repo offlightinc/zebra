@@ -522,8 +522,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(line.contains("pending source confirmation"), line)
         XCTAssertTrue(line.contains("which sources Zebra should understand for this first source intake"), line)
         XCTAssertTrue(line.contains("Normalize source aliases into source candidates"), line)
-        XCTAssertTrue(line.contains("sources Zebra cannot handle yet"), line)
-        XCTAssertTrue(line.contains("unsupported inputs"), line)
+        XCTAssertTrue(line.contains("uncataloged sources"), line)
+        XCTAssertTrue(line.contains("must include every source the user named"), line)
+        XCTAssertFalse(line.contains("unsupported inputs"), line)
+        XCTAssertFalse(line.contains("--unsupported"), line)
         XCTAssertTrue(line.contains("saved state path"), line)
         XCTAssertTrue(line.contains("--timeout=3600s"), line)
         XCTAssertTrue(line.contains("Prefer the Step 3 receipt"), line)
@@ -553,26 +555,27 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(result.normalizedSourceList, ["notion", "gmail", "imessage"])
-        XCTAssertTrue(result.unsupportedInputs.isEmpty)
+        XCTAssertTrue(result.uncatalogedSources.isEmpty)
         XCTAssertEqual(result.sourceRows["notion"]?.displayName, "Notion")
         XCTAssertEqual(result.sourceRows["gmail"]?.type, "email")
         XCTAssertEqual(result.sourceRows["imessage"]?.selectionState, "pending_confirmation")
     }
 
-    func testSourceOnboardingCatalogRecordsUnsupportedKnownSources() {
+    func testSourceOnboardingCatalogRecordsUncatalogedKnownSources() {
         let result = ZebraSourceOnboardingCatalog.normalize(
             rawSourceInput: "gmail, slack, apple notes, 애플 리마인더, obsidian"
         )
 
         XCTAssertEqual(result.normalizedSourceList, ["gmail", "obsidian"])
         XCTAssertEqual(
-            result.unsupportedInputs.map(\.normalizedValue),
+            result.uncatalogedSources.map(\.normalizedValue),
             ["slack", "apple-notes", "apple-reminders"]
         )
         XCTAssertEqual(
-            Set(result.unsupportedInputs.map(\.reason)),
-            ["not_supported_yet"]
+            Set(result.uncatalogedSources.map(\.reason)),
+            ["not_in_current_catalog"]
         )
+        XCTAssertEqual(result.confirmationPrompt, "Gmail, Slack, Apple Notes, Apple Reminders, Obsidian로 이해했습니다. 맞나요?")
     }
 
     @MainActor
@@ -605,7 +608,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(persisted.sourceReadiness.gmail.status, .ready)
         XCTAssertEqual(persisted.progress.rawSourceInput, "지메일, 옵시디언, 슬랙도 있어")
         XCTAssertEqual(persisted.progress.normalizedSourceList, ["gmail", "obsidian"])
-        XCTAssertEqual(persisted.progress.unsupportedInputs.map(\.normalizedValue), ["slack"])
+        XCTAssertEqual(persisted.progress.uncatalogedSources.map(\.normalizedValue), ["slack"])
+        XCTAssertEqual(persisted.progress.sourceConfirmation?.prompt, "Gmail, Obsidian, Slack로 이해했습니다. 맞나요?")
         XCTAssertEqual(persisted.progress.sourceConfirmation?.status, .pending)
         XCTAssertEqual(persisted.progress.sourceConfirmation?.sourceIDs, ["gmail", "obsidian"])
         XCTAssertEqual(persisted.progress.pendingQuestion?.status, "pending_source_confirmation")
@@ -670,24 +674,26 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 "--raw", "옵시디언, 지메일 슬랙",
                 "--candidate", "obsidian=옵시디언",
                 "--candidate", "gmail=지메일",
-                "--unsupported", "slack=슬랙",
+                "--uncataloged", "slack=슬랙",
             ],
             environment: environment
         )
         XCTAssertEqual(intake.status, 0, "stdout:\n\(intake.stdout)\nstderr:\n\(intake.stderr)")
         let intakePayload = try jsonObject(from: intake.stdout)
         XCTAssertEqual(intakePayload["normalizedSourceList"] as? [String], ["obsidian", "gmail"])
-        XCTAssertEqual(intakePayload["unsupportedInputs"] as? [String], ["slack"])
+        XCTAssertEqual(intakePayload["uncatalogedSources"] as? [String], ["slack"])
+        XCTAssertNil(intakePayload["unsupportedInputs"])
         XCTAssertEqual(intakePayload["sourceConfirmationStatus"] as? String, "pending")
-        XCTAssertTrue((intakePayload["confirmationPrompt"] as? String)?.contains("Obsidian, Gmail") == true)
+        XCTAssertEqual(intakePayload["confirmationPrompt"] as? String, "Obsidian, Gmail, Slack로 이해했습니다. 맞나요?")
 
         let store = makeChecklistStore(homeURL: root)
         let loaded = try XCTUnwrap(store.loadSourceOnboardingState())
         XCTAssertEqual(loaded.status, .attention)
         XCTAssertEqual(loaded.progress.rawSourceInput, "옵시디언, 지메일 슬랙")
         XCTAssertEqual(loaded.progress.normalizedSourceList, ["obsidian", "gmail"])
-        XCTAssertEqual(loaded.progress.unsupportedInputs.map(\.normalizedValue), ["slack"])
-        XCTAssertEqual(loaded.progress.unsupportedInputs.first?.rawValue, "슬랙")
+        XCTAssertEqual(loaded.progress.uncatalogedSources.map(\.normalizedValue), ["slack"])
+        XCTAssertEqual(loaded.progress.uncatalogedSources.first?.rawValue, "슬랙")
+        XCTAssertEqual(loaded.progress.uncatalogedSources.first?.reason, "not_in_current_catalog")
         XCTAssertEqual(loaded.progress.sourceRows["obsidian"]?.selectionState, "pending_confirmation")
         XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.selectionState, "pending_confirmation")
         XCTAssertNil(loaded.progress.sourceRows["slack"])
@@ -701,9 +707,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertNil(progress["step"])
         XCTAssertTrue(progress["sourceRows"] is [String: Any])
         XCTAssertFalse(progress["sourceRows"] is [[String: Any]])
-        let unsupported = try XCTUnwrap(progress["unsupportedInputs"] as? [[String: Any]])
-        XCTAssertEqual(unsupported.first?["rawValue"] as? String, "슬랙")
-        XCTAssertNil(unsupported.first?["supportedCatalog"])
+        XCTAssertNil(progress["unsupportedInputs"])
+        let uncataloged = try XCTUnwrap(progress["uncatalogedSources"] as? [[String: Any]])
+        XCTAssertEqual(uncataloged.first?["rawValue"] as? String, "슬랙")
+        XCTAssertEqual(uncataloged.first?["reason"] as? String, "not_in_current_catalog")
+        XCTAssertNil(uncataloged.first?["supportedCatalog"])
         let gmail = try XCTUnwrap((sourceReadiness["gmail"] as? [String: Any]))
         XCTAssertNotEqual(gmail["status"] as? String, "candidate")
         XCTAssertNotEqual(gmail["connectionPath"] as? String, emailArtifact.path)
@@ -727,7 +735,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertNil(sourceSubsteps.first { $0.id == "source-confirmation" })
         let obsidianSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "source-row-obsidian" })
         let gmailSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "source-row-gmail" })
-        let slackSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "unsupported-source-slack" })
+        let slackSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "uncataloged-source-slack" })
         XCTAssertNil(sourceSubsteps.first { $0.id == "gmail-readiness" })
 
         XCTAssertEqual(obsidianSubstep.title, "Obsidian")

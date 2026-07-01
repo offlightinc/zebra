@@ -512,11 +512,11 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     ) throws -> ZebraSourceOnboardingState {
         let normalized = ZebraSourceOnboardingCatalog.normalize(rawSourceInput: rawSourceInput)
         var state = sourceOnboardingPreviewState(now: now)
-        state.status = normalized.unsupportedInputs.isEmpty ? .running : .attention
+        state.status = normalized.uncatalogedSources.isEmpty ? .running : .attention
         state.progress = ZebraSourceOnboardingState.Progress(
             rawSourceInput: normalized.rawSourceInput,
             normalizedSourceList: normalized.normalizedSourceList,
-            unsupportedInputs: normalized.unsupportedInputs,
+            uncatalogedSources: normalized.uncatalogedSources,
             sourceConfirmation: ZebraSourceOnboardingState.SourceConfirmation(
                 sourceIDs: normalized.normalizedSourceList,
                 prompt: normalized.confirmationPrompt,
@@ -540,7 +540,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         let sourceIDs = state.progress.normalizedSourceList
         let prompt = state.progress.sourceConfirmation?.prompt
             ?? ZebraSourceOnboardingCatalog.confirmationPrompt(for: sourceIDs)
-        state.status = state.progress.unsupportedInputs.isEmpty ? .ready : .attention
+        state.status = state.progress.uncatalogedSources.isEmpty ? .ready : .attention
         state.progress.sourceConfirmation = ZebraSourceOnboardingState.SourceConfirmation(
             sourceIDs: sourceIDs,
             prompt: prompt,
@@ -580,8 +580,8 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             substeps.append(sourceRowSubstep(row))
         }
 
-        for unsupported in state.progress.unsupportedInputs {
-            substeps.append(unsupportedSourceSubstep(unsupported))
+        for uncataloged in state.progress.uncatalogedSources {
+            substeps.append(uncatalogedSourceSubstep(uncataloged))
         }
 
         return substeps
@@ -604,12 +604,12 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         )
     }
 
-    private func unsupportedSourceSubstep(
-        _ unsupported: ZebraSourceOnboardingState.UnsupportedSourceInput
+    private func uncatalogedSourceSubstep(
+        _ uncataloged: ZebraSourceOnboardingState.UncatalogedSource
     ) -> ZebraOnboardingChecklistSubstepSnapshot {
         ZebraOnboardingChecklistSubstepSnapshot(
-            id: "unsupported-source-\(unsupported.normalizedValue)",
-            title: unsupported.displayName ?? unsupported.rawValue,
+            id: "uncataloged-source-\(uncataloged.normalizedValue)",
+            title: uncataloged.displayName ?? uncataloged.rawValue,
             detail: nil,
             isCompleted: false,
             isActive: false,
@@ -987,8 +987,9 @@ public enum ZebraOnboardingChecklistCommand {
         Scope for this run:
         - Use the Step 3 GBrain setup receipt as the primary target readiness source.
         - Ask which sources Zebra should understand for this first source intake.
-        - Normalize source aliases into source candidates when Zebra can handle them.
-        - Treat sources Zebra cannot handle yet as unsupported inputs.
+        - Normalize source aliases into source candidates when they are in the current source catalog.
+        - Keep inputs that are not in the current catalog as uncataloged sources; do not describe them to the user as unavailable or impossible.
+        - The source-list confirmation question must include every source the user named, including uncataloged sources.
         - Use the zebra-source-onboarding helper as the Source Onboarding state write path.
 
         Helper flow:
@@ -997,7 +998,7 @@ public enum ZebraOnboardingChecklistCommand {
         3. If no source input has been recorded yet, ask the user for free-text source input.
         4. Run zebra-source-onboarding intake with the raw answer and your extracted candidates.
            Example:
-           zebra-source-onboarding intake --raw "옵시디언, 지메일 슬랙" --candidate obsidian=옵시디언 --candidate gmail=지메일 --unsupported slack=슬랙
+           zebra-source-onboarding intake --raw "옵시디언, 지메일 슬랙" --candidate obsidian=옵시디언 --candidate gmail=지메일 --uncataloged slack=슬랙
         5. Ask the source-list confirmation question from the helper output.
         6. Run zebra-source-onboarding confirm --answer yes or zebra-source-onboarding confirm --answer no.
         7. Run zebra-source-onboarding status --json and report the saved state path plus compact saved-state summary.

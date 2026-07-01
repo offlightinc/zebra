@@ -145,7 +145,7 @@ struct ZebraSourceOnboardingHelper {
         },
     }
 
-    unsupported_catalog = {
+    uncataloged_catalog = {
         "slack": {"displayName": "Slack", "aliases": ["slack", "슬랙"]},
         "apple-notes": {"displayName": "Apple Notes", "aliases": ["apple notes", "apple note", "애플 메모"]},
         "apple-reminders": {"displayName": "Apple Reminders", "aliases": ["apple reminders", "apple reminder", "애플 리마인더", "reminders", "reminder"]},
@@ -161,6 +161,18 @@ struct ZebraSourceOnboardingHelper {
             return value if isinstance(value, dict) else {}
         except Exception:
             return {}
+
+    def migrate_source_state(value):
+        progress = value.get("progress") if isinstance(value.get("progress"), dict) else None
+        if progress is None:
+            return False
+        legacy = progress.get("unsupportedInputs")
+        if "uncatalogedSources" not in progress and isinstance(legacy, list):
+            progress["uncatalogedSources"] = legacy
+        if "unsupportedInputs" in progress:
+            progress.pop("unsupportedInputs", None)
+            return True
+        return False
 
     def save_json(value):
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -282,7 +294,7 @@ struct ZebraSourceOnboardingHelper {
     def parse_intake_args():
         raw = ""
         candidates = []
-        unsupported = []
+        uncataloged = []
         index = 0
         while index < len(args):
             token = args[index]
@@ -292,8 +304,8 @@ struct ZebraSourceOnboardingHelper {
             elif token == "--candidate" and index + 1 < len(args):
                 candidates.append(split_pair(args[index + 1]))
                 index += 2
-            elif token == "--unsupported" and index + 1 < len(args):
-                unsupported.append(split_pair(args[index + 1]))
+            elif token == "--uncataloged" and index + 1 < len(args):
+                uncataloged.append(split_pair(args[index + 1]))
                 index += 2
             else:
                 print("unknown or incomplete argument: " + token, file=sys.stderr)
@@ -301,7 +313,7 @@ struct ZebraSourceOnboardingHelper {
         if not raw.strip():
             print("--raw is required", file=sys.stderr)
             sys.exit(2)
-        return raw, candidates, unsupported
+        return raw, candidates, uncataloged
 
     def best_alias_match(raw, aliases):
         lower_raw = raw.lower()
@@ -324,18 +336,18 @@ struct ZebraSourceOnboardingHelper {
             match = best_alias_match(raw, definition["aliases"])
             if match:
                 matches.append((match[0], source_id, match[1]))
-        for source_id, definition in unsupported_catalog.items():
+        for source_id, definition in uncataloged_catalog.items():
             match = best_alias_match(raw, definition["aliases"])
             if match:
                 matches.append((match[0], source_id, match[1]))
         return [(source_id, raw_value) for _, source_id, raw_value in sorted(matches)]
 
-    def add_unsupported(items, seen, source_id, raw_value, reason="not_supported_yet"):
+    def add_uncataloged(items, seen, source_id, raw_value, reason="not_in_current_catalog"):
         normalized = source_id.strip().lower()
         if not normalized or normalized in seen:
             return
         seen.add(normalized)
-        display = unsupported_catalog.get(normalized, {}).get("displayName")
+        display = uncataloged_catalog.get(normalized, {}).get("displayName")
         items.append({
             "rawValue": raw_value or normalized,
             "normalizedValue": normalized,
@@ -343,34 +355,52 @@ struct ZebraSourceOnboardingHelper {
             "reason": reason,
         })
 
-    def confirmation_prompt(source_ids):
-        if not source_ids:
+    def source_display_name(source_id, raw_value=None):
+        if source_id in supported:
+            return supported[source_id]["displayName"]
+        return uncataloged_catalog.get(source_id, {}).get("displayName") or raw_value or source_id
+
+    def confirmation_prompt(display_names):
+        if not display_names:
             return "아직 Zebra가 처리할 수 있는 source를 확인하지 못했습니다. Zebra가 이해해야 할 source를 자유롭게 적어주세요."
-        names = ", ".join(supported[source_id]["displayName"] for source_id in source_ids)
+        names = ", ".join(display_names)
         return names + "로 이해했습니다. 맞나요?"
 
     def intake():
-        raw, candidates, unsupported_pairs = parse_intake_args()
+        raw, candidates, uncataloged_pairs = parse_intake_args()
         source_ids = []
         seen_sources = set()
-        unsupported_inputs = []
-        seen_unsupported = set()
+        uncataloged_sources = []
+        seen_uncataloged = set()
+        prompt_names = []
+        seen_prompt = set()
 
-        def consider(source_id, raw_value):
+        def remember_prompt(source_id, raw_value=None):
+            normalized = source_id.strip().lower()
+            if normalized and normalized not in seen_prompt:
+                seen_prompt.add(normalized)
+                prompt_names.append(source_display_name(normalized, raw_value))
+
+        def consider(source_id, raw_value, include_prompt=True):
             normalized = source_id.strip().lower()
             if normalized in supported:
                 if normalized not in seen_sources:
                     seen_sources.add(normalized)
                     source_ids.append(normalized)
+                    if include_prompt:
+                        remember_prompt(normalized, raw_value)
             else:
-                add_unsupported(unsupported_inputs, seen_unsupported, normalized, raw_value)
+                before = len(uncataloged_sources)
+                add_uncataloged(uncataloged_sources, seen_uncataloged, normalized, raw_value)
+                if include_prompt and len(uncataloged_sources) > before:
+                    remember_prompt(normalized, raw_value)
 
-        for source_id, raw_value in candidates:
-            consider(source_id, raw_value)
         for source_id, raw_value in scan_aliases(raw):
             consider(source_id, raw_value)
-        for source_id, raw_value in unsupported_pairs:
-            add_unsupported(unsupported_inputs, seen_unsupported, source_id, raw_value)
+        for source_id, raw_value in candidates:
+            consider(source_id, raw_value, include_prompt=True)
+        for source_id, raw_value in uncataloged_pairs:
+            consider(source_id, raw_value, include_prompt=True)
 
         timestamp = now()
         rows = {}
@@ -385,16 +415,16 @@ struct ZebraSourceOnboardingHelper {
                 "selectionState": "pending_confirmation",
                 "updatedAt": timestamp,
             }
-        prompt = confirmation_prompt(source_ids)
+        prompt = confirmation_prompt(prompt_names)
         state = {
             "schemaVersion": 1,
-            "status": "attention" if unsupported_inputs else "running",
+            "status": "attention" if uncataloged_sources else "running",
             "entryContext": entry_context(),
             "sourceReadiness": {"gmail": gmail_readiness()},
             "progress": {
                 "rawSourceInput": raw,
                 "normalizedSourceList": source_ids,
-                "unsupportedInputs": unsupported_inputs,
+                "uncatalogedSources": uncataloged_sources,
                 "sourceConfirmation": {
                     "sourceIDs": source_ids,
                     "prompt": prompt,
@@ -433,11 +463,17 @@ struct ZebraSourceOnboardingHelper {
     def confirm():
         answer = parse_answer()
         state = load_json(state_path)
+        migrate_source_state(state)
         progress = state.get("progress") if isinstance(state.get("progress"), dict) else {}
         source_ids = progress.get("normalizedSourceList") if isinstance(progress.get("normalizedSourceList"), list) else []
         timestamp = now()
         previous = progress.get("sourceConfirmation") if isinstance(progress.get("sourceConfirmation"), dict) else {}
-        prompt = previous.get("prompt") or confirmation_prompt(source_ids)
+        uncataloged_sources = progress.get("uncatalogedSources") if isinstance(progress.get("uncatalogedSources"), list) else progress.get("unsupportedInputs") if isinstance(progress.get("unsupportedInputs"), list) else []
+        display_names = [source_display_name(source_id) for source_id in source_ids]
+        for item in uncataloged_sources:
+            if isinstance(item, dict):
+                display_names.append(item.get("displayName") or item.get("rawValue") or item.get("normalizedValue"))
+        prompt = previous.get("prompt") or confirmation_prompt([name for name in display_names if name])
         is_yes = answer in {"yes", "y"}
         progress["sourceConfirmation"] = {
             "sourceIDs": source_ids,
@@ -462,9 +498,9 @@ struct ZebraSourceOnboardingHelper {
             }
         progress["sourceRows"] = rows
         state["progress"] = progress
-        unsupported_inputs = progress.get("unsupportedInputs") if isinstance(progress.get("unsupportedInputs"), list) else []
+        uncataloged_sources = progress.get("uncatalogedSources") if isinstance(progress.get("uncatalogedSources"), list) else progress.get("unsupportedInputs") if isinstance(progress.get("unsupportedInputs"), list) else []
         if is_yes:
-            state["status"] = "attention" if unsupported_inputs else "ready"
+            state["status"] = "attention" if uncataloged_sources else "ready"
         else:
             state["status"] = "running"
         state["updatedAt"] = timestamp
@@ -473,14 +509,14 @@ struct ZebraSourceOnboardingHelper {
 
     def summary(state, prompt=None):
         progress = state.get("progress") if isinstance(state.get("progress"), dict) else {}
-        unsupported = progress.get("unsupportedInputs") if isinstance(progress.get("unsupportedInputs"), list) else []
+        uncataloged = progress.get("uncatalogedSources") if isinstance(progress.get("uncatalogedSources"), list) else progress.get("unsupportedInputs") if isinstance(progress.get("unsupportedInputs"), list) else []
         confirmation = progress.get("sourceConfirmation") if isinstance(progress.get("sourceConfirmation"), dict) else {}
         return {
             "ok": True,
             "statePath": str(state_path),
             "status": state.get("status"),
             "normalizedSourceList": progress.get("normalizedSourceList") or [],
-            "unsupportedInputs": [item.get("normalizedValue") for item in unsupported if isinstance(item, dict)],
+            "uncatalogedSources": [item.get("normalizedValue") for item in uncataloged if isinstance(item, dict)],
             "sourceConfirmationStatus": confirmation.get("status"),
             "confirmationPrompt": prompt or confirmation.get("prompt"),
         }
@@ -497,13 +533,15 @@ struct ZebraSourceOnboardingHelper {
                 "progress": {
                     "rawSourceInput": None,
                     "normalizedSourceList": [],
-                    "unsupportedInputs": [],
+                    "uncatalogedSources": [],
                     "sourceConfirmation": None,
                     "sourceRows": {},
                     "pendingQuestion": None,
                 },
                 "updatedAt": timestamp,
             }
+            save_json(state)
+        elif migrate_source_state(state):
             save_json(state)
         payload = summary(state)
         payload["state"] = state

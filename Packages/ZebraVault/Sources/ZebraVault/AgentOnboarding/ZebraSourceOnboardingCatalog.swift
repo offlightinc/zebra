@@ -8,7 +8,7 @@ enum ZebraSourceOnboardingCatalog {
         var aliases: [String]
     }
 
-    struct UnsupportedDefinition: Equatable, Sendable {
+    struct UncatalogedDefinition: Equatable, Sendable {
         var id: String
         var displayName: String
         var aliases: [String]
@@ -17,7 +17,7 @@ enum ZebraSourceOnboardingCatalog {
     struct NormalizationResult: Equatable, Sendable {
         var rawSourceInput: String
         var normalizedSourceList: [String]
-        var unsupportedInputs: [ZebraSourceOnboardingState.UnsupportedSourceInput]
+        var uncatalogedSources: [ZebraSourceOnboardingState.UncatalogedSource]
         var sourceRows: [String: ZebraSourceOnboardingState.SourceRow]
         var confirmationPrompt: String
     }
@@ -49,18 +49,18 @@ enum ZebraSourceOnboardingCatalog {
         ),
     ]
 
-    static let unsupportedSources: [UnsupportedDefinition] = [
-        UnsupportedDefinition(
+    static let uncatalogedSourceHints: [UncatalogedDefinition] = [
+        UncatalogedDefinition(
             id: "slack",
             displayName: "Slack",
             aliases: ["slack", "슬랙"]
         ),
-        UnsupportedDefinition(
+        UncatalogedDefinition(
             id: "apple-notes",
             displayName: "Apple Notes",
             aliases: ["apple notes", "apple note", "애플 메모"]
         ),
-        UnsupportedDefinition(
+        UncatalogedDefinition(
             id: "apple-reminders",
             displayName: "Apple Reminders",
             aliases: ["apple reminders", "apple reminder", "애플 리마인더", "reminders", "reminder"]
@@ -68,41 +68,52 @@ enum ZebraSourceOnboardingCatalog {
     ]
 
     static func normalize(rawSourceInput: String) -> NormalizationResult {
-        let supportedMatches = supportedSources.compactMap { definition -> SourceMatch? in
-            earliestMatch(
-                in: rawSourceInput,
-                aliases: definition.aliases,
-                id: definition.id,
-                displayName: definition.displayName,
-                type: definition.type
-            )
-        }
+        let matches = (
+            supportedSources.compactMap { definition -> SourceMatch? in
+                earliestMatch(
+                    in: rawSourceInput,
+                    aliases: definition.aliases,
+                    id: definition.id,
+                    displayName: definition.displayName,
+                    type: definition.type
+                )
+            }
+            + uncatalogedSourceHints.compactMap { definition -> SourceMatch? in
+                earliestMatch(
+                    in: rawSourceInput,
+                    aliases: definition.aliases,
+                    id: definition.id,
+                    displayName: definition.displayName,
+                    type: nil
+                )
+            }
+        )
         .sorted()
 
         var seenSupportedIDs: Set<String> = []
-        let normalizedSourceList = supportedMatches.compactMap { match -> String? in
-            guard !seenSupportedIDs.contains(match.id) else { return nil }
-            seenSupportedIDs.insert(match.id)
-            return match.id
-        }
+        var seenUncatalogedIDs: Set<String> = []
+        var promptNames: [String] = []
+        var normalizedSourceList: [String] = []
+        var uncatalogedSources: [ZebraSourceOnboardingState.UncatalogedSource] = []
 
-        let unsupportedInputs = unsupportedSources.compactMap { definition -> SourceMatch? in
-            earliestMatch(
-                in: rawSourceInput,
-                aliases: definition.aliases,
-                id: definition.id,
-                displayName: definition.displayName,
-                type: nil
-            )
-        }
-        .sorted()
-        .map { match in
-            ZebraSourceOnboardingState.UnsupportedSourceInput(
-                rawValue: match.rawValue,
-                normalizedValue: match.id,
-                displayName: match.displayName,
-                reason: "not_supported_yet"
-            )
+        for match in matches {
+            if match.type != nil {
+                guard !seenSupportedIDs.contains(match.id) else { continue }
+                seenSupportedIDs.insert(match.id)
+                normalizedSourceList.append(match.id)
+            } else {
+                guard !seenUncatalogedIDs.contains(match.id) else { continue }
+                seenUncatalogedIDs.insert(match.id)
+                uncatalogedSources.append(
+                    ZebraSourceOnboardingState.UncatalogedSource(
+                        rawValue: match.rawValue,
+                        normalizedValue: match.id,
+                        displayName: match.displayName,
+                        reason: "not_in_current_catalog"
+                    )
+                )
+            }
+            promptNames.append(match.displayName)
         }
 
         let rows = Dictionary(
@@ -126,9 +137,9 @@ enum ZebraSourceOnboardingCatalog {
         return NormalizationResult(
             rawSourceInput: rawSourceInput,
             normalizedSourceList: normalizedSourceList,
-            unsupportedInputs: unsupportedInputs,
+            uncatalogedSources: uncatalogedSources,
             sourceRows: rows,
-            confirmationPrompt: confirmationPrompt(for: normalizedSourceList)
+            confirmationPrompt: confirmationPrompt(forDisplayNames: promptNames)
         )
     }
 
@@ -137,11 +148,14 @@ enum ZebraSourceOnboardingCatalog {
     }
 
     static func confirmationPrompt(for sourceIDs: [String]) -> String {
-        guard !sourceIDs.isEmpty else {
+        confirmationPrompt(forDisplayNames: sourceIDs.map(displayName(for:)))
+    }
+
+    static func confirmationPrompt(forDisplayNames names: [String]) -> String {
+        guard !names.isEmpty else {
             return "아직 Zebra가 처리할 수 있는 source를 확인하지 못했습니다. Zebra가 이해해야 할 source를 자유롭게 적어주세요."
         }
-        let names = sourceIDs.map(displayName(for:)).joined(separator: ", ")
-        return "\(names)로 이해했습니다. 맞나요?"
+        return "\(names.joined(separator: ", "))로 이해했습니다. 맞나요?"
     }
 
     private static func earliestMatch(

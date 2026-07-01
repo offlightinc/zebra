@@ -93,7 +93,7 @@ extension ZebraSourceOnboardingState {
     struct Progress: Codable, Equatable, Sendable {
         var rawSourceInput: String?
         var normalizedSourceList: [String]
-        var unsupportedInputs: [UnsupportedSourceInput]
+        var uncatalogedSources: [UncatalogedSource]
         var sourceConfirmation: SourceConfirmation?
         var sourceRows: [String: SourceRow]
         var pendingQuestion: PendingQuestion?
@@ -104,14 +104,14 @@ extension ZebraSourceOnboardingState {
         init(
             rawSourceInput: String? = nil,
             normalizedSourceList: [String] = [],
-            unsupportedInputs: [UnsupportedSourceInput] = [],
+            uncatalogedSources: [UncatalogedSource] = [],
             sourceConfirmation: SourceConfirmation? = nil,
             sourceRows: [String: SourceRow] = [:],
             pendingQuestion: PendingQuestion? = nil
         ) {
             self.rawSourceInput = rawSourceInput
             self.normalizedSourceList = normalizedSourceList
-            self.unsupportedInputs = unsupportedInputs
+            self.uncatalogedSources = uncatalogedSources
             self.sourceConfirmation = sourceConfirmation
             self.sourceRows = sourceRows
             self.pendingQuestion = pendingQuestion
@@ -120,6 +120,7 @@ extension ZebraSourceOnboardingState {
         private enum CodingKeys: String, CodingKey {
             case rawSourceInput
             case normalizedSourceList
+            case uncatalogedSources
             case unsupportedInputs
             case sourceConfirmation
             case sourceRows
@@ -133,8 +134,11 @@ extension ZebraSourceOnboardingState {
                 [String].self,
                 forKey: .normalizedSourceList
             ) ?? []
-            unsupportedInputs = try container.decodeIfPresent(
-                [UnsupportedSourceInput].self,
+            uncatalogedSources = try container.decodeIfPresent(
+                [UncatalogedSource].self,
+                forKey: .uncatalogedSources
+            ) ?? container.decodeIfPresent(
+                [UncatalogedSource].self,
                 forKey: .unsupportedInputs
             ) ?? []
             sourceConfirmation = try container.decodeIfPresent(
@@ -150,9 +154,19 @@ extension ZebraSourceOnboardingState {
                 forKey: .pendingQuestion
             )
         }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encodeIfPresent(rawSourceInput, forKey: .rawSourceInput)
+            try container.encode(normalizedSourceList, forKey: .normalizedSourceList)
+            try container.encode(uncatalogedSources, forKey: .uncatalogedSources)
+            try container.encodeIfPresent(sourceConfirmation, forKey: .sourceConfirmation)
+            try container.encode(sourceRows, forKey: .sourceRows)
+            try container.encodeIfPresent(pendingQuestion, forKey: .pendingQuestion)
+        }
     }
 
-    struct UnsupportedSourceInput: Codable, Equatable, Sendable {
+    struct UncatalogedSource: Codable, Equatable, Sendable {
         var rawValue: String
         var normalizedValue: String
         var displayName: String?
