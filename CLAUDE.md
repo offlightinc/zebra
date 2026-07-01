@@ -1,5 +1,15 @@
 # cmux agent notes
 
+## Brain Write Policy (Required)
+
+Treat `/Users/hanwool/brain-offlight` as a git-backed markdown repo when creating or updating documents. Do not use `gbrain put` to create or update pages.
+
+- Check `git -C /Users/hanwool/brain-offlight status --short` before and after changes.
+- Commits must include a `Slack-Summary:` line. Spell the key exactly as `Slack-Summary:`.
+- The `Slack-Summary:` value must be a one-sentence current-work description suitable for Slack. Do not use generic fallback text such as "updated documents".
+- Stage only explicit pathspecs: `git -C /Users/hanwool/brain-offlight add <path>`.
+- Do not mutate unrelated brain files or git state.
+
 ## Zebra ↔ cmux 분리 원칙 (필수)
 
 이 저장소는 `manaflow-ai/cmux` 의 fork (`offlightinc/zebra`). upstream rebase 비용을 막기 위해 모든 Zebra 작업은 다음 규칙을 따른다:
