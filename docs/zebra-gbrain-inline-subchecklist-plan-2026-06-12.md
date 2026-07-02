@@ -293,6 +293,50 @@ for section in sections:
 
 section title 비교는 원문 title이 거의 그대로 저장되므로 우선 exact match를 쓰되, legacy state나 agent report 차이를 고려해 normalized title fallback을 둔다.
 
+## Source Onboarding 하위 row 확장
+
+2026-07-02 기준으로 같은 공통 `substeps` projection은 4단계 Source Onboarding에도 쓰인다. Source Onboarding은 GBrain 문서 섹션이 아니라 `source-onboarding-state.json`의 source row를 표시한다.
+
+Source row의 source of truth:
+
+```text
+progress.normalizedSourceList
+  -> 표시 순서의 기본값
+
+progress.sourceRows
+  -> Gmail, Obsidian 같은 source별 상태
+
+progress.activeSourceID
+  -> 현재 이어서 실행해야 하는 source
+
+progress.sourceConfirmation.status
+  -> source별 시작 버튼을 보여주기 전 confirmation gate
+```
+
+상태 계산:
+
+```text
+orderedSourceIDs = normalizedSourceList + extra sourceRows sorted by id
+if sourceConfirmation.status != confirmed:
+  activeSourceID = nil
+else if progress.activeSourceID points at a non-terminal row:
+  activeSourceID = progress.activeSourceID
+else:
+  activeSourceID = first row whose status is not checked/skipped
+
+for source row:
+  completed = status == checked
+  skipped = status == skipped
+  active = row.id == activeSourceID
+  running = parent .sourceOnboarding is running AND active
+  showsStart = parent .sourceOnboarding is first incomplete AND !running AND active
+  wasStartedBefore = playbookStepID exists OR status is running/attention
+```
+
+이 버튼은 source별 독립 executor를 새로 만드는 것이 아니다. active source row의 Start/Restart는 기존 parent `.sourceOnboarding` launch를 호출하고, helper가 저장한 `activeSourceID`/`playbookStepID` 기준으로 이어 진행한다.
+
+Stop도 현재 구조에서는 row별 process kill이 아니라 `.sourceOnboarding`으로 등록된 터미널 세션에 Ctrl-C를 보내는 parent 세션 중지다. Gmail만 중지, Obsidian만 중지 같은 source별 프로세스 제어가 필요하면 substep id를 action callback에 포함하는 별도 설계가 필요하다.
+
 ## Localization
 
 새 UI 문자열은 모두 `Resources/Localizable.xcstrings`의 Zebra append block에 추가한다.

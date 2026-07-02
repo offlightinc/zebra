@@ -26,6 +26,9 @@ let package = Package(
                 .product(name: "CMUXDebugLog", package: "CMUXDebugLog"),
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
             ],
+            resources: [
+                .process("Resources"),
+            ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
             ]

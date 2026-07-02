@@ -4,6 +4,7 @@ struct ZebraSourceOnboardingHelper {
     struct LaunchContext {
         var helperPath: String
         var launchDirectory: String
+        var runtimePromptDirectory: String
         var shellEnvironmentPrefix: String
     }
 
@@ -29,20 +30,23 @@ struct ZebraSourceOnboardingHelper {
 
     func prepareLaunch(selectedVaultPath: String?) -> LaunchContext? {
         guard let helperURL = installHelperScript() else { return nil }
+        let playbookDirectory = installSourcePlaybooks()
         let helperDirectory = helperURL.deletingLastPathComponent().path
         var commands = [
             "export ZEBRA_SOURCE_ONBOARDING_STATE=\(ZebraAgentLaunchCommand.shellQuote(stateURL.path))",
             "export ZEBRA_GBRAIN_SETUP_STATE=\(ZebraAgentLaunchCommand.shellQuote(gbrainOnboardingStateURL.path))",
             "export ZEBRA_GBRAIN_ADAPTER_STATE=\(ZebraAgentLaunchCommand.shellQuote(gbrainAdapterOnboardingStateURL.path))",
             "export ZEBRA_SOURCE_ONBOARDING_HOME=\(ZebraAgentLaunchCommand.shellQuote(homeDirectoryPath))",
+            "export ZEBRA_SOURCE_PLAYBOOK_DIR=\(ZebraAgentLaunchCommand.shellQuote(playbookDirectory.path))",
             "export PATH=\(ZebraAgentLaunchCommand.shellQuote(helperDirectory)):\"$PATH\"",
         ]
         if let selectedVaultPath = standardizedExistingDirectoryPath(selectedVaultPath) {
-            commands.append("export ZEBRA_SOURCE_SELECTED_VAULT=\(ZebraAgentLaunchCommand.shellQuote(selectedVaultPath))")
+            commands.append("export ZEBRA_GBRAIN_WRITE_TARGET_PATH=\(ZebraAgentLaunchCommand.shellQuote(selectedVaultPath))")
         }
         return LaunchContext(
             helperPath: helperURL.path,
             launchDirectory: onboardingWorkDirectoryPath(),
+            runtimePromptDirectory: runtimePromptDirectoryPath(),
             shellEnvironmentPrefix: commands.joined(separator: " && ") + " && "
         )
     }
@@ -62,10 +66,54 @@ struct ZebraSourceOnboardingHelper {
         }
     }
 
+    private func installSourcePlaybooks() -> URL {
+        let directory = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("source-playbooks", isDirectory: true)
+        let destination = directory.appendingPathComponent(
+            "obsidian.direct-markdown.v1.md",
+            isDirectory: false
+        )
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            if let resource = Bundle.module.url(
+                forResource: "obsidian.direct-markdown.v1",
+                withExtension: "md",
+                subdirectory: "SourcePlaybooks"
+            ) {
+                if fileManager.fileExists(atPath: destination.path) {
+                    try fileManager.removeItem(at: destination)
+                }
+                try fileManager.copyItem(at: resource, to: destination)
+            } else if !fileManager.fileExists(atPath: destination.path) {
+                try Self.fallbackObsidianPlaybook.write(
+                    to: destination,
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
+        } catch {
+            try? Self.fallbackObsidianPlaybook.write(
+                to: destination,
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+        return directory
+    }
+
     private func onboardingWorkDirectoryPath() -> String {
         let directory = stateURL
             .deletingLastPathComponent()
             .appendingPathComponent("source-onboarding-work", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return Self.standardizedPath(directory.path)
+    }
+
+    private func runtimePromptDirectoryPath() -> String {
+        let directory = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("source-runtime-prompts", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         return Self.standardizedPath(directory.path)
     }
@@ -84,6 +132,58 @@ struct ZebraSourceOnboardingHelper {
     private static func standardizedPath(_ path: String) -> String {
         (path as NSString).standardizingPath
     }
+
+    private static let fallbackObsidianPlaybook = """
+    ---
+    id: obsidian.direct-markdown
+    version: v1
+    sourceID: obsidian
+    initialStepID: discover_vault
+    steps:
+      - discover_vault
+      - confirm_vault_if_needed
+      - smoke_read
+      - choose_ingest_scope
+      - confirm_ingest_plan
+      - ingest_markdown
+      - verify_readback
+      - complete
+    ---
+
+    # Obsidian Direct Markdown Source Onboarding
+
+    ## Step: discover_vault
+
+    Prefer an Obsidian app registry candidate from `~/Library/Application Support/obsidian/obsidian.json`. If exactly one valid candidate exists, continue to `smoke_read`; ask the user only when there are no candidates or multiple candidates. Do not use the GBrain write target path as the Obsidian vault path.
+
+    ## Step: confirm_vault_if_needed
+
+    Ask the user to choose among multiple candidates or provide a corrected Obsidian vault path, then run `zebra-source-onboarding obsidian verify-vault --path "<vault-path>"`. Do not pass the GBrain write target path to `verify-vault`.
+
+    ## Step: smoke_read
+
+    Run `zebra-source-onboarding obsidian smoke-read`.
+
+    ## Step: choose_ingest_scope
+
+    Ask whether to ingest the whole vault, selected folders, a recent/sample subset, or skip Obsidian for now.
+
+    ## Step: confirm_ingest_plan
+
+    Summarize the ingest plan and run `zebra-source-onboarding obsidian confirm-plan --answer yes` only after approval.
+
+    ## Step: ingest_markdown
+
+    Run `zebra-source-onboarding obsidian ingest`.
+
+    ## Step: verify_readback
+
+    Run `zebra-source-onboarding obsidian verify-readback`.
+
+    ## Step: complete
+
+    Obsidian Source Onboarding is complete.
+    """
 
     private static let helperScript = """
     #!/bin/sh
@@ -125,7 +225,15 @@ struct ZebraSourceOnboardingHelper {
         os.environ.get("ZEBRA_GBRAIN_ADAPTER_STATE")
         or str(home / "Library/Application Support/zebra/onboarding/gbrain-adapter-state.json")
     ).expanduser()
-    selected_vault = os.environ.get("ZEBRA_SOURCE_SELECTED_VAULT") or ""
+    gbrain_write_target_path = (
+        os.environ.get("ZEBRA_GBRAIN_WRITE_TARGET_PATH")
+        or os.environ.get("ZEBRA_SOURCE_SELECTED_VAULT")
+        or ""
+    )
+    playbook_dir = Path(
+        os.environ.get("ZEBRA_SOURCE_PLAYBOOK_DIR")
+        or str(state_path.parent / "source-playbooks")
+    ).expanduser()
 
     supported = {
         "gmail": {
@@ -168,16 +276,25 @@ struct ZebraSourceOnboardingHelper {
             return {}
 
     def migrate_source_state(value):
+        changed = False
+        entry = value.get("entryContext") if isinstance(value.get("entryContext"), dict) else None
+        if entry is not None:
+            legacy_selected = entry.pop("selectedVaultPath", None)
+            if legacy_selected and not entry.get("gbrainWriteTargetPath"):
+                entry["gbrainWriteTargetPath"] = legacy_selected
+            if legacy_selected is not None:
+                changed = True
         progress = value.get("progress") if isinstance(value.get("progress"), dict) else None
         if progress is None:
-            return False
+            return changed
         legacy = progress.get("unsupportedInputs")
         if "uncatalogedSources" not in progress and isinstance(legacy, list):
             progress["uncatalogedSources"] = legacy
+            changed = True
         if "unsupportedInputs" in progress:
             progress.pop("unsupportedInputs", None)
-            return True
-        return False
+            changed = True
+        return changed
 
     def save_json(value):
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -322,6 +439,103 @@ struct ZebraSourceOnboardingHelper {
         "initialStepID": "connect_clawvisor",
         "steps": ["connect_clawvisor", "verify_env", "verify_connection", "complete"],
     }
+
+    obsidian_playbook_fallback = {
+        "id": "obsidian.direct-markdown",
+        "version": "v1",
+        "sourceID": "obsidian",
+        "initialStepID": "discover_vault",
+        "steps": [
+            "discover_vault",
+            "confirm_vault_if_needed",
+            "smoke_read",
+            "choose_ingest_scope",
+            "confirm_ingest_plan",
+            "ingest_markdown",
+            "verify_readback",
+            "complete",
+        ],
+        "sections": {},
+    }
+
+    def parse_playbook_markdown(path):
+        result = {
+            "id": "",
+            "version": "",
+            "sourceID": "",
+            "initialStepID": "",
+            "steps": [],
+            "sections": {},
+        }
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            return dict(obsidian_playbook_fallback)
+        body = text
+        if text.startswith("---"):
+            marker = text.find("\\n---", 3)
+            if marker >= 0:
+                frontmatter = text[3:marker].strip().splitlines()
+                body = text[marker + 4:]
+                current_list = None
+                for raw in frontmatter:
+                    if not raw.strip():
+                        continue
+                    if raw.startswith("  - ") and current_list == "steps":
+                        result["steps"].append(raw[4:].strip())
+                        continue
+                    current_list = None
+                    if ":" not in raw:
+                        continue
+                    key, value = raw.split(":", 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if key == "steps":
+                        current_list = "steps"
+                    elif key in result and isinstance(result[key], str):
+                        result[key] = value
+        current_step = None
+        buffer = []
+        for line in body.splitlines():
+            if line.startswith("## Step: "):
+                if current_step:
+                    result["sections"][current_step] = "\\n".join(buffer).strip()
+                current_step = line[len("## Step: "):].strip()
+                buffer = []
+            elif current_step:
+                buffer.append(line)
+        if current_step:
+            result["sections"][current_step] = "\\n".join(buffer).strip()
+        fallback = obsidian_playbook_fallback
+        for key in ("id", "version", "sourceID", "initialStepID"):
+            if not result.get(key):
+                result[key] = fallback[key]
+        if not result.get("steps"):
+            result["steps"] = list(fallback["steps"])
+        return result
+
+    def obsidian_playbook():
+        return parse_playbook_markdown(playbook_dir / "obsidian.direct-markdown.v1.md")
+
+    def source_run_state_path(source_id):
+        directory = state_path.parent / "source-run-state"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / (prompt_file_safe_name(source_id) + ".json")
+
+    def load_source_run_state(source_id):
+        path = source_run_state_path(source_id)
+        value = load_json(path)
+        return value if isinstance(value, dict) else {}
+
+    def save_source_run_state(source_id, value):
+        path = source_run_state_path(source_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\\n")
+        os.replace(tmp, path)
+        return str(path)
 
     def prompt_file_safe_name(value):
         safe = "".join(
@@ -478,18 +692,96 @@ struct ZebraSourceOnboardingHelper {
         Work only the current Gmail/Clawvisor repair step. Do not start other source runners. Use the helper stdout to identify the failing stage, repair that stage, and rerun the matching `zebra-source-onboarding gmail ...` command.
         ''').strip()
 
+    def obsidian_step_prompt(step_id, state, row):
+        playbook = obsidian_playbook()
+        run_state = load_source_run_state("obsidian")
+        section = playbook.get("sections", {}).get(step_id, "")
+        if not section:
+            section = "Follow the current Obsidian playbook step and continue only through the zebra-source-onboarding helper CLI."
+        unreadable_roots = run_state.get("unreadableCandidateRoots") if isinstance(run_state.get("unreadableCandidateRoots"), list) else []
+        if step_id == "discover_vault" and unreadable_roots:
+            lines = []
+            for item in unreadable_roots:
+                if not isinstance(item, dict):
+                    continue
+                path = item.get("path") or "unknown"
+                reason = item.get("reason") or "unreadable"
+                message = item.get("message") or ""
+                detail = " - `" + str(path) + "` (" + str(reason) + ")"
+                if message:
+                    detail = detail + ": " + str(message)
+                lines.append(detail)
+            if lines:
+                section = section + "\\n\\n" + "Zebra could not inspect these automatic discovery roots. Tell the user that automatic discovery may be incomplete and ask for the exact Obsidian vault path if needed:\\n" + "\\n".join(lines)
+        if step_id == "confirm_vault_if_needed":
+            candidate = run_state.get("candidateVaultPath")
+            candidates = run_state.get("candidateVaultPaths") if isinstance(run_state.get("candidateVaultPaths"), list) else []
+            if candidate:
+                method = run_state.get("discoveryMethod") or "automatic_discovery"
+                section = section + "\\n\\n" + textwrap.dedent(f'''
+                Zebra found this Obsidian-like vault candidate from `{method}` because it contains `.obsidian/`:
+
+                `{candidate}`
+
+                Ask the user to confirm whether this is the Obsidian vault to use. If yes, run:
+
+                ```bash
+                zebra-source-onboarding obsidian verify-vault --path "{candidate}"
+                ```
+
+                If no, ask for the correct vault path and run `zebra-source-onboarding obsidian verify-vault --path "<vault-path>"`.
+                ''').strip()
+            elif candidates:
+                method = run_state.get("discoveryMethod") or "automatic_discovery"
+                section = section + "\\n\\n" + "Zebra found multiple `.obsidian/` vault candidates from `" + str(method) + "`. Ask the user which one to use, then run `zebra-source-onboarding obsidian verify-vault --path \"<vault-path>\"`. Candidates:\\n\\n" + "\\n".join("- `" + str(item) + "`" for item in candidates)
+        if step_id == "confirm_ingest_plan":
+            section = section + "\\n\\n" + obsidian_ingest_plan_summary(run_state)
+        vault = run_state.get("selectedVaultPath") or run_state.get("candidateVaultPath") or "not selected"
+        scope = run_state.get("scope") or "not selected"
+        estimated = run_state.get("estimatedFileCount")
+        if estimated is None:
+            estimated = "unknown"
+        artifact = run_state.get("artifactPath") or "not created"
+        return textwrap.dedent(f'''
+        Zebra Source Onboarding: Obsidian is the active source.
+
+        Playbook: {playbook.get("id", "obsidian.direct-markdown")} {playbook.get("version", "v1")}
+        Current step: `{step_id}`
+        Current vault path: `{vault}`
+        Current ingest scope: `{scope}`
+        Approximate file count: `{estimated}`
+        Current ingest artifact: `{artifact}`
+
+        Boundary rules:
+        - Work only this Obsidian step. Do not start Notion, iMessage, Gmail, or another source unless the helper prints that source as the next active source.
+        - Use direct Markdown filesystem access. Do not require Obsidian CLI or Clawvisor for Obsidian.
+        - Do not use the GBrain write target path or `gbrainTargetPath` as the Obsidian source vault. If the user wants Obsidian, use an automatic `.obsidian/` candidate from this prompt or ask for the actual Obsidian vault path.
+        - Do not edit `source-onboarding-state.json` directly. The helper CLI is the only Source Onboarding state write path.
+        - Do not store Markdown bodies, large file lists, or prompt bodies in Source Onboarding state.
+        - Continue only from helper stdout `nextPrompt`; use `nextPromptPath` only as a fallback/debug file.
+
+        Playbook step instructions:
+
+        {section}
+        ''').strip()
+
     def source_next_prompt_payload(state, source_id, step_id):
         progress = ensure_progress(state)
         rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
         row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else {}
-        if source_id != "gmail":
+        if source_id == "gmail":
+            playbook = gmail_playbook
+            prompt = gmail_step_prompt(step_id, state, row)
+        elif source_id == "obsidian":
+            playbook = obsidian_playbook()
+            prompt = obsidian_step_prompt(step_id, state, row)
+        else:
             return {}
-        prompt = gmail_step_prompt(step_id, state, row)
         path = write_source_next_prompt_file(source_id, step_id, prompt)
         return {
             "nextSourceID": source_id,
-            "nextPlaybookID": gmail_playbook["id"],
-            "nextPlaybookVersion": gmail_playbook["version"],
+            "nextPlaybookID": playbook["id"],
+            "nextPlaybookVersion": playbook["version"],
             "nextPlaybookStepID": step_id,
             "nextPrompt": prompt,
             "nextPromptPath": path,
@@ -534,6 +826,375 @@ struct ZebraSourceOnboardingHelper {
             return False
         return isinstance(rows.get("gmail"), dict) and rows["gmail"].get("playbookID") == gmail_playbook["id"]
 
+    def set_obsidian_row_state(state, row_status, phase, step_id, timestamp=None, attention_reason=None, result_summary=None, run_state_path=None):
+        timestamp = timestamp or now()
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get("obsidian") if isinstance(rows.get("obsidian"), dict) else source_row_for("obsidian", timestamp)
+        playbook = obsidian_playbook()
+        row["status"] = row_status
+        row["phase"] = phase
+        row["selectionState"] = "confirmed"
+        row["playbookID"] = playbook["id"]
+        row["playbookVersion"] = playbook["version"]
+        row["playbookStepID"] = step_id
+        row["updatedAt"] = timestamp
+        if attention_reason:
+            row["attentionReason"] = attention_reason
+        else:
+            row.pop("attentionReason", None)
+        if result_summary:
+            row["resultSummary"] = result_summary
+        if run_state_path:
+            row["runStatePath"] = run_state_path
+        rows["obsidian"] = row
+        progress["sourceRows"] = rows
+        if "obsidian" not in ensure_execution_order(progress):
+            progress["executionOrder"].append("obsidian")
+        if row_status in {"checked", "skipped"}:
+            progress["activeSourceID"] = first_unfinished_source_id(progress)
+        else:
+            progress["activeSourceID"] = "obsidian"
+        state["status"] = source_completion_status(state)
+        state["updatedAt"] = timestamp
+        return state
+
+    def should_update_obsidian_runner(state):
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        if progress.get("activeSourceID") == "obsidian":
+            return True
+        if "obsidian" not in ensure_execution_order(progress):
+            return False
+        row = rows.get("obsidian")
+        return isinstance(row, dict) and row.get("playbookID") == obsidian_playbook()["id"]
+
+    def markdown_files_for_vault(vault_path, folders=None, limit=None):
+        vault = Path(vault_path).expanduser()
+        if not vault.is_dir():
+            return []
+        roots = []
+        if folders:
+            for folder in folders:
+                candidate = (vault / folder).resolve(strict=False)
+                try:
+                    candidate.relative_to(vault.resolve(strict=False))
+                    if candidate.exists():
+                        roots.append(candidate)
+                except Exception:
+                    continue
+        if not roots:
+            roots = [vault]
+        files = []
+        for root in roots:
+            for current, dirnames, filenames in os.walk(root):
+                dirnames[:] = [
+                    name for name in dirnames
+                    if not name.startswith(".") and name not in {".obsidian", "__MACOSX"}
+                ]
+                for filename in filenames:
+                    if not filename.lower().endswith(".md"):
+                        continue
+                    path = Path(current) / filename
+                    try:
+                        path.relative_to(vault)
+                    except Exception:
+                        continue
+                    files.append(path)
+                    if limit and len(files) >= limit:
+                        return files
+        return files
+
+    def vault_validation(value):
+        if not value:
+            return {"ok": False, "reason": "vault_path_required", "path": ""}
+        path = Path(value).expanduser()
+        if not path.exists():
+            return {"ok": False, "reason": "invalid_vault_path", "path": canonical_path(path)}
+        if not path.is_dir():
+            return {"ok": False, "reason": "vault_path_not_directory", "path": canonical_path(path)}
+        canonical = canonical_path(path)
+        broad_roots = {canonical_path(home), canonical_path(home / "Desktop"), canonical_path(home / "Documents")}
+        if canonical in broad_roots:
+            return {"ok": False, "reason": "vault_path_too_broad", "path": canonical}
+        markdown_files = markdown_files_for_vault(canonical, limit=1)
+        marker = (Path(canonical) / ".obsidian").is_dir()
+        if not marker and not markdown_files:
+            return {"ok": False, "reason": "no_markdown_files", "path": canonical}
+        count = len(markdown_files_for_vault(canonical))
+        return {
+            "ok": True,
+            "path": canonical,
+            "hasObsidianMarker": marker,
+            "estimatedFileCount": count,
+        }
+
+    def discovery_error_record(path, error):
+        reason = "permission_denied" if isinstance(error, PermissionError) else "unreadable"
+        return {
+            "path": str(path),
+            "reason": reason,
+            "message": str(error),
+        }
+
+    def deduped_paths(paths):
+        deduped = []
+        seen = set()
+        for path in paths:
+            canonical = canonical_path(path)
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            deduped.append(path)
+        return deduped
+
+    def obsidian_registry_candidate_paths():
+        paths = []
+        diagnostics = []
+        registry = home / "Library/Application Support/obsidian/obsidian.json"
+        try:
+            data = json.loads(registry.read_text(encoding="utf-8"))
+            vaults = data.get("vaults") if isinstance(data, dict) else {}
+            if isinstance(vaults, dict):
+                for item in vaults.values():
+                    if not isinstance(item, dict):
+                        continue
+                    raw_path = item.get("path")
+                    if isinstance(raw_path, str) and raw_path:
+                        paths.append(Path(raw_path).expanduser())
+        except FileNotFoundError:
+            pass
+        except Exception as error:
+            diagnostics.append(discovery_error_record(registry, error))
+        return deduped_paths(paths), diagnostics
+
+    def fallback_obsidian_candidate_paths():
+        paths = []
+        diagnostics = []
+        icloud_root = home / "Library/Mobile Documents/iCloud~md~obsidian/Documents"
+        try:
+            if icloud_root.exists() and icloud_root.is_dir():
+                paths.extend(sorted(child for child in icloud_root.iterdir() if child.is_dir()))
+        except Exception as error:
+            diagnostics.append(discovery_error_record(icloud_root, error))
+        cloud_storage = home / "Library/CloudStorage"
+        try:
+            if cloud_storage.exists() and cloud_storage.is_dir():
+                for pattern in ("OneDrive*", "GoogleDrive*"):
+                    paths.extend(sorted(child for child in cloud_storage.glob(pattern) if child.is_dir()))
+        except Exception as error:
+            diagnostics.append(discovery_error_record(cloud_storage, error))
+        paths.extend([
+            home / "Dropbox",
+            home / "Documents/Obsidian",
+            home / "Obsidian",
+        ])
+        return deduped_paths(paths), diagnostics
+
+    def discover_obsidian_marker_candidates():
+        candidates = {}
+        diagnostics = []
+        broad_roots = {
+            canonical_path(home),
+            canonical_path(home / "Desktop"),
+            canonical_path(home / "Documents"),
+            canonical_path(home / "Library/Mobile Documents"),
+            canonical_path(home / "Library/Mobile Documents/iCloud~md~obsidian/Documents"),
+        }
+        registry_paths, registry_diagnostics = obsidian_registry_candidate_paths()
+        diagnostics.extend(registry_diagnostics)
+        for discovery_method, paths in [("obsidian_registry", registry_paths)]:
+            for path in paths:
+                try:
+                    if not path.is_dir() or not (path / ".obsidian").is_dir():
+                        continue
+                except Exception as error:
+                    diagnostics.append(discovery_error_record(path, error))
+                    continue
+                vault = canonical_path(path)
+                if vault in broad_roots:
+                    continue
+                validation = vault_validation(vault)
+                if validation.get("ok") and validation.get("hasObsidianMarker"):
+                    validation["discoveryMethod"] = discovery_method
+                    candidates[vault] = validation
+        if not candidates:
+            fallback_paths, fallback_diagnostics = fallback_obsidian_candidate_paths()
+            diagnostics.extend(fallback_diagnostics)
+            for path in fallback_paths:
+                try:
+                    if not path.is_dir() or not (path / ".obsidian").is_dir():
+                        continue
+                except Exception as error:
+                    diagnostics.append(discovery_error_record(path, error))
+                    continue
+                vault = canonical_path(path)
+                if vault in broad_roots:
+                    continue
+                validation = vault_validation(vault)
+                if validation.get("ok") and validation.get("hasObsidianMarker"):
+                    validation["discoveryMethod"] = "bounded_fallback_path"
+                    candidates[vault] = validation
+        return list(candidates.values()), diagnostics
+
+    def duration_class(count):
+        try:
+            count = int(count)
+        except Exception:
+            return "unknown"
+        if count <= 25:
+            return "short"
+        if count <= 250:
+            return "medium"
+        return "long"
+
+    def obsidian_ingest_plan_summary(run_state):
+        vault = run_state.get("selectedVaultPath") or "not selected"
+        scope = run_state.get("scope") or "not selected"
+        folders = run_state.get("folders") if isinstance(run_state.get("folders"), list) else []
+        count = run_state.get("estimatedFileCount")
+        count_text = str(count) if count is not None else "unknown"
+        duration = run_state.get("durationClass") or duration_class(count)
+        scope_detail = scope
+        if scope == "folders":
+            scope_detail = "folders: " + (", ".join(folders) if folders else "none")
+        if scope == "sample":
+            scope_detail = "recent/sample subset: up to 5 Markdown files"
+        return textwrap.dedent(f'''
+        Resolved Obsidian ingest plan:
+        - Vault path: `{vault}`
+        - Selected scope: `{scope_detail}`
+        - Approximate Markdown file count: `{count_text}`
+        - Excluded paths/policies: `.obsidian/`, hidden directories, `__MACOSX`, non-Markdown files, and paths outside the selected vault.
+        - Expected duration class: `{duration}`
+        - Ingest mode: direct Markdown filesystem ingest into a Zebra source artifact.
+        - Verification plan: read back the generated Obsidian source artifact and require `source: obsidian` plus `playbook: obsidian.direct-markdown.v1`.
+
+        Ask the user for explicit approval before running ingest. If approved, run `zebra-source-onboarding obsidian confirm-plan --answer yes`. If not approved, run `zebra-source-onboarding obsidian confirm-plan --answer no`.
+        ''').strip()
+
+    def obsidian_artifact_path(state=None):
+        target = None
+        if isinstance(state, dict):
+            target = state.get("entryContext", {}).get("gbrainTargetPath")
+        if target and Path(target).is_dir():
+            directory = Path(target) / "sources"
+        else:
+            directory = state_path.parent / "source-ingest-artifacts"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / "obsidian-direct-markdown.md"
+
+    def gbrain_target_paths(state):
+        paths = set()
+        entry = state.get("entryContext") if isinstance(state.get("entryContext"), dict) else {}
+        for key in ("gbrainWriteTargetPath", "gbrainTargetPath", "selectedVaultPath"):
+            path = existing_directory(entry.get(key) or "")
+            if path:
+                paths.add(path)
+        env_path = existing_directory(gbrain_write_target_path)
+        if env_path:
+            paths.add(env_path)
+        _, resolved_target_path, _ = resolve_gbrain_target()
+        if resolved_target_path:
+            paths.add(resolved_target_path)
+        return paths
+
+    def is_gbrain_target_path(state, value):
+        path = existing_directory(value)
+        return bool(path and path in gbrain_target_paths(state))
+
+    def start_obsidian_from_next(state):
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get("obsidian") if isinstance(rows.get("obsidian"), dict) else {}
+        playbook = obsidian_playbook()
+        if row.get("playbookID") == playbook["id"] and row.get("status") in {"running", "attention"}:
+            step_id = row.get("playbookStepID") if row.get("playbookStepID") in playbook["steps"] else playbook["initialStepID"]
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, "obsidian", step_id))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        discovered, discovery_diagnostics = discover_obsidian_marker_candidates()
+        if len(discovered) == 1:
+            validation = discovered[0]
+            run_state = load_source_run_state("obsidian")
+            run_state.update({
+                "selectedVaultPath": validation["path"],
+                "hasObsidianMarker": validation.get("hasObsidianMarker"),
+                "estimatedFileCount": validation.get("estimatedFileCount"),
+                "discoveryMethod": validation.get("discoveryMethod") or "single_obsidian_marker_candidate",
+                "updatedAt": now(),
+            })
+            if discovery_diagnostics:
+                run_state["unreadableCandidateRoots"] = discovery_diagnostics
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(
+                state,
+                "running",
+                "smoke",
+                "smoke_read",
+                run_state_path=run_path,
+                result_summary="Single Obsidian vault candidate selected from " + str(validation.get("discoveryMethod") or "automatic_discovery") + " with " + str(validation.get("estimatedFileCount")) + " Markdown files.",
+            )
+            save_json(state)
+            payload = {"ok": True, "path": validation["path"], "estimatedFileCount": validation.get("estimatedFileCount")}
+            payload.update(source_next_prompt_payload(state, "obsidian", "smoke_read"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        if len(discovered) > 1:
+            run_state = load_source_run_state("obsidian")
+            run_state.update({
+                "candidateVaultPaths": [item.get("path") for item in discovered],
+                "discoveryMethod": discovered[0].get("discoveryMethod") or "multiple_obsidian_marker_candidates",
+                "updatedAt": now(),
+            })
+            if discovery_diagnostics:
+                run_state["unreadableCandidateRoots"] = discovery_diagnostics
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(
+                state,
+                "attention",
+                "preflight",
+                "confirm_vault_if_needed",
+                attention_reason="multiple_obsidian_vault_candidates",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = summary(state)
+            payload["ok"] = False
+            payload["reason"] = "multiple_obsidian_vault_candidates"
+            payload.update(source_next_prompt_payload(state, "obsidian", "confirm_vault_if_needed"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if discovery_diagnostics:
+            run_state = load_source_run_state("obsidian")
+            run_state.update({
+                "unreadableCandidateRoots": discovery_diagnostics,
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(
+                state,
+                "attention",
+                "preflight",
+                "discover_vault",
+                attention_reason="obsidian_candidate_discovery_unreadable",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = summary(state)
+            payload["ok"] = False
+            payload["reason"] = "obsidian_candidate_discovery_unreadable"
+            payload.update(source_next_prompt_payload(state, "obsidian", "discover_vault"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        state = set_obsidian_row_state(state, "running", "preflight", "discover_vault")
+        save_json(state)
+        payload = summary(state)
+        payload.update(source_next_prompt_payload(state, "obsidian", "discover_vault"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
     def start_next():
         state = load_or_create_state()
         progress = ensure_progress(state)
@@ -553,6 +1214,8 @@ struct ZebraSourceOnboardingHelper {
             payload["complete"] = state["status"] == "completed"
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 0
+        if source_id == "obsidian":
+            return start_obsidian_from_next(state)
         if source_id != "gmail":
             payload = summary(state)
             payload["ok"] = False
@@ -580,7 +1243,7 @@ struct ZebraSourceOnboardingHelper {
         gbrain = load_json(gbrain_state_path)
         receipt = gbrain.get("receipt") or {}
         targets = receipt.get("targets") or {}
-        selected = existing_directory(selected_vault)
+        selected = existing_directory(gbrain_write_target_path)
         if selected:
             for key, target in targets.items():
                 path = existing_directory((target or {}).get("vaultPath") or "")
@@ -600,7 +1263,7 @@ struct ZebraSourceOnboardingHelper {
         adapter_receipt = adapter.get("receipt") or {}
         warnings = target.get("warnings") if isinstance(target.get("warnings"), list) else []
         return {
-            "selectedVaultPath": existing_directory(selected_vault) or None,
+            "gbrainWriteTargetPath": existing_directory(gbrain_write_target_path) or None,
             "gbrainTargetPath": target_path,
             "gbrainTargetKey": target_key,
             "gbrainReceiptPath": str(gbrain_state_path),
@@ -944,6 +1607,384 @@ struct ZebraSourceOnboardingHelper {
         print("unknown gmail subcommand: " + subcommand, file=sys.stderr)
         return 2
 
+    def parse_flag_value(flag):
+        values = []
+        index = 0
+        while index < len(args):
+            if args[index] == flag and index + 1 < len(args):
+                values.append(args[index + 1])
+                index += 2
+            else:
+                index += 1
+        return values
+
+    def single_flag_value(flag):
+        values = parse_flag_value(flag)
+        return values[-1] if values else ""
+
+    def obsidian_verify_vault():
+        path = single_flag_value("--path")
+        state = load_or_create_state()
+        if is_gbrain_target_path(state, path):
+            run_state = load_source_run_state("obsidian")
+            run_state.update({
+                "rejectedCandidateReason": "gbrain_target_is_not_obsidian_source_vault",
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(
+                state,
+                "attention",
+                "preflight",
+                "confirm_vault_if_needed",
+                attention_reason="gbrain_target_is_not_obsidian_source_vault",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "gbrain_target_is_not_obsidian_source_vault"}
+            payload.update(source_next_prompt_payload(state, "obsidian", "confirm_vault_if_needed"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        validation = vault_validation(path)
+        if validation.get("ok"):
+            run_state = load_source_run_state("obsidian")
+            run_state.update({
+                "selectedVaultPath": validation["path"],
+                "hasObsidianMarker": validation.get("hasObsidianMarker"),
+                "estimatedFileCount": validation.get("estimatedFileCount"),
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(
+                state,
+                "running",
+                "smoke",
+                "smoke_read",
+                run_state_path=run_path,
+                result_summary="Obsidian vault path validated with " + str(validation.get("estimatedFileCount")) + " Markdown files.",
+            )
+            save_json(state)
+            payload = {"ok": True, "path": validation["path"], "estimatedFileCount": validation.get("estimatedFileCount")}
+            payload.update(source_next_prompt_payload(state, "obsidian", "smoke_read"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        run_state = load_source_run_state("obsidian")
+        run_state.update({"candidateVaultPath": path, "updatedAt": now()})
+        run_path = save_source_run_state("obsidian", run_state)
+        state = set_obsidian_row_state(
+            state,
+            "attention",
+            "preflight",
+            "confirm_vault_if_needed",
+            attention_reason=validation.get("reason") or "invalid_vault_path",
+            run_state_path=run_path,
+        )
+        save_json(state)
+        payload = {"ok": False, "path": validation.get("path") or path, "reason": validation.get("reason")}
+        payload.update(source_next_prompt_payload(state, "obsidian", "confirm_vault_if_needed"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 1
+
+    def obsidian_smoke_read():
+        state = load_or_create_state()
+        run_state = load_source_run_state("obsidian")
+        vault = run_state.get("selectedVaultPath")
+        validation = vault_validation(vault)
+        if not validation.get("ok"):
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(
+                state,
+                "attention",
+                "preflight",
+                "confirm_vault_if_needed",
+                attention_reason=validation.get("reason") or "vault_path_required",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": validation.get("reason") or "vault_path_required"}
+            payload.update(source_next_prompt_payload(state, "obsidian", "confirm_vault_if_needed"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        files = markdown_files_for_vault(vault, limit=5)
+        readable = None
+        for path in files:
+            try:
+                _ = path.read_text(encoding="utf-8", errors="replace")[:2048]
+                readable = path
+                break
+            except Exception:
+                continue
+        if not readable:
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(
+                state,
+                "attention",
+                "smoke",
+                "smoke_read",
+                attention_reason="markdown_read_failed",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "markdown_read_failed"}
+            payload.update(source_next_prompt_payload(state, "obsidian", "smoke_read"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        relative = str(readable.relative_to(Path(vault)))
+        run_state.update({
+            "smokeReadStatus": "passed",
+            "smokeReadSamplePath": relative,
+            "estimatedFileCount": validation.get("estimatedFileCount"),
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("obsidian", run_state)
+        state = set_obsidian_row_state(
+            state,
+            "running",
+            "ingest",
+            "choose_ingest_scope",
+            run_state_path=run_path,
+            result_summary="Obsidian smoke read passed for " + relative,
+        )
+        save_json(state)
+        payload = {"ok": True, "samplePath": relative, "estimatedFileCount": validation.get("estimatedFileCount")}
+        payload.update(source_next_prompt_payload(state, "obsidian", "choose_ingest_scope"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def obsidian_choose_scope():
+        scope = single_flag_value("--scope")
+        folders = parse_flag_value("--folder")
+        if scope not in {"whole", "folders", "sample", "skip"}:
+            print("--scope must be whole, folders, sample, or skip", file=sys.stderr)
+            return 2
+        state = load_or_create_state()
+        run_state = load_source_run_state("obsidian")
+        vault = run_state.get("selectedVaultPath")
+        if scope == "skip":
+            run_state.update({"scope": "skip", "updatedAt": now()})
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(
+                state,
+                "skipped",
+                "complete",
+                "complete",
+                run_state_path=run_path,
+                result_summary="Obsidian skipped for this Source Onboarding session.",
+            )
+            save_json(state)
+            payload = {"ok": True, "skipped": True}
+            payload.update(source_next_prompt_payload(state, "obsidian", "complete"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        if scope == "folders" and not folders:
+            print("--folder is required when --scope folders", file=sys.stderr)
+            return 2
+        files = markdown_files_for_vault(vault, folders=folders if scope == "folders" else None, limit=5 if scope == "sample" else None)
+        total = len(markdown_files_for_vault(vault, folders=folders if scope == "folders" else None)) if scope != "sample" else len(files)
+        run_state.update({
+            "scope": scope,
+            "folders": folders,
+            "estimatedFileCount": total,
+            "durationClass": duration_class(total),
+            "planConfirmed": False,
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("obsidian", run_state)
+        state = set_obsidian_row_state(
+            state,
+            "running",
+            "ingest",
+            "confirm_ingest_plan",
+            run_state_path=run_path,
+            result_summary="Obsidian ingest scope selected: " + scope,
+        )
+        save_json(state)
+        payload = {"ok": True, "scope": scope, "folders": folders, "estimatedFileCount": total, "durationClass": duration_class(total)}
+        payload.update(source_next_prompt_payload(state, "obsidian", "confirm_ingest_plan"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def obsidian_confirm_plan():
+        answer = single_flag_value("--answer").strip().lower()
+        if answer not in {"yes", "y", "no", "n"}:
+            print("--answer must be yes or no", file=sys.stderr)
+            return 2
+        state = load_or_create_state()
+        run_state = load_source_run_state("obsidian")
+        if answer in {"no", "n"}:
+            run_state.update({"planConfirmed": False, "updatedAt": now()})
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(
+                state,
+                "attention",
+                "ingest",
+                "choose_ingest_scope",
+                attention_reason="ingest_plan_rejected",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_plan_rejected"}
+            payload.update(source_next_prompt_payload(state, "obsidian", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if not run_state.get("scope") or run_state.get("scope") == "skip":
+            payload = {"ok": False, "reason": "ingest_scope_required"}
+            state = set_obsidian_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="ingest_scope_required")
+            save_json(state)
+            payload.update(source_next_prompt_payload(state, "obsidian", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({"planConfirmed": True, "confirmedAt": now(), "updatedAt": now()})
+        run_path = save_source_run_state("obsidian", run_state)
+        state = set_obsidian_row_state(
+            state,
+            "running",
+            "ingest",
+            "ingest_markdown",
+            run_state_path=run_path,
+            result_summary="Obsidian ingest plan confirmed.",
+        )
+        save_json(state)
+        payload = {"ok": True, "scope": run_state.get("scope"), "estimatedFileCount": run_state.get("estimatedFileCount")}
+        payload.update(source_next_prompt_payload(state, "obsidian", "ingest_markdown"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def obsidian_ingest():
+        state = load_or_create_state()
+        run_state = load_source_run_state("obsidian")
+        if not run_state.get("planConfirmed"):
+            state = set_obsidian_row_state(state, "attention", "ingest", "confirm_ingest_plan", attention_reason="ingest_plan_unconfirmed")
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_plan_unconfirmed"}
+            payload.update(source_next_prompt_payload(state, "obsidian", "confirm_ingest_plan"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        vault = run_state.get("selectedVaultPath")
+        scope = run_state.get("scope")
+        folders = run_state.get("folders") if isinstance(run_state.get("folders"), list) else []
+        files = markdown_files_for_vault(vault, folders=folders if scope == "folders" else None, limit=5 if scope == "sample" else None)
+        artifact = obsidian_artifact_path(state)
+        lines = [
+            "# Obsidian Source Onboarding Ingest",
+            "",
+            "source: obsidian",
+            "playbook: obsidian.direct-markdown.v1",
+            "vault: " + str(vault),
+            "scope: " + str(scope),
+            "file_count: " + str(len(files)),
+            "",
+            "## Files",
+        ]
+        for path in files:
+            try:
+                relative = str(path.relative_to(Path(vault)))
+            except Exception:
+                relative = str(path)
+            lines.append("- " + relative)
+        lines.extend(["", "## Notes"])
+        for path in files:
+            try:
+                relative = str(path.relative_to(Path(vault)))
+                body = path.read_text(encoding="utf-8", errors="replace")
+            except Exception as error:
+                lines.extend([
+                    "",
+                    "### " + str(path),
+                    "",
+                    "read_error: " + type(error).__name__,
+                ])
+                continue
+            lines.extend([
+                "",
+                "### " + relative,
+                "",
+                "```markdown",
+                body.rstrip(),
+                "```",
+            ])
+        artifact.write_text("\\n".join(lines).rstrip() + "\\n", encoding="utf-8")
+        run_state.update({
+            "artifactPath": str(artifact),
+            "ingestedFileCount": len(files),
+            "ingestedAt": now(),
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("obsidian", run_state)
+        state = set_obsidian_row_state(
+            state,
+            "running",
+            "verify",
+            "verify_readback",
+            run_state_path=run_path,
+            result_summary="Obsidian ingest artifact written with " + str(len(files)) + " Markdown files.",
+        )
+        save_json(state)
+        payload = {"ok": True, "artifactPath": str(artifact), "ingestedFileCount": len(files)}
+        payload.update(source_next_prompt_payload(state, "obsidian", "verify_readback"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def obsidian_verify_readback():
+        state = load_or_create_state()
+        run_state = load_source_run_state("obsidian")
+        artifact = Path(run_state.get("artifactPath") or "")
+        try:
+            text = artifact.read_text(encoding="utf-8")
+        except Exception:
+            text = ""
+        if "source: obsidian" not in text or "playbook: obsidian.direct-markdown.v1" not in text:
+            run_state.update({"readbackStatus": "failed", "updatedAt": now()})
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(
+                state,
+                "attention",
+                "verify",
+                "verify_readback",
+                attention_reason="readback_failed",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "readback_failed"}
+            payload.update(source_next_prompt_payload(state, "obsidian", "verify_readback"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
+        run_path = save_source_run_state("obsidian", run_state)
+        state = set_obsidian_row_state(
+            state,
+            "checked",
+            "complete",
+            "complete",
+            run_state_path=run_path,
+            result_summary="Obsidian ingest readback verified for " + str(run_state.get("ingestedFileCount") or 0) + " Markdown files.",
+        )
+        save_json(state)
+        payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
+        payload.update(source_next_prompt_payload(state, "obsidian", "complete"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def obsidian_command():
+        if not args:
+            print("obsidian requires a subcommand", file=sys.stderr)
+            return 2
+        subcommand = args[0]
+        if subcommand == "verify-vault":
+            return obsidian_verify_vault()
+        if subcommand == "smoke-read":
+            return obsidian_smoke_read()
+        if subcommand == "choose-scope":
+            return obsidian_choose_scope()
+        if subcommand == "confirm-plan":
+            return obsidian_confirm_plan()
+        if subcommand == "ingest":
+            return obsidian_ingest()
+        if subcommand == "verify-readback":
+            return obsidian_verify_readback()
+        print("unknown obsidian subcommand: " + subcommand, file=sys.stderr)
+        return 2
+
     def split_pair(value):
         if "=" in value:
             left, right = value.split("=", 1)
@@ -1201,6 +2242,8 @@ struct ZebraSourceOnboardingHelper {
         sys.exit(start_next())
     elif command == "gmail":
         sys.exit(gmail_command())
+    elif command == "obsidian":
+        sys.exit(obsidian_command())
     elif command == "status":
         status()
     else:

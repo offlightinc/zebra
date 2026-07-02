@@ -224,7 +224,10 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
                     wasStartedBefore: wasStartedBefore
                 )
             } else if step.id == .sourceOnboarding {
-                substeps = sourceOnboardingSubstepsFromCachedState()
+                substeps = sourceOnboardingSubstepsFromCachedState(
+                    isParentRunning: runningStepID == .sourceOnboarding,
+                    showsStartForActiveSource: showsStart
+                )
             } else {
                 substeps = []
             }
@@ -491,7 +494,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         return ZebraSourceOnboardingState(
             status: gbrainTargetPath == nil ? .attention : .ready,
             entryContext: ZebraSourceOnboardingState.EntryContext(
-                selectedVaultPath: selectedVaultPath,
+                gbrainWriteTargetPath: selectedVaultPath,
                 gbrainTargetPath: gbrainTargetPath,
                 gbrainTargetKey: gbrainTargetPath.map { "vault:\($0)" },
                 gbrainReceiptPath: gbrainOnboardingStateURL.path,
@@ -599,7 +602,10 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         return StepCompletionResult(isComplete: true, reasons: [])
     }
 
-    func sourceOnboardingSubstepsFromCachedState() -> [ZebraOnboardingChecklistSubstepSnapshot] {
+    func sourceOnboardingSubstepsFromCachedState(
+        isParentRunning: Bool,
+        showsStartForActiveSource: Bool
+    ) -> [ZebraOnboardingChecklistSubstepSnapshot] {
         guard let state = loadSourceOnboardingState() else { return [] }
         var substeps: [ZebraOnboardingChecklistSubstepSnapshot] = []
 
@@ -607,9 +613,17 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             + state.progress.sourceRows.keys
                 .filter { !state.progress.normalizedSourceList.contains($0) }
                 .sorted()
+        let activeSourceID = activeSourceIDForSubsteps(in: state, orderedSourceIDs: orderedSourceIDs)
         for sourceID in orderedSourceIDs {
             guard let row = state.progress.sourceRows[sourceID] else { continue }
-            substeps.append(sourceRowSubstep(row))
+            substeps.append(
+                sourceRowSubstep(
+                    row,
+                    isActive: row.id == activeSourceID,
+                    isParentRunning: isParentRunning,
+                    showsStartForActiveSource: showsStartForActiveSource
+                )
+            )
         }
 
         for uncataloged in state.progress.uncatalogedSources {
@@ -620,21 +634,54 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     }
 
     private func sourceRowSubstep(
-        _ row: ZebraSourceOnboardingState.SourceRow
+        _ row: ZebraSourceOnboardingState.SourceRow,
+        isActive: Bool,
+        isParentRunning: Bool,
+        showsStartForActiveSource: Bool
     ) -> ZebraOnboardingChecklistSubstepSnapshot {
+        let isCompleted = row.status == "checked"
+        let isSkipped = row.status == "skipped"
+        let isRunning = isParentRunning && isActive
+        let canStart = !isCompleted && !isSkipped && isActive && !isRunning
+        let wasStartedBefore = row.playbookStepID != nil
+            || row.status == "running"
+            || row.status == "attention"
         return ZebraOnboardingChecklistSubstepSnapshot(
             id: "source-row-\(row.id)",
             title: row.displayName ?? row.id,
             detail: nil,
-            isCompleted: row.status == "checked",
-            isActive: false,
+            isCompleted: isCompleted,
+            isActive: isActive,
             isWaitingForUser: row.selectionState == "pending_confirmation",
-            isRunning: row.status == "running",
-            showsStart: false,
-            wasStartedBefore: true,
+            isRunning: isRunning,
+            showsStart: showsStartForActiveSource && canStart,
+            wasStartedBefore: wasStartedBefore,
             isAttention: row.status == "attention",
-            isSkipped: row.status == "skipped"
+            isSkipped: isSkipped
         )
+    }
+
+    private func activeSourceIDForSubsteps(
+        in state: ZebraSourceOnboardingState,
+        orderedSourceIDs: [String]
+    ) -> String? {
+        let confirmed = state.progress.sourceConfirmation?.status == .confirmed
+        guard confirmed else { return nil }
+        if let activeSourceID = state.progress.activeSourceID,
+           let activeRow = state.progress.sourceRows[activeSourceID],
+           !Self.sourceRowIsTerminal(activeRow) {
+            return activeSourceID
+        }
+        return orderedSourceIDs.first { sourceID in
+            guard let row = state.progress.sourceRows[sourceID] else { return false }
+            return !Self.sourceRowIsTerminal(row)
+        }
+    }
+
+    private static func sourceRowIsTerminal(
+        _ row: ZebraSourceOnboardingState.SourceRow
+    ) -> Bool {
+        row.status == "checked" || row.status == "skipped"
     }
 
     private func uncatalogedSourceSubstep(
@@ -945,7 +992,8 @@ public enum ZebraOnboardingChecklistCommand {
     public static func launchPlan(
         for stepID: ZebraOnboardingChecklistStepID,
         selectedVaultPath: String?,
-        chainGBrainRuntimeAfterAgent: Bool = false
+        chainGBrainRuntimeAfterAgent: Bool = false,
+        useSelectedRuntimeForSourceOnboarding: Bool = true
     ) -> LaunchPlan? {
         let cwd = launchDirectory(selectedVaultPath: selectedVaultPath)
         let language = ZebraOnboardingLanguage.current()
@@ -981,10 +1029,21 @@ public enum ZebraOnboardingChecklistCommand {
             ) else {
                 return nil
             }
+            let prompt = sourceOnboardingBoundaryPrompt(selectedVaultPath: selectedVaultPath)
+            if useSelectedRuntimeForSourceOnboarding,
+               let runtime = ZebraGBrainRuntimeOnboardingStore().selectedRuntimeForGBrainSetup() {
+                return standaloneLaunchPlan(
+                    sourceOnboardingRuntimeStartupLine(
+                        launch: launch,
+                        runtime: runtime,
+                        prompt: prompt
+                    )
+                )
+            }
             return standaloneLaunchPlan(
                 agentStartupLine(
                     cwd: launch.launchDirectory,
-                    prompt: sourceOnboardingBoundaryPrompt(selectedVaultPath: selectedVaultPath),
+                    prompt: prompt,
                     shellEnvironmentPrefix: launch.shellEnvironmentPrefix
                 )
             )
@@ -1002,7 +1061,7 @@ public enum ZebraOnboardingChecklistCommand {
 
     private static func sourceOnboardingBoundaryPrompt(selectedVaultPath: String?) -> String {
         let statePath = ZebraSourceOnboardingState.defaultStateURL().path
-        let vaultContext = selectedVaultPath ?? "not selected"
+        let gbrainWriteTargetContext = selectedVaultPath ?? "not selected"
         let gbrainTargetPath = ZebraGBrainOnboardingStore().resolvedBrainRepoTargetPath()
         let gbrainTargetContext = gbrainTargetPath ?? "missing: gbrain_target_missing"
         return """
@@ -1011,21 +1070,26 @@ public enum ZebraOnboardingChecklistCommand {
         State file path:
         \(statePath)
 
-        Selected vault path:
-        \(vaultContext)
+        GBrain write target path (not an Obsidian source vault):
+        \(gbrainWriteTargetContext)
 
         GBrain target context:
         \(gbrainTargetContext)
 
         Scope for this run:
         - Use the Step 3 GBrain setup receipt as the primary target readiness source.
+        - You are running inside the selected agent runtime when Zebra has a verified runtime receipt. Treat vault file access results as runtime-specific.
+        - If Obsidian listing or file reads fail with permission errors in this runtime, report the runtime access failure instead of saying the vault has 0 Markdown files.
+        - Hermes vault access still needs separate verification; if this run is in Hermes, explicitly verify listing and smoke-read before ingest.
+        - Treat the GBrain write target path only as Zebra's write target context. Do not use it as an Obsidian source vault path.
         - Ask which sources Zebra should understand for this first source intake.
         - Normalize source aliases into source candidates when they are in the current source catalog.
         - Keep inputs that are not in the current catalog as uncataloged sources; do not describe them to the user as unavailable or impossible.
         - The source-list confirmation question must include every source the user named, including uncataloged sources.
         - Use the zebra-source-onboarding helper as the Source Onboarding state write path.
-        - After source-list confirmation, run only the Gmail/Clawvisor runner if Gmail is the next active source.
-        - Do not implement or start Notion, Obsidian, or iMessage runners in this session.
+        - After source-list confirmation, run zebra-source-onboarding next and follow only the active source returned by the helper.
+        - Gmail and Obsidian runners are implemented in this helper slice.
+        - Do not implement or start Notion or iMessage runners in this session.
         - Do not edit source-onboarding-state.json directly; continue only from helper stdout `nextPrompt` and use `nextPromptPath` only as the file fallback.
 
         Helper flow:
@@ -1038,7 +1102,7 @@ public enum ZebraOnboardingChecklistCommand {
         5. Ask the source-list confirmation question from the helper output.
         6. Run zebra-source-onboarding confirm --answer yes or zebra-source-onboarding confirm --answer no.
         7. If the confirmation was yes, run zebra-source-onboarding next.
-        8. If `next` returns a Gmail `nextPrompt`, follow that prompt exactly until Gmail is checked or needs attention.
+        8. If `next` returns a Gmail or Obsidian `nextPrompt`, follow that prompt exactly until that source is checked, skipped, or needs attention.
         9. Run zebra-source-onboarding status --json and report the saved state path plus compact saved-state summary.
 
         GBrain live probe policy:
@@ -1226,6 +1290,75 @@ public enum ZebraOnboardingChecklistCommand {
         default:
             return "echo 'Unsupported OpenClaw/Hermes runtime for GBrain setup: \(runtime.runtime)' >&2 && exit 1\r"
         }
+    }
+
+    static func sourceOnboardingRuntimeStartupLine(
+        launch: ZebraSourceOnboardingHelper.LaunchContext,
+        runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime,
+        prompt: String,
+        language: ZebraOnboardingLanguage = ZebraOnboardingLanguage.current()
+    ) -> String {
+        guard let promptPath = writeSourceOnboardingRuntimePromptFile(
+            directoryPath: launch.runtimePromptDirectory,
+            prompt: "\(language.promptPolicy)\n\n\(prompt)"
+        ) else {
+            return agentStartupLine(
+                cwd: launch.launchDirectory,
+                prompt: prompt,
+                shellEnvironmentPrefix: launch.shellEnvironmentPrefix
+            )
+        }
+        let runtimeDisplayName = gbrainRuntimeDisplayName(runtime.runtime)
+        let startMessage = "printf '%s\\n' \(ZebraAgentLaunchCommand.shellQuote("Starting \(runtimeDisplayName) for Zebra Source Onboarding..."))"
+        let command: String
+        let executable = ZebraAgentLaunchCommand.shellQuote(runtime.executablePath)
+        let promptPathArgument = ZebraAgentLaunchCommand.shellQuote(promptPath)
+        switch runtime.runtime {
+        case "openclaw":
+            command = "ZEBRA_SOURCE_ONBOARDING_PROMPT=$(cat \(promptPathArgument)) && \(startMessage) && cd \(ZebraAgentLaunchCommand.shellQuote(launch.launchDirectory)) && exec \(executable) tui --local --session \(ZebraAgentLaunchCommand.shellQuote(sourceOnboardingRuntimeSessionID(promptPath: promptPath))) --message \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\"\r"
+        case "hermes":
+            command = "ZEBRA_SOURCE_ONBOARDING_PROMPT=$(cat \(promptPathArgument)) && \(startMessage) && cd \(ZebraAgentLaunchCommand.shellQuote(launch.launchDirectory)) && exec \(executable) chat --tui --source zebra-source-onboarding --query \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\"\r"
+        default:
+            command = "echo 'Unsupported OpenClaw/Hermes runtime for Source Onboarding: \(runtime.runtime)' >&2 && exit 1\r"
+        }
+        return "\(launch.shellEnvironmentPrefix)\(command)"
+    }
+
+    private static func writeSourceOnboardingRuntimePromptFile(
+        directoryPath: String,
+        prompt: String
+    ) -> String? {
+        let directory = URL(fileURLWithPath: directoryPath, isDirectory: true)
+        let url = directory.appendingPathComponent(
+            "source-onboarding-\(UUID().uuidString).prompt.txt",
+            isDirectory: false
+        )
+        do {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return url.path
+        } catch {
+            return nil
+        }
+    }
+
+    private static func sourceOnboardingRuntimeSessionID(promptPath: String) -> String {
+        let basename = URL(fileURLWithPath: promptPath).deletingPathExtension().lastPathComponent
+        let suffix = basename
+            .lowercased()
+            .map { character -> Character in
+                if character.isLetter || character.isNumber || character == "-" {
+                    return character
+                }
+                return "-"
+            }
+        let trimmed = String(String(suffix).suffix(24)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return "zebra-source-onboarding-\(trimmed.isEmpty ? "run" : trimmed)"
     }
 
     private static func gbrainRuntimeDisplayName(_ runtime: String) -> String {
