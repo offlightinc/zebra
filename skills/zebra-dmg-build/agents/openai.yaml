@@ -1,0 +1,4 @@
+interface:
+  display_name: "Zebra DMG Build"
+  short_description: "Build Zebra.app and dist/Zebra.dmg from the release overlay."
+  default_prompt: "Use this skill to build the branded Zebra release-test artifact: run scripts/build-zebra-notarized-dmg.sh from the checkout, choose Developer ID/notarized or ad-hoc signing as appropriate, verify codesign and plist values, and report the DMG path plus SHA-256."
