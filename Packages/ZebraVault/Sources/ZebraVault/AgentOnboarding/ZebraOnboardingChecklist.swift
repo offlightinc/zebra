@@ -1315,7 +1315,7 @@ public enum ZebraOnboardingChecklistCommand {
         let promptPathArgument = ZebraAgentLaunchCommand.shellQuote(promptPath)
         switch runtime.runtime {
         case "openclaw":
-            command = "ZEBRA_SOURCE_ONBOARDING_PROMPT=$(cat \(promptPathArgument)) && \(startMessage) && cd \(ZebraAgentLaunchCommand.shellQuote(launch.launchDirectory)) && exec \(executable) tui --local --session \(ZebraAgentLaunchCommand.shellQuote(sourceOnboardingRuntimeSessionID(promptPath: promptPath))) --message \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\"\r"
+            command = "ZEBRA_SOURCE_ONBOARDING_PROMPT=$(cat \(promptPathArgument)) && \(startMessage) && cd \(ZebraAgentLaunchCommand.shellQuote(launch.launchDirectory)) && exec \(executable) tui --message \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\"\r"
         case "hermes":
             command = "ZEBRA_SOURCE_ONBOARDING_PROMPT=$(cat \(promptPathArgument)) && \(startMessage) && cd \(ZebraAgentLaunchCommand.shellQuote(launch.launchDirectory)) && exec \(executable) chat --tui --source zebra-source-onboarding --query \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\"\r"
         default:
@@ -1345,20 +1345,6 @@ public enum ZebraOnboardingChecklistCommand {
         } catch {
             return nil
         }
-    }
-
-    private static func sourceOnboardingRuntimeSessionID(promptPath: String) -> String {
-        let basename = URL(fileURLWithPath: promptPath).deletingPathExtension().lastPathComponent
-        let suffix = basename
-            .lowercased()
-            .map { character -> Character in
-                if character.isLetter || character.isNumber || character == "-" {
-                    return character
-                }
-                return "-"
-            }
-        let trimmed = String(String(suffix).suffix(24)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return "zebra-source-onboarding-\(trimmed.isEmpty ? "run" : trimmed)"
     }
 
     private static func gbrainRuntimeDisplayName(_ runtime: String) -> String {
