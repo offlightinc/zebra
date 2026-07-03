@@ -4192,6 +4192,98 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertFalse(result.stdout.contains("doctor_failed"), "stdout: \(result.stdout) stderr: \(result.stderr)")
     }
 
+    func testReportGuardRejectsCreateBrainDoctorFailureWithDiagnostics() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrainWithOnlyCycleFreshnessFailure(
+            root: root,
+            localPath: target.path,
+            doctorChecksJSON: #"{"checks":[{"name":"sync_freshness","status":"fail"},{"name":"cycle_freshness","status":"fail"}]}"#
+        )
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 3: Create the Brain",
+                "--topology", "pglite",
+                "--target", target.path,
+                "--method", "user_created_repo",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let progress = try progressObject(in: stateURL)
+        let details = try XCTUnwrap(progress["lastFailureDetails"] as? [String: Any])
+
+        XCTAssertNotEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        XCTAssertEqual(payload["reason"] as? String, "doctor_failed")
+        XCTAssertEqual(payload["doctorFailedChecks"] as? [String], ["sync_freshness", "cycle_freshness"])
+        XCTAssertEqual(payload["doctorCwd"] as? String, target.path)
+        XCTAssertEqual(payload["doctorExitCode"] as? Int, 1)
+        XCTAssertEqual(details["doctorFailedChecks"] as? [String], ["sync_freshness", "cycle_freshness"])
+        XCTAssertEqual(details["doctorCwd"] as? String, target.path)
+    }
+
+    func testReportGuardReusesDoctorDiagnosticsAndClearsDetailsAfterSuccess() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = try writeGuardDocs(root: root)
+        let target = root.appendingPathComponent("brain", isDirectory: true)
+        let doctorLog = root.appendingPathComponent("doctor-calls.log")
+        let successMarker = root.appendingPathComponent("doctor-ok")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let bin = try installFakeGBrainWithOnlyCycleFreshnessFailure(
+            root: root,
+            localPath: target.path,
+            doctorChecksJSON: #"{"checks":[{"name":"sync_freshness","status":"fail"},{"name":"cycle_freshness","status":"fail"}]}"#,
+            doctorCallLogPath: doctorLog.path,
+            successMarkerPath: successMarker.path
+        )
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        _ = try recordEmbeddingDecision(stateURL: stateURL, path: bin.path)
+
+        let arguments = [
+            "report",
+            "--status", "completed",
+            "--section", "Step 3: Create the Brain",
+            "--topology", "pglite",
+            "--target", target.path,
+            "--method", "user_created_repo",
+        ]
+        let failed = try runHelper(stateURL: stateURL, path: bin.path, arguments: arguments)
+        XCTAssertNotEqual(failed.exitCode, 0, "stdout: \(failed.stdout) stderr: \(failed.stderr)")
+        XCTAssertEqual(try String(contentsOf: doctorLog, encoding: .utf8).split(separator: "\n").count, 1)
+        XCTAssertNotNil(try progressObject(in: stateURL)["lastFailureDetails"])
+
+        try "".write(to: successMarker, atomically: true, encoding: .utf8)
+        let succeeded = try runHelper(stateURL: stateURL, path: bin.path, arguments: arguments)
+        let progress = try progressObject(in: stateURL)
+
+        XCTAssertEqual(succeeded.exitCode, 0, "stdout: \(succeeded.stdout) stderr: \(succeeded.stderr)")
+        XCTAssertEqual(try String(contentsOf: doctorLog, encoding: .utf8).split(separator: "\n").count, 2)
+        XCTAssertNil(progress["lastFailure"])
+        XCTAssertNil(progress["lastFailureDetails"])
+    }
+
     func testReportGuardRejectsCreateBrainCompletionWithoutEmbeddingDecision() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
@@ -7420,11 +7512,27 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
     private func installFakeGBrainWithOnlyCycleFreshnessFailure(
         root: URL,
         localPath: String,
-        supportsInstallProbes: Bool = true
+        supportsInstallProbes: Bool = true,
+        doctorChecksJSON: String = #"{"checks":[{"name":"connection","status":"ok"},{"name":"cycle_freshness","status":"fail","message":"Source has never completed a full cycle"}]}"#,
+        doctorCallLogPath: String? = nil,
+        successMarkerPath: String? = nil
     ) throws -> URL {
         let bin = root.appendingPathComponent("fake-gbrain-bin", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let script = bin.appendingPathComponent("gbrain", isDirectory: false)
+        let doctorCallLogBlock = doctorCallLogPath.map { path in
+            """
+              printf 'doctor\\n' >> '\(path)'
+            """
+        } ?? ""
+        let doctorSuccessBlock = successMarkerPath.map { path in
+            """
+              if [ -f '\(path)' ]; then
+                echo '{"ok":true}'
+                exit 0
+              fi
+            """
+        } ?? ""
         let probeBlock: String
         if supportsInstallProbes {
             probeBlock = """
@@ -7456,7 +7564,9 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
           exit 0
         fi
         if [ "$1" = "doctor" ]; then
-          echo '{"checks":[{"name":"connection","status":"ok"},{"name":"cycle_freshness","status":"fail","message":"Source has never completed a full cycle"}]}'
+        \(doctorCallLogBlock)
+        \(doctorSuccessBlock)
+          echo '\(doctorChecksJSON)'
           exit 1
         fi
         if [ "$1" = "sources" ] && [ "$2" = "current" ]; then

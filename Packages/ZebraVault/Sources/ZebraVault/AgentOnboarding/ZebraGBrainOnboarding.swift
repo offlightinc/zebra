@@ -3253,6 +3253,8 @@ public struct ZebraGBrainOnboardingStore {
                 "- Do not implicitly use the home directory or Zebra's onboarding work directory as the brain repo target.",
                 "- When Step 3 resolves a brain repo target, include `--topology <pglite|postgres|supabase> --target <brain repo path> --method <targetResolution.method>` on the completed report.",
                 "- If a Step 3 command asks the user to choose search mode before Step 3.5, include `--search-mode <mode>` on the Step 3 completed report so Zebra will not ask the same question again in Step 3.5.",
+                "- If the Step 3 completed report returns `doctor_failed`, inspect the report's `doctorFailedChecks`, `doctorCwd`, and `doctorExitCode`. Do not treat Step 9 `verify` output as the Step 3 report contract.",
+                "- `cycle_freshness` alone should not block Step 3. Any other doctor failed check must be fixed before reporting Step 3 completed again.",
             ])
         elif role == "search_mode":
             decision = search_mode_decision(state)
@@ -4999,10 +5001,22 @@ public struct ZebraGBrainOnboardingStore {
         except Exception:
             return False
 
-    def doctor_allows_create_brain_progress(state):
+    def bounded_text(value, limit=2000):
+        text = (value or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[-limit:]
+
+    def create_brain_doctor_diagnostics(state):
         executable = gbrain_executable()
         if not executable:
-            return False
+            return {
+                "doctorEffectiveOk": False,
+                "doctorFailedChecks": ["missing_gbrain_executable"],
+                "doctorCwd": None,
+                "doctorExitCode": None,
+                "doctorError": "missing_gbrain_executable",
+            }
         _, target_path, _, _ = resolved_target(state)
         cwd = target_path if target_path and os.path.isdir(target_path) else None
         try:
@@ -5014,9 +5028,35 @@ public struct ZebraGBrainOnboardingStore {
                 stderr=subprocess.PIPE,
                 timeout=45,
             )
-            return doctor_allows_create_or_import_progress_ok(result)
+            ok, maintenance_pending = doctor_allows_create_or_import_progress(result)
+            diagnostics = {
+                "doctorEffectiveOk": ok,
+                "doctorMaintenancePending": maintenance_pending,
+                "doctorFailedChecks": doctor_failed_checks(result),
+                "doctorCwd": cwd,
+                "doctorExitCode": result.returncode,
+            }
+            stderr = bounded_text(result.stderr)
+            if stderr:
+                diagnostics["doctorStderrTail"] = stderr
+            return diagnostics
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "doctorEffectiveOk": False,
+                "doctorFailedChecks": ["doctor_timeout"],
+                "doctorCwd": cwd,
+                "doctorExitCode": None,
+                "doctorError": "doctor_timeout",
+                "doctorStderrTail": bounded_text(exc.stderr if isinstance(exc.stderr, str) else ""),
+            }
         except Exception:
-            return False
+            return {
+                "doctorEffectiveOk": False,
+                "doctorFailedChecks": ["doctor_failed"],
+                "doctorCwd": cwd,
+                "doctorExitCode": None,
+                "doctorError": "doctor_failed",
+            }
 
     def source_registered(state, flags):
         executable = gbrain_executable()
@@ -5091,6 +5131,10 @@ public struct ZebraGBrainOnboardingStore {
         progress["lastFailure"] = reason
         progress["lastStatus"] = "rejected"
         progress["updatedAt"] = now()
+        if extra_payload and reason == "doctor_failed":
+            progress["lastFailureDetails"] = extra_payload
+        else:
+            progress.pop("lastFailureDetails", None)
         if reason in {
             "brain_repo_target_unresolved",
             "target_confirmation_missing",
@@ -5132,7 +5176,7 @@ public struct ZebraGBrainOnboardingStore {
         print(json.dumps(payload, sort_keys=True))
         sys.exit(1)
 
-    def report_guard_reason(state, status, role, flags):
+    def report_guard_reason(state, status, role, flags, guard_context=None):
         if status not in {"started", "completed"}:
             return None
         roles = completed_roles(state)
@@ -5150,7 +5194,10 @@ public struct ZebraGBrainOnboardingStore {
                 return target_reasons[0]
             if not embedding_decision_recorded(state):
                 return "embedding_provider_required"
-            if not doctor_allows_create_brain_progress(state):
+            doctor_diagnostics = create_brain_doctor_diagnostics(state)
+            if guard_context is not None:
+                guard_context["doctor_diagnostics"] = doctor_diagnostics
+            if doctor_diagnostics.get("doctorEffectiveOk") is not True:
                 return "doctor_failed"
         if role == "search_mode":
             if "create_brain" not in roles:
@@ -5293,9 +5340,11 @@ public struct ZebraGBrainOnboardingStore {
             recurring_jobs_error = apply_recurring_jobs_decision(candidate_state, flags)
             if recurring_jobs_error:
                 reject_report(state, recurring_jobs_error, section, status)
-        guard_reason = report_guard_reason(candidate_state, status, role, flags)
+        guard_context = {}
+        guard_reason = report_guard_reason(candidate_state, status, role, flags, guard_context)
         if guard_reason:
             next_action = None
+            extra_payload = None
             if guard_reason == "section_role_unknown":
                 next_action = "report mapped_role with role and evidence, or report waiting_for_user"
             elif guard_reason in {
@@ -5307,7 +5356,9 @@ public struct ZebraGBrainOnboardingStore {
                 next_action = "report waiting_for_user for brain_repo_target_resolution"
             elif guard_reason == "recurring_jobs_decision_required":
                 next_action = "report waiting_for_user for recurring_jobs_decision"
-            reject_report(state, guard_reason, section, status, next_action=next_action)
+            elif guard_reason == "doctor_failed" and role == "create_brain" and status == "completed":
+                extra_payload = guard_context.get("doctor_diagnostics")
+            reject_report(state, guard_reason, section, status, next_action=next_action, extra_payload=extra_payload)
         if role == "import_index" and status == "completed":
             source_record_error = record_verified_source_id(candidate_state, flags)
             if source_record_error:
@@ -5330,8 +5381,10 @@ public struct ZebraGBrainOnboardingStore {
             progress.pop("waitingForUser", None)
         if status == "failed":
             progress["lastFailure"] = note or section or "failed"
+            progress.pop("lastFailureDetails", None)
         elif status in ("started", "completed", "skipped", "deferred"):
             progress.pop("lastFailure", None)
+            progress.pop("lastFailureDetails", None)
         progress["lastStatus"] = status
         progress["updatedAt"] = now()
         payload = {"ok": True, "status": status, "section": section}
