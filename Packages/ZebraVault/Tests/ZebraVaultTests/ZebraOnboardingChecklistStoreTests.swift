@@ -31,13 +31,13 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         XCTAssertEqual(
             store.snapshots.map { $0.id },
-            [.agent, .gbrainRuntime, .gbrain, .sourceOnboarding, .adapter]
+            [.agent, .gbrainRuntime, .gbrain, .adapter, .sourceOnboarding]
         )
         XCTAssertEqual(store.snapshots.map { $0.number }, [1, 2, 3, 4, 5])
     }
 
     @MainActor
-    func testSourceOnboardingIsActiveImmediatelyAfterGBrainCompletion() throws {
+    func testAdapterIsActiveImmediatelyAfterGBrainCompletion() throws {
         let root = try makeTemporaryDirectory()
         let vault = root.appendingPathComponent("brain", isDirectory: true)
         let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
@@ -71,11 +71,75 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         store.syncExternalState(selectedVaultPath: vault.path)
 
+        let adapter = try XCTUnwrap(store.snapshots.first { $0.id == .adapter })
         let sourceOnboarding = try XCTUnwrap(store.snapshots.first { $0.id == .sourceOnboarding })
 
         XCTAssertTrue(store.completedStepIDs.contains(.agent))
         XCTAssertTrue(store.completedStepIDs.contains(.gbrainRuntime))
         XCTAssertTrue(store.completedStepIDs.contains(.gbrain))
+        XCTAssertFalse(store.completedStepIDs.contains(.adapter))
+        XCTAssertFalse(store.completedStepIDs.contains(.sourceOnboarding))
+        XCTAssertTrue(adapter.isActive)
+        XCTAssertTrue(adapter.showsStart)
+        XCTAssertFalse(sourceOnboarding.isActive)
+        XCTAssertFalse(sourceOnboarding.showsStart)
+    }
+
+    @MainActor
+    func testSourceOnboardingIsActiveAfterAdapterCompletion() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let sourceRepo = root
+            .appendingPathComponent("repos", isDirectory: true)
+            .appendingPathComponent("gbrain", isDirectory: true)
+        let adapterRepo = sourceRepo
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-adapter", isDirectory: true)
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let agentStateURL = onboardingDirectory.appendingPathComponent("agent-cli-state.json", isDirectory: false)
+        let agentPreferenceURL = root
+            .appendingPathComponent("agent", isDirectory: true)
+            .appendingPathComponent("preferences.json", isDirectory: false)
+        let runtimeStateURL = onboardingDirectory.appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = onboardingDirectory.appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceRepo, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: adapterRepo, withIntermediateDirectories: true)
+        try writeInstalledAdapterFiles(vault)
+        try writeAgentReadinessState(onboardingDirectory: onboardingDirectory, agent: "codex", method: "path")
+        try writeAgentPreferences(agentPreferenceURL)
+        try writeCompletedRuntimeState(
+            stateURL: runtimeStateURL,
+            runtime: "hermes",
+            executablePath: executable.path
+        )
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: vault.path,
+            executablePath: executable.path,
+            sourceRepoPath: sourceRepo.path
+        )
+        try writeCompletedAdapterState(
+            stateURL: adapterStateURL,
+            targetVaultPath: vault.path,
+            adapterRepoPath: adapterRepo.path
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            agentOnboardingStateURL: agentStateURL,
+            agentPreferenceURL: agentPreferenceURL,
+            gbrainRuntimeOnboardingStateURL: runtimeStateURL,
+            gbrainOnboardingStateURL: gbrainStateURL,
+            gbrainAdapterOnboardingStateURL: adapterStateURL
+        )
+        store.syncExternalState(selectedVaultPath: vault.path)
+
+        let sourceOnboarding = try XCTUnwrap(store.snapshots.first { $0.id == .sourceOnboarding })
+
+        XCTAssertTrue(store.completedStepIDs.contains(.adapter))
         XCTAssertFalse(store.completedStepIDs.contains(.sourceOnboarding))
         XCTAssertTrue(sourceOnboarding.isActive)
         XCTAssertTrue(sourceOnboarding.showsStart)
@@ -516,6 +580,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(line.contains("GBrain target context"), line)
         XCTAssertFalse(line.contains("Selected vault path"), line)
         XCTAssertTrue(line.contains("Step 3 GBrain setup receipt"), line)
+        XCTAssertTrue(line.contains("Source Onboarding is Step 5"), line)
+        XCTAssertTrue(line.contains("after Step 4 gbrain-adapter is installed"), line)
+        XCTAssertTrue(line.contains("entryContext.adapterReady"), line)
+        XCTAssertTrue(line.contains("injecting approved user source data into the active brain"), line)
         XCTAssertTrue(line.contains("selected agent runtime"), line)
         XCTAssertTrue(line.contains("runtime-specific"), line)
         XCTAssertTrue(line.contains("Hermes vault access still needs separate verification"), line)
@@ -880,6 +948,70 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSourceOnboardingHelperStatusRejectsStaleAdapterReceipt() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let sourceRepo = root
+            .appendingPathComponent("repos", isDirectory: true)
+            .appendingPathComponent("gbrain", isDirectory: true)
+        let adapterRepo = sourceRepo
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-adapter", isDirectory: true)
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceRepo, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: adapterRepo, withIntermediateDirectories: true)
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: vault.path,
+            executablePath: executable.path,
+            sourceRepoPath: sourceRepo.path
+        )
+        try writeCompletedAdapterState(
+            stateURL: adapterStateURL,
+            targetVaultPath: vault.path,
+            adapterRepoPath: adapterRepo.path
+        )
+
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: vault.path)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let status = try runProcess(
+            executableURL: helperURL,
+            arguments: ["status", "--json"],
+            environment: [
+                "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+                "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+                "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+                "ZEBRA_GBRAIN_WRITE_TARGET_PATH": vault.path,
+            ]
+        )
+
+        XCTAssertEqual(status.status, 0, "stdout:\n\(status.stdout)\nstderr:\n\(status.stderr)")
+        let payload = try jsonObject(from: status.stdout)
+        XCTAssertEqual(payload["status"] as? String, "attention")
+        let state = try XCTUnwrap(payload["state"] as? [String: Any])
+        let entryContext = try XCTUnwrap(state["entryContext"] as? [String: Any])
+        XCTAssertEqual(entryContext["adapterReady"] as? Bool, false)
+        let reasons = try XCTUnwrap(entryContext["adapterReadinessReasons"] as? [String])
+        XCTAssertTrue(reasons.contains("missing:adapterSkillRouter"), reasons.joined(separator: ","))
+    }
+
+    @MainActor
     func testSourceOnboardingHelperNextStartsGmailRunnerAndWritesPromptPath() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
@@ -954,6 +1086,12 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.playbookStepID, "connect_clawvisor")
 
         let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let sourceRepo = root
+            .appendingPathComponent("repos", isDirectory: true)
+            .appendingPathComponent("gbrain", isDirectory: true)
+        let adapterRepo = sourceRepo
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-adapter", isDirectory: true)
         let agentStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("agent-cli-state.json", isDirectory: false)
@@ -965,6 +1103,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .appendingPathComponent("gbrain-runtime-state.json", isDirectory: false)
         let executable = try installFakeRuntime(root: root, name: "hermes")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceRepo, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: adapterRepo, withIntermediateDirectories: true)
+        try writeInstalledAdapterFiles(vault)
         try writeAgentReadinessState(onboardingDirectory: root.appendingPathComponent("onboarding", isDirectory: true), agent: "codex", method: "path")
         try writeAgentPreferences(agentPreferenceURL)
         try writeCompletedRuntimeState(
@@ -975,7 +1116,13 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         try writeCompletedGBrainState(
             stateURL: gbrainStateURL,
             vaultPath: vault.path,
-            executablePath: executable.path
+            executablePath: executable.path,
+            sourceRepoPath: sourceRepo.path
+        )
+        try writeCompletedAdapterState(
+            stateURL: adapterStateURL,
+            targetVaultPath: vault.path,
+            adapterRepoPath: adapterRepo.path
         )
 
         let store = ZebraOnboardingChecklistStore(
@@ -983,7 +1130,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             agentOnboardingStateURL: agentStateURL,
             agentPreferenceURL: agentPreferenceURL,
             gbrainRuntimeOnboardingStateURL: runtimeStateURL,
-            gbrainOnboardingStateURL: gbrainStateURL
+            gbrainOnboardingStateURL: gbrainStateURL,
+            gbrainAdapterOnboardingStateURL: adapterStateURL
         )
         store.syncExternalState(selectedVaultPath: vault.path)
 

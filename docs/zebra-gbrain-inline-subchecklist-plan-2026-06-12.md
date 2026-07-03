@@ -295,7 +295,7 @@ section title 비교는 원문 title이 거의 그대로 저장되므로 우선 
 
 ## Source Onboarding 하위 row 확장
 
-2026-07-02 기준으로 같은 공통 `substeps` projection은 4단계 Source Onboarding에도 쓰인다. Source Onboarding은 GBrain 문서 섹션이 아니라 `source-onboarding-state.json`의 source row를 표시한다.
+2026-07-02 기준으로 같은 공통 `substeps` projection은 5단계 Source Onboarding에도 쓰인다. Source Onboarding은 GBrain 문서 섹션이 아니라 `source-onboarding-state.json`의 source row를 표시한다.
 
 Source row의 source of truth:
 

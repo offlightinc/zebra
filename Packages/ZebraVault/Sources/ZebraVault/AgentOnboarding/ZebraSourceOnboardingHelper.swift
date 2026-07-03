@@ -573,10 +573,12 @@ struct ZebraSourceOnboardingHelper {
 
     def default_state(timestamp=None):
         timestamp = timestamp or now()
+        context = entry_context()
+        missing_prerequisite = context.get("gbrainTargetMissingReason") or (None if context.get("adapterReady") else "gbrain_adapter_missing")
         return {
             "schemaVersion": 1,
-            "status": "attention" if entry_context().get("gbrainTargetMissingReason") else "ready",
-            "entryContext": entry_context(),
+            "status": "attention" if missing_prerequisite else "ready",
+            "entryContext": context,
             "sourceReadiness": {"gmail": gmail_readiness()},
             "progress": {
                 "rawSourceInput": None,
@@ -2400,10 +2402,71 @@ struct ZebraSourceOnboardingHelper {
             return key, path, target
         return None, None, {}
 
+    def adapter_block_exists(root, relative_path):
+        try:
+            text = (Path(root) / relative_path).read_text(encoding="utf-8")
+        except Exception:
+            return False
+        return "<!-- gbrain-adapter:begin goals-tasks -->" in text and "<!-- gbrain-adapter:end goals-tasks -->" in text
+
+    def adapter_installed_checks(target_path):
+        root = Path(target_path)
+        return {
+            "adapterSkillRouter": (root / ".gbrain-adapter/skills/router/SKILL.md").exists(),
+            "adapterSkillDailyTaskManager": (root / ".gbrain-adapter/skills/daily-task-manager/SKILL.md").exists(),
+            "adapterSkillDailyTaskPrep": (root / ".gbrain-adapter/skills/daily-task-prep/SKILL.md").exists(),
+            "goalsReadme": (root / "goals/README.md").exists(),
+            "tasksReadme": (root / "tasks/README.md").exists(),
+            "resolverBlock": adapter_block_exists(root, "RESOLVER.md"),
+            "schemaBlock": adapter_block_exists(root, "schema.md"),
+            "agentsBlock": adapter_block_exists(root, "AGENTS.md"),
+        }
+
+    def adapter_completion_result(target_key, target_path, target):
+        adapter = load_json(adapter_state_path)
+        adapter_receipt = adapter.get("receipt") if isinstance(adapter.get("receipt"), dict) else {}
+        if not adapter_receipt:
+            return False, ["missing_receipt"]
+        if adapter_receipt.get("complete") is not True:
+            reasons = adapter_receipt.get("reasons") if isinstance(adapter_receipt.get("reasons"), list) else []
+            return False, reasons or ["receipt_incomplete"]
+
+        gbrain = load_json(gbrain_state_path)
+        gbrain_receipt = gbrain.get("receipt") if isinstance(gbrain.get("receipt"), dict) else {}
+        if not gbrain_receipt:
+            return False, ["gbrain_receipt_missing"]
+        readiness = gbrain_receipt.get("globalReadiness") if isinstance(gbrain_receipt.get("globalReadiness"), dict) else {}
+        if readiness.get("complete") is not True:
+            return False, ["gbrain_receipt_incomplete"]
+        if not target_key or not target_path or not isinstance(target, dict) or target.get("complete") is not True:
+            return False, ["gbrain_target_missing"]
+        if adapter_receipt.get("targetKey") != target_key:
+            return False, ["target_key_mismatch"]
+
+        receipt_target_path = existing_directory(adapter_receipt.get("targetVaultPath") or "")
+        resolved_target_path = existing_directory(target.get("vaultPath") or "")
+        if not receipt_target_path or not resolved_target_path or receipt_target_path != resolved_target_path or receipt_target_path != target_path:
+            return False, ["target_path_mismatch"]
+
+        binding = gbrain.get("activeGBrainBinding") if isinstance(gbrain.get("activeGBrainBinding"), dict) else {}
+        source_repo = existing_directory(binding.get("sourceRepoPath") or "")
+        if not source_repo:
+            return False, ["gbrain_source_binding_missing"]
+        adapter_repo = existing_directory(adapter_receipt.get("adapterRepoPath") or "")
+        if not adapter_repo:
+            return False, ["adapter_repo_missing"]
+        expected_adapter_repo = canonical_path(Path(source_repo).parent / "gbrain-adapter")
+        if adapter_repo != expected_adapter_repo:
+            return False, ["adapter_repo_path_mismatch"]
+
+        failed = sorted(key for key, value in adapter_installed_checks(target_path).items() if not value)
+        if failed:
+            return False, ["missing:" + key for key in failed]
+        return True, []
+
     def entry_context():
         target_key, target_path, target = resolve_gbrain_target()
-        adapter = load_json(adapter_state_path)
-        adapter_receipt = adapter.get("receipt") or {}
+        adapter_ready, adapter_reasons = adapter_completion_result(target_key, target_path, target)
         warnings = target.get("warnings") if isinstance(target.get("warnings"), list) else []
         return {
             "onboardingLanguageCode": onboarding_language(),
@@ -2419,8 +2482,8 @@ struct ZebraSourceOnboardingHelper {
                 "status": None,
                 "reason": "step3_receipt_available" if target_path else "gbrain_target_missing",
             },
-            "adapterReady": bool(adapter_receipt.get("complete")),
-            "adapterReadinessReasons": adapter_receipt.get("reasons") if isinstance(adapter_receipt.get("reasons"), list) else [],
+            "adapterReady": adapter_ready,
+            "adapterReadinessReasons": adapter_reasons,
         }
 
     def strip_optional_quotes(value):

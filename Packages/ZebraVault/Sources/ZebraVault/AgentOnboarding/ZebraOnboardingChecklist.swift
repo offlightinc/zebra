@@ -57,8 +57,8 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         StepDefinition(id: .agent,            number: 1, staleTimeout: 5 * 60),
         StepDefinition(id: .gbrainRuntime,    number: 2, staleTimeout: 10 * 60),
         StepDefinition(id: .gbrain,           number: 3, staleTimeout: 15 * 60),
-        StepDefinition(id: .sourceOnboarding, number: 4, staleTimeout: 5 * 60),
-        StepDefinition(id: .adapter,          number: 5, staleTimeout: 5 * 60),
+        StepDefinition(id: .adapter,          number: 4, staleTimeout: 5 * 60),
+        StepDefinition(id: .sourceOnboarding, number: 5, staleTimeout: 5 * 60),
         // StepDefinition(id: .goals,            number: 6, staleTimeout: 5 * 60),
     ]
     private static let enabledStepIDs = Set(steps.map(\.id))
@@ -491,8 +491,16 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     func sourceOnboardingPreviewState(now: Date = Date()) -> ZebraSourceOnboardingState {
         let gbrainTargetPath = resolvedGBrainTargetVaultPath()
         let adapterCompletion = adapterCompletionResult(selectedVaultPath: selectedVaultPath)
+        let missingReason: String?
+        if gbrainTargetPath == nil {
+            missingReason = "gbrain_target_missing"
+        } else if !adapterCompletion.isComplete {
+            missingReason = "gbrain_adapter_missing"
+        } else {
+            missingReason = nil
+        }
         return ZebraSourceOnboardingState(
-            status: gbrainTargetPath == nil ? .attention : .ready,
+            status: missingReason == nil ? .ready : .attention,
             entryContext: ZebraSourceOnboardingState.EntryContext(
                 onboardingLanguageCode: ZebraOnboardingLanguage.current().code,
                 gbrainWriteTargetPath: selectedVaultPath,
@@ -1079,6 +1087,8 @@ public enum ZebraOnboardingChecklistCommand {
 
         Scope for this run:
         - Use the Step 3 GBrain setup receipt as the primary target readiness source.
+        - Source Onboarding is Step 5 and runs after Step 4 gbrain-adapter is installed. If `entryContext.adapterReady` is false, stop and tell the user to finish the gbrain-adapter step first.
+        - Treat this step as injecting approved user source data into the active brain, not as installing the adapter.
         - You are running inside the selected agent runtime when Zebra has a verified runtime receipt. Treat vault file access results as runtime-specific.
         - If Obsidian listing or file reads fail with permission errors in this runtime, report the runtime access failure instead of saying the vault has 0 Markdown files.
         - Hermes vault access still needs separate verification; if this run is in Hermes, explicitly verify listing and smoke-read before ingest.

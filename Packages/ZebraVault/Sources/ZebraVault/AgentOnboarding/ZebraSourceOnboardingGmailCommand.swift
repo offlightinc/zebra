@@ -1,7 +1,7 @@
 import Foundation
 
 /// Builds the shell command that drops the user into their primary agent
-/// with a prompt that walks them through the Step 4 Gmail source integration
+/// with a prompt that walks them through the Step 5 Gmail source integration
 /// via Clawvisor's GBrain env handoff.
 public enum ZebraSourceOnboardingGmailCommand {
     public enum FlowKind: String, Equatable, Sendable {
@@ -206,7 +206,7 @@ public enum ZebraSourceOnboardingGmailCommand {
         return """
         # Zebra Source Onboarding Gmail Instructions
 
-        These are the instructions for the current Step 4 Gmail source integration run.
+        These are the instructions for the current Step 5 Gmail source integration run.
 
         - Primary terminal agent: \(agent.agentKind.displayName)
         - GBrain runtime receipt: \(selectedRuntime?.runtime ?? "none")
