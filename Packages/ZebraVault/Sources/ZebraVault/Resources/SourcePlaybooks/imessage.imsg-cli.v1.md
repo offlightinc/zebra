@@ -108,6 +108,8 @@ zebra-source-onboarding imessage choose-scope --scope skip
 
 Do not expose message-count slicing as a user option. The helper can keep an internal bounded window/checkpoint and report it in the confirm plan. If `updated-since` or `all-threads` resolves conversations through a bounded chat listing, the thread-level limit must be shown in the confirm plan.
 
+For selected conversations, use the helper-provided candidate list. Prefer `contact_name`, `display_name`, or `name` when available; otherwise show a formatted phone/email handle. Do not present raw `chat_id=... service=... name=... last=...` dumps to the user.
+
 Continue only from the returned `nextPrompt`.
 
 ## Step: confirm_ingest_plan

@@ -494,6 +494,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         return ZebraSourceOnboardingState(
             status: gbrainTargetPath == nil ? .attention : .ready,
             entryContext: ZebraSourceOnboardingState.EntryContext(
+                onboardingLanguageCode: ZebraOnboardingLanguage.current().code,
                 gbrainWriteTargetPath: selectedVaultPath,
                 gbrainTargetPath: gbrainTargetPath,
                 gbrainTargetKey: gbrainTargetPath.map { "vault:\($0)" },

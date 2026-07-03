@@ -32,12 +32,15 @@ struct ZebraSourceOnboardingHelper {
         guard let helperURL = installHelperScript() else { return nil }
         let playbookDirectory = installSourcePlaybooks()
         let helperDirectory = helperURL.deletingLastPathComponent().path
+        let languageCode = ZebraOnboardingLanguage.current().code
+        persistOnboardingLanguageCode(languageCode)
         var commands = [
             "export ZEBRA_SOURCE_ONBOARDING_STATE=\(ZebraAgentLaunchCommand.shellQuote(stateURL.path))",
             "export ZEBRA_GBRAIN_SETUP_STATE=\(ZebraAgentLaunchCommand.shellQuote(gbrainOnboardingStateURL.path))",
             "export ZEBRA_GBRAIN_ADAPTER_STATE=\(ZebraAgentLaunchCommand.shellQuote(gbrainAdapterOnboardingStateURL.path))",
             "export ZEBRA_SOURCE_ONBOARDING_HOME=\(ZebraAgentLaunchCommand.shellQuote(homeDirectoryPath))",
             "export ZEBRA_SOURCE_PLAYBOOK_DIR=\(ZebraAgentLaunchCommand.shellQuote(playbookDirectory.path))",
+            "export ZEBRA_ONBOARDING_LANGUAGE=\(ZebraAgentLaunchCommand.shellQuote(languageCode))",
             "export PATH=\(ZebraAgentLaunchCommand.shellQuote(helperDirectory)):\"$PATH\"",
         ]
         if let selectedVaultPath = standardizedExistingDirectoryPath(selectedVaultPath) {
@@ -49,6 +52,37 @@ struct ZebraSourceOnboardingHelper {
             runtimePromptDirectory: runtimePromptDirectoryPath(),
             shellEnvironmentPrefix: commands.joined(separator: " && ") + " && "
         )
+    }
+
+    private func persistOnboardingLanguageCode(_ languageCode: String) {
+        let directory = stateURL.deletingLastPathComponent()
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let languageURL = directory.appendingPathComponent(
+            "source-onboarding-language.json",
+            isDirectory: false
+        )
+        let sidecar = ["onboardingLanguageCode": languageCode]
+        if let data = try? JSONSerialization.data(
+            withJSONObject: sidecar,
+            options: [.prettyPrinted, .sortedKeys]
+        ) {
+            try? data.write(to: languageURL, options: .atomic)
+        }
+
+        guard fileManager.fileExists(atPath: stateURL.path),
+              let data = try? Data(contentsOf: stateURL),
+              var state = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+        var entry = state["entryContext"] as? [String: Any] ?? [:]
+        entry["onboardingLanguageCode"] = languageCode
+        state["entryContext"] = entry
+        state["updatedAt"] = ISO8601DateFormatter().string(from: Date())
+        if let updated = try? JSONSerialization.data(
+            withJSONObject: state,
+            options: [.prettyPrinted, .sortedKeys]
+        ) {
+            try? updated.write(to: stateURL, options: .atomic)
+        }
     }
 
     private func installHelperScript() -> URL? {
@@ -242,7 +276,7 @@ struct ZebraSourceOnboardingHelper {
 
     ## Step: choose_ingest_scope
 
-    Ask the user to choose updated conversations since a date, selected conversations, all conversations, or skip.
+    Ask the user to choose updated conversations since a date, selected conversations, all conversations, or skip. For selected conversations, prefer contact/display names when available and otherwise show a formatted phone/email handle.
 
     ## Step: confirm_ingest_plan
 
@@ -342,6 +376,33 @@ struct ZebraSourceOnboardingHelper {
         "apple-notes": {"displayName": "Apple Notes", "aliases": ["apple notes", "apple note", "애플 메모"]},
         "apple-reminders": {"displayName": "Apple Reminders", "aliases": ["apple reminders", "apple reminder", "애플 리마인더", "reminders", "reminder"]},
     }
+
+    def normalize_onboarding_language(raw):
+        raw = (raw or "").strip().lower().replace("_", "-")
+        if raw == "ko" or raw.startswith("ko-"):
+            return "ko"
+        if raw == "ja" or raw.startswith("ja-"):
+            return "ja"
+        return "en"
+
+    def state_onboarding_language():
+        state = load_json(state_path)
+        entry = state.get("entryContext") if isinstance(state.get("entryContext"), dict) else {}
+        raw = entry.get("onboardingLanguageCode") if isinstance(entry, dict) else None
+        return raw if isinstance(raw, str) and raw.strip() else ""
+
+    def sidecar_onboarding_language():
+        value = load_json(state_path.parent / "source-onboarding-language.json")
+        raw = value.get("onboardingLanguageCode") if isinstance(value, dict) else None
+        return raw if isinstance(raw, str) and raw.strip() else ""
+
+    def onboarding_language():
+        return normalize_onboarding_language(
+            os.environ.get("ZEBRA_ONBOARDING_LANGUAGE")
+            or state_onboarding_language()
+            or sidecar_onboarding_language()
+            or "en"
+        )
 
     def now():
         return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -481,6 +542,8 @@ struct ZebraSourceOnboardingHelper {
         state.setdefault("schemaVersion", 1)
         state.setdefault("status", "ready")
         state.setdefault("entryContext", entry_context())
+        if isinstance(state.get("entryContext"), dict):
+            state["entryContext"].setdefault("onboardingLanguageCode", onboarding_language())
         state.setdefault("sourceReadiness", {})
         state.setdefault("progress", {
             "rawSourceInput": None,
@@ -802,6 +865,7 @@ struct ZebraSourceOnboardingHelper {
         playbook = obsidian_playbook()
         run_state = load_source_run_state("obsidian")
         section = playbook.get("sections", {}).get(step_id, "")
+        language = onboarding_language()
         path = ""
         if not section:
             section = "Follow the current Obsidian playbook step and continue only through the zebra-source-onboarding helper CLI."
@@ -825,28 +889,68 @@ struct ZebraSourceOnboardingHelper {
                     detail = detail + ": " + str(message)
                 lines.append(detail)
             if lines:
-                section = section + "\\n\\n" + "Zebra could not inspect these automatic discovery roots. Tell the user that automatic discovery may be incomplete and ask for the exact Obsidian vault path if needed:\\n" + "\\n".join(lines)
+                if language == "ko":
+                    section = section + "\\n\\n" + "Zebra가 아래 자동 탐색 위치를 확인하지 못했습니다. 자동 탐색 결과가 불완전할 수 있음을 사용자에게 알리고, 필요하면 정확한 Obsidian vault 경로를 물어보세요:\\n" + "\\n".join(lines)
+                elif language == "ja":
+                    section = section + "\\n\\n" + "Zebraは次の自動探索場所を確認できませんでした。自動探索結果が不完全な可能性をユーザーに伝え、必要であれば正確なObsidian vaultパスを尋ねてください:\\n" + "\\n".join(lines)
+                else:
+                    section = section + "\\n\\n" + "Zebra could not inspect these automatic discovery roots. Tell the user that automatic discovery may be incomplete and ask for the exact Obsidian vault path if needed:\\n" + "\\n".join(lines)
         if step_id == "confirm_vault_if_needed":
             candidate = run_state.get("candidateVaultPath")
             candidates = run_state.get("candidateVaultPaths") if isinstance(run_state.get("candidateVaultPaths"), list) else []
             if candidate:
                 method = run_state.get("discoveryMethod") or "automatic_discovery"
-                section = section + "\\n\\n" + textwrap.dedent(f'''
-                Zebra found this Obsidian-like vault candidate from `{method}` because it contains `.obsidian/`:
+                if language == "ko":
+                    section = section + "\\n\\n" + textwrap.dedent(f'''
+                    Zebra가 `{method}`에서 `.obsidian/`을 포함한 Obsidian vault 후보를 찾았습니다:
 
-                `{candidate}`
+                    `{candidate}`
 
-                Ask the user to confirm whether this is the Obsidian vault to use. If yes, run:
+                    이 경로를 Obsidian vault로 사용할지 사용자에게 확인하세요. 맞다면 다음 명령을 실행하세요:
 
-                ```bash
-                zebra-source-onboarding obsidian verify-vault --path "{candidate}"
-                ```
+                    ```bash
+                    zebra-source-onboarding obsidian verify-vault --path "{candidate}"
+                    ```
 
-                If no, ask for the correct vault path and run `zebra-source-onboarding obsidian verify-vault --path "<vault-path>"`.
-                ''').strip()
+                    아니라면 올바른 vault 경로를 물어보고 `zebra-source-onboarding obsidian verify-vault --path "<vault-path>"`를 실행하세요.
+                    ''').strip()
+                elif language == "ja":
+                    section = section + "\\n\\n" + textwrap.dedent(f'''
+                    Zebraは`{method}`から`.obsidian/`を含むObsidian vault候補を見つけました:
+
+                    `{candidate}`
+
+                    このパスをObsidian vaultとして使用するかユーザーに確認してください。正しければ次のコマンドを実行してください:
+
+                    ```bash
+                    zebra-source-onboarding obsidian verify-vault --path "{candidate}"
+                    ```
+
+                    違う場合は正しいvaultパスを尋ね、`zebra-source-onboarding obsidian verify-vault --path "<vault-path>"`を実行してください。
+                    ''').strip()
+                else:
+                    section = section + "\\n\\n" + textwrap.dedent(f'''
+                    Zebra found this Obsidian-like vault candidate from `{method}` because it contains `.obsidian/`:
+
+                    `{candidate}`
+
+                    Ask the user to confirm whether this is the Obsidian vault to use. If yes, run:
+
+                    ```bash
+                    zebra-source-onboarding obsidian verify-vault --path "{candidate}"
+                    ```
+
+                    If no, ask for the correct vault path and run `zebra-source-onboarding obsidian verify-vault --path "<vault-path>"`.
+                    ''').strip()
             elif candidates:
                 method = run_state.get("discoveryMethod") or "automatic_discovery"
-                section = section + "\\n\\n" + "Zebra found multiple `.obsidian/` vault candidates from `" + str(method) + "`. Ask the user which one to use, then run `zebra-source-onboarding obsidian verify-vault --path <vault-path>`. Candidates:\\n\\n" + "\\n".join("- `" + str(item) + "`" for item in candidates)
+                candidate_lines = "\\n".join("- `" + str(item) + "`" for item in candidates)
+                if language == "ko":
+                    section = section + "\\n\\n" + "Zebra가 `" + str(method) + "`에서 여러 `.obsidian/` vault 후보를 찾았습니다. 사용할 vault를 사용자에게 물어본 뒤 `zebra-source-onboarding obsidian verify-vault --path <vault-path>`를 실행하세요. 후보:\\n\\n" + candidate_lines
+                elif language == "ja":
+                    section = section + "\\n\\n" + "Zebraは`" + str(method) + "`から複数の`.obsidian/` vault候補を見つけました。使用するvaultをユーザーに確認し、`zebra-source-onboarding obsidian verify-vault --path <vault-path>`を実行してください。候補:\\n\\n" + candidate_lines
+                else:
+                    section = section + "\\n\\n" + "Zebra found multiple `.obsidian/` vault candidates from `" + str(method) + "`. Ask the user which one to use, then run `zebra-source-onboarding obsidian verify-vault --path <vault-path>`. Candidates:\\n\\n" + candidate_lines
         if step_id == "confirm_ingest_plan":
             section = section + "\\n\\n" + obsidian_ingest_plan_summary(run_state)
         return textwrap.dedent(f'''
@@ -873,30 +977,89 @@ struct ZebraSourceOnboardingHelper {
         ''').strip()
 
     def imessage_scope_summary(run_state):
+        language = onboarding_language()
         scope = run_state.get("scope") or "not selected"
         if scope == "updated-since":
-            return "recently updated conversations since " + str(run_state.get("since") or "not selected")
+            since = str(run_state.get("since") or "not selected")
+            if language == "ko":
+                return since + " 이후 업데이트된 대화방"
+            if language == "ja":
+                return since + "以降に更新された会話"
+            return "recently updated conversations since " + since
         if scope == "selected-threads":
             threads = run_state.get("selectedThreadIDs") if isinstance(run_state.get("selectedThreadIDs"), list) else []
-            return "selected conversations: " + (", ".join(str(item) for item in threads) if threads else "none")
+            summaries = run_state.get("selectedThreadSummaries") if isinstance(run_state.get("selectedThreadSummaries"), list) else []
+            summary_by_id = {}
+            for item in summaries:
+                if isinstance(item, dict):
+                    chat_id = str(item.get("chatID") or "").strip()
+                    summary = str(item.get("summary") or item.get("label") or "").strip()
+                    if chat_id and summary:
+                        summary_by_id[chat_id] = summary
+            labels = []
+            for item in threads:
+                chat_id = str(item)
+                labels.append(summary_by_id.get(chat_id) or ("chat_id " + chat_id))
+            thread_list = ", ".join(labels) if labels else "none"
+            if language == "ko":
+                return "선택한 대화방: " + thread_list
+            if language == "ja":
+                return "選択した会話: " + thread_list
+            return "selected conversations: " + thread_list
         if scope == "all-threads":
+            if language == "ko":
+                return "전체 대화방"
+            if language == "ja":
+                return "すべての会話"
             return "all conversations"
         if scope == "skip":
+            if language == "ko":
+                return "이번 Source Onboarding에서 iMessage 건너뛰기"
+            if language == "ja":
+                return "このSource OnboardingではiMessageをスキップ"
             return "skip iMessage for this Source Onboarding session"
         return str(scope)
 
     def imessage_ingest_plan_summary(run_state):
         internal_window = run_state.get("internalWindow") if isinstance(run_state.get("internalWindow"), dict) else {}
         message_limit = internal_window.get("messageLimitPerThread") or "bounded"
+        thread_limit = internal_window.get("threadListLimit") or "bounded"
         thread_count = run_state.get("estimatedThreadCount")
         if thread_count is None:
             thread_count = "unknown"
+        language = onboarding_language()
+        if language == "ko":
+            return textwrap.dedent(f'''
+            선택된 iMessage ingest plan입니다.
+
+            - 선택한 범위: `{imessage_scope_summary(run_state)}`
+            - 예상 대화방 수: `{thread_count}`
+            - 내부 bounded window: 대화방당 최대 `{message_limit}`개 메시지, 이 helper slice에서 최대 `{thread_limit}`개 대화방
+            - 민감정보 안내: 승인된 범위에는 raw message text, phone/email identifier, contact name, OTP/security text, timestamp, thread/message ID, attachment/reaction metadata가 저장될 수 있습니다.
+            - Ingest 방식: 승인된 iMessage 범위에 대해 bounded source artifact를 작성합니다.
+            - 검증 계획: 생성된 iMessage source artifact를 다시 읽고 `source: imessage`와 `playbook: imessage.imsg-cli.v1`를 확인합니다.
+
+            ingest를 실행하기 전에 사용자에게 명시적으로 승인받으세요. 승인하면 `zebra-source-onboarding imessage confirm-plan --answer yes`를 실행하고, 승인하지 않으면 `zebra-source-onboarding imessage confirm-plan --answer no`를 실행하세요.
+            ''').strip()
+        if language == "ja":
+            return textwrap.dedent(f'''
+            選択されたiMessage ingest planです。
+
+            - 選択した範囲: `{imessage_scope_summary(run_state)}`
+            - 推定会話数: `{thread_count}`
+            - 内部bounded window: 1会話あたり最大`{message_limit}`件のメッセージ、このhelper sliceでは最大`{thread_limit}`件の会話
+            - 機微情報の注意: 承認された範囲にはraw message text、phone/email identifier、contact name、OTP/security text、timestamp、thread/message ID、attachment/reaction metadataが保存される可能性があります。
+            - Ingest方式: 承認されたiMessage範囲のbounded source artifactを書き込みます。
+            - 検証計画: 生成されたiMessage source artifactを読み戻し、`source: imessage`と`playbook: imessage.imsg-cli.v1`を確認します。
+
+            ingestを実行する前にユーザーから明示的な承認を得てください。承認されたら`zebra-source-onboarding imessage confirm-plan --answer yes`を実行し、承認されなければ`zebra-source-onboarding imessage confirm-plan --answer no`を実行してください。
+            ''').strip()
         return textwrap.dedent(f'''
         Resolved iMessage ingest plan:
 
         - Selected scope: `{imessage_scope_summary(run_state)}`
         - Estimated conversation count: `{thread_count}`
-        - Internal bounded window: up to `{message_limit}` messages per conversation and up to `{internal_window.get("threadListLimit") or "bounded"}` conversations for this helper slice
+        - Internal bounded window: up to `{message_limit}` messages per conversation and up to `{thread_limit}` conversations for this helper slice
         - Sensitive data notice: approved scope may store raw message text, phone/email identifiers, contact names, OTP/security texts, timestamps, thread/message IDs, and attachment/reaction metadata.
         - Ingest mode: write a bounded iMessage source artifact for the approved scope.
         - Verification plan: read back the generated iMessage source artifact and require `source: imessage` plus `playbook: imessage.imsg-cli.v1`.
@@ -908,30 +1071,83 @@ struct ZebraSourceOnboardingHelper {
         playbook = imessage_playbook()
         run_state = load_source_run_state("imessage")
         section = playbook.get("sections", {}).get(step_id, "")
+        language = onboarding_language()
         if not section:
             section = "Follow the current iMessage playbook step and continue only through the zebra-source-onboarding helper CLI."
         if step_id == "choose_ingest_scope":
-            section = section + "\\n\\n" + textwrap.dedent('''
-            Present exactly these four choices to the user:
+            if language == "ko":
+                scope_instruction = textwrap.dedent('''
+                사용자에게 아래 네 가지 선택지만 보여주세요:
 
-            ```text
-            iMessage 접근 확인은 끝났습니다. 이제 실제로 brain에 저장할 대화방 범위를 정해야 합니다.
+                ```text
+                iMessage 접근 확인은 끝났습니다. 이제 실제로 brain에 저장할 대화방 범위를 정해야 합니다.
 
-            어떤 범위로 가져올까요?
+                어떤 범위로 가져올까요?
 
-            1. 최근 날짜 이후 업데이트된 대화방
-            2. 특정 대화방
-            3. 대화방 전체
-            4. 지금은 iMessage 건너뛰기
-            ```
+                1. 최근 날짜 이후 업데이트된 대화방
+                2. 특정 대화방
+                3. 대화방 전체
+                4. 지금은 iMessage 건너뛰기
+                ```
 
-            If the user chooses option 1, ask for the date and run `zebra-source-onboarding imessage choose-scope --scope updated-since --since YYYY-MM-DD`.
-            If the user chooses option 2, identify the selected conversation ID from the available iMessage data and run `zebra-source-onboarding imessage choose-scope --scope selected-threads --chat-id "<chat-id>"`.
-            If the user chooses option 3, run `zebra-source-onboarding imessage choose-scope --scope all-threads`.
-            If the user chooses option 4, run `zebra-source-onboarding imessage choose-scope --scope skip`.
+                사용자가 1번을 고르면 날짜를 물어보고 `zebra-source-onboarding imessage choose-scope --scope updated-since --since YYYY-MM-DD`를 실행하세요.
+                사용자가 2번을 고르면 아래 후보 목록에서 선택한 `chat_id`를 확인한 뒤 `zebra-source-onboarding imessage choose-scope --scope selected-threads --chat-id "<chat-id>"`를 실행하세요.
+                사용자가 3번을 고르면 `zebra-source-onboarding imessage choose-scope --scope all-threads`를 실행하세요.
+                사용자가 4번을 고르면 `zebra-source-onboarding imessage choose-scope --scope skip`을 실행하세요.
 
-            Do not expose message-count slicing as a user option. The helper records an internal bounded window in run state and the final confirm plan.
-            ''').strip()
+                사용자가 2번을 고를 때는 아래 후보 목록을 사용하세요. 표시 label과 `chat_id`를 보여주고, 선택된 row id를 `--chat-id`로 넘기세요.
+
+                메시지 개수 slicing은 사용자 선택지로 노출하지 마세요. helper가 내부 bounded window를 run state와 최종 confirm plan에 기록합니다.
+                ''').strip()
+            elif language == "ja":
+                scope_instruction = textwrap.dedent('''
+                ユーザーには次の4つの選択肢だけを表示してください:
+
+                ```text
+                iMessageへのアクセス確認は完了しました。次にbrainへ保存する会話の範囲を決めます。
+
+                どの範囲を取り込みますか？
+
+                1. 最近の日付以降に更新された会話
+                2. 特定の会話
+                3. すべての会話
+                4. 今回はiMessageをスキップ
+                ```
+
+                ユーザーが1番を選んだら日付を尋ね、`zebra-source-onboarding imessage choose-scope --scope updated-since --since YYYY-MM-DD`を実行してください。
+                ユーザーが2番を選んだら下の候補一覧から選択された`chat_id`を確認し、`zebra-source-onboarding imessage choose-scope --scope selected-threads --chat-id "<chat-id>"`を実行してください。
+                ユーザーが3番を選んだら`zebra-source-onboarding imessage choose-scope --scope all-threads`を実行してください。
+                ユーザーが4番を選んだら`zebra-source-onboarding imessage choose-scope --scope skip`を実行してください。
+
+                ユーザーが2番を選ぶ場合は下の候補一覧を使ってください。表示labelと`chat_id`を示し、選択されたrow idを`--chat-id`に渡してください。
+
+                メッセージ件数によるslicingはユーザー選択肢として表示しないでください。helperが内部bounded windowをrun stateと最終confirm planへ記録します。
+                ''').strip()
+            else:
+                scope_instruction = textwrap.dedent('''
+                Present exactly these four choices to the user:
+
+                ```text
+                iMessage 접근 확인은 끝났습니다. 이제 실제로 brain에 저장할 대화방 범위를 정해야 합니다.
+
+                어떤 범위로 가져올까요?
+
+                1. 최근 날짜 이후 업데이트된 대화방
+                2. 특정 대화방
+                3. 대화방 전체
+                4. 지금은 iMessage 건너뛰기
+                ```
+
+                If the user chooses option 1, ask for the date and run `zebra-source-onboarding imessage choose-scope --scope updated-since --since YYYY-MM-DD`.
+                If the user chooses option 2, identify the selected conversation ID from the available iMessage data and run `zebra-source-onboarding imessage choose-scope --scope selected-threads --chat-id "<chat-id>"`.
+                If the user chooses option 3, run `zebra-source-onboarding imessage choose-scope --scope all-threads`.
+                If the user chooses option 4, run `zebra-source-onboarding imessage choose-scope --scope skip`.
+
+                Use the candidate list below when the user chooses option 2. Show the label and chat_id, then run `zebra-source-onboarding imessage choose-scope --scope selected-threads --chat-id "<chat-id>"` with the selected row id.
+
+                Do not expose message-count slicing as a user option. The helper records an internal bounded window in run state and the final confirm plan.
+                ''').strip()
+            section = section + "\\n\\n" + scope_instruction + "\\n\\n" + imessage_conversation_choices(limit=10)
         if step_id == "confirm_ingest_plan":
             section = section + "\\n\\n" + imessage_ingest_plan_summary(run_state)
         command_path = run_state.get("imsgCommandPath") or "not verified"
@@ -1293,6 +1509,51 @@ struct ZebraSourceOnboardingHelper {
             scope_detail = "folders: " + (", ".join(folders) if folders else "none")
         if scope == "sample":
             scope_detail = "recent/sample subset: up to 5 Markdown files"
+        language = onboarding_language()
+        if language == "ko":
+            localized_scope_detail = scope_detail
+            if scope == "all":
+                localized_scope_detail = "전체 vault"
+            elif scope == "folders":
+                localized_scope_detail = "선택한 폴더: " + (", ".join(folders) if folders else "없음")
+            elif scope == "sample":
+                localized_scope_detail = "최근/샘플 일부: 최대 5개 Markdown 파일"
+            elif scope == "skip":
+                localized_scope_detail = "이번 Source Onboarding에서 Obsidian 건너뛰기"
+            return textwrap.dedent(f'''
+            선택된 Obsidian ingest plan입니다.
+            - Vault 경로: `{vault}`
+            - 선택한 범위: `{localized_scope_detail}`
+            - 예상 Markdown 파일 수: `{count_text}`
+            - 제외 경로/정책: `.obsidian/`, hidden directory, `__MACOSX`, Markdown이 아닌 파일, 선택된 vault 밖의 경로는 제외합니다.
+            - 예상 소요 등급: `{duration}`
+            - Ingest 방식: Markdown 파일시스템을 직접 읽어 Zebra source artifact를 작성합니다.
+            - 검증 계획: 생성된 Obsidian source artifact를 다시 읽고 `source: obsidian`와 `playbook: obsidian.direct-markdown.v1`를 확인합니다.
+
+            ingest를 실행하기 전에 사용자에게 명시적으로 승인받으세요. 승인하면 `zebra-source-onboarding obsidian confirm-plan --answer yes`를 실행하고, 승인하지 않으면 `zebra-source-onboarding obsidian confirm-plan --answer no`를 실행하세요.
+            ''').strip()
+        if language == "ja":
+            localized_scope_detail = scope_detail
+            if scope == "all":
+                localized_scope_detail = "vault全体"
+            elif scope == "folders":
+                localized_scope_detail = "選択したフォルダ: " + (", ".join(folders) if folders else "なし")
+            elif scope == "sample":
+                localized_scope_detail = "最近/サンプルの一部: 最大5件のMarkdownファイル"
+            elif scope == "skip":
+                localized_scope_detail = "このSource OnboardingではObsidianをスキップ"
+            return textwrap.dedent(f'''
+            選択されたObsidian ingest planです。
+            - Vaultパス: `{vault}`
+            - 選択した範囲: `{localized_scope_detail}`
+            - 推定Markdownファイル数: `{count_text}`
+            - 除外パス/ポリシー: `.obsidian/`、hidden directory、`__MACOSX`、Markdown以外のファイル、選択されたvault外のパスは除外します。
+            - 想定所要時間クラス: `{duration}`
+            - Ingest方式: Markdownファイルシステムを直接読み、Zebra source artifactを書き込みます。
+            - 検証計画: 生成されたObsidian source artifactを読み戻し、`source: obsidian`と`playbook: obsidian.direct-markdown.v1`を確認します。
+
+            ingestを実行する前にユーザーから明示的な承認を得てください。承認されたら`zebra-source-onboarding obsidian confirm-plan --answer yes`を実行し、承認されなければ`zebra-source-onboarding obsidian confirm-plan --answer no`を実行してください。
+            ''').strip()
         return textwrap.dedent(f'''
         Resolved Obsidian ingest plan:
         - Vault path: `{vault}`
@@ -1527,6 +1788,7 @@ struct ZebraSourceOnboardingHelper {
         adapter_receipt = adapter.get("receipt") or {}
         warnings = target.get("warnings") if isinstance(target.get("warnings"), list) else []
         return {
+            "onboardingLanguageCode": onboarding_language(),
             "gbrainWriteTargetPath": existing_directory(gbrain_write_target_path) or None,
             "gbrainTargetPath": target_path,
             "gbrainTargetKey": target_key,
@@ -2344,6 +2606,127 @@ struct ZebraSourceOnboardingHelper {
                 return str(value)
         return ""
 
+    def imessage_first_string(item, keys):
+        if not isinstance(item, dict):
+            return ""
+        for key in keys:
+            value = item.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+
+    def imessage_chat_participants(item):
+        if not isinstance(item, dict):
+            return []
+        participants = item.get("participants")
+        if isinstance(participants, list):
+            values = []
+            for participant in participants:
+                if isinstance(participant, dict):
+                    value = imessage_first_string(participant, ["contact_name", "display_name", "name", "identifier", "address", "handle"])
+                else:
+                    value = str(participant).strip() if participant is not None else ""
+                if value:
+                    values.append(value)
+            return values
+        return []
+
+    def imessage_format_handle(value):
+        raw = str(value or "").strip()
+        digits = re.sub(r"\\D", "", raw)
+        if raw.startswith("+82"):
+            national = digits[2:] if digits.startswith("82") else digits
+            if national.startswith("10") and len(national) == 10:
+                return "+82 " + national[:2] + "-" + national[2:6] + "-" + national[6:]
+            if national.startswith("2") and len(national) >= 8:
+                return "+82 " + national[:1] + "-" + national[1:-4] + "-" + national[-4:]
+            if len(national) == 8:
+                return "+82 " + national[:4] + "-" + national[4:]
+        return raw
+
+    def imessage_chat_display_label(item):
+        label = imessage_first_string(item, ["contact_name", "display_name", "name"])
+        handle = imessage_first_string(item, ["identifier", "address", "handle"])
+        if not handle:
+            participants = imessage_chat_participants(item)
+            handle = participants[0] if participants else ""
+        formatted_handle = imessage_format_handle(handle)
+        if label and label not in {handle, formatted_handle}:
+            return label + (" (" + formatted_handle + ")" if formatted_handle else "")
+        return formatted_handle or label or imessage_chat_id(item) or "unknown conversation"
+
+    def imessage_chat_kind(item, language=None):
+        is_group = bool(item.get("is_group") or item.get("isGroup") or item.get("group")) if isinstance(item, dict) else False
+        language = language or onboarding_language()
+        if language == "ko":
+            return "그룹 대화" if is_group else "개인 대화"
+        if language == "ja":
+            return "グループ会話" if is_group else "個別会話"
+        return "Group" if is_group else "Direct"
+
+    def imessage_display_time(value, language=None):
+        raw = str(value or "").strip()
+        if not raw:
+            language = language or onboarding_language()
+            if language == "ko":
+                return "시간 알 수 없음"
+            if language == "ja":
+                return "時刻不明"
+            return "unknown time"
+        return raw[:16].replace("T", " ")
+
+    def imessage_chat_plan_summary(item, language=None):
+        language = language or onboarding_language()
+        chat_id = imessage_chat_id(item) or "unknown"
+        label = imessage_chat_display_label(item)
+        service = imessage_first_string(item, ["service", "service_name", "serviceName"]) or "unknown service"
+        if service == "unknown service":
+            if language == "ko":
+                service = "서비스 알 수 없음"
+            elif language == "ja":
+                service = "サービス不明"
+        timestamp = imessage_display_time(imessage_updated_at(item), language=language)
+        separator = " · " if language in {"ko", "ja"} else " - "
+        detail = service + separator + imessage_chat_kind(item, language=language) + separator + timestamp + separator + "chat_id " + chat_id
+        if label and label != chat_id:
+            return label + " (" + detail + ")"
+        return "chat_id " + chat_id
+
+    def imessage_conversation_choices(limit=10):
+        language = onboarding_language()
+        _, result, chats = imessage_chats(limit=limit, failure_reason="history_read_failed")
+        if not result.get("ok"):
+            if language == "ko":
+                return "최근 iMessage 대화방 후보를 가져오지 못했습니다: " + str(result.get("reason") or "history_read_failed")
+            if language == "ja":
+                return "最近のiMessage会話候補を取得できませんでした: " + str(result.get("reason") or "history_read_failed")
+            return "Recent conversation candidates could not be listed: " + str(result.get("reason") or "history_read_failed")
+        if not chats:
+            if language == "ko":
+                return "`imsg chats`가 최근 iMessage 대화방 후보를 반환하지 않았습니다."
+            if language == "ja":
+                return "`imsg chats`は最近のiMessage会話候補を返しませんでした。"
+            return "No recent conversation candidates were returned by `imsg chats`."
+        if language == "ko":
+            lines = ["옵션 2에서 사용할 최근 iMessage 대화방 후보:"]
+        elif language == "ja":
+            lines = ["オプション2で使用する最近のiMessage会話候補:"]
+        else:
+            lines = ["Recent conversation candidates for option 2:"]
+        for index, item in enumerate(chats, start=1):
+            chat_id = imessage_chat_id(item) or "unknown"
+            service = imessage_first_string(item, ["service", "service_name", "serviceName"]) or "unknown service"
+            if service == "unknown service":
+                if language == "ko":
+                    service = "서비스 알 수 없음"
+                elif language == "ja":
+                    service = "サービス不明"
+            timestamp = imessage_display_time(imessage_updated_at(item), language=language)
+            lines.append(str(index) + ". " + imessage_chat_display_label(item))
+            separator = " · " if language in {"ko", "ja"} else " - "
+            lines.append("   " + service + separator + imessage_chat_kind(item, language=language) + separator + timestamp + separator + "chat_id " + chat_id)
+        return "\\n".join(lines)
+
     def imessage_chats(limit=20, failure_reason="messages_full_disk_access_missing"):
         run_state, result = run_imsg(
             ["chats", "--limit", str(limit), "--json"],
@@ -2368,11 +2751,59 @@ struct ZebraSourceOnboardingHelper {
             "checkpoint": "not_started",
         }
 
+    def imessage_resolve_selected_thread_summaries(run_state, thread_ids):
+        if not thread_ids:
+            run_state["selectedThreadSummaries"] = []
+            run_state["selectedThreadSummaryStatus"] = "not_needed"
+            return
+        internal_window = run_state.get("internalWindow") if isinstance(run_state.get("internalWindow"), dict) else imessage_internal_window()
+        thread_limit = max(int(internal_window.get("threadListLimit") or 50), len(thread_ids))
+        run_state_for_chats, result, chats = imessage_chats(
+            limit=thread_limit,
+            failure_reason="history_read_failed",
+        )
+        for key in ("imsgCommandPath", "imsgVersion", "cliStatus"):
+            if run_state_for_chats.get(key):
+                run_state[key] = run_state_for_chats[key]
+        run_state["selectedThreadSummaryListLimit"] = thread_limit
+        if not result.get("ok"):
+            run_state["selectedThreadSummaryStatus"] = "failed"
+            run_state["selectedThreadSummaryFailureReason"] = result.get("reason") or "history_read_failed"
+            run_state["selectedThreadSummaries"] = [
+                {"chatID": str(chat_id), "summary": "chat_id " + str(chat_id)}
+                for chat_id in thread_ids
+            ]
+            return
+        by_id = {}
+        for item in chats:
+            chat_id = imessage_chat_id(item)
+            if chat_id:
+                by_id[str(chat_id)] = item
+        summaries = []
+        missing = []
+        for chat_id in thread_ids:
+            normalized = str(chat_id)
+            item = by_id.get(normalized)
+            if item:
+                summaries.append({
+                    "chatID": normalized,
+                    "label": imessage_chat_display_label(item),
+                    "summary": imessage_chat_plan_summary(item),
+                })
+            else:
+                missing.append(normalized)
+                summaries.append({"chatID": normalized, "summary": "chat_id " + normalized})
+        run_state["selectedThreadSummaries"] = summaries
+        run_state["selectedThreadSummaryStatus"] = "partial" if missing else "passed"
+        if missing:
+            run_state["selectedThreadSummaryMissingIDs"] = missing
+
     def imessage_scope_thread_ids(run_state):
         scope = run_state.get("scope")
         if scope == "selected-threads":
             values = run_state.get("selectedThreadIDs")
             thread_ids = [str(item) for item in values] if isinstance(values, list) else []
+            imessage_resolve_selected_thread_summaries(run_state, thread_ids)
             run_state["resolvedThreadIDs"] = thread_ids
             run_state["estimatedThreadCount"] = len(thread_ids)
             return thread_ids

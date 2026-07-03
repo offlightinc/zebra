@@ -734,6 +734,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             ).prepareLaunch(selectedVaultPath: nil)
         )
         let helperURL = URL(fileURLWithPath: launch.helperPath)
+        XCTAssertTrue(launch.shellEnvironmentPrefix.contains("ZEBRA_ONBOARDING_LANGUAGE"), launch.shellEnvironmentPrefix)
         let environment = [
             "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
             "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
@@ -1253,6 +1254,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(prompt.contains("which one to use"), prompt)
         XCTAssertTrue(prompt.contains("obsidian_registry"), prompt)
 
+        var koreanEnvironment = environment
+        koreanEnvironment["ZEBRA_ONBOARDING_LANGUAGE"] = "ko"
+        let koreanNext = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: koreanEnvironment
+        )
+        XCTAssertEqual(koreanNext.status, 0, "stdout:\n\(koreanNext.stdout)\nstderr:\n\(koreanNext.stderr)")
+        let koreanPrompt = try XCTUnwrap(jsonObject(from: koreanNext.stdout)["nextPrompt"] as? String)
+        XCTAssertTrue(koreanPrompt.contains("여러 `.obsidian/` vault 후보"), koreanPrompt)
+        XCTAssertTrue(koreanPrompt.contains("후보:"), koreanPrompt)
+        XCTAssertTrue(koreanPrompt.contains(expectedFirstVaultPath), koreanPrompt)
+        XCTAssertFalse(koreanPrompt.contains("which one to use"), koreanPrompt)
+        XCTAssertFalse(koreanPrompt.contains("Zebra found multiple `.obsidian/` vault candidates"), koreanPrompt)
+
         let loaded = try readSourceOnboardingState(at: stateURL)
         let row = try XCTUnwrap(loaded.progress.sourceRows["obsidian"])
         XCTAssertEqual(row.status, "attention")
@@ -1331,6 +1347,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         XCTAssertEqual(resumed.status, 0, "stdout:\n\(resumed.stdout)\nstderr:\n\(resumed.stderr)")
         XCTAssertEqual(try jsonObject(from: resumed.stdout)["nextPlaybookStepID"] as? String, "confirm_vault_if_needed")
+
+        var koreanEnvironment = environment
+        koreanEnvironment["ZEBRA_ONBOARDING_LANGUAGE"] = "ko"
+        let koreanResumed = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: koreanEnvironment
+        )
+        XCTAssertEqual(koreanResumed.status, 0, "stdout:\n\(koreanResumed.stdout)\nstderr:\n\(koreanResumed.stderr)")
+        let koreanPrompt = try XCTUnwrap(jsonObject(from: koreanResumed.stdout)["nextPrompt"] as? String)
+        XCTAssertTrue(koreanPrompt.contains("Obsidian vault 후보"), koreanPrompt)
+        XCTAssertFalse(koreanPrompt.contains("Ask the user to confirm whether this is the Obsidian vault to use"), koreanPrompt)
     }
 
     @MainActor
@@ -1638,6 +1666,22 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(confirmPrompt.contains("Ingest mode: direct Markdown filesystem ingest into a Zebra source artifact."), confirmPrompt)
         XCTAssertTrue(confirmPrompt.contains("Verification plan: read back the generated Obsidian source artifact"), confirmPrompt)
 
+        var koreanEnvironment = environment
+        koreanEnvironment["ZEBRA_ONBOARDING_LANGUAGE"] = "ko"
+        let koreanPlan = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: koreanEnvironment
+        )
+        XCTAssertEqual(koreanPlan.status, 0, "stdout:\n\(koreanPlan.stdout)\nstderr:\n\(koreanPlan.stderr)")
+        let koreanPlanPrompt = try XCTUnwrap(jsonObject(from: koreanPlan.stdout)["nextPrompt"] as? String)
+        XCTAssertTrue(koreanPlanPrompt.contains("선택된 Obsidian ingest plan입니다."), koreanPlanPrompt)
+        XCTAssertTrue(koreanPlanPrompt.contains("선택한 범위: `최근/샘플 일부: 최대 5개 Markdown 파일`"), koreanPlanPrompt)
+        XCTAssertTrue(koreanPlanPrompt.contains("제외 경로/정책"), koreanPlanPrompt)
+        XCTAssertTrue(koreanPlanPrompt.contains("검증 계획"), koreanPlanPrompt)
+        XCTAssertFalse(koreanPlanPrompt.contains("Resolved Obsidian ingest plan:"), koreanPlanPrompt)
+        XCTAssertFalse(koreanPlanPrompt.contains("Selected scope: `recent/sample subset: up to 5 Markdown files`"), koreanPlanPrompt)
+
         let resumedPlan = try runProcess(
             executableURL: helperURL,
             arguments: ["next"],
@@ -1793,7 +1837,31 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(scopePrompt.contains("2. 특정 대화방"), scopePrompt)
         XCTAssertTrue(scopePrompt.contains("3. 대화방 전체"), scopePrompt)
         XCTAssertTrue(scopePrompt.contains("4. 지금은 iMessage 건너뛰기"), scopePrompt)
+        XCTAssertTrue(scopePrompt.contains("Alpha (+82 10-4330-0841)"), scopePrompt)
+        XCTAssertTrue(scopePrompt.contains("SMS - Direct - 2026-07-02 12:00 - chat_id chat-alpha"), scopePrompt)
+        XCTAssertTrue(scopePrompt.contains("4. No Handle"), scopePrompt)
+        XCTAssertTrue(scopePrompt.contains("iMessage - Direct - 2026-06-30 12:00 - chat_id chat-name-only"), scopePrompt)
+        XCTAssertFalse(scopePrompt.contains("No Handle (chat-name-only)"), scopePrompt)
+        XCTAssertFalse(scopePrompt.contains("chat_id=chat-alpha"), scopePrompt)
         XCTAssertFalse(scopePrompt.contains("최근 N개 메시지"), scopePrompt)
+
+        var koreanScopeEnvironment = environment
+        koreanScopeEnvironment["ZEBRA_ONBOARDING_LANGUAGE"] = "ko"
+        let koreanScope = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: koreanScopeEnvironment
+        )
+        XCTAssertEqual(koreanScope.status, 0, "stdout:\n\(koreanScope.stdout)\nstderr:\n\(koreanScope.stderr)")
+        let koreanScopePrompt = try XCTUnwrap(jsonObject(from: koreanScope.stdout)["nextPrompt"] as? String)
+        XCTAssertTrue(koreanScopePrompt.contains("옵션 2에서 사용할 최근 iMessage 대화방 후보:"), koreanScopePrompt)
+        XCTAssertTrue(koreanScopePrompt.contains("SMS · 개인 대화 · 2026-07-02 12:00 · chat_id chat-alpha"), koreanScopePrompt)
+        XCTAssertTrue(koreanScopePrompt.contains("4. No Handle"), koreanScopePrompt)
+        XCTAssertTrue(koreanScopePrompt.contains("iMessage · 개인 대화 · 2026-06-30 12:00 · chat_id chat-name-only"), koreanScopePrompt)
+        XCTAssertFalse(koreanScopePrompt.contains("No Handle (chat-name-only)"), koreanScopePrompt)
+        XCTAssertFalse(koreanScopePrompt.contains("Recent conversation candidates for option 2:"), koreanScopePrompt)
+        XCTAssertFalse(koreanScopePrompt.contains("Use the candidate list below"), koreanScopePrompt)
+        XCTAssertFalse(koreanScopePrompt.contains("SMS - Direct - 2026-07-02 12:00 - chat_id chat-alpha"), koreanScopePrompt)
 
         let resumedScope = try runProcess(
             executableURL: helperURL,
@@ -1831,6 +1899,19 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(confirmPrompt.contains("recently updated conversations since 2026-07-01"), confirmPrompt)
         XCTAssertTrue(confirmPrompt.contains("up to `200` messages per conversation and up to `50` conversations"), confirmPrompt)
         XCTAssertTrue(confirmPrompt.contains("Sensitive data notice"), confirmPrompt)
+
+        var koreanEnvironment = environment
+        koreanEnvironment["ZEBRA_ONBOARDING_LANGUAGE"] = "ko"
+        let koreanPlan = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: koreanEnvironment
+        )
+        XCTAssertEqual(koreanPlan.status, 0, "stdout:\n\(koreanPlan.stdout)\nstderr:\n\(koreanPlan.stderr)")
+        let koreanPlanPrompt = try XCTUnwrap(jsonObject(from: koreanPlan.stdout)["nextPrompt"] as? String)
+        XCTAssertTrue(koreanPlanPrompt.contains("선택된 iMessage ingest plan입니다."), koreanPlanPrompt)
+        XCTAssertTrue(koreanPlanPrompt.contains("선택한 범위: `2026-07-01 이후 업데이트된 대화방`"), koreanPlanPrompt)
+        XCTAssertTrue(koreanPlanPrompt.contains("민감정보 안내"), koreanPlanPrompt)
 
         let blockedBeforePlan = try runProcess(
             executableURL: helperURL,
@@ -1999,6 +2080,49 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
         XCTAssertEqual(row.status, "skipped")
         XCTAssertEqual(row.playbookStepID, "complete")
+    }
+
+    @MainActor
+    func testSourceOnboardingIMessageKoreanPlanFallsBackToStateLanguageForSelectedThread() throws {
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root.appendingPathComponent("bin", isDirectory: true)
+        try installFakeIMsg(in: fakeBin)
+        let prepared = try prepareIMessageSourceOnboarding(
+            root: root,
+            pathPrefix: fakeBin,
+            extraEnvironment: ["ZEBRA_ONBOARDING_LANGUAGE": "ko"]
+        )
+        try runIMessageToScopeSelection(helperURL: prepared.helperURL, environment: prepared.environment)
+
+        var gatewayLikeEnvironment = prepared.environment
+        gatewayLikeEnvironment.removeValue(forKey: "ZEBRA_ONBOARDING_LANGUAGE")
+        let selected = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "choose-scope", "--scope", "selected-threads", "--chat-id", "1318"],
+            environment: gatewayLikeEnvironment
+        )
+
+        XCTAssertEqual(selected.status, 0, "stdout:\n\(selected.stdout)\nstderr:\n\(selected.stderr)")
+        let payload = try jsonObject(from: selected.stdout)
+        XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "confirm_ingest_plan")
+        let prompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+        XCTAssertTrue(prompt.contains("선택된 iMessage ingest plan입니다."), prompt)
+        XCTAssertTrue(prompt.contains("선택한 범위: `선택한 대화방:"), prompt)
+        XCTAssertTrue(prompt.contains("+82 10-4330-0841"), prompt)
+        XCTAssertTrue(prompt.contains("민감정보 안내"), prompt)
+        XCTAssertFalse(prompt.contains("Resolved iMessage ingest plan:"), prompt)
+        XCTAssertFalse(prompt.contains("Selected scope:"), prompt)
+        XCTAssertFalse(prompt.contains("Sensitive data notice"), prompt)
+        XCTAssertFalse(prompt.contains("selected conversations: 1318"), prompt)
+
+        let loaded = try readSourceOnboardingState(at: prepared.stateURL)
+        XCTAssertEqual(loaded.entryContext.onboardingLanguageCode, "ko")
+        let row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
+        let runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual(runState["selectedThreadIDs"] as? [String], ["1318"])
+        let summaries = try XCTUnwrap(runState["selectedThreadSummaries"] as? [[String: Any]])
+        XCTAssertEqual(summaries.first?["chatID"] as? String, "1318")
+        XCTAssertTrue((summaries.first?["summary"] as? String ?? "").contains("+82 10-4330-0841"))
     }
 
     @MainActor
@@ -4998,8 +5122,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
           exit 0
         fi
         if [ "$1" = "chats" ]; then
-          echo '{"chat_id":"chat-alpha","display_name":"Alpha","updated_at":"2026-07-02T12:00:00Z"}'
-          echo '{"chat_id":"chat-old","display_name":"Old","updated_at":"2026-06-01T12:00:00Z"}'
+          echo '{"chat_id":"chat-alpha","display_name":"Alpha","identifier":"+821043300841","service":"SMS","is_group":false,"last_message_at":"2026-07-02T12:00:00Z","participants":["+821043300841"]}'
+          echo '{"id":1318,"name":"","identifier":"+821043300841","service":"SMS","is_group":false,"last_message_at":"2026-06-30T12:30:00Z","participants":["+821043300841"]}'
+          echo '{"chat_id":"chat-old","identifier":"+8215881688","service":"SMS","is_group":false,"last_message_at":"2026-06-01T12:00:00Z","participants":["+8215881688"]}'
+          echo '{"chat_id":"chat-name-only","display_name":"No Handle","service":"iMessage","is_group":false,"last_message_at":"2026-06-30T12:00:00Z"}'
           exit 0
         fi
         if [ "$1" = "history" ]; then

@@ -46,6 +46,7 @@ extension ZebraSourceOnboardingState {
     }
 
     struct EntryContext: Codable, Equatable, Sendable {
+        var onboardingLanguageCode: String?
         var gbrainWriteTargetPath: String?
         var gbrainTargetPath: String?
         var gbrainTargetKey: String?
