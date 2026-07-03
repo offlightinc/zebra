@@ -1447,11 +1447,14 @@ public enum ZebraOnboardingChecklistCommand {
 }
 
 public struct ZebraOnboardingChecklistCard: View {
+    private static let collapsedSubstepDefaultsKey = "ZebraOnboardingChecklistCard.collapsedSubstepStepIDs"
+
     @ObservedObject private var store: ZebraOnboardingChecklistStore
     private let onStartStep: (ZebraOnboardingChecklistStepID) -> Void
     private let onStopStep: ((ZebraOnboardingChecklistStepID) -> Void)?
     private let onCollapse: (() -> Void)?
-    @State private var collapsedSubstepStepIDs: Set<ZebraOnboardingChecklistStepID> = []
+    @State private var collapsedSubstepStepIDRawValues: [String]
+    @State private var observedCompletedStepIDs: Set<ZebraOnboardingChecklistStepID>?
 
     public init(
         store: ZebraOnboardingChecklistStore,
@@ -1463,6 +1466,9 @@ public struct ZebraOnboardingChecklistCard: View {
         self.onStartStep = onStartStep
         self.onStopStep = onStopStep
         self.onCollapse = onCollapse
+        _collapsedSubstepStepIDRawValues = State(
+            initialValue: Self.loadCollapsedSubstepStepIDRawValues()
+        )
     }
 
     public var body: some View {
@@ -1496,8 +1502,23 @@ public struct ZebraOnboardingChecklistCard: View {
                 .accessibilityIdentifier("ZebraOnboardingChecklistCard")
                 .onAppear {
                     store.prefetchGBrainDocsIfNeeded()
+                    observedCompletedStepIDs = store.completedStepIDs
+                }
+                .onChange(of: store.completedStepIDs) { _, completedStepIDs in
+                    handleCompletionChange(completedStepIDs)
                 }
             }
+        }
+    }
+
+    private var collapsedSubstepStepIDs: Set<ZebraOnboardingChecklistStepID> {
+        get {
+            Set(collapsedSubstepStepIDRawValues.compactMap(ZebraOnboardingChecklistStepID.init(rawValue:)))
+        }
+        nonmutating set {
+            let rawValues = newValue.map(\.rawValue).sorted()
+            collapsedSubstepStepIDRawValues = rawValues
+            UserDefaults.standard.set(rawValues, forKey: Self.collapsedSubstepDefaultsKey)
         }
     }
 
@@ -1575,12 +1596,36 @@ public struct ZebraOnboardingChecklistCard: View {
     ) -> (() -> Void)? {
         guard !snapshot.substeps.isEmpty else { return nil }
         return {
-            if collapsedSubstepStepIDs.contains(snapshot.id) {
-                collapsedSubstepStepIDs.remove(snapshot.id)
+            var collapsed = collapsedSubstepStepIDs
+            if collapsed.contains(snapshot.id) {
+                collapsed.remove(snapshot.id)
             } else {
-                collapsedSubstepStepIDs.insert(snapshot.id)
+                collapsed.insert(snapshot.id)
             }
+            collapsedSubstepStepIDs = collapsed
         }
+    }
+
+    private func handleCompletionChange(
+        _ completedStepIDs: Set<ZebraOnboardingChecklistStepID>
+    ) {
+        guard let previous = observedCompletedStepIDs else {
+            observedCompletedStepIDs = completedStepIDs
+            return
+        }
+        observedCompletedStepIDs = completedStepIDs
+        let newlyCompletedStepIDs = completedStepIDs.subtracting(previous)
+        let substepStepIDs = store.snapshots
+            .filter { newlyCompletedStepIDs.contains($0.id) && !$0.substeps.isEmpty }
+            .map(\.id)
+        guard !substepStepIDs.isEmpty else { return }
+        var collapsed = collapsedSubstepStepIDs
+        collapsed.formUnion(substepStepIDs)
+        collapsedSubstepStepIDs = collapsed
+    }
+
+    private static func loadCollapsedSubstepStepIDRawValues() -> [String] {
+        UserDefaults.standard.stringArray(forKey: collapsedSubstepDefaultsKey) ?? []
     }
 }
 
