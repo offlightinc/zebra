@@ -70,34 +70,56 @@ struct ZebraSourceOnboardingHelper {
         let directory = stateURL
             .deletingLastPathComponent()
             .appendingPathComponent("source-playbooks", isDirectory: true)
-        let destination = directory.appendingPathComponent(
-            "obsidian.direct-markdown.v1.md",
-            isDirectory: false
-        )
+        let playbooks: [(resource: String, filename: String, fallback: String)] = [
+            (
+                "obsidian.direct-markdown.v1",
+                "obsidian.direct-markdown.v1.md",
+                Self.fallbackObsidianPlaybook
+            ),
+            (
+                "imessage.imsg-cli.v1",
+                "imessage.imsg-cli.v1.md",
+                Self.fallbackIMessagePlaybook
+            ),
+        ]
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            if let resource = Bundle.module.url(
-                forResource: "obsidian.direct-markdown.v1",
-                withExtension: "md",
-                subdirectory: "SourcePlaybooks"
-            ) {
-                if fileManager.fileExists(atPath: destination.path) {
-                    try fileManager.removeItem(at: destination)
-                }
-                try fileManager.copyItem(at: resource, to: destination)
-            } else if !fileManager.fileExists(atPath: destination.path) {
-                try Self.fallbackObsidianPlaybook.write(
-                    to: destination,
-                    atomically: true,
-                    encoding: .utf8
+            for playbook in playbooks {
+                let destination = directory.appendingPathComponent(
+                    playbook.filename,
+                    isDirectory: false
                 )
+                if let resource = Bundle.module.url(
+                    forResource: playbook.resource,
+                    withExtension: "md",
+                    subdirectory: "SourcePlaybooks"
+                ) {
+                    if fileManager.fileExists(atPath: destination.path) {
+                        try fileManager.removeItem(at: destination)
+                    }
+                    try fileManager.copyItem(at: resource, to: destination)
+                } else if !fileManager.fileExists(atPath: destination.path) {
+                    try playbook.fallback.write(
+                        to: destination,
+                        atomically: true,
+                        encoding: .utf8
+                    )
+                }
             }
         } catch {
-            try? Self.fallbackObsidianPlaybook.write(
-                to: destination,
-                atomically: true,
-                encoding: .utf8
-            )
+            for playbook in playbooks {
+                let destination = directory.appendingPathComponent(
+                    playbook.filename,
+                    isDirectory: false
+                )
+                if !fileManager.fileExists(atPath: destination.path) {
+                    try? playbook.fallback.write(
+                        to: destination,
+                        atomically: true,
+                        encoding: .utf8
+                    )
+                }
+            }
         }
         return directory
     }
@@ -156,6 +178,8 @@ struct ZebraSourceOnboardingHelper {
 
     Prefer an Obsidian app registry candidate from `~/Library/Application Support/obsidian/obsidian.json`. If exactly one valid candidate exists, continue to `smoke_read`; ask the user only when there are no candidates or multiple candidates. Do not use the GBrain write target path as the Obsidian vault path.
 
+    When the user provides a candidate path, run `zebra-source-onboarding obsidian verify-vault --path "<vault-path>"`.
+
     ## Step: confirm_vault_if_needed
 
     Ask the user to choose among multiple candidates or provide a corrected Obsidian vault path, then run `zebra-source-onboarding obsidian verify-vault --path "<vault-path>"`. Do not pass the GBrain write target path to `verify-vault`.
@@ -185,6 +209,58 @@ struct ZebraSourceOnboardingHelper {
     Obsidian Source Onboarding is complete.
     """
 
+    private static let fallbackIMessagePlaybook = """
+    ---
+    id: imessage.imsg-cli
+    version: v1
+    sourceID: imessage
+    initialStepID: check_imsg_cli
+    steps:
+      - check_imsg_cli
+      - check_full_disk_access
+      - smoke_history
+      - choose_ingest_scope
+      - confirm_ingest_plan
+      - ingest_messages
+      - verify_readback
+      - complete
+    ---
+
+    # iMessage CLI Source Onboarding
+
+    ## Step: check_imsg_cli
+
+    Run `zebra-source-onboarding imessage check-cli`.
+
+    ## Step: check_full_disk_access
+
+    Run `zebra-source-onboarding imessage check-access`.
+
+    ## Step: smoke_history
+
+    Run `zebra-source-onboarding imessage smoke-history`. This is read-only access verification and is not ingest approval.
+
+    ## Step: choose_ingest_scope
+
+    Ask the user to choose updated conversations since a date, selected conversations, all conversations, or skip.
+
+    ## Step: confirm_ingest_plan
+
+    Summarize the selected iMessage ingest scope and ask for explicit approval.
+
+    ## Step: ingest_messages
+
+    Run `zebra-source-onboarding imessage ingest`.
+
+    ## Step: verify_readback
+
+    Run `zebra-source-onboarding imessage verify-readback`.
+
+    ## Step: complete
+
+    iMessage Source Onboarding is complete.
+    """
+
     private static let helperScript = """
     #!/bin/sh
     set -eu
@@ -204,6 +280,9 @@ struct ZebraSourceOnboardingHelper {
     "$PYTHON_BIN" - "$STATE" "$COMMAND" "$@" <<'PY'
     import json
     import os
+    import re
+    import shutil
+    import subprocess
     import sys
     import textwrap
     import urllib.error
@@ -458,7 +537,26 @@ struct ZebraSourceOnboardingHelper {
         "sections": {},
     }
 
-    def parse_playbook_markdown(path):
+    imessage_playbook_fallback = {
+        "id": "imessage.imsg-cli",
+        "version": "v1",
+        "sourceID": "imessage",
+        "initialStepID": "check_imsg_cli",
+        "steps": [
+            "check_imsg_cli",
+            "check_full_disk_access",
+            "smoke_history",
+            "choose_ingest_scope",
+            "confirm_ingest_plan",
+            "ingest_messages",
+            "verify_readback",
+            "complete",
+        ],
+        "sections": {},
+    }
+
+    def parse_playbook_markdown(path, fallback=None):
+        fallback = fallback or obsidian_playbook_fallback
         result = {
             "id": "",
             "version": "",
@@ -470,7 +568,7 @@ struct ZebraSourceOnboardingHelper {
         try:
             text = path.read_text(encoding="utf-8")
         except Exception:
-            return dict(obsidian_playbook_fallback)
+            return dict(fallback)
         body = text
         if text.startswith("---"):
             marker = text.find("\\n---", 3)
@@ -506,7 +604,6 @@ struct ZebraSourceOnboardingHelper {
                 buffer.append(line)
         if current_step:
             result["sections"][current_step] = "\\n".join(buffer).strip()
-        fallback = obsidian_playbook_fallback
         for key in ("id", "version", "sourceID", "initialStepID"):
             if not result.get(key):
                 result[key] = fallback[key]
@@ -515,7 +612,16 @@ struct ZebraSourceOnboardingHelper {
         return result
 
     def obsidian_playbook():
-        return parse_playbook_markdown(playbook_dir / "obsidian.direct-markdown.v1.md")
+        return parse_playbook_markdown(
+            playbook_dir / "obsidian.direct-markdown.v1.md",
+            obsidian_playbook_fallback,
+        )
+
+    def imessage_playbook():
+        return parse_playbook_markdown(
+            playbook_dir / "imessage.imsg-cli.v1.md",
+            imessage_playbook_fallback,
+        )
 
     def source_run_state_path(source_id):
         directory = state_path.parent / "source-run-state"
@@ -696,18 +802,25 @@ struct ZebraSourceOnboardingHelper {
         playbook = obsidian_playbook()
         run_state = load_source_run_state("obsidian")
         section = playbook.get("sections", {}).get(step_id, "")
+        path = ""
         if not section:
             section = "Follow the current Obsidian playbook step and continue only through the zebra-source-onboarding helper CLI."
+        vault = run_state.get("selectedVaultPath") or run_state.get("candidateVaultPath") or "not selected"
+        scope = run_state.get("scope") or "not selected"
+        estimated = run_state.get("estimatedFileCount")
+        if estimated is None:
+            estimated = "unknown"
+        artifact = run_state.get("artifactPath") or "not created"
         unreadable_roots = run_state.get("unreadableCandidateRoots") if isinstance(run_state.get("unreadableCandidateRoots"), list) else []
         if step_id == "discover_vault" and unreadable_roots:
             lines = []
             for item in unreadable_roots:
                 if not isinstance(item, dict):
                     continue
-                path = item.get("path") or "unknown"
+                root_path = item.get("path") or "unknown"
                 reason = item.get("reason") or "unreadable"
                 message = item.get("message") or ""
-                detail = " - `" + str(path) + "` (" + str(reason) + ")"
+                detail = " - `" + str(root_path) + "` (" + str(reason) + ")"
                 if message:
                     detail = detail + ": " + str(message)
                 lines.append(detail)
@@ -733,15 +846,9 @@ struct ZebraSourceOnboardingHelper {
                 ''').strip()
             elif candidates:
                 method = run_state.get("discoveryMethod") or "automatic_discovery"
-                section = section + "\\n\\n" + "Zebra found multiple `.obsidian/` vault candidates from `" + str(method) + "`. Ask the user which one to use, then run `zebra-source-onboarding obsidian verify-vault --path \"<vault-path>\"`. Candidates:\\n\\n" + "\\n".join("- `" + str(item) + "`" for item in candidates)
+                section = section + "\\n\\n" + "Zebra found multiple `.obsidian/` vault candidates from `" + str(method) + "`. Ask the user which one to use, then run `zebra-source-onboarding obsidian verify-vault --path <vault-path>`. Candidates:\\n\\n" + "\\n".join("- `" + str(item) + "`" for item in candidates)
         if step_id == "confirm_ingest_plan":
             section = section + "\\n\\n" + obsidian_ingest_plan_summary(run_state)
-        vault = run_state.get("selectedVaultPath") or run_state.get("candidateVaultPath") or "not selected"
-        scope = run_state.get("scope") or "not selected"
-        estimated = run_state.get("estimatedFileCount")
-        if estimated is None:
-            estimated = "unknown"
-        artifact = run_state.get("artifactPath") or "not created"
         return textwrap.dedent(f'''
         Zebra Source Onboarding: Obsidian is the active source.
 
@@ -765,6 +872,96 @@ struct ZebraSourceOnboardingHelper {
         {section}
         ''').strip()
 
+    def imessage_scope_summary(run_state):
+        scope = run_state.get("scope") or "not selected"
+        if scope == "updated-since":
+            return "recently updated conversations since " + str(run_state.get("since") or "not selected")
+        if scope == "selected-threads":
+            threads = run_state.get("selectedThreadIDs") if isinstance(run_state.get("selectedThreadIDs"), list) else []
+            return "selected conversations: " + (", ".join(str(item) for item in threads) if threads else "none")
+        if scope == "all-threads":
+            return "all conversations"
+        if scope == "skip":
+            return "skip iMessage for this Source Onboarding session"
+        return str(scope)
+
+    def imessage_ingest_plan_summary(run_state):
+        internal_window = run_state.get("internalWindow") if isinstance(run_state.get("internalWindow"), dict) else {}
+        message_limit = internal_window.get("messageLimitPerThread") or "bounded"
+        thread_count = run_state.get("estimatedThreadCount")
+        if thread_count is None:
+            thread_count = "unknown"
+        return textwrap.dedent(f'''
+        Resolved iMessage ingest plan:
+
+        - Selected scope: `{imessage_scope_summary(run_state)}`
+        - Estimated conversation count: `{thread_count}`
+        - Internal bounded window: up to `{message_limit}` messages per conversation and up to `{internal_window.get("threadListLimit") or "bounded"}` conversations for this helper slice
+        - Sensitive data notice: approved scope may store raw message text, phone/email identifiers, contact names, OTP/security texts, timestamps, thread/message IDs, and attachment/reaction metadata.
+        - Ingest mode: write a bounded iMessage source artifact for the approved scope.
+        - Verification plan: read back the generated iMessage source artifact and require `source: imessage` plus `playbook: imessage.imsg-cli.v1`.
+
+        Ask the user for explicit approval before running ingest. If approved, run `zebra-source-onboarding imessage confirm-plan --answer yes`. If not approved, run `zebra-source-onboarding imessage confirm-plan --answer no`.
+        ''').strip()
+
+    def imessage_step_prompt(step_id, state, row):
+        playbook = imessage_playbook()
+        run_state = load_source_run_state("imessage")
+        section = playbook.get("sections", {}).get(step_id, "")
+        if not section:
+            section = "Follow the current iMessage playbook step and continue only through the zebra-source-onboarding helper CLI."
+        if step_id == "choose_ingest_scope":
+            section = section + "\\n\\n" + textwrap.dedent('''
+            Present exactly these four choices to the user:
+
+            ```text
+            iMessage 접근 확인은 끝났습니다. 이제 실제로 brain에 저장할 대화방 범위를 정해야 합니다.
+
+            어떤 범위로 가져올까요?
+
+            1. 최근 날짜 이후 업데이트된 대화방
+            2. 특정 대화방
+            3. 대화방 전체
+            4. 지금은 iMessage 건너뛰기
+            ```
+
+            If the user chooses option 1, ask for the date and run `zebra-source-onboarding imessage choose-scope --scope updated-since --since YYYY-MM-DD`.
+            If the user chooses option 2, identify the selected conversation ID from the available iMessage data and run `zebra-source-onboarding imessage choose-scope --scope selected-threads --chat-id "<chat-id>"`.
+            If the user chooses option 3, run `zebra-source-onboarding imessage choose-scope --scope all-threads`.
+            If the user chooses option 4, run `zebra-source-onboarding imessage choose-scope --scope skip`.
+
+            Do not expose message-count slicing as a user option. The helper records an internal bounded window in run state and the final confirm plan.
+            ''').strip()
+        if step_id == "confirm_ingest_plan":
+            section = section + "\\n\\n" + imessage_ingest_plan_summary(run_state)
+        command_path = run_state.get("imsgCommandPath") or "not verified"
+        access = run_state.get("accessStatus") or "not verified"
+        smoke = run_state.get("smokeHistoryStatus") or "not run"
+        artifact = run_state.get("artifactPath") or "not created"
+        return textwrap.dedent(f'''
+        Zebra Source Onboarding: iMessage is the active source.
+
+        Playbook: {playbook.get("id", "imessage.imsg-cli")} {playbook.get("version", "v1")}
+        Current step: `{step_id}`
+        imsg command path: `{command_path}`
+        Messages access status: `{access}`
+        Smoke history status: `{smoke}`
+        Current ingest scope: `{imessage_scope_summary(run_state)}`
+        Current ingest artifact: `{artifact}`
+
+        Boundary rules:
+        - Work only this iMessage step. Do not start Notion, Obsidian, Gmail, or another source unless the helper prints that source as the next active source.
+        - Smoke-read is read-only access verification. It is not completion and not ingest approval.
+        - Actual ingest/write must stay within the user-approved conversation scope.
+        - Do not edit `source-onboarding-state.json` directly. The helper CLI is the only Source Onboarding state write path.
+        - Do not store raw message bodies, large chat/history JSON, prompt bodies, or transcripts in Source Onboarding state.
+        - Continue only from helper stdout `nextPrompt`; use `nextPromptPath` only as a fallback/debug file.
+
+        Playbook step instructions:
+
+        {section}
+        ''').strip()
+
     def source_next_prompt_payload(state, source_id, step_id):
         progress = ensure_progress(state)
         rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
@@ -775,6 +972,9 @@ struct ZebraSourceOnboardingHelper {
         elif source_id == "obsidian":
             playbook = obsidian_playbook()
             prompt = obsidian_step_prompt(step_id, state, row)
+        elif source_id == "imessage":
+            playbook = imessage_playbook()
+            prompt = imessage_step_prompt(step_id, state, row)
         else:
             return {}
         path = write_source_next_prompt_file(source_id, step_id, prompt)
@@ -868,6 +1068,39 @@ struct ZebraSourceOnboardingHelper {
             return False
         row = rows.get("obsidian")
         return isinstance(row, dict) and row.get("playbookID") == obsidian_playbook()["id"]
+
+    def set_imessage_row_state(state, row_status, phase, step_id, timestamp=None, attention_reason=None, result_summary=None, run_state_path=None):
+        timestamp = timestamp or now()
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get("imessage") if isinstance(rows.get("imessage"), dict) else source_row_for("imessage", timestamp)
+        playbook = imessage_playbook()
+        row["status"] = row_status
+        row["phase"] = phase
+        row["selectionState"] = "confirmed"
+        row["playbookID"] = playbook["id"]
+        row["playbookVersion"] = playbook["version"]
+        row["playbookStepID"] = step_id
+        row["updatedAt"] = timestamp
+        if attention_reason:
+            row["attentionReason"] = attention_reason
+        else:
+            row.pop("attentionReason", None)
+        if result_summary:
+            row["resultSummary"] = result_summary
+        if run_state_path:
+            row["runStatePath"] = run_state_path
+        rows["imessage"] = row
+        progress["sourceRows"] = rows
+        if "imessage" not in ensure_execution_order(progress):
+            progress["executionOrder"].append("imessage")
+        if row_status in {"checked", "skipped"}:
+            progress["activeSourceID"] = first_unfinished_source_id(progress)
+        else:
+            progress["activeSourceID"] = "imessage"
+        state["status"] = source_completion_status(state)
+        state["updatedAt"] = timestamp
+        return state
 
     def markdown_files_for_vault(vault_path, folders=None, limit=None):
         vault = Path(vault_path).expanduser()
@@ -1195,6 +1428,35 @@ struct ZebraSourceOnboardingHelper {
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
 
+    def start_imessage_from_next(state):
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get("imessage") if isinstance(rows.get("imessage"), dict) else {}
+        playbook = imessage_playbook()
+        if row.get("playbookID") == playbook["id"] and row.get("status") in {"running", "attention"}:
+            step_id = row.get("playbookStepID") if row.get("playbookStepID") in playbook["steps"] else playbook["initialStepID"]
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, "imessage", step_id))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        run_state = load_source_run_state("imessage")
+        run_state.update({
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("imessage", run_state)
+        state = set_imessage_row_state(
+            state,
+            "running",
+            "preflight",
+            playbook["initialStepID"],
+            run_state_path=run_path,
+        )
+        save_json(state)
+        payload = summary(state)
+        payload.update(source_next_prompt_payload(state, "imessage", playbook["initialStepID"]))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
     def start_next():
         state = load_or_create_state()
         progress = ensure_progress(state)
@@ -1216,6 +1478,8 @@ struct ZebraSourceOnboardingHelper {
             return 0
         if source_id == "obsidian":
             return start_obsidian_from_next(state)
+        if source_id == "imessage":
+            return start_imessage_from_next(state)
         if source_id != "gmail":
             payload = summary(state)
             payload["ok"] = False
@@ -1985,6 +2249,683 @@ struct ZebraSourceOnboardingHelper {
         print("unknown obsidian subcommand: " + subcommand, file=sys.stderr)
         return 2
 
+    def imessage_run_state_with_command_path():
+        run_state = load_source_run_state("imessage")
+        command_path = run_state.get("imsgCommandPath")
+        if not command_path:
+            command_path = shutil.which("imsg") or ""
+        if command_path:
+            run_state["imsgCommandPath"] = command_path
+        return run_state, command_path
+
+    def run_imsg(arguments, timeout=15, failure_reason="history_read_failed"):
+        run_state, command_path = imessage_run_state_with_command_path()
+        if not command_path:
+            return run_state, {
+                "ok": False,
+                "reason": "imsg_cli_missing",
+                "stdout": "",
+                "stderr": "",
+                "returncode": 127,
+            }
+        try:
+            result = subprocess.run(
+                [command_path] + list(arguments),
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+            )
+            return run_state, {
+                "ok": result.returncode == 0,
+                "reason": None if result.returncode == 0 else failure_reason,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "returncode": result.returncode,
+            }
+        except subprocess.TimeoutExpired as error:
+            return run_state, {
+                "ok": False,
+                "reason": failure_reason,
+                "stdout": error.stdout or "",
+                "stderr": error.stderr or "imsg command timed out",
+                "returncode": 124,
+            }
+        except Exception as error:
+            return run_state, {
+                "ok": False,
+                "reason": failure_reason,
+                "stdout": "",
+                "stderr": str(error),
+                "returncode": 1,
+            }
+
+    def parse_json_output(text):
+        raw = text or ""
+        try:
+            return json.loads(raw)
+        except Exception:
+            items = []
+            for line in raw.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    items.append(json.loads(stripped))
+                except Exception:
+                    return None
+            return items if items else None
+
+    def imessage_items(value):
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            for key in ("chats", "items", "data", "results", "messages"):
+                nested = value.get(key)
+                if isinstance(nested, list):
+                    return [item for item in nested if isinstance(item, dict)]
+            return [value]
+        return []
+
+    def imessage_chat_id(item):
+        if not isinstance(item, dict):
+            return ""
+        for key in ("chat_id", "chatID", "chatId", "id", "guid", "chat_guid", "chatGuid"):
+            value = item.get(key)
+            if value is not None and str(value):
+                return str(value)
+        return ""
+
+    def imessage_updated_at(item):
+        if not isinstance(item, dict):
+            return ""
+        for key in ("updated_at", "updatedAt", "last_message_at", "lastMessageAt", "date", "timestamp"):
+            value = item.get(key)
+            if value is not None and str(value):
+                return str(value)
+        return ""
+
+    def imessage_chats(limit=20, failure_reason="messages_full_disk_access_missing"):
+        run_state, result = run_imsg(
+            ["chats", "--limit", str(limit), "--json"],
+            failure_reason=failure_reason,
+        )
+        if not result.get("ok"):
+            return run_state, result, []
+        return run_state, result, imessage_items(parse_json_output(result.get("stdout") or ""))
+
+    def imessage_history(chat_id, limit=200):
+        return run_imsg(["history", "--chat-id", str(chat_id), "--limit", str(limit), "--json"], timeout=30)
+
+    def imessage_artifact_path(state=None):
+        directory = state_path.parent / "source-artifacts"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / "imessage-imsg-cli.md"
+
+    def imessage_internal_window():
+        return {
+            "messageLimitPerThread": 200,
+            "threadListLimit": 50,
+            "checkpoint": "not_started",
+        }
+
+    def imessage_scope_thread_ids(run_state):
+        scope = run_state.get("scope")
+        if scope == "selected-threads":
+            values = run_state.get("selectedThreadIDs")
+            thread_ids = [str(item) for item in values] if isinstance(values, list) else []
+            run_state["resolvedThreadIDs"] = thread_ids
+            run_state["estimatedThreadCount"] = len(thread_ids)
+            return thread_ids
+        internal_window = run_state.get("internalWindow") if isinstance(run_state.get("internalWindow"), dict) else imessage_internal_window()
+        thread_limit = int(internal_window.get("threadListLimit") or 50)
+        run_state_for_chats, result, chats = imessage_chats(
+            limit=thread_limit,
+            failure_reason="history_read_failed",
+        )
+        for key in ("imsgCommandPath", "imsgVersion", "cliStatus"):
+            if run_state_for_chats.get(key):
+                run_state[key] = run_state_for_chats[key]
+        run_state["resolvedThreadListLimit"] = thread_limit
+        if not result.get("ok"):
+            run_state["threadResolutionStatus"] = "failed"
+            run_state["threadResolutionFailureReason"] = result.get("reason") or "history_read_failed"
+            return []
+        run_state["threadResolutionStatus"] = "passed"
+        run_state["threadResolutionCandidateCount"] = len(chats)
+        if scope == "updated-since":
+            since = run_state.get("since") or ""
+            filtered = []
+            for item in chats:
+                updated_at = imessage_updated_at(item)
+                if updated_at and updated_at[:10] >= since:
+                    chat_id = imessage_chat_id(item)
+                    if chat_id:
+                        filtered.append(chat_id)
+            run_state["resolvedThreadIDs"] = filtered
+            run_state["estimatedThreadCount"] = len(filtered)
+            return filtered
+        if scope == "all-threads":
+            thread_ids = [imessage_chat_id(item) for item in chats if imessage_chat_id(item)]
+            run_state["resolvedThreadIDs"] = thread_ids
+            run_state["estimatedThreadCount"] = len(thread_ids)
+            return thread_ids
+        return []
+
+    def valid_date(value):
+        return bool(re.match(r"^\\d{4}-\\d{2}-\\d{2}$", value or ""))
+
+    def imessage_check_cli():
+        state = load_or_create_state()
+        run_state, command_path = imessage_run_state_with_command_path()
+        if not command_path:
+            run_state.update({"cliStatus": "missing", "updatedAt": now()})
+            run_path = save_source_run_state("imessage", run_state)
+            state = set_imessage_row_state(
+                state,
+                "attention",
+                "preflight",
+                "check_imsg_cli",
+                attention_reason="imsg_cli_missing",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "imsg_cli_missing"}
+            payload.update(source_next_prompt_payload(state, "imessage", "check_imsg_cli"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        version = ""
+        try:
+            result = subprocess.run([command_path, "--version"], text=True, capture_output=True, timeout=5)
+            version = (result.stdout or result.stderr or "").strip()
+        except Exception:
+            version = ""
+        run_state.update({
+            "cliStatus": "passed",
+            "imsgCommandPath": command_path,
+            "imsgVersion": version,
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("imessage", run_state)
+        state = set_imessage_row_state(
+            state,
+            "running",
+            "preflight",
+            "check_full_disk_access",
+            run_state_path=run_path,
+            result_summary="imsg CLI found at " + command_path,
+        )
+        save_json(state)
+        payload = {"ok": True, "imsgCommandPath": command_path, "imsgVersion": version}
+        payload.update(source_next_prompt_payload(state, "imessage", "check_full_disk_access"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def imessage_check_access():
+        state = load_or_create_state()
+        run_state, result, chats = imessage_chats(
+            limit=1,
+            failure_reason="messages_full_disk_access_missing",
+        )
+        if not result.get("ok"):
+            reason = result.get("reason") or "messages_full_disk_access_missing"
+            run_state.update({
+                "accessStatus": "failed",
+                "accessFailureReason": reason,
+                "accessFailureStderr": (result.get("stderr") or "")[:500],
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("imessage", run_state)
+            state = set_imessage_row_state(
+                state,
+                "attention",
+                "preflight",
+                "check_full_disk_access",
+                attention_reason=reason,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "imessage", "check_full_disk_access"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({
+            "accessStatus": "passed",
+            "estimatedThreadCount": len(chats) if chats else 0,
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("imessage", run_state)
+        state = set_imessage_row_state(
+            state,
+            "running",
+            "smoke",
+            "smoke_history",
+            run_state_path=run_path,
+            result_summary="iMessage chat listing succeeded.",
+        )
+        save_json(state)
+        payload = {"ok": True, "estimatedThreadCount": len(chats) if chats else 0}
+        payload.update(source_next_prompt_payload(state, "imessage", "smoke_history"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def imessage_smoke_history():
+        state = load_or_create_state()
+        run_state, result, chats = imessage_chats(
+            limit=5,
+            failure_reason="history_read_failed",
+        )
+        if not result.get("ok") or not chats:
+            reason = result.get("reason") or "history_read_failed"
+            run_state.update({
+                "smokeHistoryStatus": "failed",
+                "smokeFailureReason": reason,
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("imessage", run_state)
+            state = set_imessage_row_state(
+                state,
+                "attention",
+                "smoke",
+                "smoke_history",
+                attention_reason=reason,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "imessage", "smoke_history"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        chat_id = imessage_chat_id(chats[0])
+        if not chat_id:
+            reason = "history_read_failed"
+            run_state.update({
+                "smokeHistoryStatus": "failed",
+                "smokeFailureReason": reason,
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("imessage", run_state)
+            state = set_imessage_row_state(
+                state,
+                "attention",
+                "smoke",
+                "smoke_history",
+                attention_reason=reason,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "imessage", "smoke_history"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        history_state, history_result = imessage_history(chat_id, limit=1)
+        if not history_result.get("ok"):
+            reason = history_result.get("reason") or "history_read_failed"
+            run_state.update(history_state)
+            run_state.update({
+                "smokeHistoryStatus": "failed",
+                "smokeFailureReason": reason,
+                "smokeChatID": chat_id,
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("imessage", run_state)
+            state = set_imessage_row_state(
+                state,
+                "attention",
+                "smoke",
+                "smoke_history",
+                attention_reason=reason,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "imessage", "smoke_history"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update(history_state)
+        run_state.update({
+            "smokeHistoryStatus": "passed",
+            "smokeChatID": chat_id,
+            "estimatedThreadCount": len(chats),
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("imessage", run_state)
+        state = set_imessage_row_state(
+            state,
+            "running",
+            "ingest",
+            "choose_ingest_scope",
+            run_state_path=run_path,
+            result_summary="iMessage read-only smoke history passed.",
+        )
+        save_json(state)
+        payload = {"ok": True, "smokeChatID": chat_id, "estimatedThreadCount": len(chats)}
+        payload.update(source_next_prompt_payload(state, "imessage", "choose_ingest_scope"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def imessage_choose_scope():
+        scope = single_flag_value("--scope")
+        state = load_or_create_state()
+        run_state = load_source_run_state("imessage")
+        if scope == "skip":
+            run_state.update({"scope": "skip", "updatedAt": now()})
+            run_path = save_source_run_state("imessage", run_state)
+            state = set_imessage_row_state(
+                state,
+                "skipped",
+                "complete",
+                "complete",
+                run_state_path=run_path,
+                result_summary="iMessage skipped for this Source Onboarding session.",
+            )
+            save_json(state)
+            payload = {"ok": True, "skipped": True}
+            payload.update(source_next_prompt_payload(state, "imessage", "complete"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        if scope == "updated-since":
+            since = single_flag_value("--since")
+            if not valid_date(since):
+                print("--since YYYY-MM-DD is required when --scope updated-since", file=sys.stderr)
+                return 2
+            run_state.update({
+                "scope": scope,
+                "since": since,
+                "selectedThreadIDs": [],
+            })
+        elif scope == "selected-threads":
+            chat_ids = parse_flag_value("--chat-id")
+            if not chat_ids:
+                print("--chat-id is required when --scope selected-threads", file=sys.stderr)
+                return 2
+            run_state.update({
+                "scope": scope,
+                "selectedThreadIDs": chat_ids,
+            })
+        elif scope == "all-threads":
+            run_state.update({
+                "scope": scope,
+                "selectedThreadIDs": [],
+            })
+        else:
+            print("--scope must be updated-since, selected-threads, all-threads, or skip", file=sys.stderr)
+            return 2
+        run_state.update({
+            "internalWindow": imessage_internal_window(),
+            "planConfirmed": False,
+            "sensitiveNoticeConfirmed": False,
+            "updatedAt": now(),
+        })
+        thread_ids = imessage_scope_thread_ids(run_state)
+        run_state["estimatedThreadCount"] = len(thread_ids)
+        run_path = save_source_run_state("imessage", run_state)
+        state = set_imessage_row_state(
+            state,
+            "running",
+            "ingest",
+            "confirm_ingest_plan",
+            run_state_path=run_path,
+            result_summary="iMessage ingest scope selected: " + scope,
+        )
+        save_json(state)
+        payload = {"ok": True, "scope": scope, "estimatedThreadCount": run_state.get("estimatedThreadCount")}
+        payload.update(source_next_prompt_payload(state, "imessage", "confirm_ingest_plan"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def imessage_confirm_plan():
+        answer = single_flag_value("--answer").strip().lower()
+        if answer not in {"yes", "y", "no", "n"}:
+            print("--answer must be yes or no", file=sys.stderr)
+            return 2
+        state = load_or_create_state()
+        run_state = load_source_run_state("imessage")
+        if answer in {"no", "n"}:
+            run_state.update({
+                "planConfirmed": False,
+                "sensitiveNoticeConfirmed": False,
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("imessage", run_state)
+            state = set_imessage_row_state(
+                state,
+                "attention",
+                "ingest",
+                "choose_ingest_scope",
+                attention_reason="ingest_plan_rejected",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_plan_rejected"}
+            payload.update(source_next_prompt_payload(state, "imessage", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if not run_state.get("scope") or run_state.get("scope") == "skip":
+            state = set_imessage_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="ingest_scope_required")
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_scope_required"}
+            payload.update(source_next_prompt_payload(state, "imessage", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({
+            "planConfirmed": True,
+            "sensitiveNoticeConfirmed": True,
+            "confirmedAt": now(),
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("imessage", run_state)
+        state = set_imessage_row_state(
+            state,
+            "running",
+            "ingest",
+            "ingest_messages",
+            run_state_path=run_path,
+            result_summary="iMessage ingest plan confirmed.",
+        )
+        save_json(state)
+        payload = {"ok": True, "scope": run_state.get("scope")}
+        payload.update(source_next_prompt_payload(state, "imessage", "ingest_messages"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def imessage_ingest():
+        state = load_or_create_state()
+        run_state = load_source_run_state("imessage")
+        if not run_state.get("scope") or run_state.get("scope") == "skip":
+            state = set_imessage_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="ingest_scope_required")
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_scope_required"}
+            payload.update(source_next_prompt_payload(state, "imessage", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if not run_state.get("planConfirmed"):
+            state = set_imessage_row_state(state, "attention", "ingest", "confirm_ingest_plan", attention_reason="ingest_plan_unconfirmed")
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_plan_unconfirmed"}
+            payload.update(source_next_prompt_payload(state, "imessage", "confirm_ingest_plan"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        thread_ids = imessage_scope_thread_ids(run_state)
+        if not thread_ids:
+            reason = run_state.get("threadResolutionFailureReason") or "no_threads_in_approved_scope"
+            run_state.update({
+                "ingestStatus": "failed",
+                "ingestFailureReason": reason,
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("imessage", run_state)
+            state = set_imessage_row_state(
+                state,
+                "attention",
+                "ingest",
+                "ingest_messages",
+                attention_reason=reason,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "imessage", "ingest_messages"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        messages_by_thread = []
+        message_limit = int((run_state.get("internalWindow") or {}).get("messageLimitPerThread") or 200)
+        for chat_id in thread_ids:
+            history_state, result = imessage_history(chat_id, limit=message_limit)
+            if not result.get("ok"):
+                reason = result.get("reason") or "history_read_failed"
+                run_state.update(history_state)
+                run_state.update({
+                    "ingestStatus": "failed",
+                    "ingestFailureReason": reason,
+                    "failedThreadID": chat_id,
+                    "updatedAt": now(),
+                })
+                run_path = save_source_run_state("imessage", run_state)
+                state = set_imessage_row_state(
+                    state,
+                    "attention",
+                    "ingest",
+                    "ingest_messages",
+                    attention_reason=reason,
+                    run_state_path=run_path,
+                )
+                save_json(state)
+                payload = {"ok": False, "reason": reason, "failedThreadID": chat_id}
+                payload.update(source_next_prompt_payload(state, "imessage", "ingest_messages"))
+                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                return 1
+            parsed = parse_json_output(result.get("stdout") or "")
+            messages_by_thread.append({
+                "chat_id": chat_id,
+                "messages": imessage_items(parsed),
+            })
+        if not messages_by_thread:
+            reason = "history_read_failed"
+            run_state.update({
+                "ingestStatus": "failed",
+                "ingestFailureReason": reason,
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("imessage", run_state)
+            state = set_imessage_row_state(
+                state,
+                "attention",
+                "ingest",
+                "ingest_messages",
+                attention_reason=reason,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "imessage", "ingest_messages"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        artifact = imessage_artifact_path(state)
+        lines = [
+            "# iMessage Source Onboarding Ingest",
+            "",
+            "source: imessage",
+            "playbook: imessage.imsg-cli.v1",
+            "scope: " + str(run_state.get("scope")),
+            "scope_summary: " + imessage_scope_summary(run_state),
+            "thread_count: " + str(len(thread_ids)),
+            "sensitive_notice_confirmed: " + str(bool(run_state.get("sensitiveNoticeConfirmed"))).lower(),
+            "",
+            "## Threads",
+        ]
+        for item in messages_by_thread:
+            lines.extend([
+                "",
+                "### " + str(item.get("chat_id")),
+                "",
+                "```json",
+                json.dumps(item.get("messages") or [], ensure_ascii=False, indent=2),
+                "```",
+            ])
+        artifact.write_text("\\n".join(lines).rstrip() + "\\n", encoding="utf-8")
+        run_state.update({
+            "artifactPath": str(artifact),
+            "ingestedThreadCount": len(thread_ids),
+            "ingestedAt": now(),
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("imessage", run_state)
+        state = set_imessage_row_state(
+            state,
+            "running",
+            "verify",
+            "verify_readback",
+            run_state_path=run_path,
+            result_summary="iMessage ingest artifact written for " + str(len(thread_ids)) + " conversations.",
+        )
+        save_json(state)
+        payload = {"ok": True, "artifactPath": str(artifact), "ingestedThreadCount": len(thread_ids)}
+        payload.update(source_next_prompt_payload(state, "imessage", "verify_readback"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def imessage_verify_readback():
+        state = load_or_create_state()
+        run_state = load_source_run_state("imessage")
+        artifact = Path(run_state.get("artifactPath") or "")
+        try:
+            text = artifact.read_text(encoding="utf-8")
+        except Exception:
+            text = ""
+        if "source: imessage" not in text or "playbook: imessage.imsg-cli.v1" not in text:
+            run_state.update({"readbackStatus": "failed", "updatedAt": now()})
+            run_path = save_source_run_state("imessage", run_state)
+            state = set_imessage_row_state(
+                state,
+                "attention",
+                "verify",
+                "verify_readback",
+                attention_reason="readback_failed",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "readback_failed"}
+            payload.update(source_next_prompt_payload(state, "imessage", "verify_readback"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
+        run_path = save_source_run_state("imessage", run_state)
+        state = set_imessage_row_state(
+            state,
+            "checked",
+            "complete",
+            "complete",
+            run_state_path=run_path,
+            result_summary="iMessage ingest readback verified for " + str(run_state.get("ingestedThreadCount") or 0) + " conversations.",
+        )
+        save_json(state)
+        payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
+        payload.update(source_next_prompt_payload(state, "imessage", "complete"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def imessage_command():
+        if not args:
+            print("imessage requires a subcommand", file=sys.stderr)
+            return 2
+        subcommand = args[0]
+        if subcommand == "check-cli":
+            return imessage_check_cli()
+        if subcommand == "check-access":
+            return imessage_check_access()
+        if subcommand == "smoke-history":
+            return imessage_smoke_history()
+        if subcommand == "choose-scope":
+            return imessage_choose_scope()
+        if subcommand == "confirm-plan":
+            return imessage_confirm_plan()
+        if subcommand == "ingest":
+            return imessage_ingest()
+        if subcommand == "verify-readback":
+            return imessage_verify_readback()
+        print("unknown imessage subcommand: " + subcommand, file=sys.stderr)
+        return 2
+
     def split_pair(value):
         if "=" in value:
             left, right = value.split("=", 1)
@@ -2244,6 +3185,8 @@ struct ZebraSourceOnboardingHelper {
         sys.exit(gmail_command())
     elif command == "obsidian":
         sys.exit(obsidian_command())
+    elif command == "imessage":
+        sys.exit(imessage_command())
     elif command == "status":
         status()
     else:

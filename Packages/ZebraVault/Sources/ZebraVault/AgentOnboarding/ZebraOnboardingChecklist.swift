@@ -1088,8 +1088,8 @@ public enum ZebraOnboardingChecklistCommand {
         - The source-list confirmation question must include every source the user named, including uncataloged sources.
         - Use the zebra-source-onboarding helper as the Source Onboarding state write path.
         - After source-list confirmation, run zebra-source-onboarding next and follow only the active source returned by the helper.
-        - Gmail and Obsidian runners are implemented in this helper slice.
-        - Do not implement or start Notion or iMessage runners in this session.
+        - Gmail, Obsidian, and iMessage runners are implemented in this helper slice.
+        - Do not implement or start Notion runners in this session.
         - Do not edit source-onboarding-state.json directly; continue only from helper stdout `nextPrompt` and use `nextPromptPath` only as the file fallback.
 
         Helper flow:
@@ -1102,7 +1102,7 @@ public enum ZebraOnboardingChecklistCommand {
         5. Ask the source-list confirmation question from the helper output.
         6. Run zebra-source-onboarding confirm --answer yes or zebra-source-onboarding confirm --answer no.
         7. If the confirmation was yes, run zebra-source-onboarding next.
-        8. If `next` returns a Gmail or Obsidian `nextPrompt`, follow that prompt exactly until that source is checked, skipped, or needs attention.
+        8. If `next` returns a Gmail, Obsidian, or iMessage `nextPrompt`, follow that prompt exactly until that source is checked, skipped, or needs attention.
         9. Run zebra-source-onboarding status --json and report the saved state path plus compact saved-state summary.
 
         GBrain live probe policy:

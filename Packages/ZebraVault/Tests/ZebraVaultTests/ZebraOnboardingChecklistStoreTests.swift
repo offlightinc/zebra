@@ -531,8 +531,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(line.contains("Normalize source aliases into source candidates"), line)
         XCTAssertTrue(line.contains("uncataloged sources"), line)
         XCTAssertTrue(line.contains("must include every source the user named"), line)
-        XCTAssertTrue(line.contains("Gmail and Obsidian runners"), line)
-        XCTAssertTrue(line.contains("Do not implement or start Notion or iMessage runners"), line)
+        XCTAssertTrue(line.contains("Gmail, Obsidian, and iMessage runners"), line)
+        XCTAssertTrue(line.contains("Do not implement or start Notion runners"), line)
         XCTAssertTrue(line.contains("nextPromptPath"), line)
         XCTAssertFalse(line.contains("unsupported inputs"), line)
         XCTAssertFalse(line.contains("--unsupported"), line)
@@ -1102,7 +1102,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             ],
         ])
         try registryData.write(to: registry, options: .atomic)
-        let expectedVaultPath = vault.standardizedFileURL.path
+        let expectedVaultPath = pythonResolvedPath(vault)
 
         let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
         let gbrainStateURL = root
@@ -1200,8 +1200,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             ],
         ])
         try registryData.write(to: registry, options: .atomic)
-        let expectedFirstVaultPath = firstVault.standardizedFileURL.path
-        let expectedSecondVaultPath = secondVault.standardizedFileURL.path
+        let expectedFirstVaultPath = pythonResolvedPath(firstVault)
+        let expectedSecondVaultPath = pythonResolvedPath(secondVault)
 
         let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
         let gbrainStateURL = root
@@ -1243,6 +1243,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(next.status, 1, "stdout:\n\(next.stdout)\nstderr:\n\(next.stderr)")
+        XCTAssertFalse(next.stdout.isEmpty, "stdout:\n\(next.stdout)\nstderr:\n\(next.stderr)")
         let payload = try jsonObject(from: next.stdout)
         XCTAssertEqual(payload["reason"] as? String, "multiple_obsidian_vault_candidates")
         XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "confirm_vault_if_needed")
@@ -1705,6 +1706,371 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertNotNil(row.resultSummary)
         XCTAssertNotNil(row.runStatePath)
         XCTAssertFalse(try String(contentsOf: stateURL, encoding: .utf8).contains("First note\\nBody"))
+    }
+
+    @MainActor
+    func testSourceOnboardingIMessageScopeConfirmationIngestReadbackAndResume() throws {
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root.appendingPathComponent("bin", isDirectory: true)
+        try installFakeIMsg(in: fakeBin)
+
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "PATH": fakeBin.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? ""),
+        ]
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "아이메시지", "--candidate", "imessage=아이메시지"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        ).status, 0)
+
+        let started = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+        XCTAssertEqual(started.status, 0, "stdout:\n\(started.stdout)\nstderr:\n\(started.stderr)")
+        let startedPayload = try jsonObject(from: started.stdout)
+        XCTAssertEqual(startedPayload["nextSourceID"] as? String, "imessage")
+        XCTAssertEqual(startedPayload["nextPlaybookID"] as? String, "imessage.imsg-cli")
+        XCTAssertEqual(startedPayload["nextPlaybookVersion"] as? String, "v1")
+        XCTAssertEqual(startedPayload["nextPlaybookStepID"] as? String, "check_imsg_cli")
+        let nextPrompt = try XCTUnwrap(startedPayload["nextPrompt"] as? String)
+        let nextPromptPath = try XCTUnwrap(startedPayload["nextPromptPath"] as? String)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: nextPromptPath))
+        XCTAssertTrue(nextPrompt.contains("Playbook: imessage.imsg-cli v1"), nextPrompt)
+
+        let checkCLI = try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "check-cli"],
+            environment: environment
+        )
+        XCTAssertEqual(checkCLI.status, 0, "stdout:\n\(checkCLI.stdout)\nstderr:\n\(checkCLI.stderr)")
+        XCTAssertEqual(try jsonObject(from: checkCLI.stdout)["nextPlaybookStepID"] as? String, "check_full_disk_access")
+
+        let checkAccess = try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "check-access"],
+            environment: environment
+        )
+        XCTAssertEqual(checkAccess.status, 0, "stdout:\n\(checkAccess.stdout)\nstderr:\n\(checkAccess.stderr)")
+        XCTAssertEqual(try jsonObject(from: checkAccess.stdout)["nextPlaybookStepID"] as? String, "smoke_history")
+
+        let smoke = try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "smoke-history"],
+            environment: environment
+        )
+        XCTAssertEqual(smoke.status, 0, "stdout:\n\(smoke.stdout)\nstderr:\n\(smoke.stderr)")
+        let smokePayload = try jsonObject(from: smoke.stdout)
+        XCTAssertEqual(smokePayload["nextPlaybookStepID"] as? String, "choose_ingest_scope")
+        let scopePrompt = try XCTUnwrap(smokePayload["nextPrompt"] as? String)
+        XCTAssertTrue(scopePrompt.contains("1. 최근 날짜 이후 업데이트된 대화방"), scopePrompt)
+        XCTAssertTrue(scopePrompt.contains("2. 특정 대화방"), scopePrompt)
+        XCTAssertTrue(scopePrompt.contains("3. 대화방 전체"), scopePrompt)
+        XCTAssertTrue(scopePrompt.contains("4. 지금은 iMessage 건너뛰기"), scopePrompt)
+        XCTAssertFalse(scopePrompt.contains("최근 N개 메시지"), scopePrompt)
+
+        let resumedScope = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+        XCTAssertEqual(resumedScope.status, 0, "stdout:\n\(resumedScope.stdout)\nstderr:\n\(resumedScope.stderr)")
+        XCTAssertEqual(try jsonObject(from: resumedScope.stdout)["nextPlaybookStepID"] as? String, "choose_ingest_scope")
+
+        let blockedBeforeScope = try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "ingest"],
+            environment: environment
+        )
+        XCTAssertEqual(blockedBeforeScope.status, 1, "stdout:\n\(blockedBeforeScope.stdout)\nstderr:\n\(blockedBeforeScope.stderr)")
+        XCTAssertEqual(try jsonObject(from: blockedBeforeScope.stdout)["reason"] as? String, "ingest_scope_required")
+
+        let invalidScope = try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "choose-scope", "--scope", "updated-since"],
+            environment: environment
+        )
+        XCTAssertEqual(invalidScope.status, 2)
+
+        let scope = try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "choose-scope", "--scope", "updated-since", "--since", "2026-07-01"],
+            environment: environment
+        )
+        XCTAssertEqual(scope.status, 0, "stdout:\n\(scope.stdout)\nstderr:\n\(scope.stderr)")
+        let scopePayload = try jsonObject(from: scope.stdout)
+        XCTAssertEqual(scopePayload["nextPlaybookStepID"] as? String, "confirm_ingest_plan")
+        let confirmPrompt = try XCTUnwrap(scopePayload["nextPrompt"] as? String)
+        XCTAssertTrue(confirmPrompt.contains("Resolved iMessage ingest plan:"), confirmPrompt)
+        XCTAssertTrue(confirmPrompt.contains("recently updated conversations since 2026-07-01"), confirmPrompt)
+        XCTAssertTrue(confirmPrompt.contains("up to `200` messages per conversation and up to `50` conversations"), confirmPrompt)
+        XCTAssertTrue(confirmPrompt.contains("Sensitive data notice"), confirmPrompt)
+
+        let blockedBeforePlan = try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "ingest"],
+            environment: environment
+        )
+        XCTAssertEqual(blockedBeforePlan.status, 1, "stdout:\n\(blockedBeforePlan.stdout)\nstderr:\n\(blockedBeforePlan.stderr)")
+        XCTAssertEqual(try jsonObject(from: blockedBeforePlan.stdout)["reason"] as? String, "ingest_plan_unconfirmed")
+
+        let confirm = try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "confirm-plan", "--answer", "yes"],
+            environment: environment
+        )
+        XCTAssertEqual(confirm.status, 0, "stdout:\n\(confirm.stdout)\nstderr:\n\(confirm.stderr)")
+        XCTAssertEqual(try jsonObject(from: confirm.stdout)["nextPlaybookStepID"] as? String, "ingest_messages")
+
+        let resumedIngest = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+        XCTAssertEqual(resumedIngest.status, 0, "stdout:\n\(resumedIngest.stdout)\nstderr:\n\(resumedIngest.stderr)")
+        XCTAssertEqual(try jsonObject(from: resumedIngest.stdout)["nextPlaybookStepID"] as? String, "ingest_messages")
+
+        let ingest = try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "ingest"],
+            environment: environment
+        )
+        XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
+        let ingestPayload = try jsonObject(from: ingest.stdout)
+        XCTAssertEqual(ingestPayload["nextPlaybookStepID"] as? String, "verify_readback")
+        XCTAssertEqual(ingestPayload["ingestedThreadCount"] as? Int, 1)
+        let artifactPath = try XCTUnwrap(ingestPayload["artifactPath"] as? String)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: artifactPath))
+        let artifactBody = try String(contentsOfFile: artifactPath, encoding: .utf8)
+        XCTAssertTrue(artifactBody.contains("fixture raw message body"))
+        XCTAssertTrue(artifactBody.contains("chat-alpha"))
+        XCTAssertFalse(artifactBody.contains("chat-old"))
+
+        let verify = try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "verify-readback"],
+            environment: environment
+        )
+        XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
+        XCTAssertEqual(try jsonObject(from: verify.stdout)["nextPlaybookStepID"] as? String, "complete")
+
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        let row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
+        XCTAssertEqual(row.status, "checked")
+        XCTAssertEqual(row.phase, "complete")
+        XCTAssertEqual(row.playbookID, "imessage.imsg-cli")
+        XCTAssertEqual(row.playbookStepID, "complete")
+        let runStatePath = try XCTUnwrap(row.runStatePath)
+        let runState = try stateObject(in: URL(fileURLWithPath: runStatePath))
+        XCTAssertEqual(runState["scope"] as? String, "updated-since")
+        XCTAssertEqual(runState["since"] as? String, "2026-07-01")
+        XCTAssertEqual(runState["resolvedThreadListLimit"] as? Int, 50)
+        XCTAssertEqual(runState["sensitiveNoticeConfirmed"] as? Bool, true)
+        XCTAssertEqual(runState["ingestedThreadCount"] as? Int, 1)
+        XCTAssertEqual(runState["readbackStatus"] as? String, "passed")
+        let stateBody = try String(contentsOf: stateURL, encoding: .utf8)
+        XCTAssertFalse(stateBody.contains("fixture raw message body"))
+        XCTAssertFalse(try String(contentsOfFile: runStatePath, encoding: .utf8).contains("fixture raw message body"))
+    }
+
+    @MainActor
+    func testSourceOnboardingIMessageMissingCLIWritesAttention() throws {
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: fakeBin.appendingPathComponent("python3", isDirectory: false),
+            withDestinationURL: URL(fileURLWithPath: "/usr/bin/python3")
+        )
+        let prepared = try prepareIMessageSourceOnboarding(
+            root: root,
+            pathPrefix: fakeBin,
+            includeAmbientPath: false
+        )
+
+        XCTAssertEqual(try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["next"],
+            environment: prepared.environment
+        ).status, 0)
+
+        let checkCLI = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "check-cli"],
+            environment: prepared.environment
+        )
+
+        XCTAssertEqual(checkCLI.status, 1, "stdout:\n\(checkCLI.stdout)\nstderr:\n\(checkCLI.stderr)")
+        let payload = try jsonObject(from: checkCLI.stdout)
+        XCTAssertEqual(payload["reason"] as? String, "imsg_cli_missing")
+        XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "check_imsg_cli")
+        let loaded = try readSourceOnboardingState(at: prepared.stateURL)
+        XCTAssertEqual(loaded.progress.sourceRows["imessage"]?.status, "attention")
+        XCTAssertEqual(loaded.progress.sourceRows["imessage"]?.attentionReason, "imsg_cli_missing")
+    }
+
+    @MainActor
+    func testSourceOnboardingIMessageScopeVariantsAndSkip() throws {
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root.appendingPathComponent("bin", isDirectory: true)
+        try installFakeIMsg(in: fakeBin)
+        let prepared = try prepareIMessageSourceOnboarding(root: root, pathPrefix: fakeBin)
+        try runIMessageToScopeSelection(helperURL: prepared.helperURL, environment: prepared.environment)
+
+        let missingChat = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "choose-scope", "--scope", "selected-threads"],
+            environment: prepared.environment
+        )
+        XCTAssertEqual(missingChat.status, 2)
+
+        let selected = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "choose-scope", "--scope", "selected-threads", "--chat-id", "chat-alpha"],
+            environment: prepared.environment
+        )
+        XCTAssertEqual(selected.status, 0, "stdout:\n\(selected.stdout)\nstderr:\n\(selected.stderr)")
+        var loaded = try readSourceOnboardingState(at: prepared.stateURL)
+        var row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
+        var runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual(runState["scope"] as? String, "selected-threads")
+        XCTAssertEqual(runState["selectedThreadIDs"] as? [String], ["chat-alpha"])
+
+        let allThreads = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "choose-scope", "--scope", "all-threads"],
+            environment: prepared.environment
+        )
+        XCTAssertEqual(allThreads.status, 0, "stdout:\n\(allThreads.stdout)\nstderr:\n\(allThreads.stderr)")
+        loaded = try readSourceOnboardingState(at: prepared.stateURL)
+        row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
+        runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual(runState["scope"] as? String, "all-threads")
+        XCTAssertEqual((runState["internalWindow"] as? [String: Any])?["threadListLimit"] as? Int, 50)
+
+        let narrowed = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "choose-scope", "--scope", "updated-since", "--since", "2026-07-01"],
+            environment: prepared.environment
+        )
+        XCTAssertEqual(narrowed.status, 0, "stdout:\n\(narrowed.stdout)\nstderr:\n\(narrowed.stderr)")
+        loaded = try readSourceOnboardingState(at: prepared.stateURL)
+        row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
+        runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual(runState["scope"] as? String, "updated-since")
+        XCTAssertEqual(runState["since"] as? String, "2026-07-01")
+        XCTAssertEqual(runState["resolvedThreadIDs"] as? [String], ["chat-alpha"])
+        XCTAssertEqual(runState["estimatedThreadCount"] as? Int, 1)
+        XCTAssertEqual(runState["resolvedThreadListLimit"] as? Int, 50)
+
+        let skip = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "choose-scope", "--scope", "skip"],
+            environment: prepared.environment
+        )
+        XCTAssertEqual(skip.status, 0, "stdout:\n\(skip.stdout)\nstderr:\n\(skip.stderr)")
+        loaded = try readSourceOnboardingState(at: prepared.stateURL)
+        row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
+        XCTAssertEqual(row.status, "skipped")
+        XCTAssertEqual(row.playbookStepID, "complete")
+    }
+
+    @MainActor
+    func testSourceOnboardingIMessageHistoryFailureUsesHistoryReason() throws {
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root.appendingPathComponent("bin", isDirectory: true)
+        try installFakeIMsg(in: fakeBin)
+        let prepared = try prepareIMessageSourceOnboarding(
+            root: root,
+            pathPrefix: fakeBin,
+            extraEnvironment: ["IMSG_FIXTURE_MODE": "history-fails"]
+        )
+        _ = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["next"],
+            environment: prepared.environment
+        )
+        _ = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "check-cli"],
+            environment: prepared.environment
+        )
+        _ = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "check-access"],
+            environment: prepared.environment
+        )
+
+        let smoke = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "smoke-history"],
+            environment: prepared.environment
+        )
+
+        XCTAssertEqual(smoke.status, 1, "stdout:\n\(smoke.stdout)\nstderr:\n\(smoke.stderr)")
+        let payload = try jsonObject(from: smoke.stdout)
+        XCTAssertEqual(payload["reason"] as? String, "history_read_failed")
+        let loaded = try readSourceOnboardingState(at: prepared.stateURL)
+        XCTAssertEqual(loaded.progress.sourceRows["imessage"]?.attentionReason, "history_read_failed")
+    }
+
+    @MainActor
+    func testSourceOnboardingIMessageEmptyApprovedScopeDoesNotComplete() throws {
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root.appendingPathComponent("bin", isDirectory: true)
+        try installFakeIMsg(in: fakeBin)
+        let prepared = try prepareIMessageSourceOnboarding(root: root, pathPrefix: fakeBin)
+        try runIMessageToScopeSelection(helperURL: prepared.helperURL, environment: prepared.environment)
+
+        XCTAssertEqual(try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "choose-scope", "--scope", "updated-since", "--since", "2027-01-01"],
+            environment: prepared.environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "confirm-plan", "--answer", "yes"],
+            environment: prepared.environment
+        ).status, 0)
+
+        let ingest = try runProcess(
+            executableURL: prepared.helperURL,
+            arguments: ["imessage", "ingest"],
+            environment: prepared.environment
+        )
+
+        XCTAssertEqual(ingest.status, 1, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
+        let payload = try jsonObject(from: ingest.stdout)
+        XCTAssertEqual(payload["reason"] as? String, "no_threads_in_approved_scope")
+        let loaded = try readSourceOnboardingState(at: prepared.stateURL)
+        XCTAssertEqual(loaded.progress.sourceRows["imessage"]?.status, "attention")
+        XCTAssertEqual(loaded.progress.sourceRows["imessage"]?.attentionReason, "no_threads_in_approved_scope")
     }
 
     @MainActor
@@ -4619,6 +4985,120 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             atomically: true,
             encoding: .utf8
         )
+    }
+
+    private func installFakeIMsg(in directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let script = directory.appendingPathComponent("imsg", isDirectory: false)
+        let content = """
+        #!/bin/sh
+        MODE="${IMSG_FIXTURE_MODE:-ok}"
+        if [ "$1" = "--version" ]; then
+          echo "imsg fixture 1.0"
+          exit 0
+        fi
+        if [ "$1" = "chats" ]; then
+          echo '{"chat_id":"chat-alpha","display_name":"Alpha","updated_at":"2026-07-02T12:00:00Z"}'
+          echo '{"chat_id":"chat-old","display_name":"Old","updated_at":"2026-06-01T12:00:00Z"}'
+          exit 0
+        fi
+        if [ "$1" = "history" ]; then
+          if [ "$MODE" = "history-fails" ]; then
+            echo "history fixture denied" >&2
+            exit 13
+          fi
+          echo '{"message_id":"message-1","text":"fixture raw message body","timestamp":"2026-07-02T12:01:00Z"}'
+          exit 0
+        fi
+        echo "unknown imsg fixture command" >&2
+        exit 1
+        """
+        try content.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+    }
+
+    private func prepareIMessageSourceOnboarding(
+        root: URL,
+        pathPrefix: URL,
+        includeAmbientPath: Bool = true,
+        extraEnvironment: [String: String] = [:]
+    ) throws -> (
+        helperURL: URL,
+        stateURL: URL,
+        environment: [String: String]
+    ) {
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let path = includeAmbientPath
+            ? pathPrefix.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            : pathPrefix.path
+        var environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "PATH": path,
+        ]
+        environment.merge(extraEnvironment) { _, new in new }
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "아이메시지", "--candidate", "imessage=아이메시지"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        ).status, 0)
+        return (helperURL, stateURL, environment)
+    }
+
+    private func runIMessageToScopeSelection(
+        helperURL: URL,
+        environment: [String: String]
+    ) throws {
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "check-cli"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "check-access"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["imessage", "smoke-history"],
+            environment: environment
+        ).status, 0)
+    }
+
+    private func pythonResolvedPath(_ url: URL) -> String {
+        let path = url.standardizedFileURL.path
+        if path.hasPrefix("/var/") {
+            return "/private" + path
+        }
+        return path
     }
 
     private func readSourceOnboardingState(at url: URL) throws -> ZebraSourceOnboardingState {
