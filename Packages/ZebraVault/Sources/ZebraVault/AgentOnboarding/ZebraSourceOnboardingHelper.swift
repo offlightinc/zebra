@@ -375,6 +375,7 @@ struct ZebraSourceOnboardingHelper {
     import subprocess
     import sys
     import textwrap
+    import io
     import urllib.error
     import urllib.parse
     import urllib.request
@@ -874,6 +875,40 @@ struct ZebraSourceOnboardingHelper {
         if all_execution_sources_finished(progress):
             return "completed"
         return "running"
+
+    def pending_completion_source_id(state):
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        ordered = ensure_execution_order(progress)
+        for source_id in ordered + [key for key in rows.keys() if key not in ordered]:
+            row = rows.get(source_id)
+            if (
+                isinstance(row, dict)
+                and row.get("status") == "running"
+                and row.get("phase") == "complete"
+                and row.get("playbookStepID") == "complete"
+            ):
+                return source_id
+        return None
+
+    def reject_if_completion_report_pending(command_source_id):
+        state = load_json(state_path)
+        if not state:
+            return None
+        migrate_source_state(state)
+        pending_source_id = pending_completion_source_id(state)
+        if not pending_source_id:
+            return None
+        payload = summary(state)
+        payload.update(source_next_prompt_payload(state, pending_source_id, "complete"))
+        payload.update({
+            "ok": False,
+            "reason": "source_completion_report_required",
+            "blockedSourceID": command_source_id,
+            "pendingSourceID": pending_source_id,
+        })
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 1
 
     def gmail_step_prompt(step_id, state, row):
         env_path = str(home / ".gbrain/.env")
@@ -1496,6 +1531,100 @@ struct ZebraSourceOnboardingHelper {
         {section}
         ''').strip()
 
+    def source_completion_report_prompt(source_id, row):
+        display = source_display_name(source_id)
+        summary_text = row.get("resultSummary") or (display + " Source Onboarding is ready to report complete.")
+        language = onboarding_language()
+        if language == "ko":
+            return textwrap.dedent(f'''
+            Zebra Source Onboarding: {display} 완료 보고가 필요합니다.
+
+            {summary_text}
+
+            아직 다음 source로 넘어가지 마세요. 먼저 사용자에게 {display} 작업이 완료됐다고 짧게 말한 뒤, 아래 명령으로 완료를 Zebra에 보고하세요:
+
+            ```bash
+            zebra-source-onboarding report --status completed --source {source_id}
+            ```
+
+            보고 명령이 성공하면 그 stdout의 `nextPrompt`만 따라 다음 source 또는 최종 완료 안내를 진행하세요.
+            ''').strip()
+        if language == "ja":
+            return textwrap.dedent(f'''
+            Zebra Source Onboarding: {display} の完了報告が必要です。
+
+            {summary_text}
+
+            まだ次の source に進まないでください。まず {display} の作業が完了したことをユーザーに短く伝え、次のコマンドで Zebra に完了を報告してください:
+
+            ```bash
+            zebra-source-onboarding report --status completed --source {source_id}
+            ```
+
+            報告コマンドが成功したら、その stdout の `nextPrompt` だけに従って次の source または最終完了案内を進めてください。
+            ''').strip()
+        return textwrap.dedent(f'''
+        Zebra Source Onboarding: {display} completion report is required.
+
+        {summary_text}
+
+        Do not move to the next source yet. First briefly tell the user that {display} is complete, then report the completion to Zebra:
+
+        ```bash
+        zebra-source-onboarding report --status completed --source {source_id}
+        ```
+
+        After that report succeeds, continue only from its stdout `nextPrompt`.
+        ''').strip()
+
+    def source_completion_handoff_prompt(source_id, summary_text, next_prompt=None):
+        display = source_display_name(source_id)
+        language = onboarding_language()
+        if next_prompt:
+            if language == "ko":
+                return textwrap.dedent(f'''
+                먼저 사용자에게 이 완료 사실을 짧게 알려주세요:
+                {display} Source Onboarding이 완료됐습니다. {summary_text}
+
+                그 다음 아래 다음 source 단계만 진행하세요:
+
+                {next_prompt}
+                ''').strip()
+            if language == "ja":
+                return textwrap.dedent(f'''
+                まず、この完了内容をユーザーに短く伝えてください:
+                {display} Source Onboarding が完了しました。{summary_text}
+
+                その後、次の source step だけを進めてください:
+
+                {next_prompt}
+                ''').strip()
+            return textwrap.dedent(f'''
+            First, briefly tell the user this completed source:
+            {display} Source Onboarding is complete. {summary_text}
+
+            Then proceed only with the next source step below:
+
+            {next_prompt}
+            ''').strip()
+        if language == "ko":
+            return textwrap.dedent(f'''
+            {display} Source Onboarding이 완료됐습니다. {summary_text}
+
+            선택된 모든 Source Onboarding이 완료됐습니다. 사용자에게 전체 Source Onboarding이 끝났다고 짧게 말한 뒤 멈추세요.
+            ''').strip()
+        if language == "ja":
+            return textwrap.dedent(f'''
+            {display} Source Onboarding が完了しました。{summary_text}
+
+            選択されたすべての Source Onboarding が完了しました。ユーザーに全体の Source Onboarding が完了したことを短く伝えて、そこで止めてください。
+            ''').strip()
+        return textwrap.dedent(f'''
+        {display} Source Onboarding is complete. {summary_text}
+
+        All selected Source Onboarding sources are complete. Briefly tell the user that Source Onboarding is complete, then stop.
+        ''').strip()
+
     def source_next_prompt_payload(state, source_id, step_id):
         progress = ensure_progress(state)
         rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
@@ -1514,6 +1643,8 @@ struct ZebraSourceOnboardingHelper {
             prompt = notion_step_prompt(step_id, state, row)
         else:
             return {}
+        if step_id == "complete":
+            prompt = source_completion_report_prompt(source_id, row)
         path = write_source_next_prompt_file(source_id, step_id, prompt)
         return {
             "nextSourceID": source_id,
@@ -1681,6 +1812,95 @@ struct ZebraSourceOnboardingHelper {
         state["status"] = source_completion_status(state)
         state["updatedAt"] = timestamp
         return state
+
+    def mark_source_completion_pending(state, source_id, disposition, result_summary, run_state=None):
+        disposition = "skipped" if disposition == "skipped" else "checked"
+        run_state_path = None
+        if source_id != "gmail":
+            if not isinstance(run_state, dict):
+                run_state = load_source_run_state(source_id)
+            run_state.update({
+                "completionReportPending": True,
+                "completionDisposition": disposition,
+                "completionSummary": result_summary,
+                "phase": "complete",
+                "step": "complete",
+                "updatedAt": now(),
+            })
+            run_state_path = save_source_run_state(source_id, run_state)
+        if source_id == "gmail":
+            return set_gmail_row_state(
+                state,
+                "running",
+                "complete",
+                "complete",
+                result_summary=result_summary,
+            )
+        if source_id == "obsidian":
+            return set_obsidian_row_state(
+                state,
+                "running",
+                "complete",
+                "complete",
+                result_summary=result_summary,
+                run_state_path=run_state_path,
+            )
+        if source_id == "notion":
+            return set_notion_row_state(
+                state,
+                "running",
+                "complete",
+                "complete",
+                result_summary=result_summary,
+                run_state_path=run_state_path,
+            )
+        if source_id == "imessage":
+            return set_imessage_row_state(
+                state,
+                "running",
+                "complete",
+                "complete",
+                result_summary=result_summary,
+                run_state_path=run_state_path,
+            )
+        return state
+
+    def report_source_completion(state, source_id):
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else None
+        if not row:
+            return None, {"ok": False, "reason": "unknown_source", "sourceID": source_id}, 1
+        if progress.get("activeSourceID") != source_id:
+            return None, {"ok": False, "reason": "source_not_active", "sourceID": source_id}, 1
+        if row.get("status") in {"checked", "skipped"}:
+            return None, {"ok": False, "reason": "source_already_reported", "sourceID": source_id}, 1
+        if row.get("phase") != "complete" or row.get("playbookStepID") != "complete":
+            return None, {"ok": False, "reason": "source_completion_not_pending", "sourceID": source_id}, 1
+        run_state = load_source_run_state(source_id) if source_id != "gmail" else {}
+        disposition = run_state.get("completionDisposition") or "checked"
+        if disposition not in {"checked", "skipped"}:
+            disposition = "checked"
+        summary_text = row.get("resultSummary") or run_state.get("completionSummary") or (source_display_name(source_id) + " Source Onboarding completed.")
+        timestamp = now()
+        if source_id == "gmail":
+            state = set_gmail_row_state(state, disposition, "complete", "complete", timestamp=timestamp, result_summary=summary_text)
+        elif source_id == "obsidian":
+            run_state.update({"completionReportPending": False, "completionReportedAt": timestamp, "updatedAt": timestamp})
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_obsidian_row_state(state, disposition, "complete", "complete", timestamp=timestamp, result_summary=summary_text, run_state_path=run_path)
+        elif source_id == "notion":
+            run_state.update({"completionReportPending": False, "completionReportedAt": timestamp, "updatedAt": timestamp})
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_notion_row_state(state, disposition, "complete", "complete", timestamp=timestamp, result_summary=summary_text, run_state_path=run_path)
+        elif source_id == "imessage":
+            run_state.update({"completionReportPending": False, "completionReportedAt": timestamp, "updatedAt": timestamp})
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_imessage_row_state(state, disposition, "complete", "complete", timestamp=timestamp, result_summary=summary_text, run_state_path=run_path)
+        else:
+            return None, {"ok": False, "reason": "unknown_source", "sourceID": source_id}, 1
+        save_json(state)
+        return state, {"sourceID": source_id, "summary": summary_text, "disposition": disposition}, 0
 
     def markdown_files_for_vault(vault_path, folders=None, limit=None):
         vault = Path(vault_path).expanduser()
@@ -2507,12 +2727,11 @@ struct ZebraSourceOnboardingHelper {
         )
         payload = {"ok": True, "service": service, "taskId": task_id}
         if should_update_gmail_runner(state):
-            state = set_gmail_row_state(
+            state = mark_source_completion_pending(
                 state,
+                "gmail",
                 "checked",
-                "complete",
-                "complete",
-                result_summary="Gmail Clawvisor gateway smoke check passed for service " + service,
+                "Gmail Clawvisor gateway smoke check passed for service " + service,
             )
             save_json(state)
             payload.update(source_next_prompt_payload(state, "gmail", "complete"))
@@ -2523,6 +2742,9 @@ struct ZebraSourceOnboardingHelper {
         if not args:
             print("gmail requires a subcommand", file=sys.stderr)
             return 2
+        pending_code = reject_if_completion_report_pending("gmail")
+        if pending_code is not None:
+            return pending_code
         subcommand = args[0]
         if subcommand == "verify-env":
             return gmail_verify_env()
@@ -2686,14 +2908,12 @@ struct ZebraSourceOnboardingHelper {
         vault = run_state.get("selectedVaultPath")
         if scope == "skip":
             run_state.update({"scope": "skip", "updatedAt": now()})
-            run_path = save_source_run_state("obsidian", run_state)
-            state = set_obsidian_row_state(
+            state = mark_source_completion_pending(
                 state,
+                "obsidian",
                 "skipped",
-                "complete",
-                "complete",
-                run_state_path=run_path,
-                result_summary="Obsidian skipped for this Source Onboarding session.",
+                "Obsidian skipped for this Source Onboarding session.",
+                run_state=run_state,
             )
             save_json(state)
             payload = {"ok": True, "skipped": True}
@@ -2874,14 +3094,12 @@ struct ZebraSourceOnboardingHelper {
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
         run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
-        run_path = save_source_run_state("obsidian", run_state)
-        state = set_obsidian_row_state(
+        state = mark_source_completion_pending(
             state,
+            "obsidian",
             "checked",
-            "complete",
-            "complete",
-            run_state_path=run_path,
-            result_summary="Obsidian ingest readback verified for " + str(run_state.get("ingestedFileCount") or 0) + " Markdown files.",
+            "Obsidian ingest readback verified for " + str(run_state.get("ingestedFileCount") or 0) + " Markdown files.",
+            run_state=run_state,
         )
         save_json(state)
         payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
@@ -2893,6 +3111,9 @@ struct ZebraSourceOnboardingHelper {
         if not args:
             print("obsidian requires a subcommand", file=sys.stderr)
             return 2
+        pending_code = reject_if_completion_report_pending("obsidian")
+        if pending_code is not None:
+            return pending_code
         subcommand = args[0]
         if subcommand == "verify-vault":
             return obsidian_verify_vault()
@@ -3119,14 +3340,12 @@ struct ZebraSourceOnboardingHelper {
         run_state = load_source_run_state("notion")
         if scope == "skip":
             run_state.update({"scope": "skip", "phase": "complete", "step": "complete", "updatedAt": now()})
-            run_path = save_source_run_state("notion", run_state)
-            state = set_notion_row_state(
+            state = mark_source_completion_pending(
                 state,
+                "notion",
                 "skipped",
-                "complete",
-                "complete",
-                run_state_path=run_path,
-                result_summary="Notion skipped for this Source Onboarding session.",
+                "Notion skipped for this Source Onboarding session.",
+                run_state=run_state,
             )
             save_json(state)
             payload = {"ok": True, "skipped": True}
@@ -3510,14 +3729,12 @@ struct ZebraSourceOnboardingHelper {
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
         run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "phase": "complete", "step": "complete", "updatedAt": now()})
-        run_path = save_source_run_state("notion", run_state)
-        state = set_notion_row_state(
+        state = mark_source_completion_pending(
             state,
+            "notion",
             "checked",
-            "complete",
-            "complete",
-            run_state_path=run_path,
-            result_summary="Notion ingest readback verified.",
+            "Notion ingest readback verified.",
+            run_state=run_state,
         )
         save_json(state)
         payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
@@ -3529,6 +3746,9 @@ struct ZebraSourceOnboardingHelper {
         if not args:
             print("notion requires a subcommand", file=sys.stderr)
             return 2
+        pending_code = reject_if_completion_report_pending("notion")
+        if pending_code is not None:
+            return pending_code
         subcommand = args[0]
         if subcommand == "choose-scope":
             return notion_choose_scope()
@@ -4070,14 +4290,12 @@ struct ZebraSourceOnboardingHelper {
         run_state = load_source_run_state("imessage")
         if scope == "skip":
             run_state.update({"scope": "skip", "updatedAt": now()})
-            run_path = save_source_run_state("imessage", run_state)
-            state = set_imessage_row_state(
+            state = mark_source_completion_pending(
                 state,
+                "imessage",
                 "skipped",
-                "complete",
-                "complete",
-                run_state_path=run_path,
-                result_summary="iMessage skipped for this Source Onboarding session.",
+                "iMessage skipped for this Source Onboarding session.",
+                run_state=run_state,
             )
             save_json(state)
             payload = {"ok": True, "skipped": True}
@@ -4350,14 +4568,12 @@ struct ZebraSourceOnboardingHelper {
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
         run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
-        run_path = save_source_run_state("imessage", run_state)
-        state = set_imessage_row_state(
+        state = mark_source_completion_pending(
             state,
+            "imessage",
             "checked",
-            "complete",
-            "complete",
-            run_state_path=run_path,
-            result_summary="iMessage ingest readback verified for " + str(run_state.get("ingestedThreadCount") or 0) + " conversations.",
+            "iMessage ingest readback verified for " + str(run_state.get("ingestedThreadCount") or 0) + " conversations.",
+            run_state=run_state,
         )
         save_json(state)
         payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
@@ -4369,6 +4585,9 @@ struct ZebraSourceOnboardingHelper {
         if not args:
             print("imessage requires a subcommand", file=sys.stderr)
             return 2
+        pending_code = reject_if_completion_report_pending("imessage")
+        if pending_code is not None:
+            return pending_code
         subcommand = args[0]
         if subcommand == "check-cli":
             return imessage_check_cli()
@@ -4636,12 +4855,81 @@ struct ZebraSourceOnboardingHelper {
         payload["state"] = state
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
 
+    def parse_report_args():
+        status_value = ""
+        source_id = ""
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == "--status" and index + 1 < len(args):
+                status_value = args[index + 1].strip().lower()
+                index += 2
+            elif token == "--source" and index + 1 < len(args):
+                source_id = args[index + 1].strip().lower()
+                index += 2
+            else:
+                print("unknown or incomplete argument: " + token, file=sys.stderr)
+                sys.exit(2)
+        if status_value != "completed":
+            print("--status must be completed", file=sys.stderr)
+            sys.exit(2)
+        if source_id not in supported:
+            print("--source must be one of: " + ", ".join(sorted(supported.keys())), file=sys.stderr)
+            sys.exit(2)
+        return source_id
+
+    def run_start_next_captured():
+        buffer = io.StringIO()
+        old_stdout = sys.stdout
+        try:
+            sys.stdout = buffer
+            code = start_next()
+        finally:
+            sys.stdout = old_stdout
+        text = buffer.getvalue().strip()
+        if not text:
+            return {}, code
+        try:
+            return json.loads(text), code
+        except Exception:
+            return {"ok": False, "reason": "next_payload_parse_failed", "raw": text}, 1
+
+    def report():
+        source_id = parse_report_args()
+        state = load_or_create_state()
+        state, completion, code = report_source_completion(state, source_id)
+        if code != 0:
+            payload = summary(load_or_create_state())
+            payload.update(completion)
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return code
+
+        next_payload, next_code = run_start_next_captured()
+        summary_text = completion.get("summary") or ""
+        next_prompt = next_payload.get("nextPrompt") if isinstance(next_payload.get("nextPrompt"), str) else None
+        combined_prompt = source_completion_handoff_prompt(source_id, summary_text, next_prompt=next_prompt)
+        path = write_source_next_prompt_file("report-" + source_id, "completed", combined_prompt)
+
+        payload = dict(next_payload)
+        payload["ok"] = next_payload.get("ok", True)
+        payload["completedSourceID"] = source_id
+        payload["completedSourceSummary"] = summary_text
+        payload["completedSourceDisposition"] = completion.get("disposition")
+        payload["nextPrompt"] = combined_prompt
+        payload["nextPromptPath"] = path
+        if not next_prompt:
+            payload["complete"] = True
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return next_code
+
     if command == "intake":
         intake()
     elif command == "confirm":
         confirm()
     elif command == "next":
         sys.exit(start_next())
+    elif command == "report":
+        sys.exit(report())
     elif command == "gmail":
         sys.exit(gmail_command())
     elif command == "obsidian":

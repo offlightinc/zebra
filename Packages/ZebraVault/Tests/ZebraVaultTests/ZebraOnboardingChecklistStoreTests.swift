@@ -533,7 +533,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(line.contains("must include every source the user named"), line)
         XCTAssertTrue(line.contains("Gmail, Obsidian, iMessage, and Notion runners"), line)
         XCTAssertFalse(line.contains("Do not implement or start Notion runners"), line)
-        XCTAssertTrue(line.contains("Gmail, Obsidian, iMessage, or Notion `nextPrompt`"), line)
+        XCTAssertTrue(line.contains("report --status completed --source <source-id>"), line)
         XCTAssertTrue(line.contains("nextPromptPath"), line)
         XCTAssertFalse(line.contains("unsupported inputs"), line)
         XCTAssertFalse(line.contains("--unsupported"), line)
@@ -1149,7 +1149,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let root = try makeTemporaryDirectory()
         let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
         let ntnLog = root.appendingPathComponent("ntn.log", isDirectory: false)
-        try installFakeNotionCLI(fakeBin: fakeBin, logURL: ntnLog)
+        _ = try installFakeNotionCLI(fakeBin: fakeBin, logURL: ntnLog)
         let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
         let gbrainStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
@@ -1172,6 +1172,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
             "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
             "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
         ]
 
         XCTAssertEqual(try runProcess(
@@ -1207,6 +1208,215 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(artifact.contains("\"code\":\"REDACTED\""), artifact)
         XCTAssertFalse(artifact.contains("ABCDEFGH"), artifact)
         XCTAssertFalse(artifact.contains("12345678"), artifact)
+    }
+
+    @MainActor
+    func testSourceOnboardingReportCompletedAdvancesFromNotionToObsidianWithCompletionBoundary() throws {
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let ntnLog = root.appendingPathComponent("ntn.log", isDirectory: false)
+        _ = try installFakeNotionCLI(fakeBin: fakeBin, logURL: ntnLog)
+        let vault = root.appendingPathComponent("Obsidian", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault.appendingPathComponent(".obsidian", isDirectory: true), withIntermediateDirectories: true)
+        try "# Obsidian note\nBody".write(
+            to: vault.appendingPathComponent("note.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "PATH": "\(fakeBin.path):\(ProcessInfo.processInfo.environment["PATH"] ?? "")",
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "노션 옵시디언", "--candidate", "notion=노션", "--candidate", "obsidian=옵시디언"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["notion", "choose-scope", "--scope", "page", "--target", "page123"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["notion", "ingest"],
+            environment: environment
+        ).status, 0)
+
+        let verify = try runProcess(
+            executableURL: helperURL,
+            arguments: ["notion", "verify-readback"],
+            environment: environment
+        )
+        XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
+        let verifyPayload = try jsonObject(from: verify.stdout)
+        XCTAssertEqual(verifyPayload["nextSourceID"] as? String, "notion")
+        XCTAssertEqual(verifyPayload["nextPlaybookStepID"] as? String, "complete")
+        let pendingPrompt = try XCTUnwrap(verifyPayload["nextPrompt"] as? String)
+        XCTAssertTrue(pendingPrompt.contains("zebra-source-onboarding report --status completed --source notion"), pendingPrompt)
+        XCTAssertFalse(pendingPrompt.contains("Zebra Source Onboarding: Obsidian is the active source."), pendingPrompt)
+
+        let activeBeforeReport = try readSourceOnboardingState(at: stateURL).progress
+        XCTAssertEqual(activeBeforeReport.activeSourceID, "notion")
+        XCTAssertEqual(activeBeforeReport.sourceRows["notion"]?.status, "running")
+
+        let outOfOrderSourceCommand = try runProcess(
+            executableURL: helperURL,
+            arguments: ["obsidian", "verify-vault", "--path", root.path],
+            environment: environment
+        )
+        XCTAssertEqual(outOfOrderSourceCommand.status, 1, "stdout:\n\(outOfOrderSourceCommand.stdout)\nstderr:\n\(outOfOrderSourceCommand.stderr)")
+        let outOfOrderPayload = try jsonObject(from: outOfOrderSourceCommand.stdout)
+        XCTAssertEqual(outOfOrderPayload["reason"] as? String, "source_completion_report_required")
+        XCTAssertEqual(outOfOrderPayload["pendingSourceID"] as? String, "notion")
+        XCTAssertEqual(outOfOrderPayload["blockedSourceID"] as? String, "obsidian")
+        XCTAssertTrue(try XCTUnwrap(outOfOrderPayload["nextPrompt"] as? String).contains("report --status completed --source notion"))
+        let activeAfterOutOfOrderCommand = try readSourceOnboardingState(at: stateURL).progress
+        XCTAssertEqual(activeAfterOutOfOrderCommand.activeSourceID, "notion")
+        XCTAssertEqual(activeAfterOutOfOrderCommand.sourceRows["notion"]?.status, "running")
+        XCTAssertNil(activeAfterOutOfOrderCommand.sourceRows["obsidian"]?.playbookStepID)
+
+        let wrongReport = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--source", "obsidian"],
+            environment: environment
+        )
+        XCTAssertEqual(wrongReport.status, 1, "stdout:\n\(wrongReport.stdout)\nstderr:\n\(wrongReport.stderr)")
+        XCTAssertEqual(try jsonObject(from: wrongReport.stdout)["reason"] as? String, "source_not_active")
+
+        let report = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--source", "notion"],
+            environment: environment
+        )
+        XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+        let reportPayload = try jsonObject(from: report.stdout)
+        XCTAssertEqual(reportPayload["completedSourceID"] as? String, "notion")
+        XCTAssertEqual(reportPayload["nextSourceID"] as? String, "obsidian")
+        let reportPrompt = try XCTUnwrap(reportPayload["nextPrompt"] as? String)
+        XCTAssertPrompt(
+            reportPrompt,
+            contains: "Notion Source Onboarding is complete.",
+            before: "Zebra Source Onboarding: Obsidian is the active source."
+        )
+
+        let activeAfterReport = try readSourceOnboardingState(at: stateURL).progress
+        XCTAssertEqual(activeAfterReport.sourceRows["notion"]?.status, "checked")
+        XCTAssertEqual(activeAfterReport.activeSourceID, "obsidian")
+
+        let duplicateReport = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--source", "notion"],
+            environment: environment
+        )
+        XCTAssertEqual(duplicateReport.status, 1, "stdout:\n\(duplicateReport.stdout)\nstderr:\n\(duplicateReport.stderr)")
+        XCTAssertEqual(try jsonObject(from: duplicateReport.stdout)["reason"] as? String, "source_not_active")
+    }
+
+    @MainActor
+    func testSourceOnboardingSkipRequiresReportBeforeCompletion() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "노션", "--candidate", "notion=노션"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        ).status, 0)
+
+        let skip = try runProcess(
+            executableURL: helperURL,
+            arguments: ["notion", "choose-scope", "--scope", "skip"],
+            environment: environment
+        )
+        XCTAssertEqual(skip.status, 0, "stdout:\n\(skip.stdout)\nstderr:\n\(skip.stderr)")
+        let skipPayload = try jsonObject(from: skip.stdout)
+        XCTAssertEqual(skipPayload["nextSourceID"] as? String, "notion")
+        XCTAssertEqual(skipPayload["nextPlaybookStepID"] as? String, "complete")
+        XCTAssertTrue(try XCTUnwrap(skipPayload["nextPrompt"] as? String).contains("report --status completed --source notion"))
+
+        var loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.status, .running)
+        XCTAssertEqual(loaded.progress.activeSourceID, "notion")
+        XCTAssertEqual(loaded.progress.sourceRows["notion"]?.status, "running")
+
+        let report = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--source", "notion"],
+            environment: environment
+        )
+        XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+        let reportPayload = try jsonObject(from: report.stdout)
+        XCTAssertEqual(reportPayload["completedSourceDisposition"] as? String, "skipped")
+        XCTAssertEqual(reportPayload["complete"] as? Bool, true)
+
+        loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.status, .completed)
+        XCTAssertEqual(loaded.progress.sourceRows["notion"]?.status, "skipped")
     }
 
     @MainActor
@@ -1741,6 +1951,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
             "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
             "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
         ]
         XCTAssertEqual(try runProcess(
             executableURL: helperURL,
@@ -1876,10 +2087,41 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             environment: environment
         )
         XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
-        XCTAssertEqual(try jsonObject(from: verify.stdout)["nextPlaybookStepID"] as? String, "complete")
+        let verifyPayload = try jsonObject(from: verify.stdout)
+        XCTAssertEqual(verifyPayload["nextPlaybookStepID"] as? String, "complete")
+        let pendingPrompt = try XCTUnwrap(verifyPayload["nextPrompt"] as? String)
+        XCTAssertTrue(pendingPrompt.contains("completion report is required"), pendingPrompt)
+        XCTAssertTrue(pendingPrompt.contains("zebra-source-onboarding report --status completed --source obsidian"), pendingPrompt)
 
-        let loaded = try readSourceOnboardingState(at: stateURL)
-        let row = try XCTUnwrap(loaded.progress.sourceRows["obsidian"])
+        let pendingResume = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+        XCTAssertEqual(pendingResume.status, 0, "stdout:\n\(pendingResume.stdout)\nstderr:\n\(pendingResume.stderr)")
+        XCTAssertEqual(try jsonObject(from: pendingResume.stdout)["nextPlaybookStepID"] as? String, "complete")
+
+        var loaded = try readSourceOnboardingState(at: stateURL)
+        var row = try XCTUnwrap(loaded.progress.sourceRows["obsidian"])
+        XCTAssertEqual(row.status, "running")
+        XCTAssertEqual(row.phase, "complete")
+        XCTAssertEqual(row.playbookStepID, "complete")
+
+        let report = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--source", "obsidian"],
+            environment: environment
+        )
+        XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+        let reportPayload = try jsonObject(from: report.stdout)
+        XCTAssertEqual(reportPayload["completedSourceID"] as? String, "obsidian")
+        XCTAssertEqual(reportPayload["complete"] as? Bool, true)
+        let reportPrompt = try XCTUnwrap(reportPayload["nextPrompt"] as? String)
+        XCTAssertTrue(reportPrompt.contains("Obsidian Source Onboarding is complete."), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("Source Onboarding is complete"), reportPrompt)
+
+        loaded = try readSourceOnboardingState(at: stateURL)
+        row = try XCTUnwrap(loaded.progress.sourceRows["obsidian"])
         XCTAssertEqual(row.status, "checked")
         XCTAssertEqual(row.phase, "complete")
         XCTAssertEqual(row.playbookStepID, "complete")
@@ -1917,6 +2159,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
             "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
             "PATH": fakeBin.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? ""),
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
         ]
         XCTAssertEqual(try runProcess(
             executableURL: helperURL,
@@ -2096,10 +2339,29 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             environment: environment
         )
         XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
-        XCTAssertEqual(try jsonObject(from: verify.stdout)["nextPlaybookStepID"] as? String, "complete")
+        let verifyPayload = try jsonObject(from: verify.stdout)
+        XCTAssertEqual(verifyPayload["nextPlaybookStepID"] as? String, "complete")
+        let pendingPrompt = try XCTUnwrap(verifyPayload["nextPrompt"] as? String)
+        XCTAssertTrue(pendingPrompt.contains("completion report is required"), pendingPrompt)
+        XCTAssertTrue(pendingPrompt.contains("zebra-source-onboarding report --status completed --source imessage"), pendingPrompt)
 
-        let loaded = try readSourceOnboardingState(at: stateURL)
-        let row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
+        var loaded = try readSourceOnboardingState(at: stateURL)
+        var row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
+        XCTAssertEqual(row.status, "running")
+        XCTAssertEqual(row.phase, "complete")
+
+        let report = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--source", "imessage"],
+            environment: environment
+        )
+        XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+        let reportPayload = try jsonObject(from: report.stdout)
+        XCTAssertEqual(reportPayload["completedSourceID"] as? String, "imessage")
+        XCTAssertEqual(reportPayload["complete"] as? Bool, true)
+
+        loaded = try readSourceOnboardingState(at: stateURL)
+        row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
         XCTAssertEqual(row.status, "checked")
         XCTAssertEqual(row.phase, "complete")
         XCTAssertEqual(row.playbookID, "imessage.imsg-cli")
@@ -2215,8 +2477,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(skip.status, 0, "stdout:\n\(skip.stdout)\nstderr:\n\(skip.stderr)")
         loaded = try readSourceOnboardingState(at: prepared.stateURL)
         row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
-        XCTAssertEqual(row.status, "skipped")
+        XCTAssertEqual(row.status, "running")
         XCTAssertEqual(row.playbookStepID, "complete")
+        let skipPayload = try jsonObject(from: skip.stdout)
+        let skipPrompt = try XCTUnwrap(skipPayload["nextPrompt"] as? String)
+        XCTAssertTrue(skipPrompt.contains("zebra-source-onboarding report --status completed --source imessage"), skipPrompt)
     }
 
     @MainActor
@@ -5379,6 +5644,30 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     private func jsonObject(from stdout: String) throws -> [String: Any] {
         let data = try XCTUnwrap(stdout.data(using: .utf8))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func XCTAssertPrompt(
+        _ prompt: String,
+        contains earlier: String,
+        before later: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard let earlierRange = prompt.range(of: earlier) else {
+            XCTFail("Prompt did not contain expected text: \(earlier)", file: file, line: line)
+            return
+        }
+        guard let laterRange = prompt.range(of: later) else {
+            XCTFail("Prompt did not contain later text: \(later)", file: file, line: line)
+            return
+        }
+        XCTAssertLessThan(
+            earlierRange.lowerBound,
+            laterRange.lowerBound,
+            "Expected `\(earlier)` to appear before `\(later)` in prompt:\n\(prompt)",
+            file: file,
+            line: line
+        )
     }
 
     private func writeAgentPreferences(_ url: URL) throws {

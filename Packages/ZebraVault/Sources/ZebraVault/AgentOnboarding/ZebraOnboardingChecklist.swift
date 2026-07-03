@@ -1102,7 +1102,7 @@ public enum ZebraOnboardingChecklistCommand {
         5. Ask the source-list confirmation question from the helper output.
         6. Run zebra-source-onboarding confirm --answer yes or zebra-source-onboarding confirm --answer no.
         7. If the confirmation was yes, run zebra-source-onboarding next.
-        8. If `next` returns a Gmail, Obsidian, iMessage, or Notion `nextPrompt`, follow that prompt exactly until that source is checked, skipped, or needs attention.
+        8. Follow the active source `nextPrompt` exactly. When a source reaches its `complete` step, first run `zebra-source-onboarding report --status completed --source <source-id>` and continue only from that report command's stdout.
         9. Run zebra-source-onboarding status --json and report the saved state path plus compact saved-state summary.
 
         GBrain live probe policy:
