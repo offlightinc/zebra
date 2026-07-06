@@ -1079,10 +1079,10 @@ public enum ZebraOnboardingChecklistCommand {
         State file path:
         \(statePath)
 
-        GBrain write target path (not an Obsidian source vault):
+        Brain write target path (selected brain repo; not an Obsidian source vault):
         \(gbrainWriteTargetContext)
 
-        GBrain target context:
+        Brain target context:
         \(gbrainTargetContext)
 
         Scope for this run:
@@ -1092,14 +1092,14 @@ public enum ZebraOnboardingChecklistCommand {
         - You are running inside the selected agent runtime when Zebra has a verified runtime receipt. Treat vault file access results as runtime-specific.
         - If Obsidian listing or file reads fail with permission errors in this runtime, report the runtime access failure instead of saying the vault has 0 Markdown files.
         - Hermes vault access still needs separate verification; if this run is in Hermes, explicitly verify listing and smoke-read before ingest.
-        - Treat the GBrain write target path only as Zebra's write target context. Do not use it as an Obsidian source vault path.
+        - Treat the brain write target path only as Zebra's selected brain repo write context. Do not use it as an Obsidian source vault path.
         - Ask which sources Zebra should understand for this first source intake.
         - Normalize source aliases into source candidates when they are in the current source catalog.
         - Keep inputs that are not in the current catalog as uncataloged sources; do not describe them to the user as unavailable or impossible.
         - The source-list confirmation question must include every source the user named, including uncataloged sources.
         - Use the zebra-source-onboarding helper as the Source Onboarding state write path.
         - After source-list confirmation, run zebra-source-onboarding next and follow only the active source returned by the helper.
-        - Gmail, Obsidian, iMessage, and Notion runners are implemented in this helper slice.
+        - Gmail, Obsidian, iMessage, Notion, and Apple Notes runners are implemented in this helper slice.
         - Do not edit source-onboarding-state.json directly; continue only from helper stdout `nextPrompt` and use `nextPromptPath` only as the file fallback.
 
         Helper flow:

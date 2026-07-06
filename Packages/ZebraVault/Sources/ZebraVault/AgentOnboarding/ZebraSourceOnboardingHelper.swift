@@ -120,6 +120,11 @@ struct ZebraSourceOnboardingHelper {
                 "notion.ntn-cli.v1.md",
                 Self.fallbackNotionPlaybook
             ),
+            (
+                "apple-notes.memo-cli.v1",
+                "apple-notes.memo-cli.v1.md",
+                Self.fallbackAppleNotesPlaybook
+            ),
         ]
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -128,22 +133,13 @@ struct ZebraSourceOnboardingHelper {
                     playbook.filename,
                     isDirectory: false
                 )
-                if let resource = Bundle.module.url(
-                    forResource: playbook.resource,
-                    withExtension: "md",
-                    subdirectory: "SourcePlaybooks"
-                ) {
-                    if fileManager.fileExists(atPath: destination.path) {
-                        try fileManager.removeItem(at: destination)
-                    }
-                    try fileManager.copyItem(at: resource, to: destination)
-                } else if !fileManager.fileExists(atPath: destination.path) {
-                    try playbook.fallback.write(
-                        to: destination,
-                        atomically: true,
-                        encoding: .utf8
-                    )
+                let contents: String
+                if let resource = Self.sourcePlaybookResourceURL(named: playbook.resource) {
+                    contents = try String(contentsOf: resource, encoding: .utf8)
+                } else {
+                    contents = playbook.fallback
                 }
+                try contents.write(to: destination, atomically: true, encoding: .utf8)
             }
         } catch {
             for playbook in playbooks {
@@ -151,16 +147,25 @@ struct ZebraSourceOnboardingHelper {
                     playbook.filename,
                     isDirectory: false
                 )
-                if !fileManager.fileExists(atPath: destination.path) {
-                    try? playbook.fallback.write(
-                        to: destination,
-                        atomically: true,
-                        encoding: .utf8
-                    )
-                }
+                try? playbook.fallback.write(
+                    to: destination,
+                    atomically: true,
+                    encoding: .utf8
+                )
             }
         }
         return directory
+    }
+
+    private static func sourcePlaybookResourceURL(named resource: String) -> URL? {
+        Bundle.module.url(
+            forResource: resource,
+            withExtension: "md",
+            subdirectory: "SourcePlaybooks"
+        ) ?? Bundle.module.url(
+            forResource: resource,
+            withExtension: "md"
+        )
     }
 
     private func onboardingWorkDirectoryPath() -> String {
@@ -305,8 +310,9 @@ struct ZebraSourceOnboardingHelper {
     id: notion.ntn-cli
     version: v1
     sourceID: notion
-    initialStepID: choose_scope
+    initialStepID: check_ntn_cli
     steps:
+      - check_ntn_cli
       - choose_scope
       - smoke_read
       - confirm_workspace_ingest
@@ -316,6 +322,20 @@ struct ZebraSourceOnboardingHelper {
     ---
 
     # Notion ntn CLI Source Onboarding
+
+    ## Step: check_ntn_cli
+
+    Work only the Notion `check_ntn_cli` step.
+
+    Run:
+
+    ```bash
+    zebra-source-onboarding notion check-cli
+    ```
+
+    If `ntn` is missing, report the helper's compact attention reason and tell the user the expected install path is the official `ntn` CLI. The default install command is `curl -fsSL https://ntn.dev | bash`. If that install path fails and `npm` is available, use `npm install --global ntn` as the fallback. After installation, run `ntn --version` and authenticate with `ntn login`. Do not install anything unless the user explicitly asks.
+
+    Continue only from the returned `nextPrompt`.
 
     ## Step: choose_scope
 
@@ -351,6 +371,80 @@ struct ZebraSourceOnboardingHelper {
     Notion Source Onboarding is complete.
     """
 
+    private static let fallbackAppleNotesPlaybook = """
+    ---
+    id: apple-notes.memo-cli
+    version: v1
+    sourceID: apple-notes
+    initialStepID: check_memo_cli
+    steps:
+      - check_memo_cli
+      - check_notes_automation
+      - smoke_list_notes
+      - choose_ingest_scope
+      - confirm_ingest_plan
+      - ingest_notes
+      - verify_readback
+      - complete
+    ---
+
+    # Apple Notes memo CLI Source Onboarding
+
+    ## Step: check_memo_cli
+
+    Work only the Apple Notes `check_memo_cli` step.
+
+    Run:
+
+    ```bash
+    zebra-source-onboarding apple-notes check-cli
+    ```
+
+    If `memo` is missing, report the helper's compact attention reason and tell the user Apple Notes ingest requires the `memo` CLI. Show this Homebrew install command:
+
+    ```bash
+    brew tap antoniorodr/memo && brew install antoniorodr/memo/memo
+    ```
+
+    Then ask an explicit yes/no question before installing:
+
+    ```text
+    Apple Notes ingest requires the memo CLI. Install it now with Homebrew? (yes/no)
+    ```
+
+    Do not install anything unless the user explicitly answers yes.
+
+    Continue only from the returned `nextPrompt`.
+
+    ## Step: check_notes_automation
+
+    Run `zebra-source-onboarding apple-notes check-access`.
+
+    ## Step: smoke_list_notes
+
+    Run `zebra-source-onboarding apple-notes smoke-list`. This is read-only access verification and is not ingest approval.
+
+    ## Step: choose_ingest_scope
+
+    Ask the user to choose a folder, search query, selected note IDs, a small sample, or skip Apple Notes for now.
+
+    ## Step: confirm_ingest_plan
+
+    Summarize the selected Apple Notes ingest plan and ask for explicit approval.
+
+    ## Step: ingest_notes
+
+    Run `zebra-source-onboarding apple-notes ingest`.
+
+    ## Step: verify_readback
+
+    Run `zebra-source-onboarding apple-notes verify-readback`.
+
+    ## Step: complete
+
+    Apple Notes Source Onboarding is complete.
+    """
+
     private static let helperScript = """
     #!/bin/sh
     set -eu
@@ -376,6 +470,7 @@ struct ZebraSourceOnboardingHelper {
     import sys
     import textwrap
     import io
+    import unicodedata
     import urllib.error
     import urllib.parse
     import urllib.request
@@ -426,11 +521,15 @@ struct ZebraSourceOnboardingHelper {
             "type": "workspace",
             "aliases": ["notion", "노션"],
         },
+        "apple-notes": {
+            "displayName": "Apple Notes",
+            "type": "notes",
+            "aliases": ["apple notes", "apple note", "애플노트", "애플 노트", "애플 메모", "맥북 메모", "notes", "memo"],
+        },
     }
 
     uncataloged_catalog = {
         "slack": {"displayName": "Slack", "aliases": ["slack", "슬랙"]},
-        "apple-notes": {"displayName": "Apple Notes", "aliases": ["apple notes", "apple note", "애플 메모"]},
         "apple-reminders": {"displayName": "Apple Reminders", "aliases": ["apple reminders", "apple reminder", "애플 리마인더", "reminders", "reminder"]},
     }
 
@@ -681,12 +780,31 @@ struct ZebraSourceOnboardingHelper {
         "id": "notion.ntn-cli",
         "version": "v1",
         "sourceID": "notion",
-        "initialStepID": "choose_scope",
+        "initialStepID": "check_ntn_cli",
         "steps": [
+            "check_ntn_cli",
             "choose_scope",
             "smoke_read",
             "confirm_workspace_ingest",
             "ingest_notion",
+            "verify_readback",
+            "complete",
+        ],
+        "sections": {},
+    }
+
+    apple_notes_playbook_fallback = {
+        "id": "apple-notes.memo-cli",
+        "version": "v1",
+        "sourceID": "apple-notes",
+        "initialStepID": "check_memo_cli",
+        "steps": [
+            "check_memo_cli",
+            "check_notes_automation",
+            "smoke_list_notes",
+            "choose_ingest_scope",
+            "confirm_ingest_plan",
+            "ingest_notes",
             "verify_readback",
             "complete",
         ],
@@ -765,6 +883,12 @@ struct ZebraSourceOnboardingHelper {
         return parse_playbook_markdown(
             playbook_dir / "notion.ntn-cli.v1.md",
             notion_playbook_fallback,
+        )
+
+    def apple_notes_playbook():
+        return parse_playbook_markdown(
+            playbook_dir / "apple-notes.memo-cli.v1.md",
+            apple_notes_playbook_fallback,
         )
 
     def source_run_state_path(source_id):
@@ -1437,6 +1561,32 @@ struct ZebraSourceOnboardingHelper {
 
     def notion_step_instruction(step_id, run_state):
         language = onboarding_language()
+        if step_id == "check_ntn_cli":
+            return textwrap.dedent('''
+            Work only the Notion `check_ntn_cli` step.
+
+            Run:
+
+            ```bash
+            zebra-source-onboarding notion check-cli
+            ```
+
+            If `ntn` is missing, report the helper's compact attention reason `ntn_cli_missing` and tell the user the expected install path is the official `ntn` CLI. The default install command is:
+
+            ```bash
+            curl -fsSL https://ntn.dev | bash
+            ```
+
+            If that install path fails and `npm` is available, use this fallback:
+
+            ```bash
+            npm install --global ntn
+            ```
+
+            After installation, run `ntn --version` and authenticate with `ntn login`. Do not install anything unless the user explicitly asks.
+
+            Continue only from the returned `nextPrompt`.
+            ''').strip()
         if step_id == "choose_scope":
             return notion_choose_scope_instruction(run_state)
         if step_id == "confirm_workspace_ingest":
@@ -1526,6 +1676,160 @@ struct ZebraSourceOnboardingHelper {
         - Do not edit `source-onboarding-state.json` directly. The helper CLI is the only Source Onboarding state write path.
         - Do not store prompt bodies, OAuth codes, tokens, signed URLs, or credential-like query strings.
         - Treat Notion data source ingest as markdown/page artifact conversion for GBrain, not native Notion database ingest.
+        - Continue only from helper stdout `nextPrompt`; use `nextPromptPath` only as a fallback/debug file.
+
+        Playbook step instructions:
+
+        {section}
+        ''').strip()
+
+    def apple_notes_scope_summary(run_state):
+        language = onboarding_language()
+        scope = run_state.get("scope") or "not selected"
+        if scope == "folder":
+            folder = str(run_state.get("folder") or "not selected")
+            if language == "ko":
+                return "폴더: " + folder
+            if language == "ja":
+                return "フォルダ: " + folder
+            return "folder: " + folder
+        if scope == "search":
+            query = str(run_state.get("query") or "not selected")
+            if language == "ko":
+                return "검색어: " + query
+            if language == "ja":
+                return "検索語: " + query
+            return "search query: " + query
+        if scope == "selected-notes":
+            note_ids = run_state.get("selectedNoteIDs") if isinstance(run_state.get("selectedNoteIDs"), list) else []
+            return "selected note ids: " + (", ".join(str(item) for item in note_ids) if note_ids else "none")
+        if scope == "sample":
+            if language == "ko":
+                return "작은 샘플: 최대 3개 노트"
+            if language == "ja":
+                return "小さなサンプル: 最大3件のノート"
+            return "small sample: up to 3 notes"
+        if scope == "skip":
+            if language == "ko":
+                return "이번 Source Onboarding에서 Apple Notes 건너뛰기"
+            if language == "ja":
+                return "このSource OnboardingではApple Notesをスキップ"
+            return "skip Apple Notes for this Source Onboarding session"
+        return str(scope)
+
+    def apple_notes_ingest_plan_summary(run_state):
+        count = run_state.get("estimatedNoteCount")
+        count_text = str(count) if count is not None else "unknown"
+        language = onboarding_language()
+        if language == "ko":
+            return textwrap.dedent(f'''
+            선택된 Apple Notes ingest plan입니다.
+
+            - 선택한 범위: `{apple_notes_scope_summary(run_state)}`
+            - 예상 노트 수: `{count_text}`
+            - 민감정보 안내: 승인된 범위에는 개인 메모, 회사 메모, 링크, 사람 이름, 계정 정보처럼 민감할 수 있는 note body가 저장될 수 있습니다.
+            - Ingest 방식: `memo` CLI로 승인된 노트만 읽어 선택된 brain repo의 `sources/` 아래 markdown artifact를 작성합니다.
+            - 검증 계획: 생성된 Apple Notes source artifact를 다시 읽고 `source: apple-notes`와 `playbook: apple-notes.memo-cli.v1`를 확인합니다.
+
+            ingest를 실행하기 전에 사용자에게 명시적으로 승인받으세요. 승인하면 `zebra-source-onboarding apple-notes confirm-plan --answer yes`를 실행하고, 승인하지 않으면 `zebra-source-onboarding apple-notes confirm-plan --answer no`를 실행하세요.
+            ''').strip()
+        if language == "ja":
+            return textwrap.dedent(f'''
+            選択されたApple Notes ingest planです。
+
+            - 選択した範囲: `{apple_notes_scope_summary(run_state)}`
+            - 推定ノート数: `{count_text}`
+            - 機微情報の注意: 承認された範囲には個人メモ、仕事メモ、リンク、人名、アカウント情報など機微になり得るnote bodyが保存される可能性があります。
+            - Ingest方式: `memo` CLIで承認済みノートだけを読み、選択されたbrain repoの`sources/`下にmarkdown artifactを書き込みます。
+            - 検証計画: 生成されたApple Notes source artifactを読み戻し、`source: apple-notes`と`playbook: apple-notes.memo-cli.v1`を確認します。
+
+            ingestを実行する前にユーザーから明示的な承認を得てください。承認されたら`zebra-source-onboarding apple-notes confirm-plan --answer yes`を実行し、承認されなければ`zebra-source-onboarding apple-notes confirm-plan --answer no`を実行してください。
+            ''').strip()
+        return textwrap.dedent(f'''
+        Resolved Apple Notes ingest plan:
+
+        - Selected scope: `{apple_notes_scope_summary(run_state)}`
+        - Estimated note count: `{count_text}`
+        - Sensitive data notice: approved scope may store note bodies containing personal notes, work notes, links, names, or account-like information.
+        - Ingest mode: read only approved notes with the `memo` CLI and write a markdown artifact under the selected brain repo's `sources/` directory.
+        - Verification plan: read back the generated Apple Notes source artifact and require `source: apple-notes` plus `playbook: apple-notes.memo-cli.v1`.
+
+        Ask the user for explicit approval before running ingest. If approved, run `zebra-source-onboarding apple-notes confirm-plan --answer yes`. If not approved, run `zebra-source-onboarding apple-notes confirm-plan --answer no`.
+        ''').strip()
+
+    def apple_notes_step_prompt(step_id, state, row):
+        playbook = apple_notes_playbook()
+        run_state = load_source_run_state("apple-notes")
+        section = playbook.get("sections", {}).get(step_id, "")
+        language = onboarding_language()
+        if not section:
+            section = "Follow the current Apple Notes playbook step and continue only through the zebra-source-onboarding helper CLI."
+        if step_id == "choose_ingest_scope":
+            if language == "ko":
+                section = section + "\\n\\n" + textwrap.dedent('''
+                사용자에게 아래 다섯 가지 선택지만 보여주세요:
+
+                ```text
+                Apple Notes 접근 확인은 끝났습니다. 이제 실제로 brain에 저장할 메모 범위를 정해야 합니다.
+
+                어떤 범위로 가져올까요?
+
+                1. 특정 폴더
+                2. 검색어로 찾은 메모
+                3. 특정 note 번호
+                4. 작은 샘플
+                5. 지금은 Apple Notes 건너뛰기
+                ```
+
+                1번은 `zebra-source-onboarding apple-notes choose-scope --scope folder --folder "<folder>"`를 실행하세요.
+                2번은 `zebra-source-onboarding apple-notes choose-scope --scope search --query "<query>"`를 실행하세요.
+                3번은 `zebra-source-onboarding apple-notes choose-scope --scope selected-notes --note-id <memo-list-number>`를 실행하세요. note id는 `memo notes` 목록의 `NNN.` 값을 그대로 사용합니다.
+                4번은 `zebra-source-onboarding apple-notes choose-scope --scope sample`을 실행하세요.
+                5번은 `zebra-source-onboarding apple-notes choose-scope --scope skip`을 실행하세요.
+                ''').strip()
+            else:
+                section = section + "\\n\\n" + textwrap.dedent('''
+                Present exactly these five choices to the user:
+
+                1. A specific folder
+                2. Notes matching a search query
+                3. Specific note numbers
+                4. A small sample
+                5. Skip Apple Notes for now
+
+                Commands:
+                - Folder: `zebra-source-onboarding apple-notes choose-scope --scope folder --folder "<folder>"`
+                - Search: `zebra-source-onboarding apple-notes choose-scope --scope search --query "<query>"`
+                - Selected notes: `zebra-source-onboarding apple-notes choose-scope --scope selected-notes --note-id <memo-list-number>`
+                - Sample: `zebra-source-onboarding apple-notes choose-scope --scope sample`
+                - Skip: `zebra-source-onboarding apple-notes choose-scope --scope skip`
+
+                Note IDs are the global `NNN.` values shown by `memo notes`, not a local row index.
+                ''').strip()
+        if step_id == "confirm_ingest_plan":
+            section = section + "\\n\\n" + apple_notes_ingest_plan_summary(run_state)
+        command_path = run_state.get("memoCommandPath") or "not verified"
+        access = run_state.get("accessStatus") or "not verified"
+        smoke = run_state.get("smokeListStatus") or "not run"
+        artifact = run_state.get("artifactPath") or "not created"
+        return textwrap.dedent(f'''
+        Zebra Source Onboarding: Apple Notes is the active source.
+
+        Playbook: {playbook.get("id", "apple-notes.memo-cli")} {playbook.get("version", "v1")}
+        Current step: `{step_id}`
+        memo command path: `{command_path}`
+        Notes Automation/access status: `{access}`
+        Smoke list status: `{smoke}`
+        Current ingest scope: `{apple_notes_scope_summary(run_state)}`
+        Current ingest artifact: `{artifact}`
+
+        Boundary rules:
+        - Work only this Apple Notes step. Do not start Notion, Obsidian, iMessage, Gmail, or another source unless the helper prints that source as the next active source.
+        - Use the `memo` CLI. Do not read Apple Notes databases directly and do not implement custom AppleScript in this runner.
+        - Smoke-read is read-only access verification. It is not completion and not ingest approval.
+        - Actual ingest/write must stay within the user-approved Notes scope.
+        - Do not edit `source-onboarding-state.json` directly. The helper CLI is the only Source Onboarding state write path.
+        - Do not store note bodies, large note lists, prompt bodies, or transcripts in Source Onboarding state.
         - Continue only from helper stdout `nextPrompt`; use `nextPromptPath` only as a fallback/debug file.
 
         Playbook step instructions:
@@ -1643,6 +1947,9 @@ struct ZebraSourceOnboardingHelper {
         elif source_id == "notion":
             playbook = notion_playbook()
             prompt = notion_step_prompt(step_id, state, row)
+        elif source_id == "apple-notes":
+            playbook = apple_notes_playbook()
+            prompt = apple_notes_step_prompt(step_id, state, row)
         else:
             return {}
         if step_id == "complete":
@@ -1815,6 +2122,247 @@ struct ZebraSourceOnboardingHelper {
         state["updatedAt"] = timestamp
         return state
 
+    def set_apple_notes_row_state(state, row_status, phase, step_id, timestamp=None, attention_reason=None, result_summary=None, run_state_path=None):
+        timestamp = timestamp or now()
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get("apple-notes") if isinstance(rows.get("apple-notes"), dict) else source_row_for("apple-notes", timestamp)
+        playbook = apple_notes_playbook()
+        row["status"] = row_status
+        row["phase"] = phase
+        row["selectionState"] = "confirmed"
+        row["playbookID"] = playbook["id"]
+        row["playbookVersion"] = playbook["version"]
+        row["playbookStepID"] = step_id
+        row["updatedAt"] = timestamp
+        if attention_reason:
+            row["attentionReason"] = attention_reason
+        else:
+            row.pop("attentionReason", None)
+        if result_summary:
+            row["resultSummary"] = result_summary
+        if run_state_path:
+            row["runStatePath"] = run_state_path
+        rows["apple-notes"] = row
+        progress["sourceRows"] = rows
+        if "apple-notes" not in ensure_execution_order(progress):
+            progress["executionOrder"].append("apple-notes")
+        if row_status in {"checked", "skipped"}:
+            progress["activeSourceID"] = first_unfinished_source_id(progress)
+        else:
+            progress["activeSourceID"] = "apple-notes"
+        state["status"] = source_completion_status(state)
+        state["updatedAt"] = timestamp
+        return state
+
+    def should_update_apple_notes_runner(state):
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        if progress.get("activeSourceID") == "apple-notes":
+            return True
+        if "apple-notes" not in ensure_execution_order(progress):
+            return False
+        row = rows.get("apple-notes")
+        return isinstance(row, dict) and row.get("playbookID") == apple_notes_playbook()["id"]
+
+    required_cli_specs = {
+        "imessage": {
+            "binary": "imsg",
+            "pathKey": "imsgCommandPath",
+            "versionKey": "imsgVersion",
+            "statusKey": "cliStatus",
+            "checkStep": "check_imsg_cli",
+            "nextStep": "check_full_disk_access",
+            "missingReason": "imsg_cli_missing",
+        },
+        "notion": {
+            "binary": "ntn",
+            "pathKey": "ntnCommandPath",
+            "versionKey": "ntnVersion",
+            "statusKey": "cliStatus",
+            "checkStep": "check_ntn_cli",
+            "nextStep": "choose_scope",
+            "missingReason": "ntn_cli_missing",
+        },
+        "apple-notes": {
+            "binary": "memo",
+            "pathKey": "memoCommandPath",
+            "versionKey": "memoVersion",
+            "statusKey": "cliStatus",
+            "checkStep": "check_memo_cli",
+            "nextStep": "check_notes_automation",
+            "missingReason": "memo_cli_missing",
+        },
+    }
+
+    def set_cli_source_row_state(source_id, state, row_status, phase, step_id, attention_reason=None, result_summary=None, run_state_path=None):
+        if source_id == "imessage":
+            return set_imessage_row_state(
+                state,
+                row_status,
+                phase,
+                step_id,
+                attention_reason=attention_reason,
+                result_summary=result_summary,
+                run_state_path=run_state_path,
+            )
+        if source_id == "notion":
+            return set_notion_row_state(
+                state,
+                row_status,
+                phase,
+                step_id,
+                attention_reason=attention_reason,
+                result_summary=result_summary,
+                run_state_path=run_state_path,
+            )
+        if source_id == "apple-notes":
+            return set_apple_notes_row_state(
+                state,
+                row_status,
+                phase,
+                step_id,
+                attention_reason=attention_reason,
+                result_summary=result_summary,
+                run_state_path=run_state_path,
+            )
+        return state
+
+    def required_cli_command_path(source_id, run_state):
+        spec = required_cli_specs[source_id]
+        command_path = str(run_state.get(spec["pathKey"]) or "")
+        if command_path and not Path(command_path).exists():
+            command_path = ""
+        if not command_path:
+            command_path = shutil.which(spec["binary"]) or ""
+        if command_path:
+            run_state[spec["pathKey"]] = command_path
+        return command_path
+
+    def check_required_cli(source_id):
+        spec = required_cli_specs[source_id]
+        state = load_or_create_state()
+        run_state = load_source_run_state(source_id)
+        command_path = required_cli_command_path(source_id, run_state)
+        if not command_path:
+            run_state.update({
+                spec["statusKey"]: "missing",
+                "phase": "preflight",
+                "step": spec["checkStep"],
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_cli_source_row_state(
+                source_id,
+                state,
+                "attention",
+                "preflight",
+                spec["checkStep"],
+                attention_reason=spec["missingReason"],
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": spec["missingReason"]}
+            payload.update(source_next_prompt_payload(state, source_id, spec["checkStep"]))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        version = ""
+        try:
+            result = subprocess.run([command_path, "--version"], text=True, capture_output=True, timeout=5)
+            version = (result.stdout or result.stderr or "").strip()
+        except Exception:
+            version = ""
+        run_state.update({
+            spec["statusKey"]: "passed",
+            spec["pathKey"]: command_path,
+            spec["versionKey"]: version,
+            "phase": "preflight",
+            "step": spec["nextStep"],
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state(source_id, run_state)
+        state = set_cli_source_row_state(
+            source_id,
+            state,
+            "running",
+            "preflight",
+            spec["nextStep"],
+            run_state_path=run_path,
+            result_summary=spec["binary"] + " CLI found at " + command_path,
+        )
+        save_json(state)
+        payload = {
+            "ok": True,
+            spec["pathKey"]: command_path,
+            spec["versionKey"]: version,
+        }
+        payload.update(source_next_prompt_payload(state, source_id, spec["nextStep"]))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def required_cli_preflight_passed(source_id):
+        spec = required_cli_specs[source_id]
+        run_state = load_source_run_state(source_id)
+        command_path = required_cli_command_path(source_id, run_state)
+        return run_state.get(spec["statusKey"]) == "passed" and bool(command_path)
+
+    def require_cli_preflight_or_attention(source_id):
+        spec = required_cli_specs[source_id]
+        if required_cli_preflight_passed(source_id):
+            return None
+        state = load_or_create_state()
+        run_state = load_source_run_state(source_id)
+        command_path = required_cli_command_path(source_id, run_state)
+        if command_path:
+            spec = required_cli_specs[source_id]
+            version = ""
+            try:
+                result = subprocess.run([command_path, "--version"], text=True, capture_output=True, timeout=5)
+                version = (result.stdout or result.stderr or "").strip()
+            except Exception:
+                version = ""
+            run_state.update({
+                spec["statusKey"]: "passed",
+                spec["pathKey"]: command_path,
+                spec["versionKey"]: version,
+                "phase": "preflight",
+                "step": spec["nextStep"],
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_cli_source_row_state(
+                source_id,
+                state,
+                "running",
+                "preflight",
+                spec["nextStep"],
+                run_state_path=run_path,
+                result_summary=spec["binary"] + " CLI found at " + command_path,
+            )
+            save_json(state)
+            return None
+        run_state.update({
+            spec["statusKey"]: "missing",
+            "phase": "preflight",
+            "step": spec["checkStep"],
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state(source_id, run_state)
+        state = set_cli_source_row_state(
+            source_id,
+            state,
+            "attention",
+            "preflight",
+            spec["checkStep"],
+            attention_reason=spec["missingReason"],
+            run_state_path=run_path,
+        )
+        save_json(state)
+        payload = {"ok": False, "reason": spec["missingReason"]}
+        payload.update(source_next_prompt_payload(state, source_id, spec["checkStep"]))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 1
+
     def mark_source_completion_pending(state, source_id, disposition, result_summary, run_state=None):
         disposition = "skipped" if disposition == "skipped" else "checked"
         run_state_path = None
@@ -1865,6 +2413,15 @@ struct ZebraSourceOnboardingHelper {
                 result_summary=result_summary,
                 run_state_path=run_state_path,
             )
+        if source_id == "apple-notes":
+            return set_apple_notes_row_state(
+                state,
+                "running",
+                "complete",
+                "complete",
+                result_summary=result_summary,
+                run_state_path=run_state_path,
+            )
         return state
 
     def report_source_completion(state, source_id):
@@ -1899,6 +2456,10 @@ struct ZebraSourceOnboardingHelper {
             run_state.update({"completionReportPending": False, "completionReportedAt": timestamp, "updatedAt": timestamp})
             run_path = save_source_run_state(source_id, run_state)
             state = set_imessage_row_state(state, disposition, "complete", "complete", timestamp=timestamp, result_summary=summary_text, run_state_path=run_path)
+        elif source_id == "apple-notes":
+            run_state.update({"completionReportPending": False, "completionReportedAt": timestamp, "updatedAt": timestamp})
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_apple_notes_row_state(state, disposition, "complete", "complete", timestamp=timestamp, result_summary=summary_text, run_state_path=run_path)
         else:
             return None, {"ok": False, "reason": "unknown_source", "sourceID": source_id}, 1
         save_json(state)
@@ -2318,7 +2879,7 @@ struct ZebraSourceOnboardingHelper {
         run_state = load_source_run_state("notion")
         run_state.update({
             "phase": "preflight",
-            "step": "choose_scope",
+            "step": playbook["initialStepID"],
             "updatedAt": now(),
         })
         run_path = save_source_run_state("notion", run_state)
@@ -2326,13 +2887,43 @@ struct ZebraSourceOnboardingHelper {
             state,
             "running",
             "preflight",
-            "choose_scope",
+            playbook["initialStepID"],
             run_state_path=run_path,
-            result_summary="Notion scope selection required before smoke read.",
         )
         save_json(state)
         payload = summary(state)
-        payload.update(source_next_prompt_payload(state, "notion", "choose_scope"))
+        payload.update(source_next_prompt_payload(state, "notion", playbook["initialStepID"]))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def start_apple_notes_from_next(state):
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get("apple-notes") if isinstance(rows.get("apple-notes"), dict) else {}
+        playbook = apple_notes_playbook()
+        if row.get("playbookID") == playbook["id"] and row.get("status") in {"running", "attention"}:
+            step_id = row.get("playbookStepID") if row.get("playbookStepID") in playbook["steps"] else playbook["initialStepID"]
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, "apple-notes", step_id))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        run_state = load_source_run_state("apple-notes")
+        run_state.update({
+            "phase": "preflight",
+            "step": playbook["initialStepID"],
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("apple-notes", run_state)
+        state = set_apple_notes_row_state(
+            state,
+            "running",
+            "preflight",
+            playbook["initialStepID"],
+            run_state_path=run_path,
+        )
+        save_json(state)
+        payload = summary(state)
+        payload.update(source_next_prompt_payload(state, "apple-notes", playbook["initialStepID"]))
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
 
@@ -2361,6 +2952,8 @@ struct ZebraSourceOnboardingHelper {
             return start_imessage_from_next(state)
         if source_id == "notion":
             return start_notion_from_next(state)
+        if source_id == "apple-notes":
+            return start_apple_notes_from_next(state)
         if source_id != "gmail":
             payload = summary(state)
             payload["ok"] = False
@@ -3254,10 +3847,18 @@ struct ZebraSourceOnboardingHelper {
                 return maybe
         return tail or text
 
+    def notion_run_state_with_command_path():
+        run_state = load_source_run_state("notion")
+        command_path = required_cli_command_path("notion", run_state)
+        return run_state, command_path
+
     def run_ntn(ntn_args, timeout=60):
+        _, command_path = notion_run_state_with_command_path()
+        if not command_path:
+            return {"ok": False, "status": 127, "args": list(ntn_args), "stdout": "", "stderr": "ntn_cli_missing", "json": None}
         try:
             completed = subprocess.run(
-                ["ntn"] + list(ntn_args),
+                [command_path] + list(ntn_args),
                 text=True,
                 capture_output=True,
                 timeout=timeout,
@@ -3278,7 +3879,7 @@ struct ZebraSourceOnboardingHelper {
                 "json": payload,
             }
         except FileNotFoundError:
-            return {"ok": False, "status": 127, "args": list(ntn_args), "stdout": "", "stderr": "ntn_not_found", "json": None}
+            return {"ok": False, "status": 127, "args": list(ntn_args), "stdout": "", "stderr": "ntn_cli_missing", "json": None}
         except subprocess.TimeoutExpired:
             return {"ok": False, "status": 124, "args": list(ntn_args), "stdout": "", "stderr": "ntn_timeout", "json": None}
 
@@ -3415,6 +4016,10 @@ struct ZebraSourceOnboardingHelper {
             payload.update(source_next_prompt_payload(state, "notion", "complete"))
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 0
+        preflight_code = require_cli_preflight_or_attention("notion")
+        if preflight_code is not None:
+            return preflight_code
+        run_state = load_source_run_state("notion")
         if scope == "workspace-search":
             search = run_ntn(["api", "v1/search", "page_size:=10"])
             candidates = notion_search_candidates(search)
@@ -3813,6 +4418,8 @@ struct ZebraSourceOnboardingHelper {
         if pending_code is not None:
             return pending_code
         subcommand = args[0]
+        if subcommand == "check-cli":
+            return check_required_cli("notion")
         if subcommand == "choose-scope":
             return notion_choose_scope()
         if subcommand == "confirm-workspace":
@@ -3826,11 +4433,7 @@ struct ZebraSourceOnboardingHelper {
 
     def imessage_run_state_with_command_path():
         run_state = load_source_run_state("imessage")
-        command_path = run_state.get("imsgCommandPath")
-        if not command_path:
-            command_path = shutil.which("imsg") or ""
-        if command_path:
-            run_state["imsgCommandPath"] = command_path
+        command_path = required_cli_command_path("imessage", run_state)
         return run_state, command_path
 
     def run_imsg(arguments, timeout=15, failure_reason="history_read_failed"):
@@ -4159,50 +4762,7 @@ struct ZebraSourceOnboardingHelper {
         return bool(re.match(r"^\\d{4}-\\d{2}-\\d{2}$", value or ""))
 
     def imessage_check_cli():
-        state = load_or_create_state()
-        run_state, command_path = imessage_run_state_with_command_path()
-        if not command_path:
-            run_state.update({"cliStatus": "missing", "updatedAt": now()})
-            run_path = save_source_run_state("imessage", run_state)
-            state = set_imessage_row_state(
-                state,
-                "attention",
-                "preflight",
-                "check_imsg_cli",
-                attention_reason="imsg_cli_missing",
-                run_state_path=run_path,
-            )
-            save_json(state)
-            payload = {"ok": False, "reason": "imsg_cli_missing"}
-            payload.update(source_next_prompt_payload(state, "imessage", "check_imsg_cli"))
-            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-            return 1
-        version = ""
-        try:
-            result = subprocess.run([command_path, "--version"], text=True, capture_output=True, timeout=5)
-            version = (result.stdout or result.stderr or "").strip()
-        except Exception:
-            version = ""
-        run_state.update({
-            "cliStatus": "passed",
-            "imsgCommandPath": command_path,
-            "imsgVersion": version,
-            "updatedAt": now(),
-        })
-        run_path = save_source_run_state("imessage", run_state)
-        state = set_imessage_row_state(
-            state,
-            "running",
-            "preflight",
-            "check_full_disk_access",
-            run_state_path=run_path,
-            result_summary="imsg CLI found at " + command_path,
-        )
-        save_json(state)
-        payload = {"ok": True, "imsgCommandPath": command_path, "imsgVersion": version}
-        payload.update(source_next_prompt_payload(state, "imessage", "check_full_disk_access"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 0
+        return check_required_cli("imessage")
 
     def imessage_check_access():
         state = load_or_create_state()
@@ -4669,6 +5229,477 @@ struct ZebraSourceOnboardingHelper {
         print("unknown imessage subcommand: " + subcommand, file=sys.stderr)
         return 2
 
+    def apple_notes_run_state_with_command_path():
+        run_state = load_source_run_state("apple-notes")
+        command_path = required_cli_command_path("apple-notes", run_state)
+        return run_state, command_path
+
+    def apple_notes_failure_reason(result, default_reason="memo_notes_read_failed"):
+        stderr = str(result.get("stderr") or "").lower()
+        stdout = str(result.get("stdout") or "").lower()
+        combined = stderr + "\\n" + stdout
+        if any(token in combined for token in ("not authorized", "automation", "tcc", "operation not permitted", "permission")):
+            return "notes_automation_denied"
+        if result.get("returncode") == 127:
+            return "memo_cli_missing"
+        return default_reason
+
+    def run_memo(arguments, timeout=20, failure_reason="memo_notes_read_failed"):
+        run_state, command_path = apple_notes_run_state_with_command_path()
+        if not command_path:
+            return run_state, {
+                "ok": False,
+                "reason": "memo_cli_missing",
+                "stdout": "",
+                "stderr": "",
+                "returncode": 127,
+            }
+        try:
+            result = subprocess.run(
+                [command_path] + list(arguments),
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+            )
+            payload = {
+                "ok": result.returncode == 0,
+                "reason": None if result.returncode == 0 else failure_reason,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "returncode": result.returncode,
+            }
+            if not payload["ok"]:
+                payload["reason"] = apple_notes_failure_reason(payload, failure_reason)
+            return run_state, payload
+        except subprocess.TimeoutExpired as error:
+            return run_state, {
+                "ok": False,
+                "reason": failure_reason,
+                "stdout": error.stdout or "",
+                "stderr": error.stderr or "memo command timed out",
+                "returncode": 124,
+            }
+        except Exception as error:
+            return run_state, {
+                "ok": False,
+                "reason": failure_reason,
+                "stdout": "",
+                "stderr": str(error),
+                "returncode": 1,
+            }
+
+    def memo_note_ids_from_text(text):
+        ids = []
+        seen = set()
+        for line in str(text or "").splitlines():
+            match = re.match(r"^\\s*(\\d+)\\.", line)
+            if not match:
+                continue
+            note_id = match.group(1)
+            if note_id not in seen:
+                seen.add(note_id)
+                ids.append(note_id)
+        return ids
+
+    def memo_preview(text, limit=4000):
+        value = str(text or "").strip()
+        return value[:limit]
+
+    def apple_notes_artifact_path(state=None):
+        target = None
+        if isinstance(state, dict):
+            target = state.get("entryContext", {}).get("gbrainTargetPath")
+        if target and Path(target).is_dir():
+            directory = Path(target) / "sources"
+        else:
+            directory = state_path.parent / "source-ingest-artifacts"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / "apple-notes-memo-cli.md"
+
+    def apple_notes_check_cli():
+        return check_required_cli("apple-notes")
+
+    def apple_notes_check_access():
+        state = load_or_create_state()
+        run_state, result = run_memo(["notes", "-fl"], timeout=20, failure_reason="notes_automation_denied")
+        if not result.get("ok"):
+            reason = result.get("reason") or "notes_automation_denied"
+            run_state.update({
+                "accessStatus": "failed",
+                "accessFailureReason": reason,
+                "accessFailureStderr": (result.get("stderr") or "")[:500],
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("apple-notes", run_state)
+            state = set_apple_notes_row_state(
+                state,
+                "attention",
+                "preflight",
+                "check_notes_automation",
+                attention_reason=reason,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "apple-notes", "check_notes_automation"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({
+            "accessStatus": "passed",
+            "folderListPreview": memo_preview(result.get("stdout")),
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("apple-notes", run_state)
+        state = set_apple_notes_row_state(
+            state,
+            "running",
+            "smoke",
+            "smoke_list_notes",
+            run_state_path=run_path,
+            result_summary="Apple Notes folder/list command succeeded through memo.",
+        )
+        save_json(state)
+        payload = {"ok": True, "folderListPreview": memo_preview(result.get("stdout"), limit=500)}
+        payload.update(source_next_prompt_payload(state, "apple-notes", "smoke_list_notes"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def apple_notes_smoke_list():
+        state = load_or_create_state()
+        run_state, result = run_memo(["notes", "-fl"], timeout=20, failure_reason="memo_notes_list_failed")
+        if not result.get("ok") or not str(result.get("stdout") or "").strip():
+            run_state, retry = run_memo(["notes", "-nc", "-fl"], timeout=25, failure_reason="memo_notes_list_failed")
+            if retry.get("ok") and str(retry.get("stdout") or "").strip():
+                result = retry
+        if not result.get("ok") or not str(result.get("stdout") or "").strip():
+            reason = result.get("reason") or "memo_notes_list_failed"
+            run_state.update({
+                "smokeListStatus": "failed",
+                "smokeFailureReason": reason,
+                "smokeFailureStderr": (result.get("stderr") or "")[:500],
+                "updatedAt": now(),
+            })
+            run_path = save_source_run_state("apple-notes", run_state)
+            state = set_apple_notes_row_state(
+                state,
+                "attention",
+                "smoke",
+                "smoke_list_notes",
+                attention_reason=reason,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "apple-notes", "smoke_list_notes"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        note_ids = memo_note_ids_from_text(result.get("stdout"))
+        run_state.update({
+            "smokeListStatus": "passed",
+            "folderListPreview": memo_preview(result.get("stdout")),
+            "smokeNoteIDs": note_ids[:20],
+            "estimatedNoteCount": len(note_ids) if note_ids else None,
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("apple-notes", run_state)
+        state = set_apple_notes_row_state(
+            state,
+            "running",
+            "ingest",
+            "choose_ingest_scope",
+            run_state_path=run_path,
+            result_summary="Apple Notes read-only smoke list passed.",
+        )
+        save_json(state)
+        payload = {"ok": True, "estimatedNoteCount": len(note_ids) if note_ids else None}
+        payload.update(source_next_prompt_payload(state, "apple-notes", "choose_ingest_scope"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def apple_notes_estimate_scope(run_state):
+        scope = run_state.get("scope")
+        if scope == "selected-notes":
+            return list(run_state.get("selectedNoteIDs") or [])
+        if scope == "sample":
+            ids = run_state.get("smokeNoteIDs") if isinstance(run_state.get("smokeNoteIDs"), list) else []
+            if ids:
+                return [str(item) for item in ids[:3]]
+            _, result = run_memo(["notes"], timeout=20, failure_reason="memo_notes_list_failed")
+            return memo_note_ids_from_text(result.get("stdout"))[:3] if result.get("ok") else []
+        if scope == "folder":
+            folder = str(run_state.get("folder") or "")
+            _, result = run_memo(["notes", "-f", folder], timeout=25, failure_reason="memo_notes_list_failed")
+            return memo_note_ids_from_text(result.get("stdout")) if result.get("ok") else []
+        if scope == "search":
+            query = str(run_state.get("query") or "")
+            _, result = run_memo(["notes", "-s", query], timeout=25, failure_reason="memo_notes_list_failed")
+            return memo_note_ids_from_text(result.get("stdout")) if result.get("ok") else []
+        return []
+
+    def apple_notes_choose_scope():
+        scope = single_flag_value("--scope")
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-notes")
+        if scope == "skip":
+            run_state.update({"scope": "skip", "updatedAt": now()})
+            state = mark_source_completion_pending(
+                state,
+                "apple-notes",
+                "skipped",
+                "Apple Notes skipped for this Source Onboarding session.",
+                run_state=run_state,
+            )
+            save_json(state)
+            payload = {"ok": True, "skipped": True}
+            payload.update(source_next_prompt_payload(state, "apple-notes", "complete"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        if scope == "folder":
+            folder = single_flag_value("--folder")
+            if not folder:
+                print("--folder is required when --scope folder", file=sys.stderr)
+                return 2
+            run_state.update({"scope": scope, "folder": folder})
+        elif scope == "search":
+            query = single_flag_value("--query")
+            if not query:
+                print("--query is required when --scope search", file=sys.stderr)
+                return 2
+            run_state.update({"scope": scope, "query": query})
+        elif scope == "selected-notes":
+            note_ids = parse_flag_value("--note-id")
+            if not note_ids:
+                print("--note-id is required when --scope selected-notes", file=sys.stderr)
+                return 2
+            run_state.update({"scope": scope, "selectedNoteIDs": [str(item) for item in note_ids]})
+        elif scope == "sample":
+            run_state.update({"scope": scope})
+        else:
+            print("--scope must be folder, search, selected-notes, sample, or skip", file=sys.stderr)
+            return 2
+        note_ids = apple_notes_estimate_scope(run_state)
+        run_state.update({
+            "resolvedNoteIDs": note_ids,
+            "estimatedNoteCount": len(note_ids),
+            "planConfirmed": False,
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("apple-notes", run_state)
+        state = set_apple_notes_row_state(
+            state,
+            "running",
+            "ingest",
+            "confirm_ingest_plan",
+            run_state_path=run_path,
+            result_summary="Apple Notes ingest scope selected: " + scope,
+        )
+        save_json(state)
+        payload = {"ok": True, "scope": scope, "estimatedNoteCount": len(note_ids)}
+        payload.update(source_next_prompt_payload(state, "apple-notes", "confirm_ingest_plan"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def apple_notes_confirm_plan():
+        answer = single_flag_value("--answer").strip().lower()
+        if answer not in {"yes", "y", "no", "n"}:
+            print("--answer must be yes or no", file=sys.stderr)
+            return 2
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-notes")
+        if answer in {"no", "n"}:
+            run_state.update({"planConfirmed": False, "updatedAt": now()})
+            run_path = save_source_run_state("apple-notes", run_state)
+            state = set_apple_notes_row_state(
+                state,
+                "attention",
+                "ingest",
+                "choose_ingest_scope",
+                attention_reason="ingest_plan_rejected",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_plan_rejected"}
+            payload.update(source_next_prompt_payload(state, "apple-notes", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if not run_state.get("scope") or run_state.get("scope") == "skip":
+            state = set_apple_notes_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="ingest_scope_required")
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_scope_required"}
+            payload.update(source_next_prompt_payload(state, "apple-notes", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({"planConfirmed": True, "confirmedAt": now(), "updatedAt": now()})
+        run_path = save_source_run_state("apple-notes", run_state)
+        state = set_apple_notes_row_state(
+            state,
+            "running",
+            "ingest",
+            "ingest_notes",
+            run_state_path=run_path,
+            result_summary="Apple Notes ingest plan confirmed.",
+        )
+        save_json(state)
+        payload = {"ok": True, "scope": run_state.get("scope"), "estimatedNoteCount": run_state.get("estimatedNoteCount")}
+        payload.update(source_next_prompt_payload(state, "apple-notes", "ingest_notes"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def apple_notes_read_note(note_id):
+        _, result = run_memo(["notes", "-v", str(note_id)], timeout=25, failure_reason="memo_note_read_failed")
+        if not result.get("ok"):
+            _, retry = run_memo(["notes", "-nc", "-v", str(note_id)], timeout=30, failure_reason="memo_note_read_failed")
+            if retry.get("ok"):
+                result = retry
+        return result
+
+    def apple_notes_ingest():
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-notes")
+        if not run_state.get("scope") or run_state.get("scope") == "skip":
+            state = set_apple_notes_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="ingest_scope_required")
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_scope_required"}
+            payload.update(source_next_prompt_payload(state, "apple-notes", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if not run_state.get("planConfirmed"):
+            state = set_apple_notes_row_state(state, "attention", "ingest", "confirm_ingest_plan", attention_reason="ingest_plan_unconfirmed")
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_plan_unconfirmed"}
+            payload.update(source_next_prompt_payload(state, "apple-notes", "confirm_ingest_plan"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        note_ids = run_state.get("resolvedNoteIDs") if isinstance(run_state.get("resolvedNoteIDs"), list) else []
+        if not note_ids:
+            note_ids = apple_notes_estimate_scope(run_state)
+        if not note_ids:
+            reason = "no_notes_in_approved_scope"
+            run_state.update({"ingestStatus": "failed", "ingestFailureReason": reason, "updatedAt": now()})
+            run_path = save_source_run_state("apple-notes", run_state)
+            state = set_apple_notes_row_state(
+                state,
+                "attention",
+                "ingest",
+                "ingest_notes",
+                attention_reason=reason,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "apple-notes", "ingest_notes"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        artifact = apple_notes_artifact_path(state)
+        lines = [
+            "# Apple Notes Source Onboarding Ingest",
+            "",
+            "source: apple-notes",
+            "playbook: apple-notes.memo-cli.v1",
+            "scope: " + str(run_state.get("scope")),
+            "scope_summary: " + apple_notes_scope_summary(run_state),
+            "note_count: " + str(len(note_ids)),
+            "",
+            "## Notes",
+        ]
+        ingested = 0
+        for note_id in note_ids:
+            result = apple_notes_read_note(note_id)
+            lines.extend(["", "### Note " + str(note_id), ""])
+            if not result.get("ok"):
+                lines.append("read_error: " + str(result.get("reason") or "memo_note_read_failed"))
+                continue
+            lines.extend([
+                "```text",
+                str(result.get("stdout") or "").rstrip(),
+                "```",
+            ])
+            ingested += 1
+        artifact.write_text("\\n".join(lines).rstrip() + "\\n", encoding="utf-8")
+        run_state.update({
+            "artifactPath": str(artifact),
+            "ingestedNoteCount": ingested,
+            "ingestedAt": now(),
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("apple-notes", run_state)
+        state = set_apple_notes_row_state(
+            state,
+            "running",
+            "verify",
+            "verify_readback",
+            run_state_path=run_path,
+            result_summary="Apple Notes ingest artifact written for " + str(ingested) + " notes.",
+        )
+        save_json(state)
+        payload = {"ok": True, "artifactPath": str(artifact), "ingestedNoteCount": ingested}
+        payload.update(source_next_prompt_payload(state, "apple-notes", "verify_readback"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def apple_notes_verify_readback():
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-notes")
+        artifact = Path(run_state.get("artifactPath") or "")
+        try:
+            text = artifact.read_text(encoding="utf-8")
+        except Exception:
+            text = ""
+        if "source: apple-notes" not in text or "playbook: apple-notes.memo-cli.v1" not in text:
+            run_state.update({"readbackStatus": "failed", "updatedAt": now()})
+            run_path = save_source_run_state("apple-notes", run_state)
+            state = set_apple_notes_row_state(
+                state,
+                "attention",
+                "verify",
+                "verify_readback",
+                attention_reason="readback_failed",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "readback_failed"}
+            payload.update(source_next_prompt_payload(state, "apple-notes", "verify_readback"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
+        state = mark_source_completion_pending(
+            state,
+            "apple-notes",
+            "checked",
+            "Apple Notes ingest readback verified for " + str(run_state.get("ingestedNoteCount") or 0) + " notes.",
+            run_state=run_state,
+        )
+        save_json(state)
+        payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
+        payload.update(source_next_prompt_payload(state, "apple-notes", "complete"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def apple_notes_command():
+        if not args:
+            print("apple-notes requires a subcommand", file=sys.stderr)
+            return 2
+        pending_code = reject_if_completion_report_pending("apple-notes")
+        if pending_code is not None:
+            return pending_code
+        subcommand = args[0]
+        if subcommand == "check-cli":
+            return apple_notes_check_cli()
+        if subcommand == "check-access":
+            return apple_notes_check_access()
+        if subcommand == "smoke-list":
+            return apple_notes_smoke_list()
+        if subcommand == "choose-scope":
+            return apple_notes_choose_scope()
+        if subcommand == "confirm-plan":
+            return apple_notes_confirm_plan()
+        if subcommand == "ingest":
+            return apple_notes_ingest()
+        if subcommand == "verify-readback":
+            return apple_notes_verify_readback()
+        print("unknown apple-notes subcommand: " + subcommand, file=sys.stderr)
+        return 2
+
     def split_pair(value):
         if "=" in value:
             left, right = value.split("=", 1)
@@ -4699,15 +5730,27 @@ struct ZebraSourceOnboardingHelper {
             sys.exit(2)
         return raw, candidates, uncataloged
 
+    def normalized_alias_text(value):
+        return unicodedata.normalize("NFC", value or "").lower()
+
     def best_alias_match(raw, aliases):
         lower_raw = raw.lower()
+        normalized_raw = normalized_alias_text(raw)
         best = None
         for alias in aliases:
-            position = lower_raw.find(alias.lower())
-            if position < 0:
-                continue
-            raw_value = raw[position:position + len(alias)]
-            candidate = (position, -len(alias), raw_value)
+            alias_lower = alias.lower()
+            position = lower_raw.find(alias_lower)
+            if position >= 0:
+                raw_value = raw[position:position + len(alias)]
+                match_length = len(alias_lower)
+            else:
+                normalized_alias = normalized_alias_text(alias)
+                position = normalized_raw.find(normalized_alias)
+                if position < 0:
+                    continue
+                raw_value = alias
+                match_length = len(normalized_alias)
+            candidate = (position, -match_length, raw_value)
             if best is None or candidate < best:
                 best = candidate
         if best is None:
@@ -5001,6 +6044,8 @@ struct ZebraSourceOnboardingHelper {
         sys.exit(notion_command())
     elif command == "imessage":
         sys.exit(imessage_command())
+    elif command == "apple-notes":
+        sys.exit(apple_notes_command())
     elif command == "status":
         status()
     else:

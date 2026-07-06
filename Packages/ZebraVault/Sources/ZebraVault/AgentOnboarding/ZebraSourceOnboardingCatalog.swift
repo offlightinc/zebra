@@ -47,6 +47,12 @@ enum ZebraSourceOnboardingCatalog {
             type: "workspace",
             aliases: ["notion", "노션"]
         ),
+        SourceDefinition(
+            id: "apple-notes",
+            displayName: "Apple Notes",
+            type: "notes",
+            aliases: ["apple notes", "apple note", "애플노트", "애플 노트", "애플 메모", "맥북 메모", "notes", "memo"]
+        ),
     ]
 
     static let uncatalogedSourceHints: [UncatalogedDefinition] = [
@@ -54,11 +60,6 @@ enum ZebraSourceOnboardingCatalog {
             id: "slack",
             displayName: "Slack",
             aliases: ["slack", "슬랙"]
-        ),
-        UncatalogedDefinition(
-            id: "apple-notes",
-            displayName: "Apple Notes",
-            aliases: ["apple notes", "apple note", "애플 메모"]
         ),
         UncatalogedDefinition(
             id: "apple-reminders",

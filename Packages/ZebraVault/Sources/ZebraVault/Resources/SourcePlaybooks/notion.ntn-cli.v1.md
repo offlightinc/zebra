@@ -2,8 +2,9 @@
 id: notion.ntn-cli
 version: v1
 sourceID: notion
-initialStepID: choose_scope
+initialStepID: check_ntn_cli
 steps:
+  - check_ntn_cli
   - choose_scope
   - smoke_read
   - confirm_workspace_ingest
@@ -15,6 +16,32 @@ steps:
 # Notion ntn CLI Source Onboarding
 
 This playbook drives Zebra Source Onboarding for Notion through the official `ntn` CLI. It is a guided ingest runner, not a blind full-workspace importer. The helper CLI owns state transitions and prints the next executable prompt.
+
+## Step: check_ntn_cli
+
+Work only the Notion `check_ntn_cli` step.
+
+Run:
+
+```bash
+zebra-source-onboarding notion check-cli
+```
+
+If `ntn` is missing, report the helper's compact attention reason and tell the user the expected install path is the official `ntn` CLI. The default install command is:
+
+```bash
+curl -fsSL https://ntn.dev | bash
+```
+
+If that install path fails and `npm` is available, use this fallback:
+
+```bash
+npm install --global ntn
+```
+
+After installation, run `ntn --version` and authenticate with `ntn login`. Do not install anything unless the user explicitly asks.
+
+Continue only from the returned `nextPrompt`.
 
 ## Step: choose_scope
 
