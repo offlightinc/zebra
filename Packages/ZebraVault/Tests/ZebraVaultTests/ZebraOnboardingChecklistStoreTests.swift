@@ -1579,6 +1579,28 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(missingCLIPrompt.contains("Apple Notes ingest requires the memo CLI. Install it now with Homebrew? (yes/no)"), missingCLIPrompt)
         XCTAssertTrue(missingCLIPrompt.contains("Do not install anything unless the user explicitly answers yes."), missingCLIPrompt)
 
+        let koreanMissingCLI = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-notes", "check-cli"],
+            environment: baseEnvironment.merging(["ZEBRA_ONBOARDING_LANGUAGE": "ko"]) { _, new in new }
+        )
+        XCTAssertEqual(koreanMissingCLI.status, 1, "stdout:\n\(koreanMissingCLI.stdout)\nstderr:\n\(koreanMissingCLI.stderr)")
+        let koreanMissingCLIPrompt = try XCTUnwrap(jsonObject(from: koreanMissingCLI.stdout)["nextPrompt"] as? String)
+        XCTAssertTrue(koreanMissingCLIPrompt.contains("Apple Notes ingest에는 memo CLI가 필요합니다. Homebrew로 지금 설치할까요? (yes/no)"), koreanMissingCLIPrompt)
+        XCTAssertTrue(koreanMissingCLIPrompt.contains("사용자가 명시적으로 yes라고 답하기 전에는 아무것도 설치하지 마세요."), koreanMissingCLIPrompt)
+        XCTAssertFalse(koreanMissingCLIPrompt.contains("Install it now with Homebrew?"), koreanMissingCLIPrompt)
+
+        let japaneseMissingCLI = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-notes", "check-cli"],
+            environment: baseEnvironment.merging(["ZEBRA_ONBOARDING_LANGUAGE": "ja"]) { _, new in new }
+        )
+        XCTAssertEqual(japaneseMissingCLI.status, 1, "stdout:\n\(japaneseMissingCLI.stdout)\nstderr:\n\(japaneseMissingCLI.stderr)")
+        let japaneseMissingCLIPrompt = try XCTUnwrap(jsonObject(from: japaneseMissingCLI.stdout)["nextPrompt"] as? String)
+        XCTAssertTrue(japaneseMissingCLIPrompt.contains("Apple Notes ingest には memo CLI が必要です。Homebrew で今インストールしますか？ (yes/no)"), japaneseMissingCLIPrompt)
+        XCTAssertTrue(japaneseMissingCLIPrompt.contains("ユーザーが明示的に yes と答えるまで、何もインストールしないでください。"), japaneseMissingCLIPrompt)
+        XCTAssertFalse(japaneseMissingCLIPrompt.contains("Install it now with Homebrew?"), japaneseMissingCLIPrompt)
+
         _ = try installFakeMemoCLI(fakeBin: fakeBin, logURL: memoLog)
         let environment = baseEnvironment.merging([
             "PATH": "\(fakeBin.path):/usr/bin:/bin",

@@ -1757,6 +1757,85 @@ struct ZebraSourceOnboardingHelper {
         Ask the user for explicit approval before running ingest. If approved, run `zebra-source-onboarding apple-notes confirm-plan --answer yes`. If not approved, run `zebra-source-onboarding apple-notes confirm-plan --answer no`.
         ''').strip()
 
+    def apple_notes_check_memo_cli_instruction(language):
+        if language == "ko":
+            return textwrap.dedent('''
+            Apple Notes `check_memo_cli` 단계만 진행하세요.
+
+            먼저 실행:
+
+            ```bash
+            zebra-source-onboarding apple-notes check-cli
+            ```
+
+            `memo`가 없으면 helper가 반환한 compact attention reason `memo_cli_missing`을 보고하고, Apple Notes ingest에는 `memo` CLI가 필요하다고 설명하세요. Homebrew 설치 명령은 아래입니다:
+
+            ```bash
+            brew tap antoniorodr/memo && brew install antoniorodr/memo/memo
+            ```
+
+            설치하기 전에 사용자에게 아래 yes/no 질문을 명시적으로 하세요:
+
+            ```text
+            Apple Notes ingest에는 memo CLI가 필요합니다. Homebrew로 지금 설치할까요? (yes/no)
+            ```
+
+            사용자가 명시적으로 yes라고 답하기 전에는 아무것도 설치하지 마세요.
+
+            이후에는 helper stdout의 `nextPrompt`에서만 계속 진행하세요.
+            ''').strip()
+        if language == "ja":
+            return textwrap.dedent('''
+            Apple Notes の `check_memo_cli` step だけを進めてください。
+
+            まず実行:
+
+            ```bash
+            zebra-source-onboarding apple-notes check-cli
+            ```
+
+            `memo` が見つからない場合は、helper が返した compact attention reason `memo_cli_missing` を報告し、Apple Notes ingest には `memo` CLI が必要だと説明してください。Homebrew のインストールコマンドは次のとおりです:
+
+            ```bash
+            brew tap antoniorodr/memo && brew install antoniorodr/memo/memo
+            ```
+
+            インストール前に、ユーザーへ次の yes/no 質問を明示的にしてください:
+
+            ```text
+            Apple Notes ingest には memo CLI が必要です。Homebrew で今インストールしますか？ (yes/no)
+            ```
+
+            ユーザーが明示的に yes と答えるまで、何もインストールしないでください。
+
+            以後は helper stdout の `nextPrompt` だけに従って続行してください。
+            ''').strip()
+        return textwrap.dedent('''
+        Work only the Apple Notes `check_memo_cli` step.
+
+        Run:
+
+        ```bash
+        zebra-source-onboarding apple-notes check-cli
+        ```
+
+        If `memo` is missing, report the helper's compact attention reason `memo_cli_missing` and tell the user Apple Notes ingest requires the `memo` CLI. Show this Homebrew install command:
+
+        ```bash
+        brew tap antoniorodr/memo && brew install antoniorodr/memo/memo
+        ```
+
+        Then ask an explicit yes/no question before installing:
+
+        ```text
+        Apple Notes ingest requires the memo CLI. Install it now with Homebrew? (yes/no)
+        ```
+
+        Do not install anything unless the user explicitly answers yes.
+
+        Continue only from the returned `nextPrompt`.
+        ''').strip()
+
     def apple_notes_step_prompt(step_id, state, row):
         playbook = apple_notes_playbook()
         run_state = load_source_run_state("apple-notes")
@@ -1764,6 +1843,8 @@ struct ZebraSourceOnboardingHelper {
         language = onboarding_language()
         if not section:
             section = "Follow the current Apple Notes playbook step and continue only through the zebra-source-onboarding helper CLI."
+        if step_id == "check_memo_cli":
+            section = apple_notes_check_memo_cli_instruction(language)
         if step_id == "choose_ingest_scope":
             if language == "ko":
                 section = section + "\\n\\n" + textwrap.dedent('''
