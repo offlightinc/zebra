@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "kind": "source-replay-scenario",
+  "extends": "common.baseline.v1",
+  "id": "apple-reminders.remindctl.baseline",
+  "source": "apple-reminders",
+  "playbookID": "apple-reminders.remindctl",
+  "playbookVersion": "v1",
+  "fixture": "apple-reminders.remindctl.baseline.v1.json",
+  "defaultBatchID": "apple-reminders-remindctl-baseline",
+  "append": {
+    "preflightCommands": [
+      {
+        "id": "apple-reminders.remindctl-authorize",
+        "argv": ["remindctl", "authorize"],
+        "timeout": 300,
+        "expectedExitCodes": [0],
+        "failureReason": "reminders_permission_required",
+        "prompt": "If macOS asks for Reminders access, approve it and let this command finish before the replay runtime starts."
+      },
+      {
+        "id": "apple-reminders.remindctl-read-access",
+        "argv": ["remindctl", "list", "--json"],
+        "timeout": 120,
+        "expectedExitCodes": [0],
+        "failureReason": "reminders_read_access_required",
+        "prompt": "If macOS asks for Reminders access, approve it and let this read-only check finish before the replay runtime starts."
+      }
+    ]
+  }
+}

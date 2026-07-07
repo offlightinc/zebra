@@ -120,6 +120,7 @@ Ask the user which Obsidian content Zebra should ingest now:
 
 - whole vault
 - selected folders
+- specific note file
 - recent/sample subset
 - skip Obsidian for now
 
@@ -129,6 +130,7 @@ Scope guidance:
 
 - `whole` is appropriate only when the user explicitly wants the whole vault ingested now.
 - `folders` is for named relative folders inside the vault.
+- `file` is for one vault-relative Markdown note path. Accept only relative `.md` files inside the selected vault.
 - `sample` is for a bounded first ingest, useful for validating the path and artifact/readback behavior.
 - `skip` means Obsidian is intentionally skipped for this Source Onboarding session.
 
@@ -137,6 +139,7 @@ When the user chooses, run one of:
 ```bash
 zebra-source-onboarding obsidian choose-scope --scope whole
 zebra-source-onboarding obsidian choose-scope --scope folders --folder "<relative-folder>"
+zebra-source-onboarding obsidian choose-scope --scope file --file "<relative-note-path.md>"
 zebra-source-onboarding obsidian choose-scope --scope sample
 zebra-source-onboarding obsidian choose-scope --scope skip
 ```

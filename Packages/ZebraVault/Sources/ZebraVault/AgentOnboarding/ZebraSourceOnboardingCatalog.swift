@@ -47,25 +47,21 @@ enum ZebraSourceOnboardingCatalog {
             type: "workspace",
             aliases: ["notion", "노션"]
         ),
-    ]
-
-    static let uncatalogedSourceHints: [UncatalogedDefinition] = [
-        UncatalogedDefinition(
-            id: "slack",
-            displayName: "Slack",
-            aliases: ["slack", "슬랙"]
-        ),
-        UncatalogedDefinition(
+        SourceDefinition(
             id: "apple-notes",
             displayName: "Apple Notes",
-            aliases: ["apple notes", "apple note", "애플 메모"]
+            type: "notes",
+            aliases: ["apple notes", "apple note", "애플노트", "애플 노트", "애플 메모", "맥북 메모", "notes", "memo"]
         ),
-        UncatalogedDefinition(
+        SourceDefinition(
             id: "apple-reminders",
             displayName: "Apple Reminders",
-            aliases: ["apple reminders", "apple reminder", "애플 리마인더", "reminders", "reminder"]
+            type: "tasks",
+            aliases: ["apple reminders", "apple reminder", "reminders", "reminder", "애플 리마인더", "애플리마인더", "리마인더", "미리알림", "미리 알림"]
         ),
     ]
+
+    static let uncatalogedSourceHints: [UncatalogedDefinition] = []
 
     static func normalize(rawSourceInput: String) -> NormalizationResult {
         let matches = (

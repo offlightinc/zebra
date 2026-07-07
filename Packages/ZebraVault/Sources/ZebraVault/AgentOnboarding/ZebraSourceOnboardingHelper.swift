@@ -129,6 +129,11 @@ struct ZebraSourceOnboardingHelper {
                 "apple-notes.memo-cli.v1.md",
                 Self.fallbackAppleNotesPlaybook
             ),
+            (
+                "apple-reminders.remindctl.v1",
+                "apple-reminders.remindctl.v1.md",
+                Self.fallbackAppleRemindersPlaybook
+            ),
         ]
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -449,6 +454,62 @@ struct ZebraSourceOnboardingHelper {
     Apple Notes Source Onboarding is complete.
     """
 
+    private static let fallbackAppleRemindersPlaybook = """
+    ---
+    id: apple-reminders.remindctl
+    version: v1
+    sourceID: apple-reminders
+    initialStepID: check_remindctl_cli
+    steps:
+      - check_remindctl_cli
+      - check_reminders_permission
+      - smoke_list_reminders
+      - choose_ingest_scope
+      - confirm_ingest_plan
+      - ingest_reminders
+      - verify_readback
+      - complete
+    ---
+
+    # Apple Reminders remindctl Source Onboarding
+
+    ## Step: check_remindctl_cli
+
+    Run `zebra-source-onboarding apple-reminders check-cli`. If `remindctl` is missing, use the helper's Homebrew/remindctl install consent flow. Do not install anything unless the user explicitly approves that install.
+
+    ## Step: check_reminders_permission
+
+    Run `zebra-source-onboarding apple-reminders check-access`.
+
+    ## Step: smoke_list_reminders
+
+    Run `zebra-source-onboarding apple-reminders smoke-list`. This is read-only verification and not ingest approval.
+
+    ## Step: choose_ingest_scope
+
+    Ask the user to choose all open reminders, one list, today/week, custom, or skip Apple Reminders for now in the active onboarding language.
+
+    ## Step: confirm_ingest_plan
+
+    Summarize the selected Apple Reminders ingest plan and ask for explicit approval.
+
+    ## Step: ingest_reminders
+
+    Run `zebra-source-onboarding apple-reminders ingest`.
+
+    ## Step: verify_readback
+
+    Run `zebra-source-onboarding apple-reminders verify-readback`.
+
+    ## Step: complete
+
+    Tell the user a short Apple Reminders result summary, then run:
+
+    ```bash
+    zebra-source-onboarding report --status completed --source apple-reminders
+    ```
+    """
+
     private static let helperScript = """
     #!/bin/sh
     set -eu
@@ -474,7 +535,6 @@ struct ZebraSourceOnboardingHelper {
     import subprocess
     import sys
     import textwrap
-    import io
     import unicodedata
     import urllib.error
     import urllib.parse
@@ -531,12 +591,14 @@ struct ZebraSourceOnboardingHelper {
             "type": "notes",
             "aliases": ["apple notes", "apple note", "애플노트", "애플 노트", "애플 메모", "맥북 메모", "notes", "memo"],
         },
+        "apple-reminders": {
+            "displayName": "Apple Reminders",
+            "type": "tasks",
+            "aliases": ["apple reminders", "apple reminder", "reminders", "reminder", "애플 리마인더", "애플리마인더", "리마인더", "미리알림", "미리 알림"],
+        },
     }
 
-    uncataloged_catalog = {
-        "slack": {"displayName": "Slack", "aliases": ["slack", "슬랙"]},
-        "apple-reminders": {"displayName": "Apple Reminders", "aliases": ["apple reminders", "apple reminder", "애플 리마인더", "reminders", "reminder"]},
-    }
+    uncataloged_catalog = {}
 
     def normalize_onboarding_language(raw):
         raw = (raw or "").strip().lower().replace("_", "-")
@@ -951,6 +1013,24 @@ struct ZebraSourceOnboardingHelper {
         "sections": {},
     }
 
+    apple_reminders_playbook_fallback = {
+        "id": "apple-reminders.remindctl",
+        "version": "v1",
+        "sourceID": "apple-reminders",
+        "initialStepID": "check_remindctl_cli",
+        "steps": [
+            "check_remindctl_cli",
+            "check_reminders_permission",
+            "smoke_list_reminders",
+            "choose_ingest_scope",
+            "confirm_ingest_plan",
+            "ingest_reminders",
+            "verify_readback",
+            "complete",
+        ],
+        "sections": {},
+    }
+
     def parse_playbook_markdown(path, fallback=None):
         fallback = fallback or obsidian_playbook_fallback
         result = {
@@ -1029,6 +1109,12 @@ struct ZebraSourceOnboardingHelper {
         return parse_playbook_markdown(
             playbook_dir / "apple-notes.memo-cli.v1.md",
             apple_notes_playbook_fallback,
+        )
+
+    def apple_reminders_playbook():
+        return parse_playbook_markdown(
+            playbook_dir / "apple-reminders.remindctl.v1.md",
+            apple_reminders_playbook_fallback,
         )
 
     def source_run_state_path(source_id):
@@ -1240,6 +1326,79 @@ struct ZebraSourceOnboardingHelper {
         Work only the current Gmail/Clawvisor repair step. Do not start other source runners. Use the helper stdout to identify the failing stage, repair that stage, and rerun the matching `zebra-source-onboarding gmail ...` command.
         ''').strip()
 
+    def obsidian_choose_scope_instruction(language):
+        if language == "ko":
+            return textwrap.dedent('''
+            사용자에게 아래 다섯 가지 선택지만 보여주세요:
+
+            ```text
+            Obsidian 접근 확인은 끝났습니다. 이제 실제로 brain에 저장할 note 범위를 정해야 합니다.
+
+            어떤 범위로 가져올까요?
+
+            1. 전체 vault
+            2. 선택한 폴더
+            3. 특정 note 파일
+            4. 최근/샘플 일부
+            5. 지금은 Obsidian 건너뛰기
+            ```
+
+            1번은 `zebra-source-onboarding obsidian choose-scope --scope whole`을 실행하세요.
+            2번은 vault 기준 상대 폴더 경로를 확인한 뒤 `zebra-source-onboarding obsidian choose-scope --scope folders --folder "<relative-folder>"`를 실행하세요. 폴더가 여러 개면 `--folder`를 여러 번 넘기세요.
+            3번은 vault 기준 상대 Markdown 파일 경로를 확인한 뒤 `zebra-source-onboarding obsidian choose-scope --scope file --file "<relative-note-path.md>"`를 실행하세요.
+            4번은 `zebra-source-onboarding obsidian choose-scope --scope sample`을 실행하세요.
+            5번은 `zebra-source-onboarding obsidian choose-scope --scope skip`을 실행하세요.
+
+            큰 vault나 폴더에는 private/sensitive note가 포함될 수 있습니다. smoke read 성공은 접근 확인일 뿐 ingest 승인으로 보지 마세요.
+            ''').strip()
+        if language == "ja":
+            return textwrap.dedent('''
+            ユーザーには次の5つの選択肢だけを表示してください:
+
+            ```text
+            Obsidianへのアクセス確認は完了しました。次にbrainへ保存するnoteの範囲を決めます。
+
+            どの範囲を取り込みますか？
+
+            1. vault全体
+            2. 選択したフォルダ
+            3. 特定のnoteファイル
+            4. 最近/サンプルの一部
+            5. 今回はObsidianをスキップ
+            ```
+
+            1番は`zebra-source-onboarding obsidian choose-scope --scope whole`を実行してください。
+            2番はvault基準の相対フォルダパスを確認し、`zebra-source-onboarding obsidian choose-scope --scope folders --folder "<relative-folder>"`を実行してください。複数フォルダの場合は`--folder`を複数回渡してください。
+            3番はvault基準の相対Markdownファイルパスを確認し、`zebra-source-onboarding obsidian choose-scope --scope file --file "<relative-note-path.md>"`を実行してください。
+            4番は`zebra-source-onboarding obsidian choose-scope --scope sample`を実行してください。
+            5番は`zebra-source-onboarding obsidian choose-scope --scope skip`を実行してください。
+
+            大きいvaultやフォルダにはprivate/sensitive noteが含まれる可能性があります。smoke read成功はアクセス確認だけで、ingest承認ではありません。
+            ''').strip()
+        return textwrap.dedent('''
+        Present exactly these five choices to the user:
+
+        ```text
+        Obsidian access is verified. Now choose which notes to save into brain.
+
+        Which scope should be ingested?
+
+        1. Whole vault
+        2. Selected folders
+        3. Specific note file
+        4. Recent/sample subset
+        5. Skip Obsidian for now
+        ```
+
+        If the user chooses option 1, run `zebra-source-onboarding obsidian choose-scope --scope whole`.
+        If the user chooses option 2, confirm the vault-relative folder path and run `zebra-source-onboarding obsidian choose-scope --scope folders --folder "<relative-folder>"`. Pass one `--folder` per folder.
+        If the user chooses option 3, confirm the vault-relative Markdown file path and run `zebra-source-onboarding obsidian choose-scope --scope file --file "<relative-note-path.md>"`.
+        If the user chooses option 4, run `zebra-source-onboarding obsidian choose-scope --scope sample`.
+        If the user chooses option 5, run `zebra-source-onboarding obsidian choose-scope --scope skip`.
+
+        Large vaults or folders may contain private/sensitive notes. Smoke read success proves access only; it is not ingest approval.
+        ''').strip()
+
     def obsidian_step_prompt(step_id, state, row):
         playbook = obsidian_playbook()
         run_state = load_source_run_state("obsidian")
@@ -1248,6 +1407,8 @@ struct ZebraSourceOnboardingHelper {
         path = ""
         if not section:
             section = "Follow the current Obsidian playbook step and continue only through the zebra-source-onboarding helper CLI."
+        if step_id == "choose_ingest_scope":
+            section = obsidian_choose_scope_instruction(language)
         vault = run_state.get("selectedVaultPath") or run_state.get("candidateVaultPath") or "not selected"
         scope = run_state.get("scope") or "not selected"
         estimated = run_state.get("estimatedFileCount")
@@ -1823,6 +1984,269 @@ struct ZebraSourceOnboardingHelper {
         {section}
         ''').strip()
 
+    def apple_reminders_scope_summary(run_state):
+        language = onboarding_language()
+        scope = run_state.get("scope") or "not selected"
+        if scope == "all-open":
+            if language == "ko":
+                return "모든 list의 open/incomplete reminders"
+            if language == "ja":
+                return "すべてのlistのopen/incomplete reminders"
+            return "all open reminders"
+        if scope == "one-list":
+            list_name = str(run_state.get("list") or "not selected")
+            if language == "ko":
+                return "list `" + list_name + "`의 open/incomplete reminders"
+            if language == "ja":
+                return "list `" + list_name + "` のopen/incomplete reminders"
+            return "open reminders from list `" + list_name + "`"
+        if scope in {"today", "week", "overdue"}:
+            return str(scope)
+        if scope == "custom":
+            parts = []
+            lists = run_state.get("lists") if isinstance(run_state.get("lists"), list) else []
+            if lists:
+                parts.append("lists: " + ", ".join(str(item) for item in lists))
+            status = run_state.get("status")
+            if status:
+                parts.append("status: " + str(status))
+            due = run_state.get("dueWindow")
+            if due:
+                parts.append("due window: " + str(due))
+            parts.append("completed included: " + str(bool(run_state.get("includeCompleted"))).lower())
+            cap = run_state.get("itemCap")
+            if cap is not None:
+                parts.append("item cap: " + str(cap))
+            return "custom (" + "; ".join(parts) + ")"
+        if scope == "skip":
+            if language == "ko":
+                return "이번 Source Onboarding에서 Apple Reminders 건너뛰기"
+            if language == "ja":
+                return "このSource OnboardingではApple Remindersをスキップ"
+            return "skip Apple Reminders for this Source Onboarding session"
+        return str(scope)
+
+    def apple_reminders_ingest_plan_summary(run_state):
+        count = run_state.get("expectedCount")
+        count_text = str(count) if count is not None else "unknown"
+        fields = run_state.get("observedReminderFields") if isinstance(run_state.get("observedReminderFields"), list) else []
+        fields_text = ", ".join(str(item) for item in fields) if fields else "unknown until approved read"
+        artifact = run_state.get("plannedArtifactPath") or run_state.get("artifactPath") or "will be created under the selected brain repo sources directory"
+        bounded = "bounded" if run_state.get("itemCap") is not None else "full approved scope"
+        language = onboarding_language()
+        if language == "ko":
+            return textwrap.dedent(f'''
+            선택된 Apple Reminders ingest plan입니다.
+
+            - 선택한 범위: `{apple_reminders_scope_summary(run_state)}`
+            - completed 포함 여부: `{str(bool(run_state.get("includeCompleted"))).lower()}`
+            - full vs bounded: `{bounded}`
+            - 예상 reminder 수: `{count_text}`
+            - 저장할 필드: `{fields_text}`
+            - unsupported fields: EventKit/remindctl 경로에서 sections, smart lists, tags, attachments, urgent/private flags는 보장하지 않습니다.
+            - artifact path: `{artifact}`
+            - readback plan: 생성된 artifact에서 `source: apple-reminders`와 `playbook: apple-reminders.remindctl.v1`를 확인합니다.
+            - redaction policy: raw JSON dump는 저장하지 않고, 승인된 scope 안에서 remindctl이 실제 반환한 필드만 markdown으로 씁니다.
+
+            ingest를 실행하기 전에 사용자에게 명시적으로 승인받으세요. 승인하면 `zebra-source-onboarding apple-reminders confirm-plan --answer yes`를 실행하고, 승인하지 않으면 `zebra-source-onboarding apple-reminders confirm-plan --answer no`를 실행하세요.
+            ''').strip()
+        return textwrap.dedent(f'''
+        Resolved Apple Reminders ingest plan:
+
+        - Selected scope: `{apple_reminders_scope_summary(run_state)}`
+        - Completed included: `{str(bool(run_state.get("includeCompleted"))).lower()}`
+        - Full vs bounded: `{bounded}`
+        - Expected reminder count: `{count_text}`
+        - Fields to store: `{fields_text}`
+        - Unsupported fields: sections, smart lists, tags, attachments, and urgent/private flags are not guaranteed through EventKit/remindctl.
+        - Artifact path: `{artifact}`
+        - Readback plan: require `source: apple-reminders` plus `playbook: apple-reminders.remindctl.v1` in the generated artifact.
+        - Redaction policy: do not store a raw JSON dump; write only remindctl-returned fields from the approved scope as markdown.
+
+        Ask the user for explicit approval before running ingest. If approved, run `zebra-source-onboarding apple-reminders confirm-plan --answer yes`. If not approved, run `zebra-source-onboarding apple-reminders confirm-plan --answer no`.
+        ''').strip()
+
+    def apple_reminders_check_cli_instruction(language):
+        if language == "ko":
+            return textwrap.dedent('''
+            Apple Reminders `check_remindctl_cli` 단계만 진행하세요.
+
+            먼저 실행:
+
+            ```bash
+            zebra-source-onboarding apple-reminders check-cli
+            ```
+
+            `remindctl`이 없고 Homebrew도 없으면 Homebrew 설치 동의를 별도로 물으세요. 사용자가 yes라고 답하면:
+
+            ```bash
+            zebra-source-onboarding apple-reminders check-cli --homebrew-install-answer yes
+            ```
+
+            사용자가 no라고 답하면:
+
+            ```bash
+            zebra-source-onboarding apple-reminders check-cli --homebrew-install-answer no
+            ```
+
+            Homebrew가 있고 `remindctl`이 없으면 remindctl 설치 동의를 별도로 물으세요:
+
+            ```text
+            Apple Reminders ingest requires remindctl. Install it with Homebrew now? (yes/no)
+            ```
+
+            승인하면 `zebra-source-onboarding apple-reminders check-cli --remindctl-install-answer yes`를 실행하고, 거절하면 `--remindctl-install-answer no`를 실행하세요. Source build는 advanced fallback으로만 언급하세요.
+
+            이후에는 helper stdout의 `nextPrompt`에서만 계속 진행하세요.
+            ''').strip()
+        return textwrap.dedent('''
+        Work only the Apple Reminders `check_remindctl_cli` step.
+
+        First run:
+
+        ```bash
+        zebra-source-onboarding apple-reminders check-cli
+        ```
+
+        If `remindctl` is missing and Homebrew is also missing, ask for Homebrew install consent as a separate yes/no choice. If the user says yes, run:
+
+        ```bash
+        zebra-source-onboarding apple-reminders check-cli --homebrew-install-answer yes
+        ```
+
+        If the user says no, run the same command with `--homebrew-install-answer no`.
+
+        If Homebrew exists but `remindctl` is missing, ask this separate yes/no question:
+
+        ```text
+        Apple Reminders ingest requires remindctl. Install it with Homebrew now? (yes/no)
+        ```
+
+        If approved, run `zebra-source-onboarding apple-reminders check-cli --remindctl-install-answer yes`; if declined, run it with `--remindctl-install-answer no`. Mention source build only as an advanced fallback.
+
+        Continue only from helper stdout `nextPrompt`.
+        ''').strip()
+
+    def apple_reminders_scope_choices_instruction(language):
+        if language == "ko":
+            return textwrap.dedent('''
+            사용자에게 아래 다섯 가지 선택지만 보여주세요:
+
+            ```text
+            Apple Reminders 접근 확인은 끝났습니다. 이제 실제로 brain에 저장할 미리알림 범위를 정해야 합니다.
+
+            어떤 범위로 가져올까요?
+
+            1. 열려 있는 모든 미리알림
+            2. 특정 list 하나
+            3. 오늘 또는 이번 주
+            4. 직접 설정
+            5. 지금은 Apple Reminders 건너뛰기
+            ```
+
+            1번은 `zebra-source-onboarding apple-reminders choose-scope --scope all-open`를 실행하세요.
+            2번은 list 이름을 확인한 뒤 `zebra-source-onboarding apple-reminders choose-scope --scope one-list --list "<list>"`를 실행하세요.
+            3번은 사용자가 오늘을 고르면 `--scope today`, 이번 주를 고르면 `--scope week`로 실행하세요.
+            4번은 completed 포함, overdue-only, 여러 list, completed 포함 전체, item cap/sample 같은 세부 조건을 확인한 뒤 `--scope custom`과 `--list`, `--include-completed yes`, `--status open|completed|all`, `--due-window overdue|today|week|all`, 필요한 경우 `--item-cap <n>`을 조합해 실행하세요.
+            5번은 `zebra-source-onboarding apple-reminders choose-scope --scope skip`을 실행하세요.
+
+            sample cap을 기본값처럼 만들지 마세요. 사용자가 bounded/sample ingest를 명시적으로 원할 때만 `--item-cap`을 사용하세요.
+            ''').strip()
+        if language == "ja":
+            return textwrap.dedent('''
+            ユーザーには次の5つの選択肢だけを表示してください:
+
+            ```text
+            Apple Remindersへのアクセス確認は完了しました。次にbrainへ保存するリマインダーの範囲を決めます。
+
+            どの範囲を取り込みますか？
+
+            1. 未完了のすべてのリマインダー
+            2. 特定のlist 1つ
+            3. 今日または今週
+            4. カスタム
+            5. 今回はApple Remindersをスキップ
+            ```
+
+            ユーザーが1番を選んだら`zebra-source-onboarding apple-reminders choose-scope --scope all-open`を実行してください。
+            ユーザーが2番を選んだらlist名を確認し、`zebra-source-onboarding apple-reminders choose-scope --scope one-list --list "<list>"`を実行してください。
+            ユーザーが3番を選んだら、今日なら`--scope today`、今週なら`--scope week`を実行してください。
+            ユーザーが4番を選んだら、completedを含めるか、overdue-only、複数list、completedを含む全件、item cap/sampleなどの条件を確認し、`--scope custom`に`--list`、`--include-completed yes`、`--status open|completed|all`、`--due-window overdue|today|week|all`、必要なら`--item-cap <n>`を組み合わせて実行してください。
+            ユーザーが5番を選んだら`zebra-source-onboarding apple-reminders choose-scope --scope skip`を実行してください。
+
+            sample capをデフォルト扱いにしないでください。ユーザーがbounded/sample ingestを明示的に望む場合だけ`--item-cap`を使ってください。
+            ''').strip()
+        return textwrap.dedent('''
+        Present exactly these five choices to the user:
+
+        ```text
+        Apple Reminders access is verified. Now choose which reminders to save into brain.
+
+        Which scope should be ingested?
+
+        1. All open reminders
+        2. One list
+        3. Today or this week
+        4. Custom
+        5. Skip Apple Reminders for now
+        ```
+
+        If the user chooses option 1, run `zebra-source-onboarding apple-reminders choose-scope --scope all-open`.
+        If the user chooses option 2, confirm the list name and run `zebra-source-onboarding apple-reminders choose-scope --scope one-list --list "<list>"`.
+        If the user chooses option 3, run `--scope today` for today or `--scope week` for this week.
+        If the user chooses option 4, ask only for the custom details needed for completed reminders, overdue-only, multiple lists, all including completed, or item cap/sample choices. Then run `--scope custom` with flags such as `--list`, `--include-completed yes`, `--status open|completed|all`, `--due-window overdue|today|week|all`, and optional `--item-cap <n>`.
+        If the user chooses option 5, run `zebra-source-onboarding apple-reminders choose-scope --scope skip`.
+
+        Do not make a sample cap the default. Use `--item-cap` only when the user explicitly wants a bounded/sample ingest.
+        ''').strip()
+
+    def apple_reminders_step_prompt(step_id, state, row):
+        playbook = apple_reminders_playbook()
+        run_state = load_source_run_state("apple-reminders")
+        section = playbook.get("sections", {}).get(step_id, "")
+        language = onboarding_language()
+        if not section:
+            section = "Follow the current Apple Reminders playbook step and continue only through the zebra-source-onboarding helper CLI."
+        if step_id == "check_remindctl_cli":
+            section = apple_reminders_check_cli_instruction(language)
+        if step_id == "check_reminders_permission":
+            section = section + "\\n\\n" + textwrap.dedent('''
+            Permission flow is status -> doctor --for-agent -> authorize -> final status. The macOS Reminders prompt may belong to the runtime process executing remindctl, such as Terminal, OpenClaw node/agent, or Zebra runtime. If blocked, ask the user to allow that runtime in System Settings > Privacy & Security > Reminders.
+            ''').strip()
+        if step_id == "choose_ingest_scope":
+            section = apple_reminders_scope_choices_instruction(language)
+        if step_id == "confirm_ingest_plan":
+            section = section + "\\n\\n" + apple_reminders_ingest_plan_summary(run_state)
+        command_path = run_state.get("remindctlCommandPath") or "not verified"
+        permission = run_state.get("permissionStatus") or "not verified"
+        smoke = run_state.get("smokeStatus") or "not run"
+        artifact = run_state.get("artifactPath") or "not created"
+        return textwrap.dedent(f'''
+        Zebra Source Onboarding: Apple Reminders is the active source.
+
+        Playbook: {playbook.get("id", "apple-reminders.remindctl")} {playbook.get("version", "v1")}
+        Current step: `{step_id}`
+        remindctl command path: `{command_path}`
+        Reminders permission status: `{permission}`
+        Smoke status: `{smoke}`
+        Current ingest scope: `{apple_reminders_scope_summary(run_state)}`
+        Current ingest artifact: `{artifact}`
+
+        Boundary rules:
+        - Work only this Apple Reminders step. Do not start Notion, Obsidian, iMessage, Gmail, Apple Notes, or another source unless the helper prints that source as the next active source.
+        - Use the `remindctl` CLI. Do not read Reminders databases directly and do not invent unsupported fields.
+        - Homebrew install consent and remindctl install consent are separate user choices and must be recorded through the helper command flags.
+        - Smoke-read is read-only access verification. It is not completion and not ingest approval.
+        - Actual ingest/write must stay within the user-approved reminders scope.
+        - Do not edit `source-onboarding-state.json` directly. The helper CLI is the only Source Onboarding state write path.
+        - Do not store raw reminder JSON, large reminder lists, prompt bodies, or transcripts in Source Onboarding state.
+        - Continue only from helper stdout `nextPrompt`; use `nextPromptPath` only as a fallback/debug file.
+
+        Playbook step instructions:
+
+        {section}
+        ''').strip()
+
     def apple_notes_scope_summary(run_state):
         language = onboarding_language()
         scope = run_state.get("scope") or "not selected"
@@ -2068,13 +2492,14 @@ struct ZebraSourceOnboardingHelper {
 
             {summary_text}
 
-            아직 다음 source로 넘어가지 마세요. 먼저 사용자에게 {display} 작업이 완료됐다고 짧게 말한 뒤, 아래 명령으로 완료를 Zebra에 보고하세요:
+            아직 다음 source로 넘어가지 마세요. 먼저 사용자에게 {display} 완료 결과를 명확히 전달한 뒤, 아래 명령으로 완료를 Zebra에 보고하세요.
+            완료 결과를 생략하거나 작업 중 상태 업데이트 한 줄로 대체하지 마세요:
 
             ```bash
             zebra-source-onboarding report --status completed --source {source_id}
             ```
 
-            보고 명령이 성공하면 그 stdout의 `nextPrompt`만 따라 다음 source 또는 최종 완료 안내를 진행하세요.
+            보고 명령이 성공하면 그 stdout의 `nextPrompt`만 따르세요. 다음 source가 남아 있으면 보고 stdout이 별도 `zebra-source-onboarding next` 실행을 지시합니다.
             ''').strip()
         if language == "ja":
             return textwrap.dedent(f'''
@@ -2082,74 +2507,159 @@ struct ZebraSourceOnboardingHelper {
 
             {summary_text}
 
-            まだ次の source に進まないでください。まず {display} の作業が完了したことをユーザーに短く伝え、次のコマンドで Zebra に完了を報告してください:
+            まだ次の source に進まないでください。まず {display} の完了結果をユーザーに明確に伝え、次のコマンドで Zebra に完了を報告してください。
+            完了結果を省略したり、短い進捗更新だけで置き換えたりしないでください:
 
             ```bash
             zebra-source-onboarding report --status completed --source {source_id}
             ```
 
-            報告コマンドが成功したら、その stdout の `nextPrompt` だけに従って次の source または最終完了案内を進めてください。
+            報告コマンドが成功したら、その stdout の `nextPrompt` だけに従ってください。次の source が残っている場合、報告 stdout が別途 `zebra-source-onboarding next` の実行を指示します。
             ''').strip()
         return textwrap.dedent(f'''
         Zebra Source Onboarding: {display} completion report is required.
 
         {summary_text}
 
-        Do not move to the next source yet. First briefly tell the user that {display} is complete, then report the completion to Zebra:
+        Do not move to the next source yet. First show the user the {display} completion result clearly, then report the completion to Zebra.
+        Do not omit the completion result or replace it with a brief progress update:
 
         ```bash
         zebra-source-onboarding report --status completed --source {source_id}
         ```
 
-        After that report succeeds, continue only from its stdout `nextPrompt`.
+        After that report succeeds, continue only from its stdout `nextPrompt`. If another source remains, the report stdout will tell you to run `zebra-source-onboarding next` separately.
         ''').strip()
 
-    def source_completion_handoff_prompt(source_id, summary_text, next_prompt=None):
+    def source_completion_detail_lines(source_id, row, run_state, summary_text):
+        lines = ["- Result: " + str(summary_text)]
+        artifact = run_state.get("artifactPath")
+        if artifact:
+            lines.append("- Artifact: " + str(artifact))
+        readback = run_state.get("readbackStatus")
+        if readback:
+            lines.append("- Readback: " + str(readback))
+        verified_at = run_state.get("verifiedAt") or run_state.get("completionReportedAt")
+        if verified_at:
+            lines.append("- Verified at: " + str(verified_at))
+        count_specs = [
+            ("ingestedFileCount", "Markdown files ingested"),
+            ("ingestedThreadCount", "Conversations ingested"),
+            ("ingestedReminderCount", "Reminders ingested"),
+            ("ingestedNoteCount", "Notes ingested"),
+        ]
+        for key, label in count_specs:
+            value = run_state.get(key)
+            if value is not None:
+                lines.append("- " + label + ": " + str(value))
+        return lines
+
+    def source_completion_result_block(source_id, summary_text, detail_lines=None):
         display = source_display_name(source_id)
         language = onboarding_language()
-        if next_prompt:
+        if language == "ko":
+            heading = display + " Source Onboarding이 완료됐습니다."
+        elif language == "ja":
+            heading = display + " Source Onboarding が完了しました。"
+        else:
+            heading = display + " Source Onboarding is complete."
+        lines = [heading, ""]
+        details = detail_lines if isinstance(detail_lines, list) and detail_lines else ["- Result: " + str(summary_text)]
+        lines.extend(str(item) for item in details)
+        return "\\n".join(lines).strip()
+
+    def source_completion_handoff_prompt(source_id, summary_text, detail_lines=None, has_next_source=False):
+        display = source_display_name(source_id)
+        language = onboarding_language()
+        completion_block = source_completion_result_block(source_id, summary_text, detail_lines)
+        if has_next_source:
             if language == "ko":
                 return textwrap.dedent(f'''
-                먼저 사용자에게 이 완료 사실을 짧게 알려주세요:
-                {display} Source Onboarding이 완료됐습니다. {summary_text}
+                사용자에게 아래 완료 결과를 반드시 먼저 그대로 전달하세요.
+                완료 결과를 생략하거나, 작업 중 상태 업데이트 한 줄로 대체하지 마세요.
+                사용자에게 진행 여부를 묻지 마세요.
 
-                그 다음 아래 다음 source 단계만 진행하세요:
+                ```text
+                {completion_block}
+                ```
 
-                {next_prompt}
+                위 완료 결과를 사용자에게 전달한 직후, 사용자 확인을 기다리지 말고 아래 명령을 실행하세요.
+                그 stdout의 `nextPrompt`만 따라 다음 source를 진행하세요:
+
+                ```bash
+                zebra-source-onboarding next
+                ```
                 ''').strip()
             if language == "ja":
                 return textwrap.dedent(f'''
-                まず、この完了内容をユーザーに短く伝えてください:
-                {display} Source Onboarding が完了しました。{summary_text}
+                まず、次の完了結果を必ずそのままユーザーに伝えてください。
+                省略したり、短い進捗更新だけで置き換えたりしないでください。
+                ユーザーに進行許可を求めないでください。
 
-                その後、次の source step だけを進めてください:
+                ```text
+                {completion_block}
+                ```
 
-                {next_prompt}
+                その完了結果をユーザーに伝えた直後、ユーザーの確認を待たずに次のコマンドを実行してください。
+                その stdout の `nextPrompt` だけに従って次の source を進めてください:
+
+                ```bash
+                zebra-source-onboarding next
+                ```
                 ''').strip()
             return textwrap.dedent(f'''
-            First, briefly tell the user this completed source:
-            {display} Source Onboarding is complete. {summary_text}
+            You must first show the user the exact completion result below.
+            Do not omit it or replace it with a brief progress update.
+            Do not ask the user for permission to continue.
 
-            Then proceed only with the next source step below:
+            ```text
+            {completion_block}
+            ```
 
-            {next_prompt}
+            Immediately after showing that completion result, run the command below without waiting for user confirmation.
+            Then follow only its stdout `nextPrompt`:
+
+            ```bash
+            zebra-source-onboarding next
+            ```
             ''').strip()
         if language == "ko":
             return textwrap.dedent(f'''
-            {display} Source Onboarding이 완료됐습니다. {summary_text}
+            사용자에게 아래 완료 결과를 반드시 먼저 그대로 전달하세요.
+            완료 결과를 생략하거나, 작업 중 상태 업데이트 한 줄로 대체하지 마세요.
+            사용자에게 진행 여부를 묻지 마세요.
 
-            선택된 모든 Source Onboarding이 완료됐습니다. 사용자에게 전체 Source Onboarding이 끝났다고 짧게 말한 뒤 멈추세요.
+            ```text
+            {completion_block}
+            ```
+
+            위 완료 결과를 사용자에게 전달한 뒤, 선택된 모든 Source Onboarding이 완료됐다고 명확히 말하고 멈추세요.
+            다음 source가 없으므로 추가 helper 명령을 실행하지 마세요.
             ''').strip()
         if language == "ja":
             return textwrap.dedent(f'''
-            {display} Source Onboarding が完了しました。{summary_text}
+            まず、次の完了結果を必ずそのままユーザーに伝えてください。
+            省略したり、短い進捗更新だけで置き換えたりしないでください。
+            ユーザーに進行許可を求めないでください。
 
-            選択されたすべての Source Onboarding が完了しました。ユーザーに全体の Source Onboarding が完了したことを短く伝えて、そこで止めてください。
+            ```text
+            {completion_block}
+            ```
+
+            その完了結果をユーザーに伝えたあと、選択されたすべての Source Onboarding が完了したことを明確に伝えて停止してください。
+            次の source はないため、追加の helper コマンドは実行しないでください。
             ''').strip()
         return textwrap.dedent(f'''
-        {display} Source Onboarding is complete. {summary_text}
+        You must first show the user the exact completion result below.
+        Do not omit it or replace it with a brief progress update.
+        Do not ask the user for permission to continue.
 
-        All selected Source Onboarding sources are complete. Briefly tell the user that Source Onboarding is complete, then stop.
+        ```text
+        {completion_block}
+        ```
+
+        After showing that completion result, clearly tell the user that all selected Source Onboarding sources are complete, then stop.
+        There is no next source, so do not run another helper command.
         ''').strip()
 
     def source_next_prompt_payload(state, source_id, step_id):
@@ -2171,6 +2681,9 @@ struct ZebraSourceOnboardingHelper {
         elif source_id == "apple-notes":
             playbook = apple_notes_playbook()
             prompt = apple_notes_step_prompt(step_id, state, row)
+        elif source_id == "apple-reminders":
+            playbook = apple_reminders_playbook()
+            prompt = apple_reminders_step_prompt(step_id, state, row)
         else:
             return {}
         if step_id == "complete":
@@ -2386,6 +2899,49 @@ struct ZebraSourceOnboardingHelper {
         row = rows.get("apple-notes")
         return isinstance(row, dict) and row.get("playbookID") == apple_notes_playbook()["id"]
 
+    def set_apple_reminders_row_state(state, row_status, phase, step_id, timestamp=None, attention_reason=None, result_summary=None, run_state_path=None):
+        timestamp = timestamp or now()
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get("apple-reminders") if isinstance(rows.get("apple-reminders"), dict) else source_row_for("apple-reminders", timestamp)
+        playbook = apple_reminders_playbook()
+        row["status"] = row_status
+        row["phase"] = phase
+        row["selectionState"] = "confirmed"
+        row["playbookID"] = playbook["id"]
+        row["playbookVersion"] = playbook["version"]
+        row["playbookStepID"] = step_id
+        row["updatedAt"] = timestamp
+        if attention_reason:
+            row["attentionReason"] = attention_reason
+        else:
+            row.pop("attentionReason", None)
+        if result_summary:
+            row["resultSummary"] = result_summary
+        if run_state_path:
+            row["runStatePath"] = run_state_path
+        rows["apple-reminders"] = row
+        progress["sourceRows"] = rows
+        if "apple-reminders" not in ensure_execution_order(progress):
+            progress["executionOrder"].append("apple-reminders")
+        if row_status in {"checked", "skipped"}:
+            progress["activeSourceID"] = first_unfinished_source_id(progress)
+        else:
+            progress["activeSourceID"] = "apple-reminders"
+        state["status"] = source_completion_status(state)
+        state["updatedAt"] = timestamp
+        return state
+
+    def should_update_apple_reminders_runner(state):
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        if progress.get("activeSourceID") == "apple-reminders":
+            return True
+        if "apple-reminders" not in ensure_execution_order(progress):
+            return False
+        row = rows.get("apple-reminders")
+        return isinstance(row, dict) and row.get("playbookID") == apple_reminders_playbook()["id"]
+
     required_cli_specs = {
         "imessage": {
             "binary": "imsg",
@@ -2414,6 +2970,15 @@ struct ZebraSourceOnboardingHelper {
             "nextStep": "check_notes_automation",
             "missingReason": "memo_cli_missing",
         },
+        "apple-reminders": {
+            "binary": "remindctl",
+            "pathKey": "remindctlCommandPath",
+            "versionKey": "remindctlVersion",
+            "statusKey": "cliStatus",
+            "checkStep": "check_remindctl_cli",
+            "nextStep": "check_reminders_permission",
+            "missingReason": "remindctl_cli_missing",
+        },
     }
 
     def set_cli_source_row_state(source_id, state, row_status, phase, step_id, attention_reason=None, result_summary=None, run_state_path=None):
@@ -2439,6 +3004,16 @@ struct ZebraSourceOnboardingHelper {
             )
         if source_id == "apple-notes":
             return set_apple_notes_row_state(
+                state,
+                row_status,
+                phase,
+                step_id,
+                attention_reason=attention_reason,
+                result_summary=result_summary,
+                run_state_path=run_state_path,
+            )
+        if source_id == "apple-reminders":
+            return set_apple_reminders_row_state(
                 state,
                 row_status,
                 phase,
@@ -2643,6 +3218,15 @@ struct ZebraSourceOnboardingHelper {
                 result_summary=result_summary,
                 run_state_path=run_state_path,
             )
+        if source_id == "apple-reminders":
+            return set_apple_reminders_row_state(
+                state,
+                "running",
+                "complete",
+                "complete",
+                result_summary=result_summary,
+                run_state_path=run_state_path,
+            )
         return state
 
     def report_source_completion(state, source_id):
@@ -2681,8 +3265,16 @@ struct ZebraSourceOnboardingHelper {
             run_state.update({"completionReportPending": False, "completionReportedAt": timestamp, "updatedAt": timestamp})
             run_path = save_source_run_state(source_id, run_state)
             state = set_apple_notes_row_state(state, disposition, "complete", "complete", timestamp=timestamp, result_summary=summary_text, run_state_path=run_path)
+        elif source_id == "apple-reminders":
+            run_state.update({"completionReportPending": False, "completionReportedAt": timestamp, "updatedAt": timestamp})
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_apple_reminders_row_state(state, disposition, "complete", "complete", timestamp=timestamp, result_summary=summary_text, run_state_path=run_path)
         else:
             return None, {"ok": False, "reason": "unknown_source", "sourceID": source_id}, 1
+        progress = ensure_progress(state)
+        progress["activeSourceID"] = source_id
+        state["status"] = source_completion_status(state)
+        state["updatedAt"] = timestamp
         save_json(state)
         return state, {"sourceID": source_id, "summary": summary_text, "disposition": disposition}, 0
 
@@ -2721,6 +3313,58 @@ struct ZebraSourceOnboardingHelper {
                     if limit and len(files) >= limit:
                         return files
         return files
+
+    def obsidian_file_for_vault(vault_path, value):
+        if not value:
+            return {"ok": False, "reason": "file_path_required"}
+        vault = Path(vault_path).expanduser()
+        if not vault.is_dir():
+            return {"ok": False, "reason": "vault_path_required"}
+        raw = str(value).strip()
+        if not raw:
+            return {"ok": False, "reason": "file_path_required"}
+        path = Path(raw).expanduser()
+        if path.is_absolute():
+            return {"ok": False, "reason": "file_path_must_be_relative"}
+        if any((part not in {".", ".."} and part.startswith(".")) or part == "__MACOSX" for part in path.parts):
+            return {"ok": False, "reason": "file_path_not_allowed"}
+        vault_resolved = vault.resolve(strict=False)
+
+        def candidate_record(candidate):
+            resolved = candidate.resolve(strict=False)
+            try:
+                relative = resolved.relative_to(vault_resolved)
+            except Exception:
+                return {"ok": False, "reason": "file_path_outside_vault"}
+            if not resolved.exists():
+                return {"ok": False, "reason": "file_not_found"}
+            if not resolved.is_file():
+                return {"ok": False, "reason": "file_path_not_file"}
+            if resolved.suffix.lower() != ".md":
+                return {"ok": False, "reason": "file_path_not_markdown"}
+            return {"ok": True, "path": str(resolved), "relative": str(relative)}
+
+        result = candidate_record(vault / path)
+        if result.get("ok") or path.suffix or result.get("reason") != "file_not_found":
+            return result
+        return candidate_record(vault / Path(raw + ".md"))
+
+    def obsidian_markdown_files_for_scope(vault_path, run_state):
+        scope = run_state.get("scope")
+        folders = run_state.get("folders") if isinstance(run_state.get("folders"), list) else []
+        if scope == "file":
+            selected = run_state.get("files") if isinstance(run_state.get("files"), list) else []
+            files = []
+            for item in selected:
+                result = obsidian_file_for_vault(vault_path, item)
+                if result.get("ok"):
+                    files.append(Path(result["path"]))
+            return files
+        return markdown_files_for_vault(
+            vault_path,
+            folders=folders if scope == "folders" else None,
+            limit=5 if scope == "sample" else None,
+        )
 
     def vault_validation(value):
         if not value:
@@ -2869,21 +3513,28 @@ struct ZebraSourceOnboardingHelper {
         vault = run_state.get("selectedVaultPath") or "not selected"
         scope = run_state.get("scope") or "not selected"
         folders = run_state.get("folders") if isinstance(run_state.get("folders"), list) else []
+        files = run_state.get("files") if isinstance(run_state.get("files"), list) else []
         count = run_state.get("estimatedFileCount")
         count_text = str(count) if count is not None else "unknown"
         duration = run_state.get("durationClass") or duration_class(count)
         scope_detail = scope
+        if scope == "whole":
+            scope_detail = "whole vault"
         if scope == "folders":
             scope_detail = "folders: " + (", ".join(folders) if folders else "none")
+        if scope == "file":
+            scope_detail = "file: " + (", ".join(files) if files else "none")
         if scope == "sample":
             scope_detail = "recent/sample subset: up to 5 Markdown files"
         language = onboarding_language()
         if language == "ko":
             localized_scope_detail = scope_detail
-            if scope == "all":
+            if scope == "whole":
                 localized_scope_detail = "전체 vault"
             elif scope == "folders":
                 localized_scope_detail = "선택한 폴더: " + (", ".join(folders) if folders else "없음")
+            elif scope == "file":
+                localized_scope_detail = "특정 note 파일: " + (", ".join(files) if files else "없음")
             elif scope == "sample":
                 localized_scope_detail = "최근/샘플 일부: 최대 5개 Markdown 파일"
             elif scope == "skip":
@@ -2902,10 +3553,12 @@ struct ZebraSourceOnboardingHelper {
             ''').strip()
         if language == "ja":
             localized_scope_detail = scope_detail
-            if scope == "all":
+            if scope == "whole":
                 localized_scope_detail = "vault全体"
             elif scope == "folders":
                 localized_scope_detail = "選択したフォルダ: " + (", ".join(folders) if folders else "なし")
+            elif scope == "file":
+                localized_scope_detail = "特定のnoteファイル: " + (", ".join(files) if files else "なし")
             elif scope == "sample":
                 localized_scope_detail = "最近/サンプルの一部: 最大5件のMarkdownファイル"
             elif scope == "skip":
@@ -3148,6 +3801,37 @@ struct ZebraSourceOnboardingHelper {
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
 
+    def start_apple_reminders_from_next(state):
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get("apple-reminders") if isinstance(rows.get("apple-reminders"), dict) else {}
+        playbook = apple_reminders_playbook()
+        if row.get("playbookID") == playbook["id"] and row.get("status") in {"running", "attention"}:
+            step_id = row.get("playbookStepID") if row.get("playbookStepID") in playbook["steps"] else playbook["initialStepID"]
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, "apple-reminders", step_id))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        run_state = load_source_run_state("apple-reminders")
+        run_state.update({
+            "phase": "preflight",
+            "step": playbook["initialStepID"],
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("apple-reminders", run_state)
+        state = set_apple_reminders_row_state(
+            state,
+            "running",
+            "preflight",
+            playbook["initialStepID"],
+            run_state_path=run_path,
+        )
+        save_json(state)
+        payload = summary(state)
+        payload.update(source_next_prompt_payload(state, "apple-reminders", playbook["initialStepID"]))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
     def start_next():
         state = load_or_create_state()
         progress = ensure_progress(state)
@@ -3175,6 +3859,8 @@ struct ZebraSourceOnboardingHelper {
             return start_notion_from_next(state)
         if source_id == "apple-notes":
             return start_apple_notes_from_next(state)
+        if source_id == "apple-reminders":
+            return start_apple_reminders_from_next(state)
         if source_id != "gmail":
             payload = summary(state)
             payload["ok"] = False
@@ -3777,8 +4463,9 @@ struct ZebraSourceOnboardingHelper {
     def obsidian_choose_scope():
         scope = single_flag_value("--scope")
         folders = parse_flag_value("--folder")
-        if scope not in {"whole", "folders", "sample", "skip"}:
-            print("--scope must be whole, folders, sample, or skip", file=sys.stderr)
+        selected_file = single_flag_value("--file")
+        if scope not in {"whole", "folders", "file", "sample", "skip"}:
+            print("--scope must be whole, folders, file, sample, or skip", file=sys.stderr)
             return 2
         state = load_or_create_state()
         run_state = load_source_run_state("obsidian")
@@ -3800,11 +4487,22 @@ struct ZebraSourceOnboardingHelper {
         if scope == "folders" and not folders:
             print("--folder is required when --scope folders", file=sys.stderr)
             return 2
-        files = markdown_files_for_vault(vault, folders=folders if scope == "folders" else None, limit=5 if scope == "sample" else None)
-        total = len(markdown_files_for_vault(vault, folders=folders if scope == "folders" else None)) if scope != "sample" else len(files)
+        relative_files = []
+        if scope == "file":
+            validation = obsidian_file_for_vault(vault, selected_file)
+            if not validation.get("ok"):
+                print(str(validation.get("reason") or "invalid_file_path"), file=sys.stderr)
+                return 2
+            relative_files = [validation["relative"]]
         run_state.update({
             "scope": scope,
-            "folders": folders,
+            "folders": folders if scope == "folders" else [],
+            "files": relative_files,
+        })
+        files = obsidian_markdown_files_for_scope(vault, run_state)
+        total = len(markdown_files_for_vault(vault, folders=folders)) if scope == "folders" else len(files)
+        run_state.update({
+            "scope": scope,
             "estimatedFileCount": total,
             "durationClass": duration_class(total),
             "planConfirmed": False,
@@ -3883,8 +4581,7 @@ struct ZebraSourceOnboardingHelper {
             return 1
         vault = run_state.get("selectedVaultPath")
         scope = run_state.get("scope")
-        folders = run_state.get("folders") if isinstance(run_state.get("folders"), list) else []
-        files = markdown_files_for_vault(vault, folders=folders if scope == "folders" else None, limit=5 if scope == "sample" else None)
+        files = obsidian_markdown_files_for_scope(vault, run_state)
         artifact = obsidian_artifact_path(state)
         lines = [
             "# Obsidian Source Onboarding Ingest",
@@ -5450,6 +6147,772 @@ struct ZebraSourceOnboardingHelper {
         print("unknown imessage subcommand: " + subcommand, file=sys.stderr)
         return 2
 
+    def apple_reminders_run_state_with_command_path():
+        run_state = load_source_run_state("apple-reminders")
+        command_path = required_cli_command_path("apple-reminders", run_state)
+        return run_state, command_path
+
+    def apple_reminders_brew_path():
+        candidates = []
+        path_brew = shutil.which("brew")
+        if path_brew:
+            candidates.append(path_brew)
+        extra_paths = os.environ.get("ZEBRA_HOMEBREW_PATHS") or ""
+        for item in extra_paths.split(os.pathsep):
+            if item:
+                candidates.append(item)
+        candidates.extend([
+            "/opt/homebrew/bin/brew",
+            "/usr/local/bin/brew",
+        ])
+        for candidate in candidates:
+            path = Path(candidate).expanduser()
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path)
+        return ""
+
+    def apple_reminders_command_result(command, timeout=120):
+        try:
+            result = subprocess.run(command, text=True, capture_output=True, timeout=timeout)
+            return {
+                "ok": result.returncode == 0,
+                "returncode": result.returncode,
+                "stdout": (result.stdout or "")[:1000],
+                "stderr": (result.stderr or "")[:1000],
+            }
+        except subprocess.TimeoutExpired as error:
+            return {
+                "ok": False,
+                "returncode": 124,
+                "stdout": (error.stdout or "")[:1000],
+                "stderr": (error.stderr or "command timed out")[:1000],
+            }
+        except Exception as error:
+            return {
+                "ok": False,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": str(error)[:1000],
+            }
+
+    def apple_reminders_install_answer(flag):
+        answer = single_flag_value(flag).strip().lower()
+        if answer in {"yes", "y"}:
+            return "yes"
+        if answer in {"no", "n"}:
+            return "no"
+        return ""
+
+    def apple_reminders_record_attention(run_state, state, reason, step="check_remindctl_cli"):
+        run_state.update({
+            "cliStatus": "missing",
+            "phase": "preflight",
+            "step": step,
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("apple-reminders", run_state)
+        state = set_apple_reminders_row_state(
+            state,
+            "attention",
+            "preflight",
+            step,
+            attention_reason=reason,
+            run_state_path=run_path,
+        )
+        save_json(state)
+        payload = {"ok": False, "reason": reason}
+        payload.update(source_next_prompt_payload(state, "apple-reminders", step))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 1
+
+    def apple_reminders_check_cli():
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-reminders")
+        command_path = required_cli_command_path("apple-reminders", run_state)
+        if command_path:
+            return check_required_cli("apple-reminders")
+
+        brew_path = apple_reminders_brew_path()
+        homebrew_answer = apple_reminders_install_answer("--homebrew-install-answer")
+        remindctl_answer = apple_reminders_install_answer("--remindctl-install-answer")
+        run_state["homebrewPath"] = brew_path or None
+
+        if not brew_path:
+            run_state["homebrewInstallAsked"] = True
+            if homebrew_answer == "no":
+                run_state.update({
+                    "homebrewInstallAnswer": "no",
+                    "homebrewInstallResult": {"status": "user_declined"},
+                    "installCommandRun": False,
+                })
+                return apple_reminders_record_attention(run_state, state, "homebrew_install_declined")
+            if homebrew_answer != "yes":
+                run_state.update({
+                    "homebrewInstallAnswer": None,
+                    "homebrewInstallResult": {"status": "not_run"},
+                    "installCommandRun": False,
+                })
+                return apple_reminders_record_attention(run_state, state, "homebrew_install_consent_required")
+            run_state["homebrewInstallAnswer"] = "yes"
+            run_state["installCommandRun"] = True
+            homebrew_command = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+            result = apple_reminders_command_result(["/bin/bash", "-c", homebrew_command], timeout=1800)
+            run_state["homebrewInstallResult"] = {
+                "status": "succeeded" if result.get("ok") else "failed",
+                "returncode": result.get("returncode"),
+                "stderrPreview": result.get("stderr"),
+            }
+            run_path = save_source_run_state("apple-reminders", run_state)
+            brew_path = apple_reminders_brew_path()
+            if not brew_path:
+                state = set_apple_reminders_row_state(
+                    state,
+                    "attention",
+                    "preflight",
+                    "check_remindctl_cli",
+                    attention_reason="homebrew_install_failed",
+                    run_state_path=run_path,
+                )
+                save_json(state)
+                payload = {"ok": False, "reason": "homebrew_install_failed", "homebrewInstallResult": run_state.get("homebrewInstallResult")}
+                payload.update(source_next_prompt_payload(state, "apple-reminders", "check_remindctl_cli"))
+                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                return 1
+            run_state["homebrewPath"] = brew_path
+
+        run_state["remindctlInstallAsked"] = True
+        if remindctl_answer == "no":
+            run_state.update({
+                "remindctlInstallAnswer": "no",
+                "remindctlInstallResult": {"status": "user_declined"},
+                "installCommandRun": bool(run_state.get("installCommandRun")),
+            })
+            return apple_reminders_record_attention(run_state, state, "remindctl_install_declined")
+        if remindctl_answer != "yes":
+            run_state.update({
+                "remindctlInstallAnswer": None,
+                "remindctlInstallResult": {"status": "not_run"},
+                "installCommandRun": bool(run_state.get("installCommandRun")),
+            })
+            return apple_reminders_record_attention(run_state, state, "remindctl_install_consent_required")
+
+        run_state["remindctlInstallAnswer"] = "yes"
+        run_state["installCommandRun"] = True
+        result = apple_reminders_command_result([brew_path, "install", "steipete/tap/remindctl"], timeout=600)
+        run_state["remindctlInstallResult"] = {
+            "status": "succeeded" if result.get("ok") else "failed",
+            "returncode": result.get("returncode"),
+            "stderrPreview": result.get("stderr"),
+        }
+        run_path = save_source_run_state("apple-reminders", run_state)
+        command_path = shutil.which("remindctl") or ""
+        if not result.get("ok") or not command_path:
+            state = set_apple_reminders_row_state(
+                state,
+                "attention",
+                "preflight",
+                "check_remindctl_cli",
+                attention_reason="remindctl_install_failed",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "remindctl_install_failed", "remindctlInstallResult": run_state.get("remindctlInstallResult")}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "check_remindctl_cli"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        return check_required_cli("apple-reminders")
+
+    def run_remindctl(arguments, timeout=30, failure_reason="remindctl_command_failed"):
+        run_state, command_path = apple_reminders_run_state_with_command_path()
+        if not command_path:
+            return run_state, {
+                "ok": False,
+                "reason": "remindctl_cli_missing",
+                "stdout": "",
+                "stderr": "",
+                "returncode": 127,
+                "json": None,
+            }
+        try:
+            result = subprocess.run(
+                [command_path] + list(arguments),
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+            )
+            parsed = parse_json_output(result.stdout or "")
+            reason = None if result.returncode == 0 else apple_reminders_failure_reason(result.stdout, result.stderr, failure_reason)
+            return run_state, {
+                "ok": result.returncode == 0,
+                "reason": reason,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "returncode": result.returncode,
+                "json": parsed,
+            }
+        except subprocess.TimeoutExpired as error:
+            return run_state, {"ok": False, "reason": failure_reason, "stdout": error.stdout or "", "stderr": error.stderr or "remindctl command timed out", "returncode": 124, "json": None}
+        except Exception as error:
+            return run_state, {"ok": False, "reason": failure_reason, "stdout": "", "stderr": str(error), "returncode": 1, "json": None}
+
+    def apple_reminders_failure_reason(stdout, stderr, default_reason):
+        combined = (str(stdout or "") + "\\n" + str(stderr or "")).lower()
+        if any(token in combined for token in ("not authorized", "not-determined", "denied", "permission", "privacy", "tcc")):
+            return "reminders_permission_attention"
+        return default_reason
+
+    def apple_reminders_permission_status(value, text=""):
+        candidates = []
+        if isinstance(value, dict):
+            for key in ("status", "authorizationStatus", "authorization_status", "access", "permission"):
+                item = value.get(key)
+                if item is not None:
+                    candidates.append(str(item))
+            for key in ("authorized", "isAuthorized", "authorizedForReminders"):
+                item = value.get(key)
+                if item is True:
+                    candidates.append("authorized")
+                elif item is False:
+                    candidates.append("authorized_false")
+        if isinstance(value, str):
+            candidates.append(value)
+        candidates.append(str(text or ""))
+        combined = " ".join(candidates).lower()
+        if any(token in combined for token in ("authorized_false", "authorized: false", '"authorized": false', "not authorized", "unauthorized", "not-authorized", "not_authorized", "denied")):
+            return "denied"
+        if "not-determined" in combined or "not determined" in combined or "undetermined" in combined:
+            return "not-determined"
+        if "restricted" in combined:
+            return "restricted"
+        if "full-access" in combined or "full_access" in combined or "authorized" in combined or "granted" in combined:
+            return "full-access"
+        return "unknown"
+
+    def apple_reminders_check_access():
+        preflight_code = require_cli_preflight_or_attention("apple-reminders")
+        if preflight_code is not None:
+            return preflight_code
+        state = load_or_create_state()
+        run_state, status_result = run_remindctl(["status", "--json"], timeout=15, failure_reason="reminders_status_failed")
+        initial_status = apple_reminders_permission_status(status_result.get("json"), status_result.get("stdout") or status_result.get("stderr"))
+        _, doctor_result = run_remindctl(["doctor", "--for-agent"], timeout=20, failure_reason="reminders_doctor_failed")
+        authorize_result = {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        if initial_status != "full-access":
+            _, authorize_result = run_remindctl(["authorize"], timeout=60, failure_reason="reminders_authorize_failed")
+        _, final_result = run_remindctl(["status", "--json"], timeout=15, failure_reason="reminders_status_failed")
+        final_status = apple_reminders_permission_status(final_result.get("json"), final_result.get("stdout") or final_result.get("stderr"))
+        if final_status == "unknown" and initial_status == "full-access":
+            final_status = initial_status
+        run_state.update({
+            "permissionStatus": final_status,
+            "permissionInitialStatus": initial_status,
+            "doctorStatus": "passed" if doctor_result.get("ok") else "attention",
+            "doctorPreview": ((doctor_result.get("stdout") or doctor_result.get("stderr") or "")[:800]),
+            "authorizeRun": initial_status != "full-access",
+            "authorizeResult": {
+                "status": "succeeded" if authorize_result.get("ok") else "failed",
+                "returncode": authorize_result.get("returncode"),
+            },
+            "runtimePermissionOwnerNote": "macOS Reminders permission can attach to the runtime process that executes remindctl.",
+            "updatedAt": now(),
+        })
+        if final_status != "full-access":
+            run_path = save_source_run_state("apple-reminders", run_state)
+            state = set_apple_reminders_row_state(
+                state,
+                "attention",
+                "preflight",
+                "check_reminders_permission",
+                attention_reason="reminders_permission_attention",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "reminders_permission_attention", "permissionStatus": final_status}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "check_reminders_permission"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_path = save_source_run_state("apple-reminders", run_state)
+        state = set_apple_reminders_row_state(
+            state,
+            "running",
+            "smoke",
+            "smoke_list_reminders",
+            run_state_path=run_path,
+            result_summary="Apple Reminders permission verified through remindctl.",
+        )
+        save_json(state)
+        payload = {"ok": True, "permissionStatus": final_status}
+        payload.update(source_next_prompt_payload(state, "apple-reminders", "smoke_list_reminders"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def reminder_items(value):
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            for key in ("reminders", "items", "data", "results"):
+                nested = value.get(key)
+                if isinstance(nested, list):
+                    return [item for item in nested if isinstance(item, dict)]
+            return [value]
+        return []
+
+    def reminder_field_names(items):
+        fields = []
+        seen = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for key in item.keys():
+                text = str(key)
+                if text not in seen:
+                    seen.add(text)
+                    fields.append(text)
+        return fields
+
+    def reminder_list_title(item):
+        if not isinstance(item, dict):
+            return ""
+        for key in ("title", "name", "list", "listName"):
+            value = item.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+
+    def apple_reminders_smoke_list():
+        preflight_code = require_cli_preflight_or_attention("apple-reminders")
+        if preflight_code is not None:
+            return preflight_code
+        state = load_or_create_state()
+        run_state, list_result = run_remindctl(["list", "--json"], timeout=25, failure_reason="reminders_list_failed")
+        if not list_result.get("ok"):
+            reason = list_result.get("reason") or "reminders_list_failed"
+            run_state.update({"smokeStatus": "failed", "smokeFailureReason": reason, "updatedAt": now()})
+            run_path = save_source_run_state("apple-reminders", run_state)
+            state = set_apple_reminders_row_state(state, "attention", "smoke", "smoke_list_reminders", attention_reason=reason, run_state_path=run_path)
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "smoke_list_reminders"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        lists = reminder_items(list_result.get("json"))
+        list_titles = [reminder_list_title(item) for item in lists if reminder_list_title(item)]
+        run_state, open_result = run_remindctl(["open", "--json"], timeout=25, failure_reason="reminders_open_failed")
+        open_items = reminder_items(open_result.get("json")) if open_result.get("ok") else []
+        optional = {}
+        for label in ("today", "overdue", "week"):
+            _, result = run_remindctl([label, "--json"], timeout=25, failure_reason="reminders_" + label + "_failed")
+            optional[label] = {
+                "ok": bool(result.get("ok")),
+                "count": len(reminder_items(result.get("json"))) if result.get("ok") else None,
+                "returncode": result.get("returncode"),
+            }
+        list_specific = None
+        if list_titles:
+            _, list_open_result = run_remindctl(["open", "--list", list_titles[0], "--json"], timeout=25, failure_reason="reminders_list_open_failed")
+            list_specific = {
+                "command": "remindctl open --list <list> --json",
+                "list": list_titles[0],
+                "ok": bool(list_open_result.get("ok")),
+                "count": len(reminder_items(list_open_result.get("json"))) if list_open_result.get("ok") else None,
+            }
+        fields = sorted(set(reminder_field_names(lists) + reminder_field_names(open_items)))
+        run_state.update({
+            "smokeStatus": "passed",
+            "listCount": len(lists),
+            "openReminderCount": len(open_items),
+            "listTitles": list_titles[:20],
+            "observedListFields": reminder_field_names(lists),
+            "observedReminderFields": reminder_field_names(open_items),
+            "optionalSmokeChecks": optional,
+            "listSpecificOpenCheck": list_specific,
+            "observedFields": fields,
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("apple-reminders", run_state)
+        state = set_apple_reminders_row_state(
+            state,
+            "running",
+            "ingest",
+            "choose_ingest_scope",
+            run_state_path=run_path,
+            result_summary="Apple Reminders read-only smoke passed.",
+        )
+        save_json(state)
+        payload = {"ok": True, "listCount": len(lists), "openReminderCount": len(open_items), "listTitles": list_titles[:20]}
+        payload.update(source_next_prompt_payload(state, "apple-reminders", "choose_ingest_scope"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def apple_reminders_scope_read_command(run_state):
+        scope = run_state.get("scope")
+        if scope == "all-open":
+            return ["open", "--json"], None
+        if scope == "one-list":
+            list_name = str(run_state.get("list") or "")
+            return ["open", "--list", list_name, "--json"], None
+        if scope in {"today", "week", "overdue"}:
+            return [scope, "--json"], None
+        if scope == "custom":
+            lists = run_state.get("lists") if isinstance(run_state.get("lists"), list) else []
+            status = str(run_state.get("status") or "open")
+            due = str(run_state.get("dueWindow") or "")
+            include_completed = bool(run_state.get("includeCompleted"))
+            if due in {"today", "week", "overdue"} and not lists and not include_completed:
+                return [due, "--json"], None
+            if len(lists) == 1:
+                if include_completed or status in {"completed", "all"}:
+                    return ["list", lists[0], "--json"], "list_specific_completed_scope"
+                return ["open", "--list", lists[0], "--json"], None
+            if not lists and not include_completed and status in {"", "open"}:
+                return ["open", "--json"], None
+            return None, "unsupported_custom_scope"
+        return None, "ingest_scope_required"
+
+    def apple_reminders_estimate_scope(run_state):
+        command, unsupported = apple_reminders_scope_read_command(run_state)
+        if unsupported:
+            return None, [], unsupported
+        _, result = run_remindctl(command, timeout=30, failure_reason="reminders_scope_read_failed")
+        if not result.get("ok"):
+            return None, [], result.get("reason") or "reminders_scope_read_failed"
+        items = reminder_items(result.get("json"))
+        cap = run_state.get("itemCap")
+        if isinstance(cap, int) and cap >= 0:
+            items = items[:cap]
+        return len(items), reminder_field_names(items), None
+
+    def apple_reminders_choose_scope():
+        scope = single_flag_value("--scope")
+        if scope not in {"all-open", "one-list", "today", "week", "custom", "skip"}:
+            print("--scope must be all-open, one-list, today, week, custom, or skip", file=sys.stderr)
+            return 2
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-reminders")
+        if scope == "skip":
+            run_state.update({"scope": "skip", "phase": "complete", "step": "complete", "updatedAt": now()})
+            state = mark_source_completion_pending(
+                state,
+                "apple-reminders",
+                "skipped",
+                "Apple Reminders skipped for this Source Onboarding session.",
+                run_state=run_state,
+            )
+            save_json(state)
+            payload = {"ok": True, "skipped": True}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "complete"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        preflight_code = require_cli_preflight_or_attention("apple-reminders")
+        if preflight_code is not None:
+            return preflight_code
+        run_state = load_source_run_state("apple-reminders")
+        update = {"scope": scope}
+        if scope == "one-list":
+            list_name = single_flag_value("--list")
+            if not list_name:
+                print("--list is required when --scope one-list", file=sys.stderr)
+                return 2
+            update["list"] = list_name
+            update["includeCompleted"] = False
+            update["status"] = "open"
+        if scope == "custom":
+            lists = parse_flag_value("--list")
+            include_completed = apple_reminders_install_answer("--include-completed") == "yes"
+            status = single_flag_value("--status") or ("all" if include_completed else "open")
+            due_window = single_flag_value("--due-window")
+            if status not in {"open", "completed", "all"}:
+                print("--status must be open, completed, or all", file=sys.stderr)
+                return 2
+            update.update({
+                "lists": lists,
+                "includeCompleted": include_completed,
+                "status": status,
+                "dueWindow": due_window,
+            })
+        cap_text = single_flag_value("--item-cap")
+        if cap_text:
+            try:
+                cap_value = int(cap_text)
+            except Exception:
+                print("--item-cap must be an integer", file=sys.stderr)
+                return 2
+            if cap_value < 0:
+                print("--item-cap must be non-negative", file=sys.stderr)
+                return 2
+            update["itemCap"] = cap_value
+        elif "itemCap" in run_state:
+            run_state.pop("itemCap", None)
+        run_state.update(update)
+        expected_count, fields, reason = apple_reminders_estimate_scope(run_state)
+        if reason == "unsupported_custom_scope":
+            run_state.update({"expectedCount": None, "observedReminderFields": fields, "planConfirmed": False, "updatedAt": now()})
+            run_path = save_source_run_state("apple-reminders", run_state)
+            state = set_apple_reminders_row_state(
+                state,
+                "attention",
+                "ingest",
+                "choose_ingest_scope",
+                attention_reason=reason,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({
+            "expectedCount": expected_count,
+            "observedReminderFields": fields,
+            "planConfirmed": False,
+            "plannedArtifactPath": str(apple_reminders_artifact_path(state)),
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("apple-reminders", run_state)
+        state = set_apple_reminders_row_state(
+            state,
+            "running",
+            "ingest",
+            "confirm_ingest_plan",
+            run_state_path=run_path,
+            result_summary="Apple Reminders ingest scope selected: " + scope,
+        )
+        save_json(state)
+        payload = {"ok": True, "scope": scope, "expectedCount": expected_count, "fields": fields}
+        payload.update(source_next_prompt_payload(state, "apple-reminders", "confirm_ingest_plan"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def apple_reminders_confirm_plan():
+        answer = single_flag_value("--answer").strip().lower()
+        if answer not in {"yes", "y", "no", "n"}:
+            print("--answer must be yes or no", file=sys.stderr)
+            return 2
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-reminders")
+        if answer in {"no", "n"}:
+            run_state.update({"planConfirmed": False, "updatedAt": now()})
+            run_path = save_source_run_state("apple-reminders", run_state)
+            state = set_apple_reminders_row_state(
+                state,
+                "attention",
+                "ingest",
+                "choose_ingest_scope",
+                attention_reason="ingest_plan_rejected",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_plan_rejected"}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if not run_state.get("scope") or run_state.get("scope") == "skip":
+            state = set_apple_reminders_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="ingest_scope_required")
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_scope_required"}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({"planConfirmed": True, "confirmedAt": now(), "updatedAt": now()})
+        run_path = save_source_run_state("apple-reminders", run_state)
+        state = set_apple_reminders_row_state(
+            state,
+            "running",
+            "ingest",
+            "ingest_reminders",
+            run_state_path=run_path,
+            result_summary="Apple Reminders ingest plan confirmed.",
+        )
+        save_json(state)
+        payload = {"ok": True, "scope": run_state.get("scope"), "expectedCount": run_state.get("expectedCount")}
+        payload.update(source_next_prompt_payload(state, "apple-reminders", "ingest_reminders"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def apple_reminders_artifact_path(state=None):
+        target = None
+        if isinstance(state, dict):
+            target = state.get("entryContext", {}).get("gbrainTargetPath")
+        if target and Path(target).is_dir():
+            directory = Path(target) / "sources"
+        else:
+            directory = state_path.parent / "source-ingest-artifacts"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / "apple-reminders-remindctl.md"
+
+    def apple_reminders_item_list_name(item, run_state):
+        if not isinstance(item, dict):
+            return str(run_state.get("list") or "unknown")
+        for key in ("list", "listName", "calendar", "calendarTitle"):
+            value = item.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return str(run_state.get("list") or "unknown")
+
+    def apple_reminders_field_value(value):
+        if value is None:
+            return ""
+        if isinstance(value, (str, int, float, bool)):
+            return str(value)
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+    def apple_reminders_ingest():
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-reminders")
+        if not run_state.get("scope") or run_state.get("scope") == "skip":
+            state = set_apple_reminders_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="ingest_scope_required")
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_scope_required"}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if not run_state.get("planConfirmed"):
+            state = set_apple_reminders_row_state(state, "attention", "ingest", "confirm_ingest_plan", attention_reason="ingest_plan_unconfirmed")
+            save_json(state)
+            payload = {"ok": False, "reason": "ingest_plan_unconfirmed"}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "confirm_ingest_plan"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        command, unsupported = apple_reminders_scope_read_command(run_state)
+        if unsupported:
+            run_state.update({"ingestStatus": "failed", "ingestFailureReason": unsupported, "updatedAt": now()})
+            run_path = save_source_run_state("apple-reminders", run_state)
+            state = set_apple_reminders_row_state(state, "attention", "ingest", "ingest_reminders", attention_reason=unsupported, run_state_path=run_path)
+            save_json(state)
+            payload = {"ok": False, "reason": unsupported}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "ingest_reminders"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        _, result = run_remindctl(command, timeout=60, failure_reason="reminders_ingest_read_failed")
+        if not result.get("ok"):
+            reason = result.get("reason") or "reminders_ingest_read_failed"
+            run_state.update({"ingestStatus": "failed", "ingestFailureReason": reason, "updatedAt": now()})
+            run_path = save_source_run_state("apple-reminders", run_state)
+            state = set_apple_reminders_row_state(state, "attention", "ingest", "ingest_reminders", attention_reason=reason, run_state_path=run_path)
+            save_json(state)
+            payload = {"ok": False, "reason": reason}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "ingest_reminders"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        items = reminder_items(result.get("json"))
+        cap = run_state.get("itemCap")
+        if isinstance(cap, int) and cap >= 0:
+            items = items[:cap]
+        fields = reminder_field_names(items)
+        artifact = apple_reminders_artifact_path(state)
+        today = now()[:10]
+        lines = [
+            "# Apple Reminders Source Onboarding Ingest",
+            "",
+            "source: apple-reminders",
+            "playbook: apple-reminders.remindctl.v1",
+            "scope: " + str(run_state.get("scope")),
+            "scope_summary: " + apple_reminders_scope_summary(run_state),
+            "completed_included: " + str(bool(run_state.get("includeCompleted"))).lower(),
+            "item_count: " + str(len(items)),
+            "fields_returned: " + (", ".join(fields) if fields else "none"),
+            "redaction_policy: approved scope only; raw JSON dump not stored",
+            "",
+            "## Reminders",
+        ]
+        for index, item in enumerate(items, start=1):
+            list_name = apple_reminders_item_list_name(item, run_state)
+            title = str(item.get("title") or item.get("name") or ("Reminder " + str(index))) if isinstance(item, dict) else "Reminder " + str(index)
+            lines.extend(["", "### " + title, ""])
+            if isinstance(item, dict):
+                for key in fields:
+                    if key in item:
+                        lines.append("- " + str(key) + ": " + apple_reminders_field_value(item.get(key)))
+            lines.append("")
+            lines.append('[Source: Apple Reminders list "' + list_name + '", ' + today + ']')
+        artifact.write_text("\\n".join(lines).rstrip() + "\\n", encoding="utf-8")
+        run_state.update({
+            "artifactPath": str(artifact),
+            "ingestedReminderCount": len(items),
+            "observedReminderFields": fields,
+            "ingestCommand": "remindctl " + " ".join(command),
+            "ingestedAt": now(),
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("apple-reminders", run_state)
+        state = set_apple_reminders_row_state(
+            state,
+            "running",
+            "verify",
+            "verify_readback",
+            run_state_path=run_path,
+            result_summary="Apple Reminders ingest artifact written for " + str(len(items)) + " reminders.",
+        )
+        save_json(state)
+        payload = {"ok": True, "artifactPath": str(artifact), "ingestedReminderCount": len(items)}
+        payload.update(source_next_prompt_payload(state, "apple-reminders", "verify_readback"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def apple_reminders_verify_readback():
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-reminders")
+        artifact = Path(run_state.get("artifactPath") or "")
+        try:
+            text = artifact.read_text(encoding="utf-8")
+        except Exception:
+            text = ""
+        if "source: apple-reminders" not in text or "playbook: apple-reminders.remindctl.v1" not in text:
+            run_state.update({"readbackStatus": "failed", "updatedAt": now()})
+            run_path = save_source_run_state("apple-reminders", run_state)
+            state = set_apple_reminders_row_state(
+                state,
+                "attention",
+                "verify",
+                "verify_readback",
+                attention_reason="readback_failed",
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = {"ok": False, "reason": "readback_failed"}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "verify_readback"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
+        install_summary = "homebrew asked=" + str(run_state.get("homebrewInstallAsked")) + " answer=" + str(run_state.get("homebrewInstallAnswer")) + "; remindctl asked=" + str(run_state.get("remindctlInstallAsked")) + " answer=" + str(run_state.get("remindctlInstallAnswer")) + "; installCommandRun=" + str(bool(run_state.get("installCommandRun"))).lower()
+        state = mark_source_completion_pending(
+            state,
+            "apple-reminders",
+            "checked",
+            "Apple Reminders ingest readback verified for " + str(run_state.get("ingestedReminderCount") or 0) + " reminders. " + install_summary,
+            run_state=run_state,
+        )
+        save_json(state)
+        payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
+        payload.update(source_next_prompt_payload(state, "apple-reminders", "complete"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def apple_reminders_command():
+        if not args:
+            print("apple-reminders requires a subcommand", file=sys.stderr)
+            return 2
+        pending_code = reject_if_completion_report_pending("apple-reminders")
+        if pending_code is not None:
+            return pending_code
+        subcommand = args[0]
+        if subcommand == "check-cli":
+            return apple_reminders_check_cli()
+        if subcommand == "check-access":
+            return apple_reminders_check_access()
+        if subcommand == "smoke-list":
+            return apple_reminders_smoke_list()
+        if subcommand == "choose-scope":
+            return apple_reminders_choose_scope()
+        if subcommand == "confirm-plan":
+            return apple_reminders_confirm_plan()
+        if subcommand == "ingest":
+            return apple_reminders_ingest()
+        if subcommand == "verify-readback":
+            return apple_reminders_verify_readback()
+        print("unknown apple-reminders subcommand: " + subcommand, file=sys.stderr)
+        return 2
+
     def apple_notes_run_state_with_command_path():
         run_state = load_source_run_state("apple-notes")
         command_path = required_cli_command_path("apple-notes", run_state)
@@ -6216,22 +7679,6 @@ struct ZebraSourceOnboardingHelper {
             sys.exit(2)
         return source_id
 
-    def run_start_next_captured():
-        buffer = io.StringIO()
-        old_stdout = sys.stdout
-        try:
-            sys.stdout = buffer
-            code = start_next()
-        finally:
-            sys.stdout = old_stdout
-        text = buffer.getvalue().strip()
-        if not text:
-            return {}, code
-        try:
-            return json.loads(text), code
-        except Exception:
-            return {"ok": False, "reason": "next_payload_parse_failed", "raw": text}, 1
-
     def report():
         source_id = parse_report_args()
         state = load_or_create_state()
@@ -6242,23 +7689,33 @@ struct ZebraSourceOnboardingHelper {
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return code
 
-        next_payload, next_code = run_start_next_captured()
         summary_text = completion.get("summary") or ""
-        next_prompt = next_payload.get("nextPrompt") if isinstance(next_payload.get("nextPrompt"), str) else None
-        combined_prompt = source_completion_handoff_prompt(source_id, summary_text, next_prompt=next_prompt)
+        progress = ensure_progress(state)
+        has_unfinished_source = first_unfinished_source_id(progress) is not None
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else {}
+        run_state = load_source_run_state(source_id) if source_id != "gmail" else {}
+        detail_lines = source_completion_detail_lines(source_id, row, run_state, summary_text)
+        combined_prompt = source_completion_handoff_prompt(
+            source_id,
+            summary_text,
+            detail_lines=detail_lines,
+            has_next_source=has_unfinished_source,
+        )
         path = write_source_next_prompt_file("report-" + source_id, "completed", combined_prompt)
 
-        payload = dict(next_payload)
-        payload["ok"] = next_payload.get("ok", True)
+        payload = summary(state)
+        payload["ok"] = True
         payload["completedSourceID"] = source_id
         payload["completedSourceSummary"] = summary_text
         payload["completedSourceDisposition"] = completion.get("disposition")
+        if has_unfinished_source:
+            payload["nextCommand"] = "zebra-source-onboarding next"
         payload["nextPrompt"] = combined_prompt
         payload["nextPromptPath"] = path
-        if not next_prompt:
-            payload["complete"] = True
+        payload["complete"] = not has_unfinished_source and state.get("status") == "completed"
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return next_code
+        return 0
 
     def audit_openclaw_config_command():
         event = "openclaw.source_onboarding.audit"
@@ -6301,6 +7758,8 @@ struct ZebraSourceOnboardingHelper {
         sys.exit(imessage_command())
     elif command == "apple-notes":
         sys.exit(apple_notes_command())
+    elif command == "apple-reminders":
+        sys.exit(apple_reminders_command())
     elif command == "status":
         status()
     elif command == "audit-openclaw-config":

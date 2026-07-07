@@ -1,28 +1,23 @@
 {
   "schemaVersion": 1,
   "kind": "source-replay-scenario",
+  "extends": "common.baseline.v1",
   "id": "apple-notes.memo-cli.baseline",
   "source": "apple-notes",
   "playbookID": "apple-notes.memo-cli",
   "playbookVersion": "v1",
   "fixture": "apple-notes.memo-cli.baseline.v1.json",
-  "defaultRuntime": "selected",
-  "defaultRunMode": "run",
   "defaultBatchID": "apple-notes-memo-cli-baseline",
-  "defaultMaxTurns": 12,
-  "defaultTimeout": 180,
-  "preflightCommands": [
-    {
-      "id": "apple-notes.memo-automation-access",
-      "argv": ["memo", "notes", "-fl"],
-      "timeout": 300,
-      "expectedExitCodes": [0],
-      "failureReason": "notes_automation_permission_required",
-      "prompt": "If macOS asks for Apple Notes or Automation access, approve it and let this command finish before the replay runtime starts."
-    }
-  ],
-  "artifactScan": {
-    "enabled": true,
-    "excludeRuntimeHome": true
+  "append": {
+    "preflightCommands": [
+      {
+        "id": "apple-notes.memo-automation-access",
+        "argv": ["memo", "notes", "-fl"],
+        "timeout": 300,
+        "expectedExitCodes": [0],
+        "failureReason": "notes_automation_permission_required",
+        "prompt": "If macOS asks for Apple Notes or Automation access, approve it and let this command finish before the replay runtime starts."
+      }
+    ]
   }
 }

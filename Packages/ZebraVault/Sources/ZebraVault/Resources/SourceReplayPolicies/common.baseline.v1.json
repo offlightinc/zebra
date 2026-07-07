@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "kind": "source-replay-policy",
+  "id": "common.baseline.v1",
+  "defaultRuntime": "selected",
+  "defaultRunMode": "run",
+  "defaultMaxTurns": 12,
+  "defaultTimeout": 180,
+  "artifactScan": {
+    "enabled": true,
+    "excludeRuntimeHome": true
+  }
+}

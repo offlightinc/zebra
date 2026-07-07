@@ -28,6 +28,13 @@ struct ZebraSourceReplayRunner {
 
     private func installReplayData() throws {
         try installReplayResources(
+            subdirectory: "SourceReplayPolicies",
+            destination: onboardingDirectory
+                .appendingPathComponent("source-replay", isDirectory: true)
+                .appendingPathComponent("policies", isDirectory: true),
+            fallbackFiles: Self.fallbackPolicies
+        )
+        try installReplayResources(
             subdirectory: "SourceReplayFixtures",
             destination: onboardingDirectory
                 .appendingPathComponent("source-replay", isDirectory: true)
@@ -71,26 +78,72 @@ struct ZebraSourceReplayRunner {
         {
           "schemaVersion": 1,
           "kind": "source-replay-scenario",
+          "extends": "common.baseline.v1",
           "id": "apple-notes.memo-cli.baseline",
           "source": "apple-notes",
           "playbookID": "apple-notes.memo-cli",
           "playbookVersion": "v1",
           "fixture": "apple-notes.memo-cli.baseline.v1.json",
+          "defaultBatchID": "apple-notes-memo-cli-baseline",
+          "append": {
+            "preflightCommands": [
+              {
+                "id": "apple-notes.memo-automation-access",
+                "argv": ["memo", "notes", "-fl"],
+                "timeout": 300,
+                "expectedExitCodes": [0],
+                "failureReason": "notes_automation_permission_required",
+                "prompt": "If macOS asks for Apple Notes or Automation access, approve it and let this command finish before the replay runtime starts."
+              }
+            ]
+          }
+        }
+        """,
+        "apple-reminders.remindctl.baseline.json": """
+        {
+          "schemaVersion": 1,
+          "kind": "source-replay-scenario",
+          "extends": "common.baseline.v1",
+          "id": "apple-reminders.remindctl.baseline",
+          "source": "apple-reminders",
+          "playbookID": "apple-reminders.remindctl",
+          "playbookVersion": "v1",
+          "fixture": "apple-reminders.remindctl.baseline.v1.json",
+          "defaultBatchID": "apple-reminders-remindctl-baseline",
+          "append": {
+            "preflightCommands": [
+              {
+                "id": "apple-reminders.remindctl-authorize",
+                "argv": ["remindctl", "authorize"],
+                "timeout": 300,
+                "expectedExitCodes": [0],
+                "failureReason": "reminders_permission_required",
+                "prompt": "If macOS asks for Reminders access, approve it and let this command finish before the replay runtime starts."
+              },
+              {
+                "id": "apple-reminders.remindctl-read-access",
+                "argv": ["remindctl", "list", "--json"],
+                "timeout": 120,
+                "expectedExitCodes": [0],
+                "failureReason": "reminders_read_access_required",
+                "prompt": "If macOS asks for Reminders access, approve it and let this read-only check finish before the replay runtime starts."
+              }
+            ]
+          }
+        }
+        """,
+    ]
+
+    private static let fallbackPolicies = [
+        "common.baseline.v1.json": """
+        {
+          "schemaVersion": 1,
+          "kind": "source-replay-policy",
+          "id": "common.baseline.v1",
           "defaultRuntime": "selected",
           "defaultRunMode": "run",
-          "defaultBatchID": "apple-notes-memo-cli-baseline",
           "defaultMaxTurns": 12,
           "defaultTimeout": 180,
-          "preflightCommands": [
-            {
-              "id": "apple-notes.memo-automation-access",
-              "argv": ["memo", "notes", "-fl"],
-              "timeout": 300,
-              "expectedExitCodes": [0],
-              "failureReason": "notes_automation_permission_required",
-              "prompt": "If macOS asks for Apple Notes or Automation access, approve it and let this command finish before the replay runtime starts."
-            }
-          ],
           "artifactScan": {
             "enabled": true,
             "excludeRuntimeHome": true
@@ -108,7 +161,7 @@ struct ZebraSourceReplayRunner {
           "playbookID": "apple-notes.memo-cli",
           "playbookVersion": "v1",
           "purpose": "Apple Notes Source Onboarding baseline replay using the memo CLI and a small sample ingest scope.",
-          "initialPrompt": "Run Zebra Source Onboarding for Apple Notes using the installed zebra-source-onboarding helper. Start by running `zebra-source-onboarding intake --raw \\"Apple Notes\\" --candidate \\"apple-notes=Apple Notes\\"`, then `zebra-source-onboarding confirm --answer yes`, then `zebra-source-onboarding next`. After every helper command, continue only from the JSON `nextPrompt` and current `nextPlaybookStepID`. When user input is needed, ask clearly; this replay fixture will answer by playbook step.",
+          "initialPrompt": "Run Zebra Source Onboarding for Apple Notes using the installed zebra-source-onboarding helper. Start by running `zebra-source-onboarding intake --raw \\"Apple Notes\\" --candidate \\"apple-notes=Apple Notes\\"`, then `zebra-source-onboarding confirm --answer yes`, then `zebra-source-onboarding next`. After every helper command, continue only from the JSON `nextPrompt` and current `nextPlaybookStepID`. If `nextPrompt` says a source completion report is required, briefly tell the user the source is complete, run `zebra-source-onboarding report --status completed --source <source-id>`, then run `zebra-source-onboarding next` only when the report stdout tells you to. When user input is needed, ask clearly; this replay fixture will answer by playbook step.",
           "interventions": [
             {
               "playbookStepID": "choose_ingest_scope",
@@ -141,7 +194,7 @@ struct ZebraSourceReplayRunner {
           "playbookID": "obsidian.direct-markdown",
           "playbookVersion": "v1",
           "purpose": "First Obsidian Source Onboarding baseline replay using direct Markdown access and a sample ingest scope.",
-          "initialPrompt": "Run Zebra Source Onboarding for Obsidian using the installed zebra-source-onboarding helper. Start by running `zebra-source-onboarding intake --raw \\"Obsidian\\" --candidate \\"obsidian=Obsidian\\"`, then `zebra-source-onboarding confirm --answer yes`, then `zebra-source-onboarding next`. After every helper command, continue only from the JSON `nextPrompt` and current `nextPlaybookStepID`. When user input is needed, ask clearly; this replay fixture will answer by playbook step.",
+          "initialPrompt": "Run Zebra Source Onboarding for Obsidian using the installed zebra-source-onboarding helper. Start by running `zebra-source-onboarding intake --raw \\"Obsidian\\" --candidate \\"obsidian=Obsidian\\"`, then `zebra-source-onboarding confirm --answer yes`, then `zebra-source-onboarding next`. After every helper command, continue only from the JSON `nextPrompt` and current `nextPlaybookStepID`. If `nextPrompt` says a source completion report is required, briefly tell the user the source is complete, run `zebra-source-onboarding report --status completed --source <source-id>`, then run `zebra-source-onboarding next` only when the report stdout tells you to. When user input is needed, ask clearly; this replay fixture will answer by playbook step.",
           "interventions": [
             {
               "playbookStepID": "confirm_vault_if_needed",
@@ -168,6 +221,39 @@ struct ZebraSourceReplayRunner {
               "matcher": {
                 "type": "regex",
                 "pattern": "(?i)(start this ingest plan|confirm.*plan|approved scope|ingest plan|승인|시작)"
+              },
+              "answer": "yes",
+              "approval": "requires_human_approval",
+              "secretPolicy": "forbid_raw_secret"
+            }
+          ]
+        }
+        """,
+        "apple-reminders.remindctl.baseline.v1.json": """
+        {
+          "schemaVersion": 1,
+          "kind": "source-replay-fixture",
+          "source": "apple-reminders",
+          "playbookID": "apple-reminders.remindctl",
+          "playbookVersion": "v1",
+          "purpose": "Apple Reminders Source Onboarding baseline replay using remindctl and all open reminders as the approved ingest scope.",
+          "initialPrompt": "Run Zebra Source Onboarding for Apple Reminders using the installed zebra-source-onboarding helper. Start by running `zebra-source-onboarding intake --raw \\"Apple Reminders\\" --candidate \\"apple-reminders=Apple Reminders\\"`, then `zebra-source-onboarding confirm --answer yes`, then `zebra-source-onboarding next`. After every helper command, continue only from the JSON `nextPrompt` and current `nextPlaybookStepID`. If `nextPrompt` says a source completion report is required, briefly tell the user the source is complete, run `zebra-source-onboarding report --status completed --source <source-id>`, then run `zebra-source-onboarding next` only when the report stdout tells you to. When user input is needed, ask clearly; this replay fixture will answer by playbook step.",
+          "interventions": [
+            {
+              "playbookStepID": "choose_ingest_scope",
+              "matcher": {
+                "type": "regex",
+                "pattern": "(?i)(all open reminders|one list|today|this week|custom|skip apple reminders|which scope|범위|미리알림|건너뛰기)"
+              },
+              "answer": "All open reminders",
+              "approval": "storable",
+              "secretPolicy": "forbid_raw_secret"
+            },
+            {
+              "playbookStepID": "confirm_ingest_plan",
+              "matcher": {
+                "type": "regex",
+                "pattern": "(?i)(confirm.*plan|explicit approval|approved scope|ingest plan|승인|시작)"
               },
               "answer": "yes",
               "approval": "requires_human_approval",
@@ -300,9 +386,9 @@ struct ZebraSourceReplayRunner {
         helper = run_dir / "probe-helper"
         helper.write_text(
             "#!/bin/sh\\n"
-            "printf 'HELPER_CWD=%s\\\\n' \\"$(pwd)\\"\\n"
-            "printf 'HELPER_MARKER=%s\\\\n' \\"${ZEBRA_REPLAY_HELPER_MARKER:-missing}\\"\\n"
-            "printf 'HELPER_ARG=%s\\\\n' \\"${1:-missing}\\"\\n",
+            "printf 'HELPER_CWD=%s\\\\n' \\\"$(pwd)\\\"\\n"
+            "printf 'HELPER_MARKER=%s\\\\n' \\\"${ZEBRA_REPLAY_HELPER_MARKER:-missing}\\\"\\n"
+            "printf 'HELPER_ARG=%s\\\\n' \\\"${1:-missing}\\\"\\n",
             encoding="utf-8",
         )
         helper.chmod(0o755)
@@ -388,6 +474,93 @@ struct ZebraSourceReplayRunner {
     def is_safe_data_id(value):
         return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", value) is not None
 
+    def data_filename(value):
+        if not isinstance(value, str):
+            return None
+        return value if value.endswith(".json") else f"{value}.json"
+
+    def replay_layer_path(layer_id):
+        filename = data_filename(layer_id)
+        if not filename or not is_safe_data_id(filename.replace(".json", "")):
+            return None
+        root = replay_data_root()
+        for subdirectory in ("policies", "scenarios"):
+            path = root / subdirectory / filename
+            if path.exists():
+                return path
+        return None
+
+    def deep_merge(base, override):
+        if isinstance(base, dict) and isinstance(override, dict):
+            merged = dict(base)
+            for key, value in override.items():
+                if key in ("extends", "append"):
+                    continue
+                if key in merged:
+                    merged[key] = deep_merge(merged[key], value)
+                else:
+                    merged[key] = value
+            return merged
+        return override
+
+    def append_at_path(target, dotted_path, values):
+        if not isinstance(dotted_path, str) or not dotted_path or not isinstance(values, list):
+            return
+        current = target
+        parts = [part for part in dotted_path.split(".") if part]
+        if not parts:
+            return
+        for part in parts[:-1]:
+            next_value = current.get(part) if isinstance(current, dict) else None
+            if not isinstance(next_value, dict):
+                next_value = {}
+                current[part] = next_value
+            current = next_value
+        key = parts[-1]
+        existing = current.get(key) if isinstance(current, dict) else None
+        current[key] = (existing if isinstance(existing, list) else []) + values
+
+    def apply_append_directives(target, append_directives):
+        if not isinstance(append_directives, dict):
+            return
+        for dotted_path, values in append_directives.items():
+            append_at_path(target, dotted_path, values)
+
+    def resolve_replay_layer(raw, chain):
+        if not isinstance(raw, dict):
+            return None, "invalid_scenario"
+        extends = raw.get("extends")
+        if isinstance(extends, str):
+            parent_ids = [extends]
+        elif isinstance(extends, list):
+            parent_ids = extends
+        elif extends is None:
+            parent_ids = []
+        else:
+            return None, "invalid_scenario_extends"
+
+        merged = {}
+        for parent_id in parent_ids:
+            if not is_safe_data_id(str(parent_id).replace(".json", "")):
+                return None, "invalid_scenario_extends"
+            if parent_id in chain:
+                return None, "scenario_extends_cycle"
+            parent_path = replay_layer_path(parent_id)
+            if not parent_path:
+                return None, "unknown_scenario_extends"
+            try:
+                parent_raw = load_json(parent_path)
+            except Exception:
+                return None, "invalid_scenario_extends"
+            parent, error = resolve_replay_layer(parent_raw, chain + [parent_id])
+            if error:
+                return None, error
+            merged = deep_merge(merged, parent)
+
+        merged = deep_merge(merged, raw)
+        apply_append_directives(merged, raw.get("append"))
+        return merged, None
+
     def load_scenario(scenario_id):
         if not is_safe_data_id(scenario_id):
             return None, "invalid_scenario_id", None
@@ -395,9 +568,12 @@ struct ZebraSourceReplayRunner {
         if not path.exists():
             return None, "unknown_scenario", path
         try:
-            scenario = load_json(path)
+            scenario_raw = load_json(path)
         except Exception:
             return None, "invalid_scenario", path
+        scenario, resolve_error = resolve_replay_layer(scenario_raw, [scenario_id])
+        if resolve_error:
+            return None, resolve_error, path
         if scenario.get("id") and scenario.get("id") != scenario_id:
             return None, "scenario_id_mismatch", path
         return scenario, None, path
@@ -1774,14 +1950,40 @@ struct ZebraSourceReplayRunner {
         print(json.dumps(sanitize_payload(report), indent=2, sort_keys=True))
         return 0 if ok else 1
 
+    def command_scenario(argv):
+        parser = argparse.ArgumentParser(prog="zebra-source-replay scenario")
+        parser.add_argument("scenario_id")
+        args = parser.parse_args(argv)
+        scenario, scenario_error, scenario_path = load_scenario(args.scenario_id)
+        if scenario_error:
+            report = {
+                "ok": False,
+                "command": "scenario",
+                "scenarioID": args.scenario_id,
+                "reason": scenario_error,
+                "scenarioPath": str(scenario_path) if scenario_path else None,
+            }
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 1
+        report = {
+            "ok": True,
+            "command": "scenario",
+            "scenarioID": args.scenario_id,
+            "scenarioPath": str(scenario_path),
+            "scenario": scenario,
+        }
+        print(json.dumps(sanitize_payload(report), indent=2, sort_keys=True))
+        return 0
+
     def print_top_level_usage(stream=sys.stdout):
-        print("usage: zebra-source-replay <probe|run|batch|test> ...", file=stream)
+        print("usage: zebra-source-replay <probe|run|batch|test|scenario> ...", file=stream)
         print("", file=stream)
         print("commands:", file=stream)
         print("  probe   Run a runtime capability probe", file=stream)
         print("  run     Replay one source onboarding fixture", file=stream)
         print("  batch   Replay a fixture multiple times and summarize the batch", file=stream)
         print("  test    Replay a named source onboarding scenario", file=stream)
+        print("  scenario  Print a resolved source onboarding scenario", file=stream)
 
     def main():
         if len(sys.argv) < 2:
@@ -1799,6 +2001,8 @@ struct ZebraSourceReplayRunner {
             return command_batch(sys.argv[2:])
         if command == "test":
             return command_test(sys.argv[2:])
+        if command == "scenario":
+            return command_scenario(sys.argv[2:])
         print_top_level_usage(sys.stderr)
         return 2
 

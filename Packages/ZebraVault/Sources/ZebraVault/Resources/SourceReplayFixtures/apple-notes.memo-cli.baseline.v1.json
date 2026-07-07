@@ -5,7 +5,7 @@
   "playbookID": "apple-notes.memo-cli",
   "playbookVersion": "v1",
   "purpose": "Apple Notes Source Onboarding baseline replay using the memo CLI and a small sample ingest scope.",
-  "initialPrompt": "Run Zebra Source Onboarding for Apple Notes using the installed zebra-source-onboarding helper. Start by running `zebra-source-onboarding intake --raw \"Apple Notes\" --candidate \"apple-notes=Apple Notes\"`, then `zebra-source-onboarding confirm --answer yes`, then `zebra-source-onboarding next`. After every helper command, continue only from the JSON `nextPrompt` and current `nextPlaybookStepID`. When user input is needed, ask clearly; this replay fixture will answer by playbook step.",
+  "initialPrompt": "Run Zebra Source Onboarding for Apple Notes using the installed zebra-source-onboarding helper. Start by running `zebra-source-onboarding intake --raw \"Apple Notes\" --candidate \"apple-notes=Apple Notes\"`, then `zebra-source-onboarding confirm --answer yes`, then `zebra-source-onboarding next`. After every helper command, continue only from the JSON `nextPrompt` and current `nextPlaybookStepID`. If `nextPrompt` says a source completion report is required, briefly tell the user the source is complete, run `zebra-source-onboarding report --status completed --source <source-id>`, then run `zebra-source-onboarding next` only when the report stdout tells you to. When user input is needed, ask clearly; this replay fixture will answer by playbook step.",
   "interventions": [
     {
       "playbookStepID": "choose_ingest_scope",
