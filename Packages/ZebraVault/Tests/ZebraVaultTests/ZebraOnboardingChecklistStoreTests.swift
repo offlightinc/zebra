@@ -3294,6 +3294,154 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSourceOnboardingObsidianKoreanScopePromptAndSingleFileIngest() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root
+            .appendingPathComponent("Library/Mobile Documents/iCloud~md~obsidian/Documents", isDirectory: true)
+            .appendingPathComponent("ObsidianVault", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".obsidian", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let notes = vault.appendingPathComponent("Notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+        try "# Alpha\nOnly this note".write(
+            to: notes.appendingPathComponent("A.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "# Beta\nDo not ingest".write(
+            to: notes.appendingPathComponent("B.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "not markdown".write(
+            to: notes.appendingPathComponent("raw.txt", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "ko",
+        ]
+
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "옵시디언", "--candidate", "obsidian=옵시디언"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        ).status, 0)
+
+        let smoke = try runProcess(
+            executableURL: helperURL,
+            arguments: ["obsidian", "smoke-read"],
+            environment: environment
+        )
+        XCTAssertEqual(smoke.status, 0, "stdout:\n\(smoke.stdout)\nstderr:\n\(smoke.stderr)")
+        let smokePrompt = try XCTUnwrap(jsonObject(from: smoke.stdout)["nextPrompt"] as? String)
+        XCTAssertTrue(smokePrompt.contains("사용자에게 아래 다섯 가지 선택지만 보여주세요"), smokePrompt)
+        XCTAssertTrue(smokePrompt.contains("3. 특정 note 파일"), smokePrompt)
+        XCTAssertTrue(smokePrompt.contains("--scope file --file"), smokePrompt)
+        XCTAssertFalse(smokePrompt.contains("whole vault"), smokePrompt)
+        XCTAssertFalse(smokePrompt.contains("selected folders"), smokePrompt)
+        XCTAssertFalse(smokePrompt.contains("recent/sample subset"), smokePrompt)
+        XCTAssertFalse(smokePrompt.contains("skip Obsidian for now"), smokePrompt)
+
+        let rejectedOutsidePath = try runProcess(
+            executableURL: helperURL,
+            arguments: ["obsidian", "choose-scope", "--scope", "file", "--file", "../outside.md"],
+            environment: environment
+        )
+        XCTAssertEqual(rejectedOutsidePath.status, 2, "stdout:\n\(rejectedOutsidePath.stdout)\nstderr:\n\(rejectedOutsidePath.stderr)")
+        XCTAssertTrue(rejectedOutsidePath.stderr.contains("file_path_outside_vault"), rejectedOutsidePath.stderr)
+
+        let rejectedDirectory = try runProcess(
+            executableURL: helperURL,
+            arguments: ["obsidian", "choose-scope", "--scope", "file", "--file", "Notes"],
+            environment: environment
+        )
+        XCTAssertEqual(rejectedDirectory.status, 2, "stdout:\n\(rejectedDirectory.stdout)\nstderr:\n\(rejectedDirectory.stderr)")
+        XCTAssertTrue(rejectedDirectory.stderr.contains("file_path_not_file"), rejectedDirectory.stderr)
+
+        let rejectedNonMarkdown = try runProcess(
+            executableURL: helperURL,
+            arguments: ["obsidian", "choose-scope", "--scope", "file", "--file", "Notes/raw.txt"],
+            environment: environment
+        )
+        XCTAssertEqual(rejectedNonMarkdown.status, 2, "stdout:\n\(rejectedNonMarkdown.stdout)\nstderr:\n\(rejectedNonMarkdown.stderr)")
+        XCTAssertTrue(rejectedNonMarkdown.stderr.contains("file_path_not_markdown"), rejectedNonMarkdown.stderr)
+
+        let scope = try runProcess(
+            executableURL: helperURL,
+            arguments: ["obsidian", "choose-scope", "--scope", "file", "--file", "Notes/A"],
+            environment: environment
+        )
+        XCTAssertEqual(scope.status, 0, "stdout:\n\(scope.stdout)\nstderr:\n\(scope.stderr)")
+        let scopePayload = try jsonObject(from: scope.stdout)
+        XCTAssertEqual(scopePayload["nextPlaybookStepID"] as? String, "confirm_ingest_plan")
+        XCTAssertEqual(scopePayload["scope"] as? String, "file")
+        XCTAssertEqual(scopePayload["estimatedFileCount"] as? Int, 1)
+        let planPrompt = try XCTUnwrap(scopePayload["nextPrompt"] as? String)
+        XCTAssertTrue(planPrompt.contains("선택한 범위: `특정 note 파일: Notes/A.md`"), planPrompt)
+        XCTAssertTrue(planPrompt.contains("예상 Markdown 파일 수: `1`"), planPrompt)
+
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        let runStatePath = try XCTUnwrap(loaded.progress.sourceRows["obsidian"]?.runStatePath)
+        let runState = try jsonObject(from: String(contentsOfFile: runStatePath, encoding: .utf8))
+        XCTAssertEqual(runState["scope"] as? String, "file")
+        XCTAssertEqual(runState["files"] as? [String], ["Notes/A.md"])
+
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["obsidian", "confirm-plan", "--answer", "yes"],
+            environment: environment
+        ).status, 0)
+        let ingest = try runProcess(
+            executableURL: helperURL,
+            arguments: ["obsidian", "ingest"],
+            environment: environment
+        )
+        XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
+        let artifactPath = try XCTUnwrap(jsonObject(from: ingest.stdout)["artifactPath"] as? String)
+        let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
+        XCTAssertTrue(artifact.contains("scope: file"), artifact)
+        XCTAssertTrue(artifact.contains("- Notes/A.md"), artifact)
+        XCTAssertTrue(artifact.contains("### Notes/A.md"), artifact)
+        XCTAssertTrue(artifact.contains("Only this note"), artifact)
+        XCTAssertFalse(artifact.contains("Notes/B.md"), artifact)
+        XCTAssertFalse(artifact.contains("Do not ingest"), artifact)
+    }
+
+    @MainActor
     func testSourceOnboardingIMessageScopeConfirmationIngestReadbackAndResume() throws {
         let root = try makeTemporaryDirectory()
         let fakeBin = root.appendingPathComponent("bin", isDirectory: true)
