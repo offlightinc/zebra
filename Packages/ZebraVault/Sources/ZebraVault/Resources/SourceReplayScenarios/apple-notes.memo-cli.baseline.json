@@ -11,6 +11,16 @@
   "defaultBatchID": "apple-notes-memo-cli-baseline",
   "defaultMaxTurns": 12,
   "defaultTimeout": 180,
+  "preflightCommands": [
+    {
+      "id": "apple-notes.memo-automation-access",
+      "argv": ["memo", "notes", "-fl"],
+      "timeout": 300,
+      "expectedExitCodes": [0],
+      "failureReason": "notes_automation_permission_required",
+      "prompt": "If macOS asks for Apple Notes or Automation access, approve it and let this command finish before the replay runtime starts."
+    }
+  ],
   "artifactScan": {
     "enabled": true,
     "excludeRuntimeHome": true

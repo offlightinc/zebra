@@ -1103,6 +1103,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             source: "apple-notes",
             playbookID: "apple-notes.memo-cli"
         )
+        let fakeMemo = try installFakeMemo(root: root)
         try writeSelectedRuntimeReceipt(root: root, runtime: "hermes", executable: fakeHermes)
 
         let result = try runProcess(
@@ -1116,7 +1117,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 "--timeout", "5",
                 "--max-turns", "4",
             ],
-            environment: [:]
+            environment: [
+                "PATH": fakeMemo.deletingLastPathComponent().path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? ""),
+            ]
         )
         let payload = try jsonObject(from: result.stdout)
         let runSummary = try XCTUnwrap(payload["runSummary"] as? [String: Any])
@@ -1145,6 +1148,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             playbookID: "apple-notes.memo-cli"
         )
         let fakeOpenClawHome = try makeFakeOpenClawHome(root: root)
+        let fakeMemo = try installFakeMemo(root: root)
         let sourceConfig = fakeOpenClawHome.appendingPathComponent("openclaw.json", isDirectory: false)
         let sourceConfigContent = try String(contentsOf: sourceConfig, encoding: .utf8)
         try writeSelectedRuntimeReceipt(root: root, runtime: "openclaw", executable: fakeOpenClaw)
@@ -1161,16 +1165,64 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 "--timeout", "5",
                 "--max-turns", "4",
             ],
-            environment: [:]
+            environment: [
+                "PATH": fakeMemo.deletingLastPathComponent().path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? ""),
+            ]
         )
         let payload = try jsonObject(from: result.stdout)
+        let runSummary = try XCTUnwrap(payload["runSummary"] as? [String: Any])
+        let runDirectory = URL(fileURLWithPath: try XCTUnwrap(runSummary["runDirectory"] as? String), isDirectory: true)
         let openClawConfig = try XCTUnwrap(payload["openClawOriginalConfig"] as? [String: Any])
+        let events = try String(contentsOf: runDirectory.appendingPathComponent("intervention-events.jsonl"), encoding: .utf8)
 
         XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         XCTAssertEqual(payload["ok"] as? Bool, true)
         XCTAssertEqual(payload["runtime"] as? String, "openclaw")
         XCTAssertEqual(openClawConfig["unchanged"] as? Bool, true)
+        XCTAssertTrue(events.contains("\"event\": \"source.preflight.command\""), events)
+        XCTAssertTrue(events.contains("\"id\": \"apple-notes.memo-automation-access\""), events)
         XCTAssertEqual(try String(contentsOf: sourceConfig, encoding: .utf8), sourceConfigContent)
+    }
+
+    func testSourceReplayHelperTestStopsBeforeRuntimeWhenSourcePreflightFails() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+        let fakeHermes = try installFakeSourceReplayRuntime(
+            root: root,
+            name: "hermes",
+            firstStep: "choose_ingest_scope",
+            source: "apple-notes",
+            playbookID: "apple-notes.memo-cli"
+        )
+        let fakeMemo = try installFakeMemo(root: root, mode: "fail")
+        try writeSelectedRuntimeReceipt(root: root, runtime: "hermes", executable: fakeHermes)
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "test",
+                "apple-notes.memo-cli.baseline",
+                "--root", root.appendingPathComponent("replay", isDirectory: true).path,
+                "--batch-id", "unit",
+                "--run-id", "apple-notes-preflight-fails",
+                "--timeout", "5",
+                "--max-turns", "4",
+            ],
+            environment: [
+                "PATH": fakeMemo.deletingLastPathComponent().path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? ""),
+            ]
+        )
+        let payload = try jsonObject(from: result.stdout)
+        let runSummary = try XCTUnwrap(payload["runSummary"] as? [String: Any])
+        let preflight = try XCTUnwrap(runSummary["preflight"] as? [String: Any])
+        let commands = try XCTUnwrap(preflight["commands"] as? [[String: Any]])
+
+        XCTAssertEqual(result.status, 1, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(runSummary["exitReason"] as? String, "notes_automation_permission_required")
+        XCTAssertEqual(preflight["ok"] as? Bool, false)
+        XCTAssertEqual(commands.first?["id"] as? String, "apple-notes.memo-automation-access")
+        XCTAssertEqual(commands.first?["exitCode"] as? Int, 13)
     }
 
     func testSourceReplayHelperTestFailsWhenSelectedRuntimeReceiptIsMissing() throws {
@@ -7232,6 +7284,32 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
           exit 0
         fi
         exit 0
+        """
+        try scriptContent.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    private func installFakeMemo(root: URL, mode: String = "ok") throws -> URL {
+        let directory = root.appendingPathComponent("fake-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let script = directory.appendingPathComponent("memo", isDirectory: false)
+        let scriptContent = """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo "memo, version 0.6.0"
+          exit 0
+        fi
+        if [ "\(mode)" = "fail" ]; then
+          echo "memo automation denied" >&2
+          exit 13
+        fi
+        if [ "$1" = "notes" ]; then
+          echo "001. Replay fixture note"
+          exit 0
+        fi
+        echo "unexpected memo args: $*" >&2
+        exit 1
         """
         try scriptContent.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)

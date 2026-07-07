@@ -81,6 +81,16 @@ struct ZebraSourceReplayRunner {
           "defaultBatchID": "apple-notes-memo-cli-baseline",
           "defaultMaxTurns": 12,
           "defaultTimeout": 180,
+          "preflightCommands": [
+            {
+              "id": "apple-notes.memo-automation-access",
+              "argv": ["memo", "notes", "-fl"],
+              "timeout": 300,
+              "expectedExitCodes": [0],
+              "failureReason": "notes_automation_permission_required",
+              "prompt": "If macOS asks for Apple Notes or Automation access, approve it and let this command finish before the replay runtime starts."
+            }
+          ],
           "artifactScan": {
             "enabled": true,
             "excludeRuntimeHome": true
@@ -754,9 +764,131 @@ struct ZebraSourceReplayRunner {
             "source": source,
             "playbookID": playbook_id or "unknown",
             "playbookVersion": playbook_version,
+            "preflightCommands": raw.get("preflightCommands") if isinstance(raw.get("preflightCommands"), list) else [],
             "interventions": interventions,
             "initialPrompt": raw.get("initialPrompt"),
         }
+
+    def normalize_preflight_command(item):
+        if not isinstance(item, dict):
+            return None
+        argv = item.get("argv")
+        if not isinstance(argv, list) or not argv or not all(isinstance(value, str) and value for value in argv):
+            return None
+        expected = item.get("expectedExitCodes")
+        if not isinstance(expected, list) or not expected:
+            expected = [0]
+        expected_codes = []
+        for value in expected:
+            try:
+                expected_codes.append(int(value))
+            except Exception:
+                continue
+        if not expected_codes:
+            expected_codes = [0]
+        try:
+            timeout = int(item.get("timeout") or 120)
+        except Exception:
+            timeout = 120
+        return {
+            "id": str(item.get("id") or "source-preflight"),
+            "argv": argv,
+            "timeout": max(1, timeout),
+            "expectedExitCodes": expected_codes,
+            "continueOnFailure": bool(item.get("continueOnFailure")),
+            "failureReason": str(item.get("failureReason") or "source_preflight_failed"),
+            "prompt": str(item.get("prompt") or ""),
+        }
+
+    def collect_preflight_commands(args, fixture):
+        commands = []
+        for item in fixture.get("preflightCommands") or []:
+            normalized = normalize_preflight_command(item)
+            if normalized:
+                commands.append(normalized)
+        for item in getattr(args, "preflight_commands", []) or []:
+            normalized = normalize_preflight_command(item)
+            if normalized:
+                commands.append(normalized)
+        return commands
+
+    def run_source_preflights(args, fixture, run_dir, env):
+        commands = collect_preflight_commands(args, fixture)
+        results = []
+        if not commands:
+            return {"ok": True, "results": results}
+        append_jsonl(run_dir / "intervention-events.jsonl", {
+            "event": "source.preflight.started",
+            "source": fixture["source"],
+            "count": len(commands),
+        })
+        for index, command in enumerate(commands, start=1):
+            started = now_ms()
+            result = {
+                "id": command["id"],
+                "index": index,
+                "argv": command["argv"],
+                "timeout": command["timeout"],
+                "expectedExitCodes": command["expectedExitCodes"],
+                "prompt": command["prompt"],
+            }
+            try:
+                completed = subprocess.run(
+                    command["argv"],
+                    cwd=run_dir,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=command["timeout"],
+                )
+                result.update({
+                    "exitCode": completed.returncode,
+                    "ok": completed.returncode in command["expectedExitCodes"],
+                    "durationMs": now_ms() - started,
+                    "stdoutBytes": len((completed.stdout or "").encode("utf-8")),
+                    "stderrPreview": sanitize_text((completed.stderr or "")[:1000]),
+                })
+            except FileNotFoundError:
+                result.update({
+                    "exitCode": 127,
+                    "ok": False,
+                    "durationMs": now_ms() - started,
+                    "stdoutBytes": 0,
+                    "stderrPreview": "command not found: " + command["argv"][0],
+                })
+            except subprocess.TimeoutExpired as error:
+                stderr = error.stderr or "source preflight command timed out"
+                result.update({
+                    "exitCode": 124,
+                    "ok": False,
+                    "timedOut": True,
+                    "durationMs": now_ms() - started,
+                    "stdoutBytes": len((error.stdout or "").encode("utf-8")) if isinstance(error.stdout, str) else 0,
+                    "stderrPreview": sanitize_text(str(stderr)[:1000]),
+                })
+            except Exception as error:
+                result.update({
+                    "exitCode": 1,
+                    "ok": False,
+                    "durationMs": now_ms() - started,
+                    "stdoutBytes": 0,
+                    "stderrPreview": sanitize_text(str(error)[:1000]),
+                })
+            results.append(result)
+            append_jsonl(run_dir / "intervention-events.jsonl", sanitize_payload({
+                "event": "source.preflight.command",
+                "source": fixture["source"],
+                **result,
+            }))
+            if not result.get("ok") and not command["continueOnFailure"]:
+                return {
+                    "ok": False,
+                    "reason": command["failureReason"],
+                    "failedCommand": result,
+                    "results": results,
+                }
+        return {"ok": True, "results": results}
 
     def matcher_matches(matcher, text):
         if not matcher:
@@ -1053,8 +1185,24 @@ struct ZebraSourceReplayRunner {
         openclaw_gateway_process = None
         openclaw_config_watcher = None
         message = prompt
+        preflight_results = []
 
         try:
+            preflight = run_source_preflights(args, fixture, run_dir, env)
+            preflight_results = preflight.get("results") or []
+            if not preflight.get("ok"):
+                exit_reason = preflight.get("reason") or "source_preflight_failed"
+                unanswered.append({
+                    "source": fixture["source"],
+                    "playbookStepID": None,
+                    "reason": exit_reason,
+                    "preflightCommandID": (preflight.get("failedCommand") or {}).get("id"),
+                })
+                summary = run_summary(args, fixture, run_dir, state_path, ok, exit_reason, applied_steps, unanswered, openclaw_agent, openclaw_session_key, hermes_session, hermes_resume_count, openclaw_isolation, preflight_results=preflight_results)
+                summary["preflightFailure"] = preflight.get("failedCommand")
+                write_json_sanitized(run_dir / "run-summary.json", summary)
+                return summary
+
             if args.runtime == "openclaw":
                 openclaw_config_watcher = start_openclaw_source_config_watcher(args, run_dir)
                 openclaw_isolation = prepare_openclaw_isolation(args, run_dir, env)
@@ -1083,7 +1231,7 @@ struct ZebraSourceReplayRunner {
                 )
                 if add_result["exitCode"] != 0 and "already" not in (add_result["stdout"] + add_result["stderr"]).lower():
                     exit_reason = "openclaw_agent_add_failed"
-                    summary = run_summary(args, fixture, run_dir, state_path, ok, exit_reason, applied_steps, unanswered, openclaw_agent, openclaw_session_key, hermes_session, hermes_resume_count, openclaw_isolation)
+                    summary = run_summary(args, fixture, run_dir, state_path, ok, exit_reason, applied_steps, unanswered, openclaw_agent, openclaw_session_key, hermes_session, hermes_resume_count, openclaw_isolation, preflight_results=preflight_results)
                     write_json_sanitized(run_dir / "run-summary.json", summary)
                     return summary
 
@@ -1159,14 +1307,14 @@ struct ZebraSourceReplayRunner {
                 applied_steps.add(step_id)
                 message = answer
 
-            summary = run_summary(args, fixture, run_dir, state_path, ok, exit_reason, applied_steps, unanswered, openclaw_agent, openclaw_session_key, hermes_session, hermes_resume_count, openclaw_isolation)
+            summary = run_summary(args, fixture, run_dir, state_path, ok, exit_reason, applied_steps, unanswered, openclaw_agent, openclaw_session_key, hermes_session, hermes_resume_count, openclaw_isolation, preflight_results=preflight_results)
             write_json_sanitized(run_dir / "run-summary.json", summary)
             return summary
         finally:
             stop_openclaw_gateway(openclaw_gateway_process)
             stop_openclaw_source_config_watcher(args, run_dir, openclaw_config_watcher)
 
-    def run_summary(args, fixture, run_dir, state_path, ok, exit_reason, applied_steps, unanswered, openclaw_agent, openclaw_session_key, hermes_session, hermes_resume_count, openclaw_isolation=None):
+    def run_summary(args, fixture, run_dir, state_path, ok, exit_reason, applied_steps, unanswered, openclaw_agent, openclaw_session_key, hermes_session, hermes_resume_count, openclaw_isolation=None, preflight_results=None):
         summary = {
             "ok": ok,
             "command": "run",
@@ -1180,6 +1328,10 @@ struct ZebraSourceReplayRunner {
             "runDirectory": str(run_dir),
             "statePath": str(state_path),
             "sanitizer": {"redactedCount": sanitizer_state["redactedCount"]},
+            "preflight": {
+                "ok": all(item.get("ok") for item in (preflight_results or [])),
+                "commands": preflight_results or [],
+            },
         }
         if args.runtime == "openclaw":
             summary["openClaw"] = {
@@ -1547,6 +1699,7 @@ struct ZebraSourceReplayRunner {
             openclaw_gateway_port=args.openclaw_gateway_port,
             openclaw_skip_gateway=args.openclaw_skip_gateway,
             hermes_executable=args.hermes_executable or (runtime_info["executablePath"] if runtime == "hermes" else "hermes"),
+            preflight_commands=scenario.get("preflightCommands") if isinstance(scenario.get("preflightCommands"), list) else [],
         )
 
         input_env = scenario.get("inputEnv") if isinstance(scenario.get("inputEnv"), dict) else {}
