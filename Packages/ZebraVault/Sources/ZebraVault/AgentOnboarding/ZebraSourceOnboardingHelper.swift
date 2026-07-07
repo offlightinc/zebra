@@ -1190,6 +1190,79 @@ struct ZebraSourceOnboardingHelper {
         Work only the current Gmail/Clawvisor repair step. Do not start other source runners. Use the helper stdout to identify the failing stage, repair that stage, and rerun the matching `zebra-source-onboarding gmail ...` command.
         ''').strip()
 
+    def obsidian_choose_scope_instruction(language):
+        if language == "ko":
+            return textwrap.dedent('''
+            사용자에게 아래 다섯 가지 선택지만 보여주세요:
+
+            ```text
+            Obsidian 접근 확인은 끝났습니다. 이제 실제로 brain에 저장할 note 범위를 정해야 합니다.
+
+            어떤 범위로 가져올까요?
+
+            1. 전체 vault
+            2. 선택한 폴더
+            3. 특정 note 파일
+            4. 최근/샘플 일부
+            5. 지금은 Obsidian 건너뛰기
+            ```
+
+            1번은 `zebra-source-onboarding obsidian choose-scope --scope whole`을 실행하세요.
+            2번은 vault 기준 상대 폴더 경로를 확인한 뒤 `zebra-source-onboarding obsidian choose-scope --scope folders --folder "<relative-folder>"`를 실행하세요. 폴더가 여러 개면 `--folder`를 여러 번 넘기세요.
+            3번은 vault 기준 상대 Markdown 파일 경로를 확인한 뒤 `zebra-source-onboarding obsidian choose-scope --scope file --file "<relative-note-path.md>"`를 실행하세요.
+            4번은 `zebra-source-onboarding obsidian choose-scope --scope sample`을 실행하세요.
+            5번은 `zebra-source-onboarding obsidian choose-scope --scope skip`을 실행하세요.
+
+            큰 vault나 폴더에는 private/sensitive note가 포함될 수 있습니다. smoke read 성공은 접근 확인일 뿐 ingest 승인으로 보지 마세요.
+            ''').strip()
+        if language == "ja":
+            return textwrap.dedent('''
+            ユーザーには次の5つの選択肢だけを表示してください:
+
+            ```text
+            Obsidianへのアクセス確認は完了しました。次にbrainへ保存するnoteの範囲を決めます。
+
+            どの範囲を取り込みますか？
+
+            1. vault全体
+            2. 選択したフォルダ
+            3. 特定のnoteファイル
+            4. 最近/サンプルの一部
+            5. 今回はObsidianをスキップ
+            ```
+
+            1番は`zebra-source-onboarding obsidian choose-scope --scope whole`を実行してください。
+            2番はvault基準の相対フォルダパスを確認し、`zebra-source-onboarding obsidian choose-scope --scope folders --folder "<relative-folder>"`を実行してください。複数フォルダの場合は`--folder`を複数回渡してください。
+            3番はvault基準の相対Markdownファイルパスを確認し、`zebra-source-onboarding obsidian choose-scope --scope file --file "<relative-note-path.md>"`を実行してください。
+            4番は`zebra-source-onboarding obsidian choose-scope --scope sample`を実行してください。
+            5番は`zebra-source-onboarding obsidian choose-scope --scope skip`を実行してください。
+
+            大きいvaultやフォルダにはprivate/sensitive noteが含まれる可能性があります。smoke read成功はアクセス確認だけで、ingest承認ではありません。
+            ''').strip()
+        return textwrap.dedent('''
+        Present exactly these five choices to the user:
+
+        ```text
+        Obsidian access is verified. Now choose which notes to save into brain.
+
+        Which scope should be ingested?
+
+        1. Whole vault
+        2. Selected folders
+        3. Specific note file
+        4. Recent/sample subset
+        5. Skip Obsidian for now
+        ```
+
+        If the user chooses option 1, run `zebra-source-onboarding obsidian choose-scope --scope whole`.
+        If the user chooses option 2, confirm the vault-relative folder path and run `zebra-source-onboarding obsidian choose-scope --scope folders --folder "<relative-folder>"`. Pass one `--folder` per folder.
+        If the user chooses option 3, confirm the vault-relative Markdown file path and run `zebra-source-onboarding obsidian choose-scope --scope file --file "<relative-note-path.md>"`.
+        If the user chooses option 4, run `zebra-source-onboarding obsidian choose-scope --scope sample`.
+        If the user chooses option 5, run `zebra-source-onboarding obsidian choose-scope --scope skip`.
+
+        Large vaults or folders may contain private/sensitive notes. Smoke read success proves access only; it is not ingest approval.
+        ''').strip()
+
     def obsidian_step_prompt(step_id, state, row):
         playbook = obsidian_playbook()
         run_state = load_source_run_state("obsidian")
@@ -1280,6 +1353,8 @@ struct ZebraSourceOnboardingHelper {
                     section = section + "\\n\\n" + "Zebraは`" + str(method) + "`から複数の`.obsidian/` vault候補を見つけました。使用するvaultをユーザーに確認し、`zebra-source-onboarding obsidian verify-vault --path <vault-path>`を実行してください。候補:\\n\\n" + candidate_lines
                 else:
                     section = section + "\\n\\n" + "Zebra found multiple `.obsidian/` vault candidates from `" + str(method) + "`. Ask the user which one to use, then run `zebra-source-onboarding obsidian verify-vault --path <vault-path>`. Candidates:\\n\\n" + candidate_lines
+        if step_id == "choose_ingest_scope":
+            section = obsidian_choose_scope_instruction(language)
         if step_id == "confirm_ingest_plan":
             section = section + "\\n\\n" + obsidian_ingest_plan_summary(run_state)
         return textwrap.dedent(f'''
@@ -3138,6 +3213,58 @@ struct ZebraSourceOnboardingHelper {
                         return files
         return files
 
+    def obsidian_file_for_vault(vault_path, value):
+        if not value:
+            return {"ok": False, "reason": "file_path_required"}
+        vault = Path(vault_path).expanduser()
+        if not vault.is_dir():
+            return {"ok": False, "reason": "vault_path_required"}
+        raw = str(value).strip()
+        if not raw:
+            return {"ok": False, "reason": "file_path_required"}
+        path = Path(raw).expanduser()
+        if path.is_absolute():
+            return {"ok": False, "reason": "file_path_must_be_relative"}
+        if any((part not in {".", ".."} and part.startswith(".")) or part == "__MACOSX" for part in path.parts):
+            return {"ok": False, "reason": "file_path_not_allowed"}
+        vault_resolved = vault.resolve(strict=False)
+
+        def candidate_record(candidate):
+            resolved = candidate.resolve(strict=False)
+            try:
+                relative = resolved.relative_to(vault_resolved)
+            except Exception:
+                return {"ok": False, "reason": "file_path_outside_vault"}
+            if not resolved.exists():
+                return {"ok": False, "reason": "file_not_found"}
+            if not resolved.is_file():
+                return {"ok": False, "reason": "file_path_not_file"}
+            if resolved.suffix.lower() != ".md":
+                return {"ok": False, "reason": "file_path_not_markdown"}
+            return {"ok": True, "path": str(resolved), "relative": str(relative)}
+
+        result = candidate_record(vault / path)
+        if result.get("ok") or path.suffix or result.get("reason") != "file_not_found":
+            return result
+        return candidate_record(vault / Path(raw + ".md"))
+
+    def obsidian_markdown_files_for_scope(vault_path, run_state):
+        scope = run_state.get("scope")
+        folders = run_state.get("folders") if isinstance(run_state.get("folders"), list) else []
+        if scope == "file":
+            selected = run_state.get("files") if isinstance(run_state.get("files"), list) else []
+            files = []
+            for item in selected:
+                result = obsidian_file_for_vault(vault_path, item)
+                if result.get("ok"):
+                    files.append(Path(result["path"]))
+            return files
+        return markdown_files_for_vault(
+            vault_path,
+            folders=folders if scope == "folders" else None,
+            limit=5 if scope == "sample" else None,
+        )
+
     def vault_validation(value):
         if not value:
             return {"ok": False, "reason": "vault_path_required", "path": ""}
@@ -3285,21 +3412,28 @@ struct ZebraSourceOnboardingHelper {
         vault = run_state.get("selectedVaultPath") or "not selected"
         scope = run_state.get("scope") or "not selected"
         folders = run_state.get("folders") if isinstance(run_state.get("folders"), list) else []
+        files = run_state.get("files") if isinstance(run_state.get("files"), list) else []
         count = run_state.get("estimatedFileCount")
         count_text = str(count) if count is not None else "unknown"
         duration = run_state.get("durationClass") or duration_class(count)
         scope_detail = scope
+        if scope == "whole":
+            scope_detail = "whole vault"
         if scope == "folders":
             scope_detail = "folders: " + (", ".join(folders) if folders else "none")
+        if scope == "file":
+            scope_detail = "file: " + (", ".join(files) if files else "none")
         if scope == "sample":
             scope_detail = "recent/sample subset: up to 5 Markdown files"
         language = onboarding_language()
         if language == "ko":
             localized_scope_detail = scope_detail
-            if scope == "all":
+            if scope == "whole":
                 localized_scope_detail = "전체 vault"
             elif scope == "folders":
                 localized_scope_detail = "선택한 폴더: " + (", ".join(folders) if folders else "없음")
+            elif scope == "file":
+                localized_scope_detail = "특정 note 파일: " + (", ".join(files) if files else "없음")
             elif scope == "sample":
                 localized_scope_detail = "최근/샘플 일부: 최대 5개 Markdown 파일"
             elif scope == "skip":
@@ -3318,10 +3452,12 @@ struct ZebraSourceOnboardingHelper {
             ''').strip()
         if language == "ja":
             localized_scope_detail = scope_detail
-            if scope == "all":
+            if scope == "whole":
                 localized_scope_detail = "vault全体"
             elif scope == "folders":
                 localized_scope_detail = "選択したフォルダ: " + (", ".join(folders) if folders else "なし")
+            elif scope == "file":
+                localized_scope_detail = "特定のnoteファイル: " + (", ".join(files) if files else "なし")
             elif scope == "sample":
                 localized_scope_detail = "最近/サンプルの一部: 最大5件のMarkdownファイル"
             elif scope == "skip":
@@ -4238,8 +4374,9 @@ struct ZebraSourceOnboardingHelper {
     def obsidian_choose_scope():
         scope = single_flag_value("--scope")
         folders = parse_flag_value("--folder")
-        if scope not in {"whole", "folders", "sample", "skip"}:
-            print("--scope must be whole, folders, sample, or skip", file=sys.stderr)
+        selected_file = single_flag_value("--file")
+        if scope not in {"whole", "folders", "file", "sample", "skip"}:
+            print("--scope must be whole, folders, file, sample, or skip", file=sys.stderr)
             return 2
         state = load_or_create_state()
         run_state = load_source_run_state("obsidian")
@@ -4261,11 +4398,22 @@ struct ZebraSourceOnboardingHelper {
         if scope == "folders" and not folders:
             print("--folder is required when --scope folders", file=sys.stderr)
             return 2
-        files = markdown_files_for_vault(vault, folders=folders if scope == "folders" else None, limit=5 if scope == "sample" else None)
-        total = len(markdown_files_for_vault(vault, folders=folders if scope == "folders" else None)) if scope != "sample" else len(files)
+        relative_files = []
+        if scope == "file":
+            validation = obsidian_file_for_vault(vault, selected_file)
+            if not validation.get("ok"):
+                print(str(validation.get("reason") or "invalid_file_path"), file=sys.stderr)
+                return 2
+            relative_files = [validation["relative"]]
         run_state.update({
             "scope": scope,
-            "folders": folders,
+            "folders": folders if scope == "folders" else [],
+            "files": relative_files,
+        })
+        files = obsidian_markdown_files_for_scope(vault, run_state)
+        total = len(markdown_files_for_vault(vault, folders=folders)) if scope == "folders" else len(files)
+        run_state.update({
+            "scope": scope,
             "estimatedFileCount": total,
             "durationClass": duration_class(total),
             "planConfirmed": False,
@@ -4344,8 +4492,14 @@ struct ZebraSourceOnboardingHelper {
             return 1
         vault = run_state.get("selectedVaultPath")
         scope = run_state.get("scope")
-        folders = run_state.get("folders") if isinstance(run_state.get("folders"), list) else []
-        files = markdown_files_for_vault(vault, folders=folders if scope == "folders" else None, limit=5 if scope == "sample" else None)
+        files = obsidian_markdown_files_for_scope(vault, run_state)
+        if scope == "file" and not files:
+            state = set_obsidian_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="selected_file_unavailable")
+            save_json(state)
+            payload = {"ok": False, "reason": "selected_file_unavailable"}
+            payload.update(source_next_prompt_payload(state, "obsidian", "choose_ingest_scope"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
         artifact = obsidian_artifact_path(state)
         lines = [
             "# Obsidian Source Onboarding Ingest",
