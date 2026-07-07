@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "kind": "source-replay-fixture",
+  "source": "obsidian",
+  "playbookID": "obsidian.direct-markdown",
+  "playbookVersion": "v1",
+  "purpose": "First Obsidian Source Onboarding baseline replay using direct Markdown access and a sample ingest scope.",
+  "initialPrompt": "Run Zebra Source Onboarding for Obsidian using the installed zebra-source-onboarding helper. Start by running `zebra-source-onboarding intake --raw \"Obsidian\" --candidate \"obsidian=Obsidian\"`, then `zebra-source-onboarding confirm --answer yes`, then `zebra-source-onboarding next`. After every helper command, continue only from the JSON `nextPrompt` and current `nextPlaybookStepID`. If `nextPrompt` says a source completion report is required, briefly tell the user the source is complete, run `zebra-source-onboarding report --status completed --source <source-id>`, then run `zebra-source-onboarding next` only when the report stdout tells you to. When user input is needed, ask clearly; this replay fixture will answer by playbook step.",
+  "interventions": [
+    {
+      "playbookStepID": "confirm_vault_if_needed",
+      "matcher": {
+        "type": "regex",
+        "pattern": "(?i)(vault path|vault folder|\\.obsidian|correct vault|볼트|경로)"
+      },
+      "answerEnv": "ZEBRA_REPLAY_OBSIDIAN_VAULT_PATH",
+      "approval": "storable",
+      "secretPolicy": "forbid_raw_secret"
+    },
+    {
+      "playbookStepID": "choose_ingest_scope",
+      "matcher": {
+        "type": "regex",
+        "pattern": "(?i)(ingest scope|whole vault|sample|selected folders|skip|범위|샘플)"
+      },
+      "answer": "sample",
+      "approval": "storable",
+      "secretPolicy": "forbid_raw_secret"
+    },
+    {
+      "playbookStepID": "confirm_ingest_plan",
+      "matcher": {
+        "type": "regex",
+        "pattern": "(?i)(start this ingest plan|confirm.*plan|approved scope|ingest plan|승인|시작)"
+      },
+      "answer": "yes",
+      "approval": "requires_human_approval",
+      "secretPolicy": "forbid_raw_secret"
+    }
+  ]
+}
