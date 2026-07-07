@@ -527,6 +527,8 @@ struct ZebraSourceOnboardingHelper {
     fi
 
     "$PYTHON_BIN" - "$STATE" "$COMMAND" "$@" <<'PY'
+    import contextlib
+    import io
     import json
     import hashlib
     import os
@@ -2490,45 +2492,87 @@ struct ZebraSourceOnboardingHelper {
             return textwrap.dedent(f'''
             Zebra Source Onboarding: {display} 완료 보고가 필요합니다.
 
-            {summary_text}
+            # Current Source Step
+            source: {source_id}
+            display: {display}
+            step: complete
 
-            아직 다음 source로 넘어가지 마세요. 먼저 사용자에게 {display} 완료 결과를 명확히 전달한 뒤, 아래 명령으로 완료를 Zebra에 보고하세요.
-            완료 결과를 생략하거나 작업 중 상태 업데이트 한 줄로 대체하지 마세요:
+            # Boundary
+            아직 다음 source로 넘어가지 마세요.
+            Source Onboarding state는 helper CLI만 변경합니다.
+
+            # User-Facing Output
+            아직 사용자에게 {display} 완료 메시지를 보내지 마세요.
+            사용자에게 보여줄 완료 결과 block은 report 명령 stdout에서 생성됩니다.
+            지금 다음 action은 user-facing message가 아니라 report command입니다.
+
+            # Required Next Action
+            아래 명령을 실행하세요:
 
             ```bash
             zebra-source-onboarding report --status completed --source {source_id}
             ```
 
-            보고 명령이 성공하면 그 stdout의 `nextPrompt`만 따르세요. 다음 source가 남아 있으면 보고 stdout이 별도 `zebra-source-onboarding next` 실행을 지시합니다.
+            # Continuation
+            report 명령이 성공하면 그 stdout의 `nextPrompt`만 따르세요.
+            report stdout이 완료 결과와 다음 source prompt를 함께 줄 수 있습니다.
             ''').strip()
         if language == "ja":
             return textwrap.dedent(f'''
             Zebra Source Onboarding: {display} の完了報告が必要です。
 
-            {summary_text}
+            # Current Source Step
+            source: {source_id}
+            display: {display}
+            step: complete
 
-            まだ次の source に進まないでください。まず {display} の完了結果をユーザーに明確に伝え、次のコマンドで Zebra に完了を報告してください。
-            完了結果を省略したり、短い進捗更新だけで置き換えたりしないでください:
+            # Boundary
+            まだ次の source に進まないでください。
+            Source Onboarding state は helper CLI だけが変更します。
+
+            # User-Facing Output
+            まだ {display} の完了メッセージをユーザーに送らないでください。
+            ユーザーに表示する完了結果 block は report command の stdout で生成されます。
+            次の action は user-facing message ではなく report command です。
+
+            # Required Next Action
+            次のコマンドを実行してください:
 
             ```bash
             zebra-source-onboarding report --status completed --source {source_id}
             ```
 
-            報告コマンドが成功したら、その stdout の `nextPrompt` だけに従ってください。次の source が残っている場合、報告 stdout が別途 `zebra-source-onboarding next` の実行を指示します。
+            # Continuation
+            report command が成功したら、その stdout の `nextPrompt` だけに従ってください。
+            report stdout は完了結果と次の source prompt を一緒に返すことがあります。
             ''').strip()
         return textwrap.dedent(f'''
         Zebra Source Onboarding: {display} completion report is required.
 
-        {summary_text}
+        # Current Source Step
+        source: {source_id}
+        display: {display}
+        step: complete
 
-        Do not move to the next source yet. First show the user the {display} completion result clearly, then report the completion to Zebra.
-        Do not omit the completion result or replace it with a brief progress update:
+        # Boundary
+        Do not move to the next source yet.
+        Source Onboarding state is changed only through the helper CLI.
+
+        # User-Facing Output
+        Do not send a user-facing {display} completion message yet.
+        The completion result block that should be shown to the user will be produced by the report command stdout.
+        Your next action is not a user-facing message. Your next action is the report command.
+
+        # Required Next Action
+        Run exactly:
 
         ```bash
         zebra-source-onboarding report --status completed --source {source_id}
         ```
 
-        After that report succeeds, continue only from its stdout `nextPrompt`. If another source remains, the report stdout will tell you to run `zebra-source-onboarding next` separately.
+        # Continuation
+        After the report succeeds, continue only from its stdout `nextPrompt`.
+        The report stdout may include both the completed source result and the next source prompt.
         ''').strip()
 
     def source_completion_detail_lines(source_id, row, run_state, summary_text):
@@ -2568,60 +2612,52 @@ struct ZebraSourceOnboardingHelper {
         lines.extend(str(item) for item in details)
         return "\\n".join(lines).strip()
 
-    def source_completion_handoff_prompt(source_id, summary_text, detail_lines=None, has_next_source=False):
+    def source_completion_handoff_prompt(source_id, summary_text, detail_lines=None, has_next_source=False, next_prompt=None):
         display = source_display_name(source_id)
         language = onboarding_language()
         completion_block = source_completion_result_block(source_id, summary_text, detail_lines)
         if has_next_source:
+            next_prompt = (next_prompt or "").strip()
             if language == "ko":
                 return textwrap.dedent(f'''
-                사용자에게 아래 완료 결과를 반드시 먼저 그대로 전달하세요.
-                완료 결과를 생략하거나, 작업 중 상태 업데이트 한 줄로 대체하지 마세요.
-                사용자에게 진행 여부를 묻지 마세요.
-
-                ```text
+                # Completed Source Result
                 {completion_block}
-                ```
 
-                위 완료 결과를 사용자에게 전달한 직후, 사용자 확인을 기다리지 말고 아래 명령을 실행하세요.
-                그 stdout의 `nextPrompt`만 따라 다음 source를 진행하세요:
+                # Continuation Contract
+                - 지금 이 완료 결과만 전달하고 멈추지 마세요.
+                - 사용자에게 계속 진행할지 묻지 마세요.
+                - helper stdout `nextPrompt`만 따라 다음 source를 계속 진행하세요.
+                - 다음 user-facing response를 보낼 때는 반드시 위 Completed Source Result를 먼저 보여주고, 그 다음 아래 Next Source Prompt의 질문/결과를 보여주세요.
 
-                ```bash
-                zebra-source-onboarding next
-                ```
+                # Next Source Prompt
+                {next_prompt}
                 ''').strip()
             if language == "ja":
                 return textwrap.dedent(f'''
-                まず、次の完了結果を必ずそのままユーザーに伝えてください。
-                省略したり、短い進捗更新だけで置き換えたりしないでください。
-                ユーザーに進行許可を求めないでください。
-
-                ```text
+                # Completed Source Result
                 {completion_block}
-                ```
 
-                その完了結果をユーザーに伝えた直後、ユーザーの確認を待たずに次のコマンドを実行してください。
-                その stdout の `nextPrompt` だけに従って次の source を進めてください:
+                # Continuation Contract
+                - この完了結果だけを伝えて停止しないでください。
+                - ユーザーに続行許可を求めないでください。
+                - helper stdout の `nextPrompt` だけに従って次の source を続行してください。
+                - 次に user-facing response を送るときは、必ず上の Completed Source Result を最初に表示し、その後に下の Next Source Prompt の質問/結果を表示してください。
 
-                ```bash
-                zebra-source-onboarding next
-                ```
+                # Next Source Prompt
+                {next_prompt}
                 ''').strip()
             return textwrap.dedent(f'''
-            You must first show the user the exact completion result below.
-            Do not omit it or replace it with a brief progress update.
-            Do not ask the user for permission to continue.
-
-            ```text
+            # Completed Source Result
             {completion_block}
-            ```
 
-            Immediately after showing that completion result, run the command below without waiting for user confirmation.
-            Then follow only its stdout `nextPrompt`:
+            # Continuation Contract
+            - Do not stop after only delivering this completion result.
+            - Do not ask the user for permission to continue.
+            - Continue only from helper stdout `nextPrompt`.
+            - When you next send a user-facing response, begin with the Completed Source Result above, then show the next source question/result from the Next Source Prompt below.
 
-            ```bash
-            zebra-source-onboarding next
-            ```
+            # Next Source Prompt
+            {next_prompt}
             ''').strip()
         if language == "ko":
             return textwrap.dedent(f'''
@@ -3883,6 +3919,19 @@ struct ZebraSourceOnboardingHelper {
         payload.update(source_next_prompt_payload(state, "gmail", "connect_clawvisor"))
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
+
+    def run_start_next_captured():
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = start_next()
+        stdout = buffer.getvalue().strip()
+        payload = {}
+        if stdout:
+            try:
+                payload = json.loads(stdout.splitlines()[-1])
+            except Exception:
+                payload = {"ok": False, "reason": "next_payload_parse_failed", "rawNextStdout": stdout}
+        return code, payload
 
     def resolve_gbrain_target():
         gbrain = load_json(gbrain_state_path)
@@ -7696,21 +7745,38 @@ struct ZebraSourceOnboardingHelper {
         row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else {}
         run_state = load_source_run_state(source_id) if source_id != "gmail" else {}
         detail_lines = source_completion_detail_lines(source_id, row, run_state, summary_text)
+        next_payload = {}
+        if has_unfinished_source:
+            _, next_payload = run_start_next_captured()
         combined_prompt = source_completion_handoff_prompt(
             source_id,
             summary_text,
             detail_lines=detail_lines,
             has_next_source=has_unfinished_source,
+            next_prompt=next_payload.get("nextPrompt"),
         )
         path = write_source_next_prompt_file("report-" + source_id, "completed", combined_prompt)
 
-        payload = summary(state)
+        payload_state = load_or_create_state() if has_unfinished_source else state
+        payload = summary(payload_state)
         payload["ok"] = True
         payload["completedSourceID"] = source_id
         payload["completedSourceSummary"] = summary_text
         payload["completedSourceDisposition"] = completion.get("disposition")
+        payload["completedSourceResultBlock"] = source_completion_result_block(source_id, summary_text, detail_lines)
         if has_unfinished_source:
-            payload["nextCommand"] = "zebra-source-onboarding next"
+            for key in [
+                "nextSourceID",
+                "nextPlaybookID",
+                "nextPlaybookVersion",
+                "nextPlaybookStepID",
+            ]:
+                if key in next_payload:
+                    payload[key] = next_payload.get(key)
+            if "nextPromptPath" in next_payload:
+                payload["nextSourcePromptPath"] = next_payload.get("nextPromptPath")
+            if "reason" in next_payload and next_payload.get("ok") is False:
+                payload["nextSourceReason"] = next_payload.get("reason")
         payload["nextPrompt"] = combined_prompt
         payload["nextPromptPath"] = path
         payload["complete"] = not has_unfinished_source and state.get("status") == "completed"

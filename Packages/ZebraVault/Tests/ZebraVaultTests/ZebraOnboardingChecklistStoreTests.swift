@@ -2681,28 +2681,29 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
         let reportPayload = try jsonObject(from: report.stdout)
         XCTAssertEqual(reportPayload["completedSourceID"] as? String, "notion")
-        XCTAssertNil(reportPayload["nextSourceID"])
-        XCTAssertEqual(reportPayload["nextCommand"] as? String, "zebra-source-onboarding next")
+        XCTAssertEqual(reportPayload["nextSourceID"] as? String, "obsidian")
+        XCTAssertNil(reportPayload["nextCommand"])
         XCTAssertEqual(reportPayload["complete"] as? Bool, false)
+        XCTAssertTrue(try XCTUnwrap(reportPayload["completedSourceResultBlock"] as? String).contains("Notion Source Onboarding is complete."))
         let reportPrompt = try XCTUnwrap(reportPayload["nextPrompt"] as? String)
-        XCTAssertTrue(reportPrompt.contains("You must first show the user the exact completion result below."), reportPrompt)
-        XCTAssertTrue(reportPrompt.contains("Do not omit it or replace it with a brief progress update."), reportPrompt)
-        XCTAssertTrue(reportPrompt.contains("Do not ask the user for permission to continue."), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("# Completed Source Result"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("# Continuation Contract"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("# Next Source Prompt"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("Notion Source Onboarding is complete."), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("- Result:"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("- Artifact:"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("- Readback: passed"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("- Verified at:"), reportPrompt)
-        XCTAssertTrue(reportPrompt.contains("without waiting for user confirmation"), reportPrompt)
-        XCTAssertTrue(reportPrompt.contains("zebra-source-onboarding next"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("When you next send a user-facing response, begin with the Completed Source Result above"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("Zebra Source Onboarding: Obsidian is the active source."), reportPrompt)
+        XCTAssertFalse(reportPrompt.contains("zebra-source-onboarding next"), reportPrompt)
         XCTAssertFalse(reportPrompt.contains("continue?"), reportPrompt)
         XCTAssertFalse(reportPrompt.contains("계속 진행할까요?"), reportPrompt)
         XCTAssertFalse(reportPrompt.contains("다음 source로 넘어갈까요?"), reportPrompt)
-        XCTAssertFalse(reportPrompt.contains("Zebra Source Onboarding: Obsidian is the active source."), reportPrompt)
 
         let activeAfterReport = try readSourceOnboardingState(at: stateURL).progress
         XCTAssertEqual(activeAfterReport.sourceRows["notion"]?.status, "checked")
-        XCTAssertEqual(activeAfterReport.activeSourceID, "notion")
+        XCTAssertEqual(activeAfterReport.activeSourceID, "obsidian")
 
         let nextAfterReport = try runProcess(
             executableURL: helperURL,
@@ -2732,21 +2733,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             (
                 language: "ko",
                 required: [
-                    "사용자에게 아래 완료 결과를 반드시 먼저 그대로 전달하세요.",
-                    "작업 중 상태 업데이트 한 줄로 대체하지 마세요.",
-                    "진행 여부를 묻지 마세요.",
-                    "사용자 확인을 기다리지 말고",
-                    "zebra-source-onboarding next",
+                    "# Completed Source Result",
+                    "# Continuation Contract",
+                    "# Next Source Prompt",
+                    "다음 user-facing response를 보낼 때는 반드시 위 Completed Source Result를 먼저 보여주고",
+                    "사용자에게 계속 진행할지 묻지 마세요.",
                 ]
             ),
             (
                 language: "ja",
                 required: [
-                    "まず、次の完了結果を必ずそのままユーザーに伝えてください。",
-                    "短い進捗更新だけで置き換えたりしないでください。",
-                    "ユーザーに進行許可を求めないでください。",
-                    "ユーザーの確認を待たずに",
-                    "zebra-source-onboarding next",
+                    "# Completed Source Result",
+                    "# Continuation Contract",
+                    "# Next Source Prompt",
+                    "次に user-facing response を送るときは、必ず上の Completed Source Result を最初に表示し",
+                    "ユーザーに続行許可を求めないでください。",
                 ]
             ),
         ] {
@@ -2849,7 +2850,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 XCTAssertTrue(prompt.contains("Notion Source Onboarding が完了しました。"), prompt)
                 XCTAssertFalse(prompt.contains("Notion Source Onboarding is complete."), prompt)
             }
-            XCTAssertFalse(prompt.contains("Zebra Source Onboarding: Obsidian is the active source."), prompt)
+            XCTAssertTrue(prompt.contains("Zebra Source Onboarding: Obsidian is the active source."), prompt)
         }
     }
 
@@ -3599,8 +3600,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(verifyPayload["nextPlaybookStepID"] as? String, "complete")
         let pendingPrompt = try XCTUnwrap(verifyPayload["nextPrompt"] as? String)
         XCTAssertTrue(pendingPrompt.contains("completion report is required"), pendingPrompt)
-        XCTAssertTrue(pendingPrompt.contains("First show the user the Obsidian completion result clearly"), pendingPrompt)
-        XCTAssertTrue(pendingPrompt.contains("Do not omit the completion result or replace it with a brief progress update"), pendingPrompt)
+        XCTAssertTrue(pendingPrompt.contains("# User-Facing Output"), pendingPrompt)
+        XCTAssertTrue(pendingPrompt.contains("Do not send a user-facing Obsidian completion message yet"), pendingPrompt)
+        XCTAssertTrue(pendingPrompt.contains("Your next action is not a user-facing message"), pendingPrompt)
         XCTAssertTrue(pendingPrompt.contains("zebra-source-onboarding report --status completed --source obsidian"), pendingPrompt)
         XCTAssertFalse(pendingPrompt.contains("First briefly tell the user"), pendingPrompt)
 
