@@ -1108,7 +1108,7 @@ public enum ZebraOnboardingChecklistCommand {
         3. If no source input has been recorded yet, ask the user for free-text source input.
         4. Run zebra-source-onboarding intake with the raw answer and your extracted candidates.
            Example:
-           zebra-source-onboarding intake --raw "옵시디언, 지메일 슬랙" --candidate obsidian=옵시디언 --candidate gmail=지메일 --uncataloged slack=슬랙
+           zebra-source-onboarding intake --raw "옵시디언, 지메일 사용자소스" --candidate obsidian=옵시디언 --candidate gmail=지메일 --uncataloged custom-source=사용자소스
         5. Ask the source-list confirmation question from the helper output.
         6. Run zebra-source-onboarding confirm --answer yes or zebra-source-onboarding confirm --answer no.
         7. If the confirmation was yes, run zebra-source-onboarding next.

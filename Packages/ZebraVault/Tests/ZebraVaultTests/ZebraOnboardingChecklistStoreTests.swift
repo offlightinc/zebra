@@ -706,31 +706,36 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
     func testSourceOnboardingCatalogRecordsUncatalogedKnownSources() {
         let result = ZebraSourceOnboardingCatalog.normalize(
-            rawSourceInput: "gmail, slack, apple notes, 애플 리마인더, obsidian"
+            rawSourceInput: "gmail, apple notes, 애플 리마인더, obsidian"
         )
 
-        XCTAssertEqual(result.normalizedSourceList, ["gmail", "apple-notes", "obsidian"])
+        XCTAssertEqual(result.normalizedSourceList, ["gmail", "apple-notes", "apple-reminders", "obsidian"])
         XCTAssertEqual(result.sourceRows["apple-notes"]?.displayName, "Apple Notes")
         XCTAssertEqual(result.sourceRows["apple-notes"]?.type, "notes")
-        XCTAssertEqual(
-            result.uncatalogedSources.map(\.normalizedValue),
-            ["slack", "apple-reminders"]
-        )
-        XCTAssertEqual(
-            Set(result.uncatalogedSources.map(\.reason)),
-            ["not_in_current_catalog"]
-        )
-        XCTAssertEqual(result.confirmationPrompt, "Gmail, Slack, Apple Notes, Apple Reminders, Obsidian로 이해했습니다. 맞나요?")
+        XCTAssertEqual(result.sourceRows["apple-reminders"]?.displayName, "Apple Reminders")
+        XCTAssertEqual(result.sourceRows["apple-reminders"]?.type, "tasks")
+        XCTAssertTrue(result.uncatalogedSources.isEmpty)
+        XCTAssertEqual(result.confirmationPrompt, "Gmail, Apple Notes, Apple Reminders, Obsidian로 이해했습니다. 맞나요?")
     }
 
     func testSourceOnboardingCatalogRecognizesKoreanAppleNotesAliasInMentionOrder() {
         let result = ZebraSourceOnboardingCatalog.normalize(
-            rawSourceInput: "애플노트 지메일 노션 슬랙"
+            rawSourceInput: "애플노트 지메일 노션"
         )
 
         XCTAssertEqual(result.normalizedSourceList, ["apple-notes", "gmail", "notion"])
-        XCTAssertEqual(result.uncatalogedSources.map(\.normalizedValue), ["slack"])
-        XCTAssertEqual(result.confirmationPrompt, "Apple Notes, Gmail, Notion, Slack로 이해했습니다. 맞나요?")
+        XCTAssertTrue(result.uncatalogedSources.isEmpty)
+        XCTAssertEqual(result.confirmationPrompt, "Apple Notes, Gmail, Notion로 이해했습니다. 맞나요?")
+    }
+
+    func testSourceOnboardingCatalogRecognizesKoreanAppleRemindersAliasesInMentionOrder() {
+        let result = ZebraSourceOnboardingCatalog.normalize(
+            rawSourceInput: "애플리마인더 지메일 미리 알림 노션"
+        )
+
+        XCTAssertEqual(result.normalizedSourceList, ["apple-reminders", "gmail", "notion"])
+        XCTAssertTrue(result.uncatalogedSources.isEmpty)
+        XCTAssertEqual(result.confirmationPrompt, "Apple Reminders, Gmail, Notion로 이해했습니다. 맞나요?")
     }
 
     @MainActor
@@ -753,18 +758,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let recordedAt = Date(timeIntervalSince1970: 1_800_000_100)
 
         let recorded = try store.recordSourceOnboardingInput(
-            "지메일, 옵시디언, 슬랙도 있어",
+            "지메일, 옵시디언",
             now: recordedAt
         )
         let persisted = try readSourceOnboardingState(at: stateURL)
 
         XCTAssertEqual(recorded, persisted)
-        XCTAssertEqual(persisted.status, .attention)
+        XCTAssertEqual(persisted.status, .running)
         XCTAssertEqual(persisted.sourceReadiness.gmail.status, .ready)
-        XCTAssertEqual(persisted.progress.rawSourceInput, "지메일, 옵시디언, 슬랙도 있어")
+        XCTAssertEqual(persisted.progress.rawSourceInput, "지메일, 옵시디언")
         XCTAssertEqual(persisted.progress.normalizedSourceList, ["gmail", "obsidian"])
-        XCTAssertEqual(persisted.progress.uncatalogedSources.map(\.normalizedValue), ["slack"])
-        XCTAssertEqual(persisted.progress.sourceConfirmation?.prompt, "Gmail, Obsidian, Slack로 이해했습니다. 맞나요?")
+        XCTAssertTrue(persisted.progress.uncatalogedSources.isEmpty)
+        XCTAssertEqual(persisted.progress.sourceConfirmation?.prompt, "Gmail, Obsidian로 이해했습니다. 맞나요?")
         XCTAssertEqual(persisted.progress.sourceConfirmation?.status, .pending)
         XCTAssertEqual(persisted.progress.sourceConfirmation?.sourceIDs, ["gmail", "obsidian"])
         XCTAssertEqual(persisted.progress.pendingQuestion?.status, "pending_source_confirmation")
@@ -777,7 +782,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let persistedConfirmation = try readSourceOnboardingState(at: stateURL)
 
         XCTAssertEqual(confirmed, persistedConfirmation)
-        XCTAssertEqual(persistedConfirmation.status, .attention)
+        XCTAssertEqual(persistedConfirmation.status, .ready)
         XCTAssertNil(persistedConfirmation.progress.pendingQuestion)
         XCTAssertEqual(persistedConfirmation.progress.sourceConfirmation?.status, .confirmed)
         XCTAssertEqual(persistedConfirmation.progress.sourceConfirmation?.confirmedAt, confirmedAt)
@@ -827,32 +832,32 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             executableURL: helperURL,
             arguments: [
                 "intake",
-                "--raw", "옵시디언, 지메일 슬랙",
+                "--raw", "옵시디언, 지메일 사용자소스",
                 "--candidate", "obsidian=옵시디언",
                 "--candidate", "gmail=지메일",
-                "--uncataloged", "slack=슬랙",
+                "--uncataloged", "custom-source=사용자소스",
             ],
             environment: environment
         )
         XCTAssertEqual(intake.status, 0, "stdout:\n\(intake.stdout)\nstderr:\n\(intake.stderr)")
         let intakePayload = try jsonObject(from: intake.stdout)
         XCTAssertEqual(intakePayload["normalizedSourceList"] as? [String], ["obsidian", "gmail"])
-        XCTAssertEqual(intakePayload["uncatalogedSources"] as? [String], ["slack"])
+        XCTAssertEqual(intakePayload["uncatalogedSources"] as? [String], ["custom-source"])
         XCTAssertNil(intakePayload["unsupportedInputs"])
         XCTAssertEqual(intakePayload["sourceConfirmationStatus"] as? String, "pending")
-        XCTAssertEqual(intakePayload["confirmationPrompt"] as? String, "Obsidian, Gmail, Slack로 이해했습니다. 맞나요?")
+        XCTAssertEqual(intakePayload["confirmationPrompt"] as? String, "Obsidian, Gmail, 사용자소스로 이해했습니다. 맞나요?")
 
         let store = makeChecklistStore(homeURL: root)
         let loaded = try XCTUnwrap(store.loadSourceOnboardingState())
         XCTAssertEqual(loaded.status, .attention)
-        XCTAssertEqual(loaded.progress.rawSourceInput, "옵시디언, 지메일 슬랙")
+        XCTAssertEqual(loaded.progress.rawSourceInput, "옵시디언, 지메일 사용자소스")
         XCTAssertEqual(loaded.progress.normalizedSourceList, ["obsidian", "gmail"])
-        XCTAssertEqual(loaded.progress.uncatalogedSources.map(\.normalizedValue), ["slack"])
-        XCTAssertEqual(loaded.progress.uncatalogedSources.first?.rawValue, "슬랙")
+        XCTAssertEqual(loaded.progress.uncatalogedSources.map(\.normalizedValue), ["custom-source"])
+        XCTAssertEqual(loaded.progress.uncatalogedSources.first?.rawValue, "사용자소스")
         XCTAssertEqual(loaded.progress.uncatalogedSources.first?.reason, "not_in_current_catalog")
         XCTAssertEqual(loaded.progress.sourceRows["obsidian"]?.selectionState, "pending_confirmation")
         XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.selectionState, "pending_confirmation")
-        XCTAssertNil(loaded.progress.sourceRows["slack"])
+        XCTAssertNil(loaded.progress.sourceRows["custom-source"])
         XCTAssertEqual(loaded.sourceReadiness.gmail.localArtifact?.path, emailArtifact.path)
         XCTAssertNotEqual(loaded.sourceReadiness.gmail.connectionPath, emailArtifact.path)
 
@@ -865,7 +870,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(progress["sourceRows"] is [[String: Any]])
         XCTAssertNil(progress["unsupportedInputs"])
         let uncataloged = try XCTUnwrap(progress["uncatalogedSources"] as? [[String: Any]])
-        XCTAssertEqual(uncataloged.first?["rawValue"] as? String, "슬랙")
+        XCTAssertEqual(uncataloged.first?["rawValue"] as? String, "사용자소스")
         XCTAssertEqual(uncataloged.first?["reason"] as? String, "not_in_current_catalog")
         XCTAssertNil(uncataloged.first?["supportedCatalog"])
         let gmail = try XCTUnwrap((sourceReadiness["gmail"] as? [String: Any]))
@@ -891,7 +896,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertNil(sourceSubsteps.first { $0.id == "source-confirmation" })
         let obsidianSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "source-row-obsidian" })
         let gmailSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "source-row-gmail" })
-        let slackSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "uncataloged-source-slack" })
+        let customSourceSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "uncataloged-source-custom-source" })
         XCTAssertNil(sourceSubsteps.first { $0.id == "gmail-readiness" })
 
         XCTAssertEqual(obsidianSubstep.title, "Obsidian")
@@ -899,9 +904,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(obsidianSubstep.isCompleted)
         XCTAssertEqual(gmailSubstep.title, "Gmail")
         XCTAssertNil(gmailSubstep.detail)
-        XCTAssertEqual(slackSubstep.title, "Slack")
-        XCTAssertNil(slackSubstep.detail)
-        XCTAssertTrue(slackSubstep.isAttention)
+        XCTAssertEqual(customSourceSubstep.title, "사용자소스")
+        XCTAssertNil(customSourceSubstep.detail)
+        XCTAssertTrue(customSourceSubstep.isAttention)
 
         let status = try runProcess(
             executableURL: helperURL,
@@ -932,6 +937,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             "imessage.imsg-cli.v1.md",
             "notion.ntn-cli.v1.md",
             "apple-notes.memo-cli.v1.md",
+            "apple-reminders.remindctl.v1.md",
         ]
         try FileManager.default.createDirectory(at: playbookDirectory, withIntermediateDirectories: true)
         for filename in stalePlaybooks {
@@ -956,6 +962,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             "imessage.imsg-cli.v1.md": "Full Disk Access",
             "notion.ntn-cli.v1.md": "curl -fsSL https://ntn.dev | bash",
             "apple-notes.memo-cli.v1.md": "brew tap antoniorodr/memo && brew install antoniorodr/memo/memo",
+            "apple-reminders.remindctl.v1.md": "brew install steipete/tap/remindctl",
         ]
         for (filename, marker) in expectedMarkers {
             let text = try String(
@@ -1729,15 +1736,415 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         let intake = try runProcess(
             executableURL: helperURL,
-            arguments: ["intake", "--raw", "애플노트 지메일 노션 슬랙"],
+            arguments: ["intake", "--raw", "애플노트 지메일 노션"],
             environment: environment
         )
 
         XCTAssertEqual(intake.status, 0, "stdout:\n\(intake.stdout)\nstderr:\n\(intake.stderr)")
         let payload = try jsonObject(from: intake.stdout)
         XCTAssertEqual(payload["normalizedSourceList"] as? [String], ["apple-notes", "gmail", "notion"])
-        XCTAssertEqual(payload["uncatalogedSources"] as? [String], ["slack"])
-        XCTAssertEqual(payload["confirmationPrompt"] as? String, "Apple Notes, Gmail, Notion, Slack로 이해했습니다. 맞나요?")
+        XCTAssertEqual(payload["uncatalogedSources"] as? [String], [])
+        XCTAssertEqual(payload["confirmationPrompt"] as? String, "Apple Notes, Gmail, Notion로 이해했습니다. 맞나요?")
+    }
+
+    @MainActor
+    func testSourceOnboardingHelperRecognizesKoreanAppleRemindersAliasWithoutAgentCandidate() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        let intake = try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "애플리마인더 지메일 미리 알림 노션"],
+            environment: environment
+        )
+
+        XCTAssertEqual(intake.status, 0, "stdout:\n\(intake.stdout)\nstderr:\n\(intake.stderr)")
+        let payload = try jsonObject(from: intake.stdout)
+        XCTAssertEqual(payload["normalizedSourceList"] as? [String], ["apple-reminders", "gmail", "notion"])
+        XCTAssertEqual(payload["uncatalogedSources"] as? [String], [])
+        XCTAssertEqual(payload["confirmationPrompt"] as? String, "Apple Reminders, Gmail, Notion로 이해했습니다. 맞나요?")
+    }
+
+    @MainActor
+    func testSourceOnboardingAppleRemindersInstallConsentAndPermissionAttention() throws {
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: fakeBin.appendingPathComponent("python3", isDirectory: false),
+            withDestinationURL: URL(fileURLWithPath: "/usr/bin/python3")
+        )
+
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let baseEnvironment = [
+            "PATH": fakeBin.path,
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "미리알림", "--candidate", "apple-reminders=미리알림"],
+            environment: baseEnvironment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: baseEnvironment
+        ).status, 0)
+        let next = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: baseEnvironment
+        )
+        XCTAssertEqual(next.status, 0, "stdout:\n\(next.stdout)\nstderr:\n\(next.stderr)")
+        let nextPayload = try jsonObject(from: next.stdout)
+        XCTAssertEqual(nextPayload["nextSourceID"] as? String, "apple-reminders")
+        XCTAssertEqual(nextPayload["nextPlaybookID"] as? String, "apple-reminders.remindctl")
+        XCTAssertEqual(nextPayload["nextPlaybookStepID"] as? String, "check_remindctl_cli")
+
+        let missingBrew = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-reminders", "check-cli"],
+            environment: baseEnvironment
+        )
+        XCTAssertEqual(missingBrew.status, 1, "stdout:\n\(missingBrew.stdout)\nstderr:\n\(missingBrew.stderr)")
+        XCTAssertEqual(try jsonObject(from: missingBrew.stdout)["reason"] as? String, "homebrew_install_consent_required")
+        var loaded = try readSourceOnboardingState(at: stateURL)
+        var row = try XCTUnwrap(loaded.progress.sourceRows["apple-reminders"])
+        var runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual(runState["homebrewInstallAsked"] as? Bool, true)
+        XCTAssertEqual(runState["installCommandRun"] as? Bool, false)
+
+        let declinedBrew = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-reminders", "check-cli", "--homebrew-install-answer", "no"],
+            environment: baseEnvironment
+        )
+        XCTAssertEqual(declinedBrew.status, 1, "stdout:\n\(declinedBrew.stdout)\nstderr:\n\(declinedBrew.stderr)")
+        XCTAssertEqual(try jsonObject(from: declinedBrew.stdout)["reason"] as? String, "homebrew_install_declined")
+        loaded = try readSourceOnboardingState(at: stateURL)
+        row = try XCTUnwrap(loaded.progress.sourceRows["apple-reminders"])
+        runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual(runState["homebrewInstallAnswer"] as? String, "no")
+        XCTAssertEqual((runState["homebrewInstallResult"] as? [String: Any])?["status"] as? String, "user_declined")
+
+        let brewLog = root.appendingPathComponent("brew.log", isDirectory: false)
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "brew",
+            content: """
+            #!/bin/sh
+            printf '%s\\n' "$*" >> '\(shellSingleQuoted(brewLog.path))'
+            if [ "$1" = "install" ] && [ "$2" = "steipete/tap/remindctl" ]; then
+              /bin/cat > '\(shellSingleQuoted(fakeBin.appendingPathComponent("remindctl", isDirectory: false).path))' <<'EOS'
+            #!/bin/sh
+            if [ "$1" = "--version" ]; then
+              echo "remindctl 0.3.2"
+              exit 0
+            fi
+            if [ "$1" = "status" ]; then
+              echo '{"status":"denied"}'
+              exit 0
+            fi
+            if [ "$1" = "doctor" ]; then
+              echo 'Reminders permission required'
+              exit 0
+            fi
+            if [ "$1" = "authorize" ]; then
+              exit 0
+            fi
+            exit 1
+            EOS
+              /bin/chmod +x '\(shellSingleQuoted(fakeBin.appendingPathComponent("remindctl", isDirectory: false).path))'
+              exit 0
+            fi
+            exit 1
+            """
+        )
+        let installRemindctl = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-reminders", "check-cli", "--remindctl-install-answer", "yes"],
+            environment: baseEnvironment
+        )
+        XCTAssertEqual(installRemindctl.status, 0, "stdout:\n\(installRemindctl.stdout)\nstderr:\n\(installRemindctl.stderr)")
+        loaded = try readSourceOnboardingState(at: stateURL)
+        row = try XCTUnwrap(loaded.progress.sourceRows["apple-reminders"])
+        runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual(runState["remindctlInstallAsked"] as? Bool, true)
+        XCTAssertEqual(runState["remindctlInstallAnswer"] as? String, "yes")
+        XCTAssertEqual((runState["remindctlInstallResult"] as? [String: Any])?["status"] as? String, "succeeded")
+        XCTAssertEqual(runState["installCommandRun"] as? Bool, true)
+
+        let denied = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-reminders", "check-access"],
+            environment: baseEnvironment
+        )
+        XCTAssertEqual(denied.status, 1, "stdout:\n\(denied.stdout)\nstderr:\n\(denied.stderr)")
+        XCTAssertEqual(try jsonObject(from: denied.stdout)["reason"] as? String, "reminders_permission_attention")
+        XCTAssertTrue(try XCTUnwrap(jsonObject(from: denied.stdout)["nextPrompt"] as? String).contains("System Settings > Privacy & Security > Reminders"))
+    }
+
+    @MainActor
+    func testSourceOnboardingAppleRemindersRunnerHappyPathUsesOpenListCommand() throws {
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        let remindctlLog = root.appendingPathComponent("remindctl.log", isDirectory: false)
+        let brain = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: brain, withIntermediateDirectories: true)
+        _ = try installFakeRemindctlCLI(fakeBin: fakeBin, logURL: remindctlLog)
+
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: brain.path,
+            executablePath: "/usr/bin/true"
+        )
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: brain.path)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "PATH": "\(fakeBin.path):/usr/bin:/bin",
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_GBRAIN_WRITE_TARGET_PATH": brain.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "intake",
+                "--raw", "apple reminders, apple notes",
+                "--candidate", "apple-reminders=apple reminders",
+                "--candidate", "apple-notes=apple notes",
+            ],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["next"], environment: environment).status, 0)
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["apple-reminders", "check-cli"], environment: environment).status, 0)
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["apple-reminders", "check-access"], environment: environment).status, 0)
+
+        let smoke = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-reminders", "smoke-list"],
+            environment: environment
+        )
+        XCTAssertEqual(smoke.status, 0, "stdout:\n\(smoke.stdout)\nstderr:\n\(smoke.stderr)")
+        let smokePayload = try jsonObject(from: smoke.stdout)
+        XCTAssertEqual(smokePayload["openReminderCount"] as? Int, 2)
+        let scopePrompt = try XCTUnwrap(smokePayload["nextPrompt"] as? String)
+        XCTAssertTrue(scopePrompt.contains("1. All open reminders"), scopePrompt)
+        XCTAssertTrue(scopePrompt.contains("5. Skip Apple Reminders for now"), scopePrompt)
+
+        let koreanScope = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment.merging(["ZEBRA_ONBOARDING_LANGUAGE": "ko"]) { _, new in new }
+        )
+        XCTAssertEqual(koreanScope.status, 0, "stdout:\n\(koreanScope.stdout)\nstderr:\n\(koreanScope.stderr)")
+        let koreanScopePrompt = try XCTUnwrap(jsonObject(from: koreanScope.stdout)["nextPrompt"] as? String)
+        XCTAssertTrue(koreanScopePrompt.contains("1. 열려 있는 모든 미리알림"), koreanScopePrompt)
+        XCTAssertTrue(koreanScopePrompt.contains("5. 지금은 Apple Reminders 건너뛰기"), koreanScopePrompt)
+        XCTAssertFalse(koreanScopePrompt.contains("1. All open reminders"), koreanScopePrompt)
+        XCTAssertFalse(koreanScopePrompt.contains("5. Skip Apple Reminders for now"), koreanScopePrompt)
+
+        let japaneseScope = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment.merging(["ZEBRA_ONBOARDING_LANGUAGE": "ja"]) { _, new in new }
+        )
+        XCTAssertEqual(japaneseScope.status, 0, "stdout:\n\(japaneseScope.stdout)\nstderr:\n\(japaneseScope.stderr)")
+        let japaneseScopePrompt = try XCTUnwrap(jsonObject(from: japaneseScope.stdout)["nextPrompt"] as? String)
+        XCTAssertTrue(japaneseScopePrompt.contains("1. 未完了のすべてのリマインダー"), japaneseScopePrompt)
+        XCTAssertTrue(japaneseScopePrompt.contains("5. 今回はApple Remindersをスキップ"), japaneseScopePrompt)
+        XCTAssertFalse(japaneseScopePrompt.contains("1. All open reminders"), japaneseScopePrompt)
+        XCTAssertFalse(japaneseScopePrompt.contains("5. Skip Apple Reminders for now"), japaneseScopePrompt)
+
+        let scope = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-reminders", "choose-scope", "--scope", "one-list", "--list", "Work"],
+            environment: environment
+        )
+        XCTAssertEqual(scope.status, 0, "stdout:\n\(scope.stdout)\nstderr:\n\(scope.stderr)")
+        XCTAssertEqual(try jsonObject(from: scope.stdout)["nextPlaybookStepID"] as? String, "confirm_ingest_plan")
+        XCTAssertEqual(try jsonObject(from: scope.stdout)["expectedCount"] as? Int, 2)
+
+        let blockedIngest = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-reminders", "ingest"],
+            environment: environment
+        )
+        XCTAssertEqual(blockedIngest.status, 1, "stdout:\n\(blockedIngest.stdout)\nstderr:\n\(blockedIngest.stderr)")
+        XCTAssertEqual(try jsonObject(from: blockedIngest.stdout)["reason"] as? String, "ingest_plan_unconfirmed")
+
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-reminders", "confirm-plan", "--answer", "yes"],
+            environment: environment
+        ).status, 0)
+        let ingest = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-reminders", "ingest"],
+            environment: environment
+        )
+        XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
+        let artifactPath = try XCTUnwrap(jsonObject(from: ingest.stdout)["artifactPath"] as? String)
+        let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
+        XCTAssertTrue(artifact.contains("source: apple-reminders"), artifact)
+        XCTAssertTrue(artifact.contains("playbook: apple-reminders.remindctl.v1"), artifact)
+        XCTAssertTrue(artifact.contains("Investor update"), artifact)
+        XCTAssertTrue(artifact.contains("[Source: Apple Reminders list \"Work\","), artifact)
+        XCTAssertFalse(artifact.contains("\"reminders\":"), artifact)
+
+        let commandLog = try String(contentsOf: remindctlLog, encoding: .utf8)
+        XCTAssertTrue(commandLog.contains("open --list Work --json"), commandLog)
+        XCTAssertFalse(commandLog.split(whereSeparator: \.isNewline).contains("list Work --json"), commandLog)
+
+        let verify = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-reminders", "verify-readback"],
+            environment: environment
+        )
+        XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
+        let verifyPayload = try jsonObject(from: verify.stdout)
+        XCTAssertEqual(verifyPayload["nextPlaybookStepID"] as? String, "complete")
+        let pendingPrompt = try XCTUnwrap(verifyPayload["nextPrompt"] as? String)
+        XCTAssertTrue(pendingPrompt.contains("Apple Reminders completion report is required"), pendingPrompt)
+        XCTAssertTrue(pendingPrompt.contains("zebra-source-onboarding report --status completed --source apple-reminders"), pendingPrompt)
+        XCTAssertFalse(pendingPrompt.contains("Zebra Source Onboarding: Apple Notes is the active source."), pendingPrompt)
+
+        let blockedNext = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+        XCTAssertEqual(blockedNext.status, 1, "stdout:\n\(blockedNext.stdout)\nstderr:\n\(blockedNext.stderr)")
+        let blockedNextPayload = try jsonObject(from: blockedNext.stdout)
+        XCTAssertEqual(blockedNextPayload["reason"] as? String, "source_completion_report_required")
+        XCTAssertEqual(blockedNextPayload["pendingSourceID"] as? String, "apple-reminders")
+        XCTAssertEqual(blockedNextPayload["blockedSourceID"] as? String, "next")
+        XCTAssertEqual(blockedNextPayload["nextSourceID"] as? String, "apple-reminders")
+        XCTAssertEqual(blockedNextPayload["nextPlaybookStepID"] as? String, "complete")
+        XCTAssertTrue(try XCTUnwrap(blockedNextPayload["nextPrompt"] as? String).contains("zebra-source-onboarding report --status completed --source apple-reminders"))
+        var loadedWhilePending = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loadedWhilePending.progress.activeSourceID, "apple-reminders")
+        XCTAssertNil(loadedWhilePending.progress.sourceRows["apple-notes"]?.playbookStepID)
+
+        let blockedNextSource = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-notes", "check-cli"],
+            environment: environment
+        )
+        XCTAssertEqual(blockedNextSource.status, 1, "stdout:\n\(blockedNextSource.stdout)\nstderr:\n\(blockedNextSource.stderr)")
+        let blockedNextSourcePayload = try jsonObject(from: blockedNextSource.stdout)
+        XCTAssertEqual(blockedNextSourcePayload["reason"] as? String, "source_completion_report_required")
+        XCTAssertEqual(blockedNextSourcePayload["pendingSourceID"] as? String, "apple-reminders")
+        XCTAssertEqual(blockedNextSourcePayload["blockedSourceID"] as? String, "apple-notes")
+
+        let report = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--source", "apple-reminders"],
+            environment: environment
+        )
+        XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+        let reportPayload = try jsonObject(from: report.stdout)
+        XCTAssertEqual(reportPayload["completedSourceID"] as? String, "apple-reminders")
+        XCTAssertNil(reportPayload["nextSourceID"])
+        XCTAssertEqual(reportPayload["complete"] as? Bool, false)
+        let reportPrompt = try XCTUnwrap(reportPayload["nextPrompt"] as? String)
+        XCTAssertTrue(reportPrompt.contains("Apple Reminders Source Onboarding is complete."), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("First tell the user this concrete completion result:"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("- Reminders ingested: 2"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("- Scope: open reminders from list `Work`"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("- Artifact: `"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("zebra-source-onboarding next"), reportPrompt)
+        XCTAssertFalse(reportPrompt.contains("Zebra Source Onboarding: Apple Notes is the active source."), reportPrompt)
+
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.progress.sourceRows["apple-reminders"]?.status, "checked")
+        XCTAssertNil(loaded.progress.activeSourceID)
+        XCTAssertNil(loaded.progress.sourceRows["apple-notes"]?.playbookStepID)
+        let runStatePath = try XCTUnwrap(loaded.progress.sourceRows["apple-reminders"]?.runStatePath)
+        let runState = try stateObject(in: URL(fileURLWithPath: runStatePath))
+        XCTAssertNil(runState["rawJSON"])
+        XCTAssertNil(runState["items"])
+        XCTAssertEqual(runState["ingestedReminderCount"] as? Int, 2)
+        XCTAssertEqual(runState["completionReportPending"] as? Bool, false)
+        XCTAssertNotNil(runState["completionReportedAt"] as? String)
+
+        let nextAfterReport = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+        XCTAssertEqual(nextAfterReport.status, 0, "stdout:\n\(nextAfterReport.stdout)\nstderr:\n\(nextAfterReport.stderr)")
+        let nextAfterReportPayload = try jsonObject(from: nextAfterReport.stdout)
+        XCTAssertEqual(nextAfterReportPayload["nextSourceID"] as? String, "apple-notes")
+        let nextAfterReportPrompt = try XCTUnwrap(nextAfterReportPayload["nextPrompt"] as? String)
+        XCTAssertTrue(nextAfterReportPrompt.contains("Zebra Source Onboarding: Apple Notes is the active source."), nextAfterReportPrompt)
+        loadedWhilePending = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loadedWhilePending.progress.activeSourceID, "apple-notes")
     }
 
     @MainActor
@@ -2014,6 +2421,23 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(activeAfterOutOfOrderCommand.sourceRows["notion"]?.status, "running")
         XCTAssertNil(activeAfterOutOfOrderCommand.sourceRows["obsidian"]?.playbookStepID)
 
+        let blockedNext = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+        XCTAssertEqual(blockedNext.status, 1, "stdout:\n\(blockedNext.stdout)\nstderr:\n\(blockedNext.stderr)")
+        let blockedNextPayload = try jsonObject(from: blockedNext.stdout)
+        XCTAssertEqual(blockedNextPayload["reason"] as? String, "source_completion_report_required")
+        XCTAssertEqual(blockedNextPayload["pendingSourceID"] as? String, "notion")
+        XCTAssertEqual(blockedNextPayload["blockedSourceID"] as? String, "next")
+        XCTAssertEqual(blockedNextPayload["nextSourceID"] as? String, "notion")
+        XCTAssertEqual(blockedNextPayload["nextPlaybookStepID"] as? String, "complete")
+        XCTAssertTrue(try XCTUnwrap(blockedNextPayload["nextPrompt"] as? String).contains("report --status completed --source notion"))
+        let activeAfterBlockedNext = try readSourceOnboardingState(at: stateURL).progress
+        XCTAssertEqual(activeAfterBlockedNext.activeSourceID, "notion")
+        XCTAssertNil(activeAfterBlockedNext.sourceRows["obsidian"]?.playbookStepID)
+
         let wrongReport = try runProcess(
             executableURL: helperURL,
             arguments: ["report", "--status", "completed", "--source", "obsidian"],
@@ -2030,17 +2454,39 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
         let reportPayload = try jsonObject(from: report.stdout)
         XCTAssertEqual(reportPayload["completedSourceID"] as? String, "notion")
-        XCTAssertEqual(reportPayload["nextSourceID"] as? String, "obsidian")
+        XCTAssertNil(reportPayload["nextSourceID"])
+        XCTAssertEqual(reportPayload["complete"] as? Bool, false)
         let reportPrompt = try XCTUnwrap(reportPayload["nextPrompt"] as? String)
-        XCTAssertPrompt(
-            reportPrompt,
-            contains: "Notion Source Onboarding is complete.",
-            before: "Zebra Source Onboarding: Obsidian is the active source."
-        )
+        XCTAssertTrue(reportPrompt.contains("Notion Source Onboarding is complete."), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("First tell the user this concrete completion result:"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("- Scope: page"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("- Target: `page123`"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("- Artifact: `"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("- Verified Notion fetches: page"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("zebra-source-onboarding next"), reportPrompt)
+        XCTAssertFalse(reportPrompt.contains("Zebra Source Onboarding: Obsidian is the active source."), reportPrompt)
 
         let activeAfterReport = try readSourceOnboardingState(at: stateURL).progress
         XCTAssertEqual(activeAfterReport.sourceRows["notion"]?.status, "checked")
-        XCTAssertEqual(activeAfterReport.activeSourceID, "obsidian")
+        XCTAssertNil(activeAfterReport.activeSourceID)
+        XCTAssertNil(activeAfterReport.sourceRows["obsidian"]?.playbookStepID)
+        let notionRunStatePath = try XCTUnwrap(activeAfterReport.sourceRows["notion"]?.runStatePath)
+        let notionRunState = try stateObject(in: URL(fileURLWithPath: notionRunStatePath))
+        XCTAssertEqual(notionRunState["completionReportPending"] as? Bool, false)
+        XCTAssertNotNil(notionRunState["completionReportedAt"] as? String)
+
+        let nextAfterReport = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+        XCTAssertEqual(nextAfterReport.status, 0, "stdout:\n\(nextAfterReport.stdout)\nstderr:\n\(nextAfterReport.stderr)")
+        let nextAfterReportPayload = try jsonObject(from: nextAfterReport.stdout)
+        XCTAssertEqual(nextAfterReportPayload["nextSourceID"] as? String, "obsidian")
+        let nextAfterReportPrompt = try XCTUnwrap(nextAfterReportPayload["nextPrompt"] as? String)
+        XCTAssertTrue(nextAfterReportPrompt.contains("Zebra Source Onboarding: Obsidian is the active source."), nextAfterReportPrompt)
+        let activeAfterNext = try readSourceOnboardingState(at: stateURL).progress
+        XCTAssertEqual(activeAfterNext.activeSourceID, "obsidian")
 
         let duplicateReport = try runProcess(
             executableURL: helperURL,
@@ -2804,7 +3250,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             arguments: ["next"],
             environment: environment
         )
-        XCTAssertEqual(pendingResume.status, 0, "stdout:\n\(pendingResume.stdout)\nstderr:\n\(pendingResume.stderr)")
+        XCTAssertEqual(pendingResume.status, 1, "stdout:\n\(pendingResume.stdout)\nstderr:\n\(pendingResume.stderr)")
+        XCTAssertEqual(try jsonObject(from: pendingResume.stdout)["reason"] as? String, "source_completion_report_required")
+        XCTAssertEqual(try jsonObject(from: pendingResume.stdout)["pendingSourceID"] as? String, "obsidian")
+        XCTAssertEqual(try jsonObject(from: pendingResume.stdout)["blockedSourceID"] as? String, "next")
         XCTAssertEqual(try jsonObject(from: pendingResume.stdout)["nextPlaybookStepID"] as? String, "complete")
 
         var loaded = try readSourceOnboardingState(at: stateURL)
@@ -2824,6 +3273,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(reportPayload["complete"] as? Bool, true)
         let reportPrompt = try XCTUnwrap(reportPayload["nextPrompt"] as? String)
         XCTAssertTrue(reportPrompt.contains("Obsidian Source Onboarding is complete."), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("First tell the user this concrete completion result:"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("- Markdown files ingested: 2"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("- Artifact: `"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("Source Onboarding is complete"), reportPrompt)
 
         loaded = try readSourceOnboardingState(at: stateURL)
@@ -2834,6 +3286,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(row.playbookID, "obsidian.direct-markdown")
         XCTAssertNotNil(row.resultSummary)
         XCTAssertNotNil(row.runStatePath)
+        XCTAssertNil(loaded.progress.activeSourceID)
+        let runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual(runState["completionReportPending"] as? Bool, false)
+        XCTAssertNotNil(runState["completionReportedAt"] as? String)
         XCTAssertFalse(try String(contentsOf: stateURL, encoding: .utf8).contains("First note\\nBody"))
     }
 
@@ -7245,6 +7701,55 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
           esac
         fi
         echo "unsupported memo args: $*" >&2
+        exit 1
+        """
+        try scriptContent.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    private func installFakeRemindctlCLI(fakeBin: URL, logURL: URL) throws -> URL {
+        try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        let script = fakeBin.appendingPathComponent("remindctl", isDirectory: false)
+        let scriptContent = """
+        #!/bin/sh
+        printf '%s\\n' "$*" >> '\(shellSingleQuoted(logURL.path))'
+        if [ "$1" = "--version" ]; then
+          echo "remindctl 0.3.2"
+          exit 0
+        fi
+        if [ "$1" = "status" ]; then
+          echo '{"status":"full-access"}'
+          exit 0
+        fi
+        if [ "$1" = "doctor" ]; then
+          echo 'Reminders access OK'
+          exit 0
+        fi
+        if [ "$1" = "authorize" ]; then
+          exit 0
+        fi
+        if [ "$1" = "list" ] && [ "$2" = "--json" ]; then
+          echo '[{"id":"list-work","title":"Work","reminderCount":3,"overdueCount":1},{"id":"list-home","title":"Home","reminderCount":0,"overdueCount":0}]'
+          exit 0
+        fi
+        if [ "$1" = "list" ] && [ "$2" = "Work" ] && [ "$3" = "--json" ]; then
+          echo '[{"id":"done-1","title":"Completed task","list":"Work","completed":true}]'
+          exit 0
+        fi
+        if [ "$1" = "open" ] && [ "$2" = "--json" ]; then
+          echo '[{"id":"r1","title":"Investor update","list":"Work","dueDate":"2026-07-08","completed":false},{"id":"r2","title":"Review metrics","list":"Work","completed":false}]'
+          exit 0
+        fi
+        if [ "$1" = "open" ] && [ "$2" = "--list" ] && [ "$3" = "Work" ] && [ "$4" = "--json" ]; then
+          echo '[{"id":"r1","title":"Investor update","list":"Work","dueDate":"2026-07-08","completed":false},{"id":"r2","title":"Review metrics","list":"Work","completed":false,"url":"https://example.com"}]'
+          exit 0
+        fi
+        if [ "$1" = "today" ] || [ "$1" = "overdue" ] || [ "$1" = "week" ]; then
+          echo '[]'
+          exit 0
+        fi
+        echo "unsupported remindctl args: $*" >&2
         exit 1
         """
         try scriptContent.write(to: script, atomically: true, encoding: .utf8)
