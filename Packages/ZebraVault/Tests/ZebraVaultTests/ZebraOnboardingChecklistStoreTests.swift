@@ -2471,7 +2471,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(reportPrompt.contains("- Artifact:"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("- Readback: passed"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("- Verified at:"), reportPrompt)
-        XCTAssertTrue(reportPrompt.contains("When you next send a user-facing response, begin with the Completed Source Result above"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("Before running any command from the Next Source Prompt"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("Do not treat a brief progress update or commentary as satisfying this requirement"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("Zebra Source Onboarding: Obsidian is the active source."), reportPrompt)
         XCTAssertFalse(reportPrompt.contains("zebra-source-onboarding next"), reportPrompt)
         XCTAssertFalse(reportPrompt.contains("continue?"), reportPrompt)
@@ -2517,7 +2518,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                     "# Completed Source Result",
                     "# Continuation Contract",
                     "# Next Source Prompt",
-                    "다음 user-facing response를 보낼 때는 반드시 위 Completed Source Result를 먼저 보여주고",
+                    "다음 source command를 실행하기 전에 반드시 위 Completed Source Result를 사용자에게 먼저 보여주세요.",
+                    "짧은 진행상황 업데이트나 commentary는 이 요구사항을 충족하지 않습니다.",
                     "사용자에게 계속 진행할지 묻지 마세요.",
                 ]
             ),
@@ -2527,7 +2529,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                     "# Completed Source Result",
                     "# Continuation Contract",
                     "# Next Source Prompt",
-                    "次に user-facing response を送るときは、必ず上の Completed Source Result を最初に表示し",
+                    "次の source command を実行する前に、必ず上の Completed Source Result を先にユーザーへ表示してください。",
+                    "短い進捗更新や commentary だけでは、この要件を満たしません。",
                     "ユーザーに続行許可を求めないでください。",
                 ]
             ),

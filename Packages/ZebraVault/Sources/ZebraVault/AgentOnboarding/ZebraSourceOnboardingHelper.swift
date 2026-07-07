@@ -2545,10 +2545,11 @@ struct ZebraSourceOnboardingHelper {
                 {completion_block}
 
                 # Continuation Contract
-                - 지금 이 완료 결과만 전달하고 멈추지 마세요.
+                - 다음 source command를 실행하기 전에 반드시 위 Completed Source Result를 사용자에게 먼저 보여주세요.
+                - 짧은 진행상황 업데이트나 commentary는 이 요구사항을 충족하지 않습니다.
                 - 사용자에게 계속 진행할지 묻지 마세요.
                 - helper stdout `nextPrompt`만 따라 다음 source를 계속 진행하세요.
-                - 다음 user-facing response를 보낼 때는 반드시 위 Completed Source Result를 먼저 보여주고, 그 다음 아래 Next Source Prompt의 질문/결과를 보여주세요.
+                - 완료 결과를 보여준 뒤에는 아래 Next Source Prompt를 그대로 진행하세요.
 
                 # Next Source Prompt
                 {next_prompt}
@@ -2559,10 +2560,11 @@ struct ZebraSourceOnboardingHelper {
                 {completion_block}
 
                 # Continuation Contract
-                - この完了結果だけを伝えて停止しないでください。
+                - 次の source command を実行する前に、必ず上の Completed Source Result を先にユーザーへ表示してください。
+                - 短い進捗更新や commentary だけでは、この要件を満たしません。
                 - ユーザーに続行許可を求めないでください。
                 - helper stdout の `nextPrompt` だけに従って次の source を続行してください。
-                - 次に user-facing response を送るときは、必ず上の Completed Source Result を最初に表示し、その後に下の Next Source Prompt の質問/結果を表示してください。
+                - 完了結果を表示した後は、下の Next Source Prompt をそのまま進めてください。
 
                 # Next Source Prompt
                 {next_prompt}
@@ -2572,10 +2574,11 @@ struct ZebraSourceOnboardingHelper {
             {completion_block}
 
             # Continuation Contract
-            - Do not stop after only delivering this completion result.
+            - Before running any command from the Next Source Prompt, send a user-facing message that includes the Completed Source Result above.
+            - Do not treat a brief progress update or commentary as satisfying this requirement.
             - Do not ask the user for permission to continue.
             - Continue only from helper stdout `nextPrompt`.
-            - When you next send a user-facing response, begin with the Completed Source Result above, then show the next source question/result from the Next Source Prompt below.
+            - After sending that completed result to the user, continue with the Next Source Prompt below.
 
             # Next Source Prompt
             {next_prompt}
