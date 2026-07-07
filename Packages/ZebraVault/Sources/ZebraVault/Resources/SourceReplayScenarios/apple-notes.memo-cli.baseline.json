@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "kind": "source-replay-scenario",
+  "id": "apple-notes.memo-cli.baseline",
+  "source": "apple-notes",
+  "playbookID": "apple-notes.memo-cli",
+  "playbookVersion": "v1",
+  "fixture": "apple-notes.memo-cli.baseline.v1.json",
+  "defaultRuntime": "selected",
+  "defaultRunMode": "run",
+  "defaultBatchID": "apple-notes-memo-cli-baseline",
+  "defaultMaxTurns": 12,
+  "defaultTimeout": 180,
+  "artifactScan": {
+    "enabled": true,
+    "excludeRuntimeHome": true
+  }
+}

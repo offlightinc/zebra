@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "kind": "source-replay-fixture",
+  "source": "apple-notes",
+  "playbookID": "apple-notes.memo-cli",
+  "playbookVersion": "v1",
+  "purpose": "Apple Notes Source Onboarding baseline replay using the memo CLI and a small sample ingest scope.",
+  "initialPrompt": "Run Zebra Source Onboarding for Apple Notes using the installed zebra-source-onboarding helper. Start by running `zebra-source-onboarding intake --raw \"Apple Notes\" --candidate \"apple-notes=Apple Notes\"`, then `zebra-source-onboarding confirm --answer yes`, then `zebra-source-onboarding next`. After every helper command, continue only from the JSON `nextPrompt` and current `nextPlaybookStepID`. When user input is needed, ask clearly; this replay fixture will answer by playbook step.",
+  "interventions": [
+    {
+      "playbookStepID": "choose_ingest_scope",
+      "matcher": {
+        "type": "regex",
+        "pattern": "(?i)(ingest scope|folder|search query|selected note|small sample|skip apple notes|범위|샘플|건너뛰기)"
+      },
+      "answer": "sample",
+      "approval": "storable",
+      "secretPolicy": "forbid_raw_secret"
+    },
+    {
+      "playbookStepID": "confirm_ingest_plan",
+      "matcher": {
+        "type": "regex",
+        "pattern": "(?i)(confirm.*plan|explicit approval|approved scope|ingest plan|승인|시작)"
+      },
+      "answer": "yes",
+      "approval": "requires_human_approval",
+      "secretPolicy": "forbid_raw_secret"
+    }
+  ]
+}

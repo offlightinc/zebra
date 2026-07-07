@@ -654,7 +654,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(line.contains("ZEBRA_SOURCE_ONBOARDING_PROMPT=$(cat "), line)
         XCTAssertTrue(line.contains("Starting OpenClaw for Zebra Source Onboarding..."), line)
         XCTAssertTrue(line.contains("cd '\(launch.launchDirectory)'"), line)
-        XCTAssertTrue(line.contains("exec '/tmp/openclaw' tui --message \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\""), line)
+        XCTAssertTrue(line.contains("audit-openclaw-config --event 'openclaw.source_onboarding.launch.starting' --executable '/tmp/openclaw'"), line)
+        XCTAssertTrue(line.contains("'/tmp/openclaw' tui --message \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\""), line)
+        XCTAssertTrue(line.contains("audit-openclaw-config --event 'openclaw.source_onboarding.launch.finished' --executable '/tmp/openclaw'"), line)
+        XCTAssertTrue(line.contains("exit $_ZEBRA_SOURCE_ONBOARDING_OPENCLAW_STATUS"), line)
         XCTAssertFalse(line.contains("--local"), line)
         XCTAssertFalse(line.contains("--session"), line)
         XCTAssertTrue(line.contains("--message \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\""), line)
@@ -690,6 +693,740 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(line.contains("Starting Hermes for Zebra Source Onboarding..."), line)
         XCTAssertTrue(line.contains("exec '/tmp/hermes' chat --tui --source zebra-source-onboarding --query \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\""), line)
         XCTAssertFalse(line.contains("source onboarding prompt"), line)
+    }
+
+    func testSourceOnboardingRuntimeLaunchPlanExposesReplayMetadataForOpenClaw() throws {
+        let root = try makeTemporaryDirectory()
+        let promptDirectory = root.appendingPathComponent("source-runtime-prompts", isDirectory: true)
+        let launch = ZebraSourceOnboardingHelper.LaunchContext(
+            helperPath: root.appendingPathComponent("bin/zebra-source-onboarding").path,
+            launchDirectory: root.appendingPathComponent("source-onboarding-work", isDirectory: true).path,
+            runtimePromptDirectory: promptDirectory.path,
+            shellEnvironmentPrefix: "export ZEBRA_SOURCE_ONBOARDING_STATE='\(root.path)/state.json' && "
+        )
+        let runtime = ZebraGBrainRuntimeOnboardingStore.SelectedRuntime(
+            runtime: "openclaw",
+            executablePath: "/tmp/openclaw"
+        )
+
+        let plan = try XCTUnwrap(ZebraSourceOnboardingRuntimeLaunchPlan.make(
+            launch: launch,
+            runtime: runtime,
+            prompt: "source onboarding prompt",
+            language: .en,
+            runID: "Source Replay Run 001"
+        ))
+
+        XCTAssertEqual(plan.runtime, .openclaw)
+        XCTAssertEqual(plan.openClawAgentWorkspace, launch.launchDirectory)
+        XCTAssertEqual(plan.openClawAgentID, "zebra-source-replay-source-replay-run-001")
+        XCTAssertEqual(
+            plan.openClawSessionKey,
+            "agent:zebra-source-replay-source-replay-run-001:Source Replay Run 001"
+        )
+        XCTAssertNil(plan.hermesSessionID)
+        XCTAssertTrue(plan.terminalStartupLine.contains("audit-openclaw-config --event 'openclaw.source_onboarding.launch.starting' --executable '/tmp/openclaw'"), plan.terminalStartupLine)
+        XCTAssertTrue(plan.terminalStartupLine.contains("'/tmp/openclaw' tui --message \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\""), plan.terminalStartupLine)
+        XCTAssertTrue(plan.terminalStartupLine.contains("audit-openclaw-config --event 'openclaw.source_onboarding.launch.finished' --executable '/tmp/openclaw'"), plan.terminalStartupLine)
+        XCTAssertFalse(plan.terminalStartupLine.contains("--local"), plan.terminalStartupLine)
+        XCTAssertFalse(plan.terminalStartupLine.contains("--session"), plan.terminalStartupLine)
+        XCTAssertFalse(plan.terminalStartupLine.contains("source onboarding prompt"), plan.terminalStartupLine)
+        let prompt = try String(contentsOfFile: plan.promptPath, encoding: .utf8)
+        XCTAssertTrue(prompt.contains("source onboarding prompt"), prompt)
+    }
+
+    func testSourceOnboardingPrepareLaunchInstallsReplayHelper() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("source-onboarding-state.json", isDirectory: false)
+        let helper = ZebraSourceOnboardingHelper(
+            stateURL: stateURL,
+            gbrainOnboardingStateURL: root.appendingPathComponent("gbrain.json"),
+            gbrainAdapterOnboardingStateURL: root.appendingPathComponent("adapter.json"),
+            homeDirectoryPath: root.path
+        )
+
+        let launch = try XCTUnwrap(helper.prepareLaunch(selectedVaultPath: nil))
+        let replayHelper = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("bin/zebra-source-replay", isDirectory: false)
+
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: replayHelper.path))
+        XCTAssertTrue(launch.shellEnvironmentPrefix.contains("ZEBRA_SOURCE_ONBOARDING_STATE"))
+    }
+
+    func testSourceOnboardingHelperAuditsOpenClawConfigWithoutSecrets() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("source-onboarding-state.json", isDirectory: false)
+        let openClawHome = root.appendingPathComponent(".openclaw", isDirectory: true)
+        try FileManager.default.createDirectory(at: openClawHome, withIntermediateDirectories: true)
+        try """
+        {
+          "gateway": {
+            "mode": "local",
+            "auth": {
+              "token": "secret-token-123"
+            }
+          },
+          "agents": []
+        }
+        """.write(
+            to: openClawHome.appendingPathComponent("openclaw.json", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: root.appendingPathComponent("gbrain.json"),
+                gbrainAdapterOnboardingStateURL: root.appendingPathComponent("adapter.json"),
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+
+        let result = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "audit-openclaw-config",
+                "--event", "unit.openclaw.audit",
+                "--executable", "/tmp/openclaw",
+            ],
+            environment: [
+                "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+                "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            ]
+        )
+        let payload = try jsonObject(from: result.stdout)
+        let logURL = stateURL.deletingLastPathComponent().appendingPathComponent("openclaw-config-audit.jsonl", isDirectory: false)
+        let audit = try String(contentsOf: logURL, encoding: .utf8)
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["event"] as? String, "unit.openclaw.audit")
+        XCTAssertEqual(payload["logPath"] as? String, logURL.path)
+        XCTAssertTrue(audit.contains("\"event\": \"unit.openclaw.audit\""), audit)
+        XCTAssertTrue(audit.contains("\"gatewayPresent\": true"), audit)
+        XCTAssertTrue(audit.contains("\"gatewayMode\": \"local\""), audit)
+        XCTAssertTrue(audit.contains("\"gatewayTokenPresent\": true"), audit)
+        XCTAssertFalse(audit.contains("secret-token-123"), audit)
+    }
+
+    func testSourceReplayHelperTopLevelHelpExitsSuccessfully() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+
+        for arguments in [["--help"], ["-h"], ["help"]] {
+            let result = try runProcess(
+                executableURL: helper,
+                arguments: arguments,
+                environment: [:]
+            )
+
+            XCTAssertEqual(result.status, 0, "arguments: \(arguments)\nstdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+            XCTAssertTrue(result.stdout.contains("usage: zebra-source-replay <probe|run|batch|test>"), result.stdout)
+            XCTAssertTrue(result.stdout.contains("commands:"), result.stdout)
+            XCTAssertTrue(result.stderr.isEmpty, result.stderr)
+        }
+    }
+
+    func testSourceReplayHelperUnknownTopLevelCommandFails() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: ["unknown-command"],
+            environment: [:]
+        )
+
+        XCTAssertEqual(result.status, 2, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stderr.contains("usage: zebra-source-replay <probe|run|batch|test>"), result.stderr)
+    }
+
+    func testSourceReplayHelperRunWritesOpenClawArtifactsAndRedactsSecrets() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+        let fakeOpenClaw = try installFakeSourceReplayRuntime(root: root, name: "openclaw")
+        let fakeOpenClawHome = try makeFakeOpenClawHome(root: root)
+        let fixture = root.appendingPathComponent("fixture.json", isDirectory: false)
+        try """
+        {
+          "schemaVersion": 1,
+          "source": "obsidian",
+          "playbookID": "obsidian.direct-markdown",
+          "playbookVersion": "v1",
+          "interventions": [
+            {
+              "playbookStepId": "confirm_vault_if_needed",
+              "matcher": {
+                "type": "contains",
+                "text": "vault path"
+              },
+              "answer": "/Users/hanwool/TestVault token sk-test-1234567890",
+              "approval": "storable",
+              "secretPolicy": "forbid_raw_secret"
+            }
+          ]
+        }
+        """.write(to: fixture, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "run",
+                "--runtime", "openclaw",
+                "--root", root.appendingPathComponent("replay", isDirectory: true).path,
+                "--batch-id", "unit",
+                "--run-id", "openclaw-success",
+                "--fixture", fixture.path,
+                "--openclaw-executable", fakeOpenClaw.path,
+                "--openclaw-home", fakeOpenClawHome.path,
+                "--timeout", "5",
+                "--max-turns", "4",
+            ],
+            environment: [:]
+        )
+        let payload = try jsonObject(from: result.stdout)
+        let runDirectory = URL(fileURLWithPath: try XCTUnwrap(payload["runDirectory"] as? String), isDirectory: true)
+        let summary = try jsonObject(at: runDirectory.appendingPathComponent("run-summary.json", isDirectory: false))
+        let openClaw = try XCTUnwrap(summary["openClaw"] as? [String: Any])
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(summary["ok"] as? Bool, true)
+        XCTAssertEqual(summary["command"] as? String, "run")
+        XCTAssertEqual(summary["source"] as? String, "obsidian")
+        XCTAssertEqual(summary["playbookID"] as? String, "obsidian.direct-markdown")
+        XCTAssertEqual(summary["playbookVersion"] as? String, "v1")
+        XCTAssertEqual(summary["exitReason"] as? String, "completed")
+        XCTAssertEqual(summary["interventionCount"] as? Int, 1)
+        XCTAssertEqual((summary["unansweredInterventions"] as? [[String: Any]])?.count, 0)
+        XCTAssertTrue((openClaw["agentID"] as? String)?.hasPrefix("zebra-source-replay-") == true)
+        XCTAssertTrue((openClaw["sessionKey"] as? String)?.hasPrefix("agent:") == true)
+        XCTAssertEqual(openClaw["workspace"] as? String, runDirectory.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: runDirectory.appendingPathComponent("replay-manifest.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: runDirectory.appendingPathComponent("fixture.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: runDirectory.appendingPathComponent("prompt.txt").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: runDirectory.appendingPathComponent("transcript.jsonl").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: runDirectory.appendingPathComponent("intervention-events.jsonl").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: runDirectory.appendingPathComponent("openclaw-config-audit.jsonl").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: runDirectory.appendingPathComponent("helper-output/turn-001-stdout.txt").path))
+        let events = try String(contentsOf: runDirectory.appendingPathComponent("intervention-events.jsonl"), encoding: .utf8)
+        XCTAssertTrue(events.contains("\"event\": \"playbook.step.observed\""), events)
+        XCTAssertTrue(events.contains("\"sourceOfTruth\": \"state+helper_stdout_next_prompt\""), events)
+        XCTAssertTrue(events.contains("\"event\": \"fixture.intervention.applied\""), events)
+        XCTAssertTrue(events.contains("\"playbookStepID\": \"confirm_vault_if_needed\""), events)
+        XCTAssertTrue(events.contains("\"matcherResult\": \"matched\""), events)
+        let audit = try String(contentsOf: runDirectory.appendingPathComponent("openclaw-config-audit.jsonl"), encoding: .utf8)
+        XCTAssertTrue(audit.contains("\"event\": \"openclaw.source_config.watch_started\""), audit)
+        XCTAssertTrue(audit.contains("\"event\": \"openclaw.agents.add.starting\""), audit)
+        XCTAssertTrue(audit.contains("\"event\": \"openclaw.agent.turn.finished\""), audit)
+        let sanitizer = try XCTUnwrap(summary["sanitizer"] as? [String: Any])
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(sanitizer["redactedCount"] as? Int), 1)
+        XCTAssertFalse(try directory(runDirectory, contains: "sk-test-1234567890"))
+        XCTAssertFalse(try directory(runDirectory, contains: "refresh_token"))
+        XCTAssertFalse(try directory(runDirectory, contains: "authorization_code"))
+    }
+
+    func testSourceReplayHelperRunUsesIsolatedOpenClawHomeCopy() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+        let fakeOpenClaw = try installFakeSourceReplayRuntime(root: root, name: "openclaw")
+        let sourceOpenClawHome = root.appendingPathComponent("source-openclaw", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceOpenClawHome, withIntermediateDirectories: true)
+        let sourceConfig = sourceOpenClawHome.appendingPathComponent("openclaw.json", isDirectory: false)
+        let sourceConfigContent = """
+        {
+          "gateway": {
+            "auth": {
+              "mode": "token",
+              "token": "raw-replay-token-should-stay-out-of-artifacts"
+            },
+            "mode": "local",
+            "port": 18789
+          },
+          "models": {
+            "default": "openai/gpt-5.5"
+          }
+        }
+        """
+        try sourceConfigContent.write(to: sourceConfig, atomically: true, encoding: .utf8)
+        let fixture = root.appendingPathComponent("fixture.json", isDirectory: false)
+        try """
+        {
+          "schemaVersion": 1,
+          "source": "obsidian",
+          "playbookID": "obsidian.direct-markdown",
+          "playbookVersion": "v1",
+          "interventions": [
+            {
+              "playbookStepId": "confirm_vault_if_needed",
+              "matcher": {
+                "type": "contains",
+                "text": "vault path"
+              },
+              "answer": "sample",
+              "approval": "storable"
+            }
+          ]
+        }
+        """.write(to: fixture, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "run",
+                "--runtime", "openclaw",
+                "--root", root.appendingPathComponent("replay", isDirectory: true).path,
+                "--batch-id", "unit",
+                "--run-id", "openclaw-isolated-home",
+                "--fixture", fixture.path,
+                "--openclaw-executable", fakeOpenClaw.path,
+                "--openclaw-home", sourceOpenClawHome.path,
+                "--timeout", "5",
+                "--max-turns", "4",
+            ],
+            environment: [:]
+        )
+        let payload = try jsonObject(from: result.stdout)
+        let runDirectory = URL(fileURLWithPath: try XCTUnwrap(payload["runDirectory"] as? String), isDirectory: true)
+        let summary = try jsonObject(at: runDirectory.appendingPathComponent("run-summary.json", isDirectory: false))
+        let openClaw = try XCTUnwrap(summary["openClaw"] as? [String: Any])
+        let isolatedHome = URL(fileURLWithPath: try XCTUnwrap(openClaw["isolatedHome"] as? String), isDirectory: true)
+        let isolatedConfig = URL(fileURLWithPath: try XCTUnwrap(openClaw["configPath"] as? String), isDirectory: false)
+        let stateDir = URL(fileURLWithPath: try XCTUnwrap(openClaw["stateDir"] as? String), isDirectory: true)
+        let envLog = try String(contentsOf: runDirectory.appendingPathComponent("openclaw-env.jsonl"), encoding: .utf8)
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(summary["ok"] as? Bool, true)
+        XCTAssertEqual(try String(contentsOf: sourceConfig, encoding: .utf8), sourceConfigContent)
+        XCTAssertNotEqual(isolatedHome.path, sourceOpenClawHome.path)
+        XCTAssertTrue(isolatedHome.path.contains("/replay/openclaw-home/unit/openclaw-isolated-home"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: isolatedConfig.path))
+        XCTAssertEqual(stateDir.path, isolatedHome.path)
+        XCTAssertTrue(envLog.contains("OPENCLAW_HOME"))
+        XCTAssertTrue(envLog.contains(isolatedHome.path), envLog)
+        XCTAssertTrue(envLog.contains(isolatedConfig.path), envLog)
+        XCTAssertFalse(envLog.contains(sourceOpenClawHome.path), envLog)
+        XCTAssertTrue(envLog.contains(#""hasGatewayToken": true"#), envLog)
+        let audit = try String(contentsOf: runDirectory.appendingPathComponent("openclaw-config-audit.jsonl"), encoding: .utf8)
+        XCTAssertTrue(audit.contains("\"gatewayTokenPresent\": true"), audit)
+        XCTAssertTrue(audit.contains("\"event\": \"openclaw.isolation.prepared\""), audit)
+        XCTAssertFalse(try directory(runDirectory, contains: "raw-replay-token-should-stay-out-of-artifacts"))
+    }
+
+    func testSourceReplayHelperRunUsesBundledObsidianBaselineFixtureAnswerEnv() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+        let fakeOpenClaw = try installFakeSourceReplayRuntime(root: root, name: "openclaw")
+        let fakeOpenClawHome = try makeFakeOpenClawHome(root: root)
+        let fixture = sourceReplayFixtureURL("obsidian.direct-markdown.baseline.v1.json")
+        let vaultPath = root.appendingPathComponent("TestVault", isDirectory: true).path
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "run",
+                "--runtime", "openclaw",
+                "--root", root.appendingPathComponent("replay", isDirectory: true).path,
+                "--batch-id", "unit",
+                "--run-id", "obsidian-baseline-env",
+                "--fixture", fixture.path,
+                "--openclaw-executable", fakeOpenClaw.path,
+                "--openclaw-home", fakeOpenClawHome.path,
+                "--timeout", "5",
+                "--max-turns", "4",
+            ],
+            environment: [
+                "ZEBRA_REPLAY_OBSIDIAN_VAULT_PATH": vaultPath,
+            ]
+        )
+        let payload = try jsonObject(from: result.stdout)
+        let runDirectory = URL(fileURLWithPath: try XCTUnwrap(payload["runDirectory"] as? String), isDirectory: true)
+        let fixtureArtifact = try String(contentsOf: runDirectory.appendingPathComponent("fixture.json"), encoding: .utf8)
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(payload["source"] as? String, "obsidian")
+        XCTAssertEqual(payload["playbookID"] as? String, "obsidian.direct-markdown")
+        XCTAssertEqual(payload["playbookVersion"] as? String, "v1")
+        XCTAssertTrue(fixtureArtifact.contains("ZEBRA_REPLAY_OBSIDIAN_VAULT_PATH"), fixtureArtifact)
+        XCTAssertFalse(fixtureArtifact.contains(vaultPath), fixtureArtifact)
+    }
+
+    func testSourceReplayHelperRunStopsWhenFixtureAnswerEnvIsMissing() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+        let fakeOpenClaw = try installFakeSourceReplayRuntime(root: root, name: "openclaw")
+        let fakeOpenClawHome = try makeFakeOpenClawHome(root: root)
+        let fixture = sourceReplayFixtureURL("obsidian.direct-markdown.baseline.v1.json")
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "run",
+                "--runtime", "openclaw",
+                "--root", root.appendingPathComponent("replay", isDirectory: true).path,
+                "--batch-id", "unit",
+                "--run-id", "obsidian-baseline-missing-env",
+                "--fixture", fixture.path,
+                "--openclaw-executable", fakeOpenClaw.path,
+                "--openclaw-home", fakeOpenClawHome.path,
+                "--timeout", "5",
+                "--max-turns", "4",
+            ],
+            environment: [:]
+        )
+        let payload = try jsonObject(from: result.stdout)
+        let runDirectory = URL(fileURLWithPath: try XCTUnwrap(payload["runDirectory"] as? String), isDirectory: true)
+        let events = try String(contentsOf: runDirectory.appendingPathComponent("intervention-events.jsonl"), encoding: .utf8)
+        let unanswered = try XCTUnwrap(payload["unansweredInterventions"] as? [[String: Any]])
+
+        XCTAssertEqual(result.status, 1, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["exitReason"] as? String, "fixture_answer_env_missing")
+        XCTAssertEqual(unanswered.first?["playbookStepID"] as? String, "confirm_vault_if_needed")
+        XCTAssertEqual(unanswered.first?["answerEnv"] as? String, "ZEBRA_REPLAY_OBSIDIAN_VAULT_PATH")
+        XCTAssertTrue(events.contains("\"event\": \"fixture.intervention.missing_answer_env\""), events)
+        XCTAssertFalse(events.contains("\"event\": \"fixture.intervention.applied\""), events)
+    }
+
+    func testSourceReplayHelperTestUsesSelectedHermesRuntimeForAppleNotesScenario() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+        let fakeHermes = try installFakeSourceReplayRuntime(
+            root: root,
+            name: "hermes",
+            firstStep: "choose_ingest_scope",
+            source: "apple-notes",
+            playbookID: "apple-notes.memo-cli"
+        )
+        try writeSelectedRuntimeReceipt(root: root, runtime: "hermes", executable: fakeHermes)
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "test",
+                "apple-notes.memo-cli.baseline",
+                "--root", root.appendingPathComponent("replay", isDirectory: true).path,
+                "--batch-id", "unit",
+                "--run-id", "apple-notes-hermes",
+                "--timeout", "5",
+                "--max-turns", "4",
+            ],
+            environment: [:]
+        )
+        let payload = try jsonObject(from: result.stdout)
+        let runSummary = try XCTUnwrap(payload["runSummary"] as? [String: Any])
+        let artifactScan = try XCTUnwrap(payload["artifactScan"] as? [String: Any])
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(payload["command"] as? String, "test")
+        XCTAssertEqual(payload["scenarioID"] as? String, "apple-notes.memo-cli.baseline")
+        XCTAssertEqual(payload["runtime"] as? String, "hermes")
+        XCTAssertEqual(runSummary["source"] as? String, "apple-notes")
+        XCTAssertEqual(runSummary["playbookID"] as? String, "apple-notes.memo-cli")
+        XCTAssertEqual(runSummary["interventionCount"] as? Int, 2)
+        XCTAssertEqual(artifactScan["ok"] as? Bool, true)
+        XCTAssertNotNil(payload["summaryPath"] as? String)
+    }
+
+    func testSourceReplayHelperTestUsesSelectedOpenClawRuntimeForAppleNotesScenario() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+        let fakeOpenClaw = try installFakeSourceReplayRuntime(
+            root: root,
+            name: "openclaw",
+            firstStep: "choose_ingest_scope",
+            source: "apple-notes",
+            playbookID: "apple-notes.memo-cli"
+        )
+        let fakeOpenClawHome = try makeFakeOpenClawHome(root: root)
+        let sourceConfig = fakeOpenClawHome.appendingPathComponent("openclaw.json", isDirectory: false)
+        let sourceConfigContent = try String(contentsOf: sourceConfig, encoding: .utf8)
+        try writeSelectedRuntimeReceipt(root: root, runtime: "openclaw", executable: fakeOpenClaw)
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "test",
+                "apple-notes.memo-cli.baseline",
+                "--root", root.appendingPathComponent("replay", isDirectory: true).path,
+                "--batch-id", "unit",
+                "--run-id", "apple-notes-openclaw",
+                "--openclaw-home", fakeOpenClawHome.path,
+                "--timeout", "5",
+                "--max-turns", "4",
+            ],
+            environment: [:]
+        )
+        let payload = try jsonObject(from: result.stdout)
+        let openClawConfig = try XCTUnwrap(payload["openClawOriginalConfig"] as? [String: Any])
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(payload["runtime"] as? String, "openclaw")
+        XCTAssertEqual(openClawConfig["unchanged"] as? Bool, true)
+        XCTAssertEqual(try String(contentsOf: sourceConfig, encoding: .utf8), sourceConfigContent)
+    }
+
+    func testSourceReplayHelperTestFailsWhenSelectedRuntimeReceiptIsMissing() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "test",
+                "apple-notes.memo-cli.baseline",
+                "--root", root.appendingPathComponent("replay", isDirectory: true).path,
+            ],
+            environment: [:]
+        )
+        let payload = try jsonObject(from: result.stdout)
+
+        XCTAssertEqual(result.status, 1, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["reason"] as? String, "selected_runtime_missing")
+        XCTAssertEqual(payload["scenarioID"] as? String, "apple-notes.memo-cli.baseline")
+    }
+
+    func testSourceReplayHelperTestFailsForUnknownScenario() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: ["test", "missing.scenario"],
+            environment: [:]
+        )
+        let payload = try jsonObject(from: result.stdout)
+
+        XCTAssertEqual(result.status, 1, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["reason"] as? String, "unknown_scenario")
+    }
+
+    func testSourceReplayHelperRunWritesHermesResumeArtifacts() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+        let fakeHermes = try installFakeSourceReplayRuntime(root: root, name: "hermes")
+        let fixture = root.appendingPathComponent("fixture.json", isDirectory: false)
+        try """
+        {
+          "schemaVersion": 1,
+          "source": "obsidian",
+          "playbookID": "obsidian.direct-markdown",
+          "playbookVersion": "v1",
+          "interventions": [
+            {
+              "playbookStepId": "confirm_vault_if_needed",
+              "matcher": {
+                "type": "contains",
+                "text": "vault path"
+              },
+              "answer": "sample",
+              "approval": "storable"
+            }
+          ]
+        }
+        """.write(to: fixture, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "run",
+                "--runtime", "hermes",
+                "--root", root.appendingPathComponent("replay", isDirectory: true).path,
+                "--batch-id", "unit",
+                "--run-id", "hermes-success",
+                "--fixture", fixture.path,
+                "--hermes-executable", fakeHermes.path,
+                "--timeout", "5",
+                "--max-turns", "4",
+            ],
+            environment: [:]
+        )
+        let payload = try jsonObject(from: result.stdout)
+        let hermes = try XCTUnwrap(payload["hermes"] as? [String: Any])
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(payload["runtime"] as? String, "hermes")
+        XCTAssertEqual(payload["exitReason"] as? String, "completed")
+        XCTAssertEqual(hermes["sessionID"] as? String, "fake-hermes-session")
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(hermes["resumeCount"] as? Int), 1)
+    }
+
+    func testSourceReplayHelperRunStopsWhenFixtureDoesNotCoverObservedStep() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+        let fakeOpenClaw = try installFakeSourceReplayRuntime(root: root, name: "openclaw", firstStep: "choose_ingest_scope")
+        let fakeOpenClawHome = try makeFakeOpenClawHome(root: root)
+        let fixture = root.appendingPathComponent("fixture.json", isDirectory: false)
+        try """
+        {
+          "schemaVersion": 1,
+          "source": "obsidian",
+          "playbookID": "obsidian.direct-markdown",
+          "playbookVersion": "v1",
+          "interventions": [
+            {
+              "playbookStepId": "confirm_vault_if_needed",
+              "matcher": {
+                "type": "contains",
+                "text": "vault path"
+              },
+              "answer": "/Users/hanwool/TestVault",
+              "approval": "storable"
+            }
+          ]
+        }
+        """.write(to: fixture, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "run",
+                "--runtime", "openclaw",
+                "--root", root.appendingPathComponent("replay", isDirectory: true).path,
+                "--batch-id", "unit",
+                "--run-id", "openclaw-needs-human",
+                "--fixture", fixture.path,
+                "--openclaw-executable", fakeOpenClaw.path,
+                "--openclaw-home", fakeOpenClawHome.path,
+                "--timeout", "5",
+                "--max-turns", "4",
+            ],
+            environment: [:]
+        )
+        let payload = try jsonObject(from: result.stdout)
+        let unanswered = try XCTUnwrap(payload["unansweredInterventions"] as? [[String: Any]])
+
+        XCTAssertEqual(result.status, 1, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["exitReason"] as? String, "needs_human_intervention")
+        XCTAssertEqual(unanswered.first?["source"] as? String, "obsidian")
+        XCTAssertEqual(unanswered.first?["playbookStepID"] as? String, "choose_ingest_scope")
+    }
+
+    func testSourceReplayHelperBatchWritesSummaryForMultipleRuns() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+        let fakeHermes = try installFakeSourceReplayRuntime(root: root, name: "hermes")
+        let fixture = root.appendingPathComponent("fixture.json", isDirectory: false)
+        try """
+        {
+          "schemaVersion": 1,
+          "source": "obsidian",
+          "playbookID": "obsidian.direct-markdown",
+          "playbookVersion": "v1",
+          "interventions": [
+            {
+              "playbookStepId": "confirm_vault_if_needed",
+              "matcher": {
+                "type": "contains",
+                "text": "vault path"
+              },
+              "answer": "sample",
+              "approval": "storable"
+            }
+          ]
+        }
+        """.write(to: fixture, atomically: true, encoding: .utf8)
+
+        let rootReplay = root.appendingPathComponent("replay", isDirectory: true)
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "batch",
+                "--runtime", "hermes",
+                "--root", rootReplay.path,
+                "--batch-id", "batch-unit",
+                "--fixture", fixture.path,
+                "--hermes-executable", fakeHermes.path,
+                "--timeout", "5",
+                "--max-turns", "4",
+                "--run-count", "2",
+            ],
+            environment: [:]
+        )
+        let payload = try jsonObject(from: result.stdout)
+        let summaryURL = rootReplay
+            .appendingPathComponent("batch", isDirectory: true)
+            .appendingPathComponent("batch-unit", isDirectory: true)
+            .appendingPathComponent("batch-summary.json", isDirectory: false)
+        let summary = try jsonObject(at: summaryURL)
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(summary["command"] as? String, "batch")
+        XCTAssertEqual(summary["runCount"] as? Int, 2)
+        XCTAssertEqual(summary["completedCount"] as? Int, 2)
+        XCTAssertEqual(summary["failedCount"] as? Int, 0)
+    }
+
+    func testSourceReplayHelperHermesProbeReadsSessionIDFromStderr() throws {
+        let root = try makeTemporaryDirectory()
+        let helper = try XCTUnwrap(ZebraSourceReplayRunner(onboardingDirectory: root).installHelperScript())
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        let fakeHermes = fakeBin.appendingPathComponent("hermes", isDirectory: false)
+        let script = """
+        #!/bin/sh
+        if [ "$1" = "chat" ]; then
+          case "$*" in
+            *"--resume 20260706_fake"*"The color is blue"*)
+              echo 'RECORDED_COLOR=blue'
+              echo 'REMEMBERED_PREVIOUS_QUESTION=yes'
+              exit 0
+              ;;
+            *"--resume 20260706_fake"*)
+              echo 'HELPER_CWD='"$(pwd)"
+              echo 'HELPER_MARKER=hermes-helper'
+              echo 'HELPER_ARG=hermes-arg'
+              exit 0
+              ;;
+            *)
+              echo 'session_id: 20260706_fake' >&2
+              echo 'Current working directory: '"$(pwd)"
+              echo 'ZEBRA_REPLAY_PROBE_TOKEN: '"${ZEBRA_REPLAY_PROBE_TOKEN:-missing}"
+              cat probe.txt
+              echo 'QUESTION: What color should I record?'
+              exit 0
+              ;;
+          esac
+        fi
+        exit 1
+        """
+        try script.write(to: fakeHermes, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeHermes.path)
+
+        let result = try runProcess(
+            executableURL: helper,
+            arguments: [
+                "probe",
+                "--runtime", "hermes",
+                "--root", root.appendingPathComponent("replay", isDirectory: true).path,
+                "--batch-id", "unit",
+                "--run-id", "hermes-stderr",
+                "--timeout", "5",
+                "--hermes-executable", fakeHermes.path,
+            ],
+            environment: [:]
+        )
+        let payload = try jsonObject(from: result.stdout)
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(payload["runtime"] as? String, "hermes")
+        XCTAssertEqual(payload["sessionID"] as? String, "20260706_fake")
+        let checks = try XCTUnwrap(payload["checks"] as? [String: Bool])
+        XCTAssertEqual(checks["helperCommandEnv"], true)
+        XCTAssertEqual(checks["multiTurnMemory"], true)
     }
 
     func testSourceOnboardingCatalogNormalizesFreeTextAliasesInMentionOrder() {
@@ -1009,6 +1746,96 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(entryContext["adapterReady"] as? Bool, false)
         let reasons = try XCTUnwrap(entryContext["adapterReadinessReasons"] as? [String])
         XCTAssertTrue(reasons.contains("missing:adapterSkillRouter"), reasons.joined(separator: ","))
+    }
+
+    @MainActor
+    func testSourceOnboardingHelperStatusRefreshesStaleAdapterReadiness() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let sourceRepo = root
+            .appendingPathComponent("repos", isDirectory: true)
+            .appendingPathComponent("gbrain", isDirectory: true)
+        let adapterRepo = sourceRepo
+            .deletingLastPathComponent()
+            .appendingPathComponent("gbrain-adapter", isDirectory: true)
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let executable = try installFakeRuntime(root: root, name: "hermes")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceRepo, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: adapterRepo, withIntermediateDirectories: true)
+        try writeInstalledAdapterFiles(vault)
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: vault.path,
+            executablePath: executable.path,
+            sourceRepoPath: sourceRepo.path
+        )
+        try writeCompletedAdapterState(
+            stateURL: adapterStateURL,
+            targetVaultPath: vault.path,
+            adapterRepoPath: adapterRepo.path
+        )
+        try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let staleState: [String: Any] = [
+            "schemaVersion": 1,
+            "status": "ready",
+            "entryContext": [
+                "onboardingLanguageCode": "ko",
+                "gbrainTargetPath": vault.path,
+                "gbrainTargetKey": "vault:\(vault.path)",
+                "adapterReady": false,
+                "adapterReadinessReasons": [],
+            ],
+            "progress": [
+                "rawSourceInput": NSNull(),
+                "normalizedSourceList": [],
+                "uncatalogedSources": [],
+                "sourceConfirmation": NSNull(),
+                "executionOrder": NSNull(),
+                "activeSourceID": NSNull(),
+                "sourceRows": [:],
+                "pendingQuestion": NSNull(),
+            ],
+            "updatedAt": "2026-06-04T00:00:00Z",
+        ]
+        let staleData = try JSONSerialization.data(withJSONObject: staleState, options: [.prettyPrinted, .sortedKeys])
+        try staleData.write(to: stateURL, options: .atomic)
+
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: vault.path)
+        )
+        let status = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["status", "--json"],
+            environment: [
+                "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+                "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+                "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+                "ZEBRA_GBRAIN_WRITE_TARGET_PATH": vault.path,
+            ]
+        )
+
+        XCTAssertEqual(status.status, 0, "stdout:\n\(status.stdout)\nstderr:\n\(status.stderr)")
+        let payload = try jsonObject(from: status.stdout)
+        let state = try XCTUnwrap(payload["state"] as? [String: Any])
+        let entryContext = try XCTUnwrap(state["entryContext"] as? [String: Any])
+        XCTAssertEqual(entryContext["adapterReady"] as? Bool, true)
+        XCTAssertEqual(entryContext["adapterReadinessReasons"] as? [String], [])
+        let persisted = try jsonObject(at: stateURL)
+        let persistedEntry = try XCTUnwrap(persisted["entryContext"] as? [String: Any])
+        XCTAssertEqual(persistedEntry["adapterReady"] as? Bool, true)
     }
 
     @MainActor
@@ -5794,6 +6621,29 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
+    private func jsonObject(at url: URL) throws -> [String: Any] {
+        let data = try Data(contentsOf: url)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func directory(_ url: URL, contains needle: String) throws -> Bool {
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        ) else {
+            return false
+        }
+        for case let fileURL as URL in enumerator {
+            let values = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
+            guard values.isRegularFile == true else { continue }
+            guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
+            if text.contains(needle) {
+                return true
+            }
+        }
+        return false
+    }
+
     private func XCTAssertPrompt(
         _ prompt: String,
         contains earlier: String,
@@ -6386,6 +7236,181 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         try scriptContent.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         return script
+    }
+
+    private func installFakeSourceReplayRuntime(
+        root: URL,
+        name: String,
+        firstStep: String = "confirm_vault_if_needed",
+        source: String = "obsidian",
+        playbookID: String = "obsidian.direct-markdown"
+    ) throws -> URL {
+        let directory = root.appendingPathComponent("fake-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let script = directory.appendingPathComponent(name, isDirectory: false)
+        let scriptContent = """
+        #!/usr/bin/env python3
+        import json
+        import os
+        import sys
+
+        runtime = "\(name)"
+        first_step = "\(firstStep)"
+        source = "\(source)"
+        playbook_id = "\(playbookID)"
+        playbook_version = "v1"
+
+        def prompt_for(step):
+            if step == "confirm_vault_if_needed":
+                return "Please provide the Obsidian vault path."
+            if step == "choose_ingest_scope":
+                return "Choose the ingest scope: folder, search query, selected note, small sample, or skip."
+            if step == "confirm_ingest_plan":
+                return "Confirm the ingest plan with explicit approval."
+            if step == "complete":
+                return "Source Onboarding is complete."
+            return "Continue Source Onboarding."
+
+        def write_state(step):
+            path = os.environ.get("ZEBRA_SOURCE_ONBOARDING_STATE")
+            if not path:
+                return
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            state = {
+                "progress": {
+                    "sourceRows": {
+                        source: {
+                            "playbookID": playbook_id,
+                            "playbookVersion": playbook_version,
+                            "playbookStepID": step,
+                            "status": "checked" if step == "complete" else "attention"
+                        }
+                    }
+                }
+            }
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(state, handle, sort_keys=True)
+
+        def payload(step):
+            return {
+                "nextSourceID": source,
+                "nextPlaybookID": playbook_id,
+                "nextPlaybookVersion": playbook_version,
+                "nextPlaybookStepID": step,
+                "nextPrompt": prompt_for(step),
+                "nextPromptPath": os.path.join(os.environ.get("ZEBRA_SOURCE_REPLAY_RUN_DIR", ""), "next-prompt.txt")
+            }
+
+        def record_openclaw_environment():
+            if runtime != "openclaw":
+                return
+            run_dir = os.environ.get("ZEBRA_SOURCE_REPLAY_RUN_DIR")
+            if not run_dir:
+                return
+            os.makedirs(run_dir, exist_ok=True)
+            entry = {
+                "command": " ".join(sys.argv[1:3]),
+                "OPENCLAW_HOME": os.environ.get("OPENCLAW_HOME"),
+                "OPENCLAW_CONFIG_PATH": os.environ.get("OPENCLAW_CONFIG_PATH"),
+                "OPENCLAW_STATE_DIR": os.environ.get("OPENCLAW_STATE_DIR"),
+                "hasGatewayToken": bool(os.environ.get("OPENCLAW_GATEWAY_TOKEN")),
+            }
+            with open(os.path.join(run_dir, "openclaw-env.jsonl"), "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, sort_keys=True) + "\\n")
+
+        def message_from_args():
+            args = sys.argv
+            if "--message" in args:
+                return args[args.index("--message") + 1]
+            if "-q" in args:
+                return args[args.index("-q") + 1]
+            return " ".join(args[1:])
+
+        record_openclaw_environment()
+
+        if runtime == "openclaw" and len(sys.argv) > 2 and sys.argv[1] == "agents" and sys.argv[2] == "add":
+            print(json.dumps({"ok": True}))
+            sys.exit(0)
+
+        message = message_from_args()
+        if source == "apple-notes":
+            lowered = message.lower()
+            if lowered.strip() in {"yes", "y"}:
+                step = "complete"
+            elif "sample" in lowered:
+                step = "confirm_ingest_plan"
+            else:
+                step = first_step
+        else:
+            step = "complete" if ("TestVault" in message or "sample" in message or "sk-test" in message) else first_step
+        write_state(step)
+        current_payload = payload(step)
+
+        if runtime == "openclaw":
+            print(json.dumps({"result": {"payloads": [{"text": json.dumps(current_payload, sort_keys=True)}]}}))
+        else:
+            if "--resume" not in sys.argv:
+                print("session_id: fake-hermes-session", file=sys.stderr)
+            print(json.dumps(current_payload, sort_keys=True))
+        """
+        try scriptContent.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    private func makeFakeOpenClawHome(root: URL, token: String = "fake-openclaw-gateway-token") throws -> URL {
+        let home = root.appendingPathComponent("fake-openclaw-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try """
+        {
+          "gateway": {
+            "auth": {
+              "mode": "token",
+              "token": "\(token)"
+            },
+            "mode": "local",
+            "port": 18789
+          },
+          "models": {
+            "default": "openai/gpt-5.5"
+          }
+        }
+        """.write(to: home.appendingPathComponent("openclaw.json", isDirectory: false), atomically: true, encoding: .utf8)
+        return home
+    }
+
+    private func writeSelectedRuntimeReceipt(root: URL, runtime: String, executable: URL) throws {
+        try """
+        {
+          "schemaVersion": 1,
+          "receipt": {
+            "complete": true,
+            "runtime": "\(runtime)",
+            "executablePath": "\(executable.path)",
+            "provider": "test",
+            "keySource": "test",
+            "checks": {
+              "credentials": true,
+              "runtimeConfigCommand": true,
+              "llmCall": true
+            }
+          }
+        }
+        """.write(
+            to: root.appendingPathComponent("gbrain-runtime-state.json", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    private func sourceReplayFixtureURL(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/ZebraVault/Resources/SourceReplayFixtures", isDirectory: true)
+            .appendingPathComponent(name, isDirectory: false)
+            .standardizedFileURL
     }
 
     private func installFakeRuntimeLogger(root: URL, name: String, log: URL) throws -> URL {

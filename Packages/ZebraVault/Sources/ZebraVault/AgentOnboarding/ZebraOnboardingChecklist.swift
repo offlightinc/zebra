@@ -1308,9 +1308,11 @@ public enum ZebraOnboardingChecklistCommand {
         prompt: String,
         language: ZebraOnboardingLanguage = ZebraOnboardingLanguage.current()
     ) -> String {
-        guard let promptPath = writeSourceOnboardingRuntimePromptFile(
-            directoryPath: launch.runtimePromptDirectory,
-            prompt: "\(language.promptPolicy)\n\n\(prompt)"
+        guard let launchPlan = ZebraSourceOnboardingRuntimeLaunchPlan.make(
+            launch: launch,
+            runtime: runtime,
+            prompt: prompt,
+            language: language
         ) else {
             return agentStartupLine(
                 cwd: launch.launchDirectory,
@@ -1318,43 +1320,7 @@ public enum ZebraOnboardingChecklistCommand {
                 shellEnvironmentPrefix: launch.shellEnvironmentPrefix
             )
         }
-        let runtimeDisplayName = gbrainRuntimeDisplayName(runtime.runtime)
-        let startMessage = "printf '%s\\n' \(ZebraAgentLaunchCommand.shellQuote("Starting \(runtimeDisplayName) for Zebra Source Onboarding..."))"
-        let command: String
-        let executable = ZebraAgentLaunchCommand.shellQuote(runtime.executablePath)
-        let promptPathArgument = ZebraAgentLaunchCommand.shellQuote(promptPath)
-        switch runtime.runtime {
-        case "openclaw":
-            command = "ZEBRA_SOURCE_ONBOARDING_PROMPT=$(cat \(promptPathArgument)) && \(startMessage) && cd \(ZebraAgentLaunchCommand.shellQuote(launch.launchDirectory)) && exec \(executable) tui --message \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\"\r"
-        case "hermes":
-            command = "ZEBRA_SOURCE_ONBOARDING_PROMPT=$(cat \(promptPathArgument)) && \(startMessage) && cd \(ZebraAgentLaunchCommand.shellQuote(launch.launchDirectory)) && exec \(executable) chat --tui --source zebra-source-onboarding --query \"$ZEBRA_SOURCE_ONBOARDING_PROMPT\"\r"
-        default:
-            command = "echo 'Unsupported OpenClaw/Hermes runtime for Source Onboarding: \(runtime.runtime)' >&2 && exit 1\r"
-        }
-        return "\(launch.shellEnvironmentPrefix)\(command)"
-    }
-
-    private static func writeSourceOnboardingRuntimePromptFile(
-        directoryPath: String,
-        prompt: String
-    ) -> String? {
-        let directory = URL(fileURLWithPath: directoryPath, isDirectory: true)
-        let url = directory.appendingPathComponent(
-            "source-onboarding-\(UUID().uuidString).prompt.txt",
-            isDirectory: false
-        )
-        do {
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true
-            )
-            let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
-            try text.write(to: url, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            return url.path
-        } catch {
-            return nil
-        }
+        return launchPlan.terminalStartupLine
     }
 
     private static func gbrainRuntimeDisplayName(_ runtime: String) -> String {
