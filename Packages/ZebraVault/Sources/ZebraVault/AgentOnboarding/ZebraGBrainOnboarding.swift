@@ -228,6 +228,7 @@ public struct ZebraGBrainOnboardingStore {
         var vaultPath: String?
         var sourceId: String?
         var profileId: String?
+        var remoteMCPURL: String?
         var gbrainExecutablePath: String?
         var wrapperPath: String?
         var doctorStatus: ProbeResult?
@@ -268,6 +269,7 @@ public struct ZebraGBrainOnboardingStore {
     private struct SourceVerification: Codable, Equatable {
         var sourceId: String?
         var targetPath: String?
+        var remoteMCPURL: String?
         var verifiedAt: String?
         var method: String?
         var gbrainExecutablePath: String?
@@ -340,6 +342,7 @@ public struct ZebraGBrainOnboardingStore {
         "user_existing_repo",
         "user_created_repo",
         "user_confirmed_home",
+        "thin_client_remote",
     ]
 
     private let stateURL: URL
@@ -535,44 +538,26 @@ public struct ZebraGBrainOnboardingStore {
         let verification = state.progress?.existingInstallVerification
         let status = verification?.status
         let reasons = verification?.reasons ?? []
-        let verified = status == "verified" || status == "existing_install_verified"
-        let transientPreserved = status == "transient_retry_preserved"
         let diagnosisNeeded = status == "diagnosis_needed" || status == "existing_install_failed"
-        let verificationActive = !verified && !transientPreserved && !diagnosisNeeded
 
-        var snapshots = [
-            ZebraOnboardingChecklistSubstepSnapshot(
-                id: "zebra-gbrain-existing-install-verify",
-                title: Self.existingInstallVerificationTitle(),
-                detail: existingInstallVerificationDetail(status: status, reasons: reasons),
-                isCompleted: verified || transientPreserved,
-                isActive: verificationActive,
-                isWaitingForUser: false,
-                isRunning: isParentRunning && verificationActive,
-                showsStart: showsStartForActiveSection && verificationActive,
-                wasStartedBefore: wasStartedBefore,
-                isAttention: transientPreserved
-            ),
-        ]
-
-        if diagnosisNeeded {
-            snapshots.append(
-                ZebraOnboardingChecklistSubstepSnapshot(
-                    id: "zebra-gbrain-existing-install-diagnosis",
-                    title: Self.existingInstallDiagnosisTitle(),
-                    detail: existingInstallVerificationDetail(status: status, reasons: reasons),
-                    isCompleted: false,
-                    isActive: true,
-                    isWaitingForUser: false,
-                    isRunning: isParentRunning,
-                    showsStart: showsStartForActiveSection,
-                    wasStartedBefore: wasStartedBefore,
-                    isAttention: true
-                )
-            )
+        guard diagnosisNeeded else {
+            return []
         }
 
-        return snapshots
+        return [
+            ZebraOnboardingChecklistSubstepSnapshot(
+                id: "zebra-gbrain-existing-install-diagnosis",
+                title: Self.existingInstallDiagnosisTitle(),
+                detail: existingInstallVerificationDetail(status: status, reasons: reasons),
+                isCompleted: false,
+                isActive: true,
+                isWaitingForUser: false,
+                isRunning: isParentRunning,
+                showsStart: showsStartForActiveSection,
+                wasStartedBefore: wasStartedBefore,
+                isAttention: true
+            ),
+        ]
     }
 
     private func existingInstallVerificationDetail(status: String?, reasons: [String]) -> String? {
@@ -625,13 +610,6 @@ public struct ZebraGBrainOnboardingStore {
         )
     }
 
-    private static func existingInstallVerificationTitle() -> String {
-        String(
-            localized: "brain.onboarding.gbrain.substep.existingInstall.verify",
-            defaultValue: "Check existing GBrain install"
-        )
-    }
-
     private static func existingInstallDiagnosisTitle() -> String {
         String(
             localized: "brain.onboarding.gbrain.substep.existingInstall.diagnose",
@@ -665,6 +643,11 @@ public struct ZebraGBrainOnboardingStore {
         var reasons: [String] = []
         if !targetResolutionVerifies(resolved.target.targetResolution) {
             reasons.append("target_confirmation_missing")
+        }
+        if targetHasThinClientRemoteVerification(resolved.target),
+           receiptIsComplete(receipt, selectedVaultPath: selectedVaultPath),
+           reasons.isEmpty {
+            return CompletionResult(isComplete: true, reasons: [])
         }
         guard let vaultPath = standardizedExistingDirectoryPath(resolved.target.vaultPath) else {
             reasons.append("receipt_target_missing")
@@ -715,17 +698,25 @@ public struct ZebraGBrainOnboardingStore {
         if !targetResolutionVerifies(resolved.target.targetResolution) {
             reasons.append("target_confirmation_missing")
         }
-        guard standardizedExistingDirectoryPath(resolved.target.vaultPath) != nil else {
-            reasons.append("receipt_target_missing")
-            return CompletionResult(isComplete: false, reasons: reasons)
-        }
-        if let vaultPath = standardizedExistingDirectoryPath(resolved.target.vaultPath),
-           let forbiddenReason = forbiddenBrainRepoTargetReason(
-            vaultPath,
-            method: resolved.target.targetResolution?.method
-           ) {
-            reasons.append(forbiddenReason)
-            return CompletionResult(isComplete: false, reasons: reasons)
+        if targetHasThinClientRemoteVerification(resolved.target) {
+            guard receiptIsComplete(receipt, selectedVaultPath: selectedVaultPath) else {
+                reasons.append("receipt_incomplete")
+                return CompletionResult(isComplete: false, reasons: reasons)
+            }
+            return CompletionResult(isComplete: reasons.isEmpty, reasons: reasons)
+        } else {
+            guard standardizedExistingDirectoryPath(resolved.target.vaultPath) != nil else {
+                reasons.append("receipt_target_missing")
+                return CompletionResult(isComplete: false, reasons: reasons)
+            }
+            if let vaultPath = standardizedExistingDirectoryPath(resolved.target.vaultPath),
+               let forbiddenReason = forbiddenBrainRepoTargetReason(
+                vaultPath,
+                method: resolved.target.targetResolution?.method
+               ) {
+                reasons.append(forbiddenReason)
+                return CompletionResult(isComplete: false, reasons: reasons)
+            }
         }
         guard nonEmpty(resolved.target.sourceId) != nil || targetHasThinClientReadVerification(resolved.target) else {
             reasons.append("source_not_registered")
@@ -740,6 +731,13 @@ public struct ZebraGBrainOnboardingStore {
 
     private func targetHasThinClientReadVerification(_ target: Target) -> Bool {
         target.sourceVerification?.method == "existing_install_thin_client_read_probe"
+            && target.complete == true
+    }
+
+    private func targetHasThinClientRemoteVerification(_ target: Target) -> Bool {
+        target.targetResolution?.method == "thin_client_remote"
+            && target.sourceVerification?.method == "existing_install_thin_client_read_probe"
+            && nonEmpty(target.remoteMCPURL) != nil
             && target.complete == true
     }
 
@@ -1049,7 +1047,7 @@ public struct ZebraGBrainOnboardingStore {
             )
         } else {
             instructions.append(
-                "No selected brain repo target is confirmed yet. First inspect the installed `gbrain` CLI and ask the user to choose an existing brain repo target if one is found. Do not run `verify-existing-install` until you have a concrete target path."
+                "No selected local brain repo target is confirmed yet. First run `zebra-gbrain-onboarding discover-existing-install-target`. If it returns `kind: remote_thin_client`, treat the remote MCP URL as a remote-only target, do not ask for a local brain repo path, and run the printed `nextAction.command`. If it returns `kind: local_vault`, run the printed `nextAction.command`. Only ask the user for a local brain/vault repo path when it returns `kind: unresolved` with `askUserFor: brain_repo_path`."
             )
         }
         instructions.append(contentsOf: [
@@ -2610,6 +2608,7 @@ public struct ZebraGBrainOnboardingStore {
         "user_existing_repo",
         "user_created_repo",
         "user_confirmed_home",
+        "thin_client_remote",
     }
     allowed_roles = {
         "install",
@@ -3705,7 +3704,7 @@ public struct ZebraGBrainOnboardingStore {
             first_visible,
             "Do not run tools or read files before printing that line.",
             "This is Zebra GBrain preflight mode. Do not start INSTALL_FOR_AGENTS.md Step 1 and do not create a GBrain setup checklist unless the user explicitly confirms they want a new GBrain/brain setup.",
-            ("First run: " + verify_command) if verify_command else "No selected brain repo target is confirmed yet. First inspect the installed `gbrain` CLI (`gbrain --version`, `gbrain status --json`, `gbrain sources list --json`, and `gbrain doctor --json` when available) and ask the user to choose an existing brain repo target if one is found. Do not run `verify-existing-install` until you have a concrete target path.",
+            ("First run: " + verify_command) if verify_command else "No selected local brain repo target is confirmed yet. First run: zebra-gbrain-onboarding discover-existing-install-target. If it returns `kind: remote_thin_client`, treat the remote MCP URL as a remote-only target, do not ask for a local brain repo path, and run its `nextAction.command`. If it returns `kind: local_vault`, run its `nextAction.command`. Only ask the user for a local brain/vault repo path when it returns `kind: unresolved` with `askUserFor: brain_repo_path`.",
             "When you run `verify-existing-install`, if it returns `complete: true` with status `verified` or `transient_retry_preserved`, stop new GBrain setup work and summarize the result. Do not edit `gbrain-setup-state.json` directly.",
             "If `verify-existing-install` fails with `diagnosis_needed`, run the printed `nextAction.command` before choosing a repair path.",
             "Treat `failure.reasons` as probe evidence labels, not root-cause taxonomy and not a fixed repair-command mapping.",
@@ -3847,6 +3846,9 @@ public struct ZebraGBrainOnboardingStore {
 
     def target_key(path):
         return "vault:" + os.path.abspath(os.path.expanduser(path))
+
+    def remote_target_key(remote_mcp_url):
+        return "remote:" + (remote_mcp_url or "thin-client")
 
     def gbrain_executable():
         state = load_state()
@@ -5934,6 +5936,92 @@ public struct ZebraGBrainOnboardingStore {
             or ("admin scope" in lower and "required" in lower)
         )
 
+    def existing_install_remote_mcp_url(payload):
+        found = []
+        def visit(value, key_hint=""):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    visit(child, str(key))
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child, key_hint)
+            elif isinstance(value, str):
+                text = value.strip()
+                lower_key = (key_hint or "").lower()
+                if text.startswith("http") and ("/mcp" in text or "mcp" in lower_key):
+                    found.append(text)
+        visit(payload)
+        return found[0] if found else None
+
+    def existing_install_remote_has_read_write(payload):
+        scopes = set()
+        def visit(value, key_hint=""):
+            lower_key = (key_hint or "").lower()
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    normalized_key = "".join(ch for ch in str(key).lower() if ch.isalnum())
+                    if child is True and normalized_key in {"read", "canread", "readaccess", "readpermission"}:
+                        scopes.add("read")
+                    if child is True and normalized_key in {"write", "canwrite", "writeaccess", "writepermission"}:
+                        scopes.add("write")
+                    visit(child, str(key))
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child, key_hint)
+            elif isinstance(value, str):
+                lower_value = value.strip().lower()
+                if lower_value in {"read", "write"} and any(token in lower_key for token in ["scope", "capabilit", "permission", "access"]):
+                    scopes.add(lower_value)
+        visit(payload)
+        if {"read", "write"}.issubset(scopes):
+            return True
+        text = json.dumps(payload).lower()
+        return '"read"' in text and '"write"' in text and any(token in text for token in ["scope", "capabilit", "permission", "access"])
+
+    def existing_install_remote_target_probe(executable, target):
+        try:
+            result = subprocess.run(
+                [executable, "status", "--json"],
+                cwd=target if target and os.path.isdir(target) else None,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "adapter": "remote", "status": "transient", "reason": PGLITE_BUSY_REASON}
+        except Exception:
+            return {"ok": False, "adapter": "remote", "status": "error", "reason": "remote_status_failed"}
+        if result.returncode != 0:
+            reason = transient_probe_reason((result.stderr or "") + "\\n" + (result.stdout or "")) or "remote_status_failed"
+            return {"ok": False, "adapter": "remote", "status": "error", "reason": reason}
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except Exception:
+            return {"ok": False, "adapter": "remote", "status": "error", "reason": "remote_status_invalid_json"}
+        remote_mcp_url = existing_install_remote_mcp_url(payload)
+        read_write_ok = existing_install_remote_has_read_write(payload)
+        warnings = []
+        warning_text = json.dumps(payload.get("warnings") if isinstance(payload, dict) else []) + "\\n" + (result.stderr or "")
+        if existing_install_admin_diagnostic_unavailable(warning_text):
+            warnings.append("remote_admin_diagnostic_unavailable")
+        reasons = []
+        if not remote_mcp_url:
+            reasons.append("remote_mcp_target_missing")
+        if not read_write_ok:
+            reasons.append("remote_read_write_not_verified")
+        return {
+            "ok": not reasons,
+            "adapter": "remote",
+            "status": "verified" if not reasons else "mismatch",
+            "method": "existing_install_thin_client_status",
+            "remoteMCPURL": remote_mcp_url,
+            "readWriteOk": read_write_ok,
+            "warnings": warnings,
+            "reasons": reasons,
+            "reason": reasons[0] if reasons else None,
+        }
+
     def existing_install_has_thin_client_source_refusal(source_probe_attempts):
         return any(
             attempt.get("reason") == "sources_cli_not_routable"
@@ -6143,21 +6231,19 @@ public struct ZebraGBrainOnboardingStore {
         return direct, attempts
 
     def existing_install_verify_command(target, method, source_id=None):
-        command = (
-            "zebra-gbrain-onboarding verify-existing-install"
-            + " --target " + shell_quote(target or "")
-            + " --method " + shell_quote(method or "selected_vault")
-        )
+        command = "zebra-gbrain-onboarding verify-existing-install"
+        if target:
+            command += " --target " + shell_quote(target)
+        command += " --method " + shell_quote(method or ("selected_vault" if target else "thin_client_remote"))
         if source_id:
             command += " --source-id " + shell_quote(source_id)
         return command
 
     def existing_install_diagnose_command(target, method, source_id=None):
-        command = (
-            "zebra-gbrain-onboarding diagnose-existing-install-failure"
-            + " --target " + shell_quote(target or "")
-            + " --method " + shell_quote(method or "selected_vault")
-        )
+        command = "zebra-gbrain-onboarding diagnose-existing-install-failure"
+        if target:
+            command += " --target " + shell_quote(target)
+        command += " --method " + shell_quote(method or ("selected_vault" if target else "thin_client_remote"))
         if source_id:
             command += " --source-id " + shell_quote(source_id)
         return command
@@ -6168,6 +6254,215 @@ public struct ZebraGBrainOnboardingStore {
             "command": existing_install_diagnose_command(target, method, source_id),
             "instruction": "Run this command before choosing a repair path. Treat the installed gbrain CLI output as the primary authority, then rerun verify-existing-install after repair.",
         }
+
+    def existing_install_verify_next_action(target, method, source_id=None):
+        return {
+            "kind": "verify_existing_install",
+            "command": existing_install_verify_command(target, method, source_id),
+            "instruction": "Run this command before asking for a new local brain repo path or starting a new GBrain setup.",
+        }
+
+    def discover_local_path_from_entries(payload, preferred_source_id=None):
+        entries = collect_source_entries(payload)
+        preferred = []
+        fallback = []
+        for entry in entries:
+            local_path = entry.get("local_path") or entry.get("localPath") or entry.get("path")
+            if not local_path:
+                continue
+            expanded = os.path.abspath(os.path.expanduser(local_path))
+            if not os.path.isdir(expanded):
+                continue
+            entry_source_id = entry.get("id") or entry.get("source_id") or entry.get("sourceId")
+            candidate = {
+                "targetPath": expanded,
+                "sourceId": entry_source_id,
+            }
+            if preferred_source_id and entry_source_id == preferred_source_id:
+                preferred.append(candidate)
+            else:
+                fallback.append(candidate)
+        return (preferred or fallback or [None])[0]
+
+    def discover_current_source_id(payload):
+        if not isinstance(payload, dict):
+            return None
+        direct = payload.get("source_id") or payload.get("sourceId") or payload.get("id")
+        if direct:
+            return direct
+        current = payload.get("current") or payload.get("source")
+        if isinstance(current, dict):
+            return current.get("source_id") or current.get("sourceId") or current.get("id")
+        return None
+
+    def discovered_local_vault_payload(target_path, source_id=None, method="user_existing_repo", source="unknown"):
+        target_path = os.path.abspath(os.path.expanduser(target_path))
+        payload = {
+            "kind": "local_vault",
+            "targetPath": target_path,
+            "targetKey": target_key(target_path),
+            "method": method,
+            "source": source,
+            "nextAction": existing_install_verify_next_action(target_path, method, source_id),
+        }
+        if source_id:
+            payload["sourceId"] = source_id
+        return payload
+
+    def discovered_remote_thin_client_payload(remote_probe, source="gbrain_status"):
+        remote_mcp_url = remote_probe.get("remoteMCPURL")
+        return {
+            "kind": "remote_thin_client",
+            "remoteMCPURL": remote_mcp_url,
+            "targetKey": remote_target_key(remote_mcp_url),
+            "readWriteOk": bool(remote_probe.get("readWriteOk")),
+            "method": "thin_client_remote",
+            "source": source,
+            "warnings": remote_probe.get("warnings") or [],
+            "nextAction": existing_install_verify_next_action(None, "thin_client_remote"),
+        }
+
+    def discover_existing_install_target():
+        state = load_state()
+        progress = state.get("progress") or {}
+        receipt = state.get("receipt") or {}
+        targets = receipt.get("targets") or {}
+
+        selected_vault = progress.get("selectedVaultPath")
+        if selected_vault and os.path.isdir(os.path.abspath(os.path.expanduser(selected_vault))):
+            print(json.dumps(
+                discovered_local_vault_payload(
+                    selected_vault,
+                    method="selected_vault",
+                    source="selected_vault",
+                ),
+                sort_keys=True,
+            ))
+            sys.exit(0)
+
+        primary_key = receipt.get("primaryTargetKey") or progress.get("resolvedTargetKey")
+        primary_target = targets.get(primary_key) if primary_key else None
+        if primary_target:
+            remote_mcp_url = primary_target.get("remoteMCPURL")
+            target_method = (primary_target.get("targetResolution") or {}).get("method")
+            if target_method == "thin_client_remote" and remote_mcp_url:
+                print(json.dumps({
+                    "kind": "remote_thin_client",
+                    "remoteMCPURL": remote_mcp_url,
+                    "targetKey": remote_target_key(remote_mcp_url),
+                    "readWriteOk": True,
+                    "method": "thin_client_remote",
+                    "source": "cached_receipt",
+                    "warnings": primary_target.get("warnings") or [],
+                    "nextAction": existing_install_verify_next_action(None, "thin_client_remote"),
+                }, sort_keys=True))
+                sys.exit(0)
+            target_path = primary_target.get("vaultPath")
+            if target_path and os.path.isdir(os.path.abspath(os.path.expanduser(target_path))):
+                print(json.dumps(
+                    discovered_local_vault_payload(
+                        target_path,
+                        source_id=primary_target.get("sourceId"),
+                        method=target_method or "user_existing_repo",
+                        source="cached_receipt",
+                    ),
+                    sort_keys=True,
+                ))
+                sys.exit(0)
+
+        executable = gbrain_executable()
+        probes = []
+        if executable:
+            remote_probe = existing_install_remote_target_probe(executable, None)
+            probes.append({
+                "name": "gbrain_status_remote",
+                "ok": bool(remote_probe.get("ok")),
+                "reason": remote_probe.get("reason"),
+                "reasons": remote_probe.get("reasons") or [],
+            })
+            if remote_probe.get("ok") and remote_probe.get("remoteMCPURL"):
+                print(json.dumps(discovered_remote_thin_client_payload(remote_probe), sort_keys=True))
+                sys.exit(0)
+
+            status_ok, status_payload, status_error = run_json(
+                [executable, "status", "--json"],
+                timeout=12,
+            )
+            probes.append({
+                "name": "gbrain_status",
+                "ok": bool(status_ok),
+                "reason": None if status_ok else probe_failure_reason(status_error),
+            })
+            if status_ok:
+                status_candidate = discover_local_path_from_entries(status_payload)
+                if status_candidate:
+                    print(json.dumps(
+                        discovered_local_vault_payload(
+                            status_candidate["targetPath"],
+                            source_id=status_candidate.get("sourceId"),
+                            source="gbrain_status",
+                        ),
+                        sort_keys=True,
+                    ))
+                    sys.exit(0)
+
+            current_ok, current_payload, current_error = run_json(
+                [executable, "sources", "current", "--json"],
+                timeout=8,
+            )
+            probes.append({
+                "name": "gbrain_sources_current",
+                "ok": bool(current_ok),
+                "reason": None if current_ok else probe_failure_reason(current_error),
+            })
+            current_source_id = discover_current_source_id(current_payload) if current_ok else None
+            current_candidate = discover_local_path_from_entries(current_payload, current_source_id) if current_ok else None
+            if current_candidate:
+                print(json.dumps(
+                    discovered_local_vault_payload(
+                        current_candidate["targetPath"],
+                        source_id=current_candidate.get("sourceId") or current_source_id,
+                        source="gbrain_sources_current",
+                    ),
+                    sort_keys=True,
+                ))
+                sys.exit(0)
+
+            list_ok, list_payload, list_error = run_json(
+                [executable, "sources", "list", "--json"],
+                timeout=8,
+            )
+            probes.append({
+                "name": "gbrain_sources_list",
+                "ok": bool(list_ok),
+                "reason": None if list_ok else probe_failure_reason(list_error),
+            })
+            list_candidate = discover_local_path_from_entries(list_payload, current_source_id) if list_ok else None
+            if list_candidate:
+                print(json.dumps(
+                    discovered_local_vault_payload(
+                        list_candidate["targetPath"],
+                        source_id=list_candidate.get("sourceId") or current_source_id,
+                        source="gbrain_sources_list",
+                    ),
+                    sort_keys=True,
+                ))
+                sys.exit(0)
+        else:
+            probes.append({
+                "name": "gbrain_executable",
+                "ok": False,
+                "reason": "missing_gbrain_executable",
+            })
+
+        print(json.dumps({
+            "kind": "unresolved",
+            "askUserFor": "brain_repo_path",
+            "reason": "existing_install_target_not_discovered",
+            "probes": probes,
+            "instruction": "Ask whether to continue remote-only if the user knows they use thin-client remote MCP, or ask for an optional local brain/vault repo path. Do not run broad filesystem scans.",
+        }, sort_keys=True))
+        sys.exit(0)
 
     def existing_install_guardrails():
         return [
@@ -6380,10 +6675,12 @@ public struct ZebraGBrainOnboardingStore {
         source_id = flags.get("source_id")
         method = flags.get("method") or "selected_vault"
         profile_id = flags.get("profile_id")
+        remote_mcp_url = None
+        is_thin_client_remote = method == "thin_client_remote"
         reasons = []
-        if not target:
+        if not target and not is_thin_client_remote:
             reasons.append("target_not_resolved")
-        else:
+        elif target:
             target = os.path.abspath(os.path.expanduser(target))
             forbidden_reason = forbidden_target_reason(target, method)
             if forbidden_reason:
@@ -6425,7 +6722,7 @@ public struct ZebraGBrainOnboardingStore {
 
         read_probe = {"ok": False, "status": "not_run"}
         read_reason = None
-        if executable and target and os.path.isdir(target):
+        if executable and (is_thin_client_remote or (target and os.path.isdir(target))):
             read_probe, read_reason = existing_install_read_probe(executable, target)
             if read_reason:
                 reasons.append(read_reason)
@@ -6433,7 +6730,22 @@ public struct ZebraGBrainOnboardingStore {
         source_probe = {"ok": False, "status": "not_run", "reason": "source_probe_not_run"}
         source_probe_attempts = []
         warnings = []
-        if executable and target and os.path.isdir(target):
+        if executable and is_thin_client_remote:
+            remote_probe = existing_install_remote_target_probe(executable, target)
+            source_probe_attempts = [remote_probe]
+            remote_mcp_url = remote_probe.get("remoteMCPURL")
+            warnings.extend(remote_probe.get("warnings") or [])
+            if remote_probe.get("ok") and read_probe.get("ok"):
+                source_probe = existing_install_as_thin_client_read_verified(
+                    remote_probe,
+                    source_probe_attempts,
+                    source_id,
+                )
+            else:
+                source_probe = remote_probe
+                for reason in remote_probe.get("reasons") or [remote_probe.get("reason") or "remote_target_not_verified"]:
+                    reasons.append(reason)
+        elif executable and target and os.path.isdir(target):
             source_probe, source_probe_attempts = existing_install_source_probe(executable, target, source_id)
             if source_probe.get("sourceId"):
                 source_id = source_probe.get("sourceId")
@@ -6457,7 +6769,7 @@ public struct ZebraGBrainOnboardingStore {
             doctor_reason
             and existing_install_admin_diagnostic_unavailable(doctor_reason + "\\n" + "\\n".join(doctor_failed_check_names))
             and read_probe.get("ok")
-            and existing_install_has_thin_client_source_refusal(source_probe_attempts)
+            and (is_thin_client_remote or existing_install_has_thin_client_source_refusal(source_probe_attempts))
         )
         if doctor_admin_diagnostic_unavailable:
             warnings.append("remote_admin_diagnostic_unavailable")
@@ -6471,7 +6783,7 @@ public struct ZebraGBrainOnboardingStore {
         source_identity_satisfied = bool(source_id or source_probe.get("method") == "existing_install_thin_client_read_probe")
         complete = bool(global_complete and source_probe.get("ok") and source_identity_satisfied and not reasons)
         verified_at = now()
-        key = target_key(target) if target and os.path.isdir(target) else None
+        key = remote_target_key(remote_mcp_url) if is_thin_client_remote and remote_mcp_url else (target_key(target) if target and os.path.isdir(target) else None)
 
         state = load_state()
         receipt = state.setdefault("receipt", {})
@@ -6506,6 +6818,7 @@ public struct ZebraGBrainOnboardingStore {
             if not preserve_completed_receipt:
                 target_payload.update({
                     "vaultPath": target,
+                    "remoteMCPURL": remote_mcp_url,
                     "sourceId": source_id,
                     "profileId": profile_id,
                     "gbrainExecutablePath": executable,
@@ -6537,6 +6850,7 @@ public struct ZebraGBrainOnboardingStore {
                     target_payload["sourceVerification"] = {
                         "sourceId": source_id,
                         "targetPath": target,
+                        "remoteMCPURL": remote_mcp_url,
                         "verifiedAt": verified_at,
                         "method": source_probe.get("method") or "existing_install_sources_current_and_list",
                         "gbrainExecutablePath": executable,
@@ -6546,7 +6860,8 @@ public struct ZebraGBrainOnboardingStore {
                     target_payload.pop("sourceVerification", None)
                 targets[key] = target_payload
             progress = state.setdefault("progress", {})
-            progress.setdefault("selectedVaultPath", target)
+            if target:
+                progress.setdefault("selectedVaultPath", target)
             progress["resolvedTargetKey"] = key
             progress["targetResolution"] = {
                 "status": status_value,
@@ -6985,6 +7300,8 @@ public struct ZebraGBrainOnboardingStore {
         status()
     elif command == "verify":
         verify()
+    elif command == "discover-existing-install-target":
+        discover_existing_install_target()
     elif command == "verify-existing-install":
         verify_existing_install()
     elif command == "diagnose-existing-install-failure":
@@ -7004,7 +7321,7 @@ public struct ZebraGBrainOnboardingStore {
     elif command == "create-initial-brain-commit":
         create_initial_brain_commit()
     else:
-        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|run-gbrain|report|status|verify|verify-existing-install|diagnose-existing-install-failure|recover-cycle-freshness|prepare-platform-scheduler|check-launchd-bun-path|repair-launchd-bun-path|create-initial-brain-commit> [options]", file=sys.stderr)
+        print("usage: zebra-gbrain-onboarding <prepare-source-repo|active-source-repo-path|active-source-env|write-runtime-launcher|prepare-openclaw-agent|run-gbrain|report|status|verify|discover-existing-install-target|verify-existing-install|diagnose-existing-install-failure|recover-cycle-freshness|prepare-platform-scheduler|check-launchd-bun-path|repair-launchd-bun-path|create-initial-brain-commit> [options]", file=sys.stderr)
         sys.exit(2)
     PY
     """

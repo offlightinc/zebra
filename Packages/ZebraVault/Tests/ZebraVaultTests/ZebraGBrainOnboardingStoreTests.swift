@@ -49,6 +49,14 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(progress["completedSections"] as? [String], [])
         XCTAssertNotNil(progress["existingInstallVerification"] as? [String: Any])
         XCTAssertTrue(store.cachedCompletionResult(selectedVaultPath: vault.path).isComplete)
+        XCTAssertEqual(
+            store.sectionSnapshotsFromCachedState(
+                isParentRunning: false,
+                showsStartForActiveSection: true,
+                wasStartedBefore: true
+            ),
+            []
+        )
     }
 
     func testVerifyExistingInstallHelperUsesRemoteStatusWhenSourcesCliIsThinClientRefused() throws {
@@ -139,6 +147,169 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let sourceVerification = try XCTUnwrap(target["sourceVerification"] as? [String: Any])
         XCTAssertEqual(sourceVerification["method"] as? String, "existing_install_thin_client_read_probe")
         XCTAssertTrue(store.cachedCompletionResult(selectedVaultPath: vault.path).isComplete)
+        XCTAssertEqual(
+            store.sectionSnapshotsFromCachedState(
+                isParentRunning: false,
+                showsStartForActiveSection: true,
+                wasStartedBefore: true
+            ),
+            []
+        )
+    }
+
+    func testExistingInstallPromptAllowsThinClientRemoteWithoutLocalPath() throws {
+        let root = try makeTemporaryDirectory()
+        let bin = try installFakeThinClientRemoteGBrain(root: root)
+        let stateURL = root.appendingPathComponent("state.json", isDirectory: false)
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": bin.path]
+        )
+
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        XCTAssertTrue(launch.existingInstallVerificationMode)
+        XCTAssertTrue(launch.startupPrompt.contains("discover-existing-install-target"), launch.startupPrompt)
+        XCTAssertTrue(launch.startupPrompt.contains("kind: remote_thin_client"), launch.startupPrompt)
+        XCTAssertTrue(launch.startupPrompt.contains("nextAction.command"), launch.startupPrompt)
+        XCTAssertFalse(launch.startupPrompt.contains("concrete target path"), launch.startupPrompt)
+    }
+
+    func testDiscoverExistingInstallTargetReturnsRemoteThinClientWithoutLocalPath() throws {
+        let root = try makeTemporaryDirectory()
+        let remoteMCPURL = "https://brainbook-offlight-gbrain.tail678bae.ts.net/mcp"
+        let bin = try installFakeThinClientRemoteGBrain(root: root, remoteMCPURL: remoteMCPURL)
+        let stateURL = root.appendingPathComponent("state.json", isDirectory: false)
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: ["discover-existing-install-target"]
+        )
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let payload = try helperPayload(result.stdout)
+        XCTAssertEqual(payload["kind"] as? String, "remote_thin_client")
+        XCTAssertEqual(payload["remoteMCPURL"] as? String, remoteMCPURL)
+        XCTAssertEqual(payload["targetKey"] as? String, "remote:\(remoteMCPURL)")
+        XCTAssertEqual(payload["readWriteOk"] as? Bool, true)
+        let nextAction = try XCTUnwrap(payload["nextAction"] as? [String: Any])
+        XCTAssertEqual(nextAction["command"] as? String, "zebra-gbrain-onboarding verify-existing-install --method 'thin_client_remote'")
+    }
+
+    func testDiscoverExistingInstallTargetReturnsLocalVaultFromSourcesList() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let bin = try installFakeGBrain(root: root, sourceId: "main", localPath: vault.path)
+        let stateURL = root.appendingPathComponent("state.json", isDirectory: false)
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: ["discover-existing-install-target"]
+        )
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let payload = try helperPayload(result.stdout)
+        XCTAssertEqual(payload["kind"] as? String, "local_vault")
+        XCTAssertEqual(payload["targetPath"] as? String, vault.path)
+        XCTAssertEqual(payload["sourceId"] as? String, "main")
+        XCTAssertEqual(payload["method"] as? String, "user_existing_repo")
+        let nextAction = try XCTUnwrap(payload["nextAction"] as? [String: Any])
+        XCTAssertEqual(
+            nextAction["command"] as? String,
+            "zebra-gbrain-onboarding verify-existing-install --target \(shellQuotedForTest(vault.path)) --method 'user_existing_repo' --source-id 'main'"
+        )
+    }
+
+    func testDiscoverExistingInstallTargetAsksForPathWhenNarrowDiscoveryFails() throws {
+        let root = try makeTemporaryDirectory()
+        let emptyBin = root.appendingPathComponent("empty-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: emptyBin, withIntermediateDirectories: true)
+        let stateURL = root.appendingPathComponent("state.json", isDirectory: false)
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": emptyBin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: emptyBin.path,
+            arguments: ["discover-existing-install-target"]
+        )
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let payload = try helperPayload(result.stdout)
+        XCTAssertEqual(payload["kind"] as? String, "unresolved")
+        XCTAssertEqual(payload["askUserFor"] as? String, "brain_repo_path")
+        XCTAssertEqual(payload["reason"] as? String, "existing_install_target_not_discovered")
+        XCTAssertNil(payload["nextAction"])
+    }
+
+    func testVerifyExistingInstallHelperCompletesRemoteThinClientWithoutSelectedVault() throws {
+        let root = try makeTemporaryDirectory()
+        let remoteMCPURL = "https://brainbook-offlight-gbrain.tail678bae.ts.net/mcp"
+        let bin = try installFakeThinClientRemoteGBrain(root: root, remoteMCPURL: remoteMCPURL)
+        let stateURL = root.appendingPathComponent("state.json", isDirectory: false)
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "verify-existing-install",
+                "--method", "thin_client_remote",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let payload = try helperPayload(result.stdout)
+        XCTAssertEqual(payload["complete"] as? Bool, true)
+        XCTAssertEqual(payload["status"] as? String, "verified")
+        XCTAssertEqual(payload["warnings"] as? [String], ["remote_admin_diagnostic_unavailable"])
+        let sourceProbe = try XCTUnwrap(payload["sourceProbe"] as? [String: Any])
+        XCTAssertEqual(sourceProbe["method"] as? String, "existing_install_thin_client_read_probe")
+        let state = try stateObject(in: stateURL)
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        XCTAssertNil(progress["selectedVaultPath"] as? String)
+        XCTAssertEqual((progress["targetResolution"] as? [String: Any])?["method"] as? String, "thin_client_remote")
+        let target = try receiptTarget(in: stateURL, key: "remote:\(remoteMCPURL)")
+        XCTAssertEqual(target["complete"] as? Bool, true)
+        XCTAssertEqual(target["remoteMCPURL"] as? String, remoteMCPURL)
+        XCTAssertEqual(target["warnings"] as? [String], ["remote_admin_diagnostic_unavailable"])
+        let sourceVerification = try XCTUnwrap(target["sourceVerification"] as? [String: Any])
+        XCTAssertEqual(sourceVerification["method"] as? String, "existing_install_thin_client_read_probe")
+        XCTAssertEqual(sourceVerification["remoteMCPURL"] as? String, remoteMCPURL)
+        XCTAssertTrue(store.cachedCompletionResult(selectedVaultPath: nil).isComplete)
+        XCTAssertEqual(
+            store.sectionSnapshotsFromCachedState(
+                isParentRunning: false,
+                showsStartForActiveSection: true,
+                wasStartedBefore: true
+            ),
+            []
+        )
     }
 
     func testVerifyExistingInstallHelperStillFailsThinClientWhenReadProbeFails() throws {
@@ -183,6 +354,15 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(reasons.contains("read_probe_failed"), "stdout: \(result.stdout)")
         XCTAssertTrue(reasons.contains("remote_status_snapshot_failed"), "stdout: \(result.stdout)")
         XCTAssertFalse(store.cachedCompletionResult(selectedVaultPath: vault.path).isComplete)
+        let snapshots = store.sectionSnapshotsFromCachedState(
+            isParentRunning: true,
+            showsStartForActiveSection: false,
+            wasStartedBefore: true
+        )
+        XCTAssertEqual(snapshots.map(\.title), ["Diagnose existing GBrain install"])
+        XCTAssertTrue(snapshots[0].isActive)
+        XCTAssertTrue(snapshots[0].isRunning)
+        XCTAssertTrue(snapshots[0].isAttention)
     }
 
     func testVerifyExistingInstallHelperRequiresRealSearchHit() throws {
@@ -1341,7 +1521,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
     }
 
-    func testPreflightSectionSnapshotsShowExistingInstallCheckBeforeDocsManifest() throws {
+    func testPreflightSectionSnapshotsDoNotShowNormalExistingInstallSubsteps() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root.appendingPathComponent("state.json")
         let store = ZebraGBrainOnboardingStore(
@@ -1358,9 +1538,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             wasStartedBefore: true
         )
 
-        XCTAssertEqual(snapshots.map(\.title), ["Check existing GBrain install"])
-        XCTAssertTrue(snapshots[0].isActive)
-        XCTAssertTrue(snapshots[0].isRunning)
+        XCTAssertEqual(snapshots, [])
     }
 
     func testPreflightDoesNotUseRecommendedSourceDocsBeforeExplicitFreshInstall() throws {
@@ -1381,7 +1559,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             wasStartedBefore: true
         )
 
-        XCTAssertEqual(snapshots.map(\.title), ["Check existing GBrain install"])
+        XCTAssertEqual(snapshots, [])
         XCTAssertFalse(snapshots.map(\.title).contains("Step 1: Install GBrain"))
     }
 
@@ -1413,10 +1591,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(launch.existingInstallVerificationMode)
         XCTAssertEqual(progress["gbrainSetupMode"] as? String, "existing_install_verification")
         XCTAssertEqual(sections.compactMap { $0["title"] as? String }, [])
-        XCTAssertEqual(snapshots.map(\.title), ["Check existing GBrain install"])
+        XCTAssertEqual(snapshots, [])
         XCTAssertFalse(snapshots.map(\.title).contains("Step 1: Install GBrain"))
-        XCTAssertTrue(snapshots[0].isActive)
-        XCTAssertTrue(snapshots[0].isRunning)
     }
 
     func testExistingInstallModePrepareSourceRepoKeepsDocsFallbackOutOfFreshChecklistUntilExplicitFreshInstall() throws {
@@ -1454,8 +1630,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 isParentRunning: false,
                 showsStartForActiveSection: true,
                 wasStartedBefore: true
-            ).map(\.title),
-            ["Check existing GBrain install"]
+            ),
+            []
         )
 
         let freshResult = try runHelper(
@@ -1478,6 +1654,18 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             "Step 1: Install GBrain",
             "Step 2: API Keys",
         ])
+        XCTAssertEqual(
+            store.sectionSnapshotsFromCachedState(
+                isParentRunning: false,
+                showsStartForActiveSection: true,
+                wasStartedBefore: true
+            ).map(\.title),
+            [
+                "Check and clone GBrain repo",
+                "Step 1: Install GBrain",
+                "Step 2: API Keys",
+            ]
+        )
     }
 
     func testStaleFreshInstallModeWithoutExplicitMarkerReturnsToPreflight() throws {
@@ -1505,8 +1693,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 isParentRunning: false,
                 showsStartForActiveSection: true,
                 wasStartedBefore: true
-            ).map(\.title),
-            ["Check existing GBrain install"]
+            ),
+            []
         )
     }
 
@@ -1543,7 +1731,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(targetResolution["status"] as? String, "unresolved")
         XCTAssertNil(targetResolution["method"] as? String)
         XCTAssertFalse(launch.startupPrompt.contains("verify-existing-install --target '<selected-vault>'"), launch.startupPrompt)
-        XCTAssertTrue(launch.startupPrompt.contains("No selected brain repo target is confirmed yet"), launch.startupPrompt)
+        XCTAssertTrue(launch.startupPrompt.contains("No selected local brain repo target is confirmed yet"), launch.startupPrompt)
+        XCTAssertTrue(launch.startupPrompt.contains("discover-existing-install-target"), launch.startupPrompt)
     }
 
     func testExistingInstallVerificationStateIsReusedOnlyForSameVault() throws {
@@ -1585,8 +1774,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
                 isParentRunning: false,
                 showsStartForActiveSection: true,
                 wasStartedBefore: true
-            ).map(\.title),
-            ["Check existing GBrain install"]
+            ),
+            []
         )
     }
 
@@ -7353,6 +7542,14 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         return try XCTUnwrap(targets[key] as? [String: Any])
     }
 
+    private func receiptTarget(in stateURL: URL, key: String) throws -> [String: Any] {
+        let data = try Data(contentsOf: stateURL)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let receipt = try XCTUnwrap(object["receipt"] as? [String: Any])
+        let targets = try XCTUnwrap(receipt["targets"] as? [String: Any])
+        return try XCTUnwrap(targets[key] as? [String: Any])
+    }
+
     private func globalReadiness(in stateURL: URL) throws -> [String: Any] {
         let data = try Data(contentsOf: stateURL)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -7440,6 +7637,10 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
     private func helperPayload(_ stdout: String) throws -> [String: Any] {
         let data = try XCTUnwrap(stdout.data(using: .utf8))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func shellQuotedForTest(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     private func bootstrapPromptPath(from launcherScript: String) throws -> String {
@@ -8128,6 +8329,44 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         fi
         if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
           echo '\(statusJSON)'
+          exit 0
+        fi
+        exit 1
+        """
+        .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return bin
+    }
+
+    private func installFakeThinClientRemoteGBrain(
+        root: URL,
+        remoteMCPURL: String = "https://brainbook-offlight-gbrain.tail678bae.ts.net/mcp",
+        searchOutput: String = #"{"results":[{"path":"remote.md","score":1.0}]}"#
+    ) throws -> URL {
+        let bin = root.appendingPathComponent("fake-thin-client-gbrain-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let script = bin.appendingPathComponent("gbrain", isDirectory: false)
+        let escapedSearchOutput = searchOutput.replacingOccurrences(of: "'", with: "'\"'\"'")
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo "gbrain 0.42.56.0"
+          exit 0
+        fi
+        if [ "$1" = "doctor" ] && [ "$2" = "--json" ]; then
+          echo '{"ok":true}'
+          exit 0
+        fi
+        if [ "$1" = "search" ]; then
+          echo '\(escapedSearchOutput)'
+          exit 0
+        fi
+        if [ "$1" = "sources" ]; then
+          echo "gbrain sources is not routable in remote_mcp thin-client mode" >&2
+          exit 64
+        fi
+        if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
+          echo '{"mode":"thin-client","remoteMCP":{"url":"\(remoteMCPURL)","scopes":["read","write"]},"warnings":["remote snapshot failed: Remote tool get_status_snapshot failed: {\\"error\\":\\"insufficient_scope\\",\\"message\\":\\"Operation get_status_snapshot requires admin scope\\",\\"your_scopes\\":[\\"read\\",\\"write\\"]}"]}'
           exit 0
         fi
         exit 1

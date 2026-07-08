@@ -86,6 +86,108 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testExistingInstallVerifiedReceiptCompletesGBrainParentWithoutSubsteps() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try writeExistingInstallVerifiedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: vault.path,
+            sourceVerificationMethod: "existing_install_sources_current_and_list",
+            sourceId: "brain"
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+        store.syncExternalState(selectedVaultPath: vault.path)
+        store.beginLaunch(stepID: .gbrain)
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
+        XCTAssertTrue(gbrain.isCompleted)
+        XCTAssertEqual(gbrain.substeps, [])
+    }
+
+    @MainActor
+    func testExistingInstallThinClientReadVerificationCompletesGBrainParentWithoutSubsteps() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try writeExistingInstallVerifiedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: vault.path,
+            sourceVerificationMethod: "existing_install_thin_client_read_probe",
+            sourceId: nil
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+        store.syncExternalState(selectedVaultPath: vault.path)
+        store.beginLaunch(stepID: .gbrain)
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
+        XCTAssertTrue(gbrain.isCompleted)
+        XCTAssertEqual(gbrain.substeps, [])
+    }
+
+    @MainActor
+    func testExistingInstallRemoteThinClientReceiptCompletesGBrainParentWithoutSelectedVault() throws {
+        let root = try makeTemporaryDirectory()
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try writeExistingInstallVerifiedRemoteThinClientGBrainState(
+            stateURL: gbrainStateURL,
+            remoteMCPURL: "https://brainbook-offlight-gbrain.tail678bae.ts.net/mcp"
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+        store.syncExternalState(selectedVaultPath: nil)
+        store.beginLaunch(stepID: .gbrain)
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
+        XCTAssertTrue(gbrain.isCompleted)
+        XCTAssertEqual(gbrain.substeps, [])
+    }
+
+    @MainActor
+    func testExistingInstallDiagnosisNeededShowsOnlyDiagnosisSubstep() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try writeExistingInstallDiagnosisNeededGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: vault.path
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+        store.syncExternalState(selectedVaultPath: vault.path)
+        store.beginLaunch(stepID: .gbrain)
+
+        let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
+        XCTAssertFalse(gbrain.isCompleted)
+        XCTAssertEqual(gbrain.substeps.map(\.title), ["Diagnose existing GBrain install"])
+        XCTAssertTrue(gbrain.substeps[0].isAttention)
+    }
+
+    @MainActor
     func testSourceOnboardingIsActiveAfterAdapterCompletion() throws {
         let root = try makeTemporaryDirectory()
         let vault = root.appendingPathComponent("brain", isDirectory: true)
@@ -7441,6 +7543,180 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 "confirmedAt": timestamp,
             ]
         }
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeExistingInstallVerifiedGBrainState(
+        stateURL: URL,
+        vaultPath: String,
+        sourceVerificationMethod: String,
+        sourceId: String?
+    ) throws {
+        let targetKey = "vault:\(vaultPath)"
+        let timestamp = "2026-07-08T00:00:00Z"
+        var target: [String: Any] = [
+            "vaultPath": vaultPath,
+            "status": "verified",
+            "complete": true,
+            "targetResolution": [
+                "method": "selected_vault",
+                "confirmedAt": timestamp,
+            ],
+            "sourceVerification": [
+                "method": sourceVerificationMethod,
+                "verifiedAt": timestamp,
+            ],
+            "verifiedAt": timestamp,
+            "reasons": [],
+        ]
+        if let sourceId {
+            target["sourceId"] = sourceId
+        }
+        let state: [String: Any] = [
+            "schemaVersion": 1,
+            "progress": [
+                "gbrainSetupMode": "existing_install_verification",
+                "resolvedTargetKey": targetKey,
+                "targetResolution": [
+                    "status": "verified",
+                    "method": "selected_vault",
+                    "confirmedAt": timestamp,
+                ],
+                "existingInstallVerification": [
+                    "status": "verified",
+                    "reasons": [],
+                    "verifiedAt": timestamp,
+                ],
+            ],
+            "receipt": [
+                "globalReadiness": [
+                    "complete": true,
+                    "doctorOk": true,
+                    "verifiedAt": timestamp,
+                ],
+                "primaryTargetKey": targetKey,
+                "targets": [
+                    targetKey: target,
+                ],
+            ],
+        ]
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeExistingInstallVerifiedRemoteThinClientGBrainState(
+        stateURL: URL,
+        remoteMCPURL: String
+    ) throws {
+        let targetKey = "remote:\(remoteMCPURL)"
+        let timestamp = "2026-07-08T00:00:00Z"
+        let target: [String: Any] = [
+            "remoteMCPURL": remoteMCPURL,
+            "status": "verified",
+            "complete": true,
+            "targetResolution": [
+                "method": "thin_client_remote",
+                "confirmedAt": timestamp,
+            ],
+            "sourceVerification": [
+                "method": "existing_install_thin_client_read_probe",
+                "remoteMCPURL": remoteMCPURL,
+                "verifiedAt": timestamp,
+            ],
+            "warnings": ["remote_admin_diagnostic_unavailable"],
+            "verifiedAt": timestamp,
+            "reasons": [],
+        ]
+        let state: [String: Any] = [
+            "schemaVersion": 1,
+            "progress": [
+                "gbrainSetupMode": "existing_install_verification",
+                "resolvedTargetKey": targetKey,
+                "targetResolution": [
+                    "status": "verified",
+                    "method": "thin_client_remote",
+                    "confirmedAt": timestamp,
+                ],
+                "existingInstallVerification": [
+                    "status": "verified",
+                    "warnings": ["remote_admin_diagnostic_unavailable"],
+                    "reasons": [],
+                    "verifiedAt": timestamp,
+                ],
+            ],
+            "receipt": [
+                "globalReadiness": [
+                    "complete": true,
+                    "doctorOk": true,
+                    "verifiedAt": timestamp,
+                ],
+                "primaryTargetKey": targetKey,
+                "targets": [
+                    targetKey: target,
+                ],
+            ],
+        ]
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeExistingInstallDiagnosisNeededGBrainState(
+        stateURL: URL,
+        vaultPath: String
+    ) throws {
+        let targetKey = "vault:\(vaultPath)"
+        let timestamp = "2026-07-08T00:00:00Z"
+        let state: [String: Any] = [
+            "schemaVersion": 1,
+            "progress": [
+                "gbrainSetupMode": "existing_install_verification",
+                "selectedVaultPath": vaultPath,
+                "resolvedTargetKey": targetKey,
+                "targetResolution": [
+                    "status": "diagnosis_needed",
+                    "method": "selected_vault",
+                    "confirmedAt": timestamp,
+                ],
+                "existingInstallVerification": [
+                    "status": "diagnosis_needed",
+                    "reasons": ["read_probe_failed"],
+                    "verifiedAt": timestamp,
+                ],
+            ],
+            "receipt": [
+                "globalReadiness": [
+                    "complete": false,
+                    "doctorOk": true,
+                    "verifiedAt": timestamp,
+                ],
+                "primaryTargetKey": targetKey,
+                "targets": [
+                    targetKey: [
+                        "vaultPath": vaultPath,
+                        "complete": false,
+                        "status": "diagnosis_needed",
+                        "targetResolution": [
+                            "method": "selected_vault",
+                            "confirmedAt": timestamp,
+                        ],
+                        "reasons": ["read_probe_failed"],
+                    ],
+                ],
+            ],
+        ]
         try FileManager.default.createDirectory(
             at: stateURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
