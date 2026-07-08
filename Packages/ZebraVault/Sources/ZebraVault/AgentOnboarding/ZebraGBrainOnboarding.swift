@@ -1031,7 +1031,7 @@ public struct ZebraGBrainOnboardingStore {
         ]
         if let selectedVault = loadState()?.progress?.selectedVaultPath {
             instructions.append(
-                "Before starting INSTALL_FOR_AGENTS.md Step 1, check whether the selected vault already has a working GBrain by running `zebra-gbrain-onboarding verify-existing-install --target \(ZebraAgentLaunchCommand.shellQuote(selectedVault)) --method selected_vault`. If it returns `complete: true`, stop the GBrain install work. If it fails, run the printed `nextAction.command` before choosing a repair path. The diagnosis output is read-only context: use the installed `gbrain` CLI help/doctor/status/remediation output as the primary authority, use any local GBrain repo docs only as fallback, do not edit `gbrain-setup-state.json` directly, ask the user before changing source bindings, remote topology, credentials, or abandoning recovery for a fresh install, and rerun `verify-existing-install` after repair."
+                "Before starting INSTALL_FOR_AGENTS.md Step 1, check whether the selected vault already has a working GBrain by running `zebra-gbrain-onboarding verify-existing-install --target \(ZebraAgentLaunchCommand.shellQuote(selectedVault)) --method selected_vault`. If it returns `complete: true`, stop the GBrain install work. If it fails, run the printed `nextAction.command` before choosing a repair path. The diagnosis output is read-only context: use the installed `gbrain` CLI help/doctor/status/remediation output as the primary authority, use any local GBrain repo docs only as fallback, do not edit `gbrain-setup-state.json` directly, ask the user before changing source bindings, remote topology, credentials, or abandoning recovery for a new home-directory GBrain setup, and rerun `verify-existing-install` after repair."
             )
         }
         return instructions.joined(separator: " ")
@@ -1041,7 +1041,7 @@ public struct ZebraGBrainOnboardingStore {
         var instructions = [
             onboardingLanguage.firstVisibleGBrainSetupInstruction,
             "Do not run tools or read files before printing that line.",
-            "This is Zebra GBrain preflight mode. Do not start INSTALL_FOR_AGENTS.md Step 1 and do not create a fresh-install checklist unless the user explicitly confirms they want a new GBrain/brain setup.",
+            "This is Zebra GBrain preflight mode. Do not start INSTALL_FOR_AGENTS.md Step 1 and do not create a GBrain setup checklist unless the user explicitly confirms they want a new GBrain/brain setup.",
         ]
         if let selectedVault {
             instructions.append(
@@ -1053,11 +1053,12 @@ public struct ZebraGBrainOnboardingStore {
             )
         }
         instructions.append(contentsOf: [
-            "When you run `verify-existing-install`, if it returns `complete: true` with status `verified` or `transient_retry_preserved`, stop fresh-install work and summarize the result.",
+            "When you run `verify-existing-install`, if it returns `complete: true` with status `verified` or `transient_retry_preserved`, stop new GBrain setup work and summarize the result.",
             "If `verify-existing-install` fails with `diagnosis_needed`, run the printed `nextAction.command` before choosing a repair path.",
             "Treat `failure.reasons` as probe evidence labels, not root-cause taxonomy and not a fixed repair-command mapping.",
             "Use installed `gbrain` CLI output as the primary authority. Use a local GBrain source repo only as docs/tool fallback when needed.",
-            "If the user explicitly chooses fresh install, run `zebra-gbrain-onboarding prepare-source-repo --fresh-install`, then follow the returned fresh-install section flow.",
+            "If recovery is not practical and you ask the user to choose a fallback, put the new setup option first and label it as installing GBrain in the home directory, for example Korean `홈 디렉토리에 GBrain 설치` or English `Install GBrain in my home directory`. Do not use the phrase `fresh install` in user-facing text.",
+            "If the user explicitly chooses that new home-directory GBrain setup, run `zebra-gbrain-onboarding prepare-source-repo --fresh-install`, then follow the returned setup section flow.",
             "Do not edit gbrain-setup-state.json directly. Zebra-owned helper commands are the only authority allowed to write onboarding completion receipts.",
         ])
         return instructions.joined(separator: " ")
@@ -3703,14 +3704,15 @@ public struct ZebraGBrainOnboardingStore {
         return "\\n".join([
             first_visible,
             "Do not run tools or read files before printing that line.",
-            "This is Zebra GBrain preflight mode. Do not start INSTALL_FOR_AGENTS.md Step 1 and do not create a fresh-install checklist unless the user explicitly confirms they want a new GBrain/brain setup.",
+            "This is Zebra GBrain preflight mode. Do not start INSTALL_FOR_AGENTS.md Step 1 and do not create a GBrain setup checklist unless the user explicitly confirms they want a new GBrain/brain setup.",
             ("First run: " + verify_command) if verify_command else "No selected brain repo target is confirmed yet. First inspect the installed `gbrain` CLI (`gbrain --version`, `gbrain status --json`, `gbrain sources list --json`, and `gbrain doctor --json` when available) and ask the user to choose an existing brain repo target if one is found. Do not run `verify-existing-install` until you have a concrete target path.",
-            "When you run `verify-existing-install`, if it returns `complete: true` with status `verified` or `transient_retry_preserved`, stop fresh-install work and summarize the result. Do not edit `gbrain-setup-state.json` directly.",
+            "When you run `verify-existing-install`, if it returns `complete: true` with status `verified` or `transient_retry_preserved`, stop new GBrain setup work and summarize the result. Do not edit `gbrain-setup-state.json` directly.",
             "If `verify-existing-install` fails with `diagnosis_needed`, run the printed `nextAction.command` before choosing a repair path.",
             "Treat `failure.reasons` as probe evidence labels, not root-cause taxonomy and not a fixed repair-command mapping.",
-            "Use installed `gbrain` CLI help/doctor/status/remediation output as the primary authority. Use a local GBrain source repo only as docs/tool fallback when needed; to prepare that fallback without starting fresh install, run `zebra-gbrain-onboarding prepare-source-repo`.",
-            "Ask the user before changing source bindings, remote topology, credentials, destructive data state, or abandoning recovery for fresh install.",
-            "If the user explicitly chooses fresh install, run `zebra-gbrain-onboarding prepare-source-repo --fresh-install`, then follow the returned fresh-install section flow.",
+            "Use installed `gbrain` CLI help/doctor/status/remediation output as the primary authority. Use a local GBrain source repo only as docs/tool fallback when needed; to prepare that fallback without starting a new setup, run `zebra-gbrain-onboarding prepare-source-repo`.",
+            "Ask the user before changing source bindings, remote topology, credentials, destructive data state, or abandoning recovery for a new home-directory GBrain setup.",
+            "If recovery is not practical and you ask the user to choose a fallback, put the new setup option first and label it as installing GBrain in the home directory, for example Korean `홈 디렉토리에 GBrain 설치` or English `Install GBrain in my home directory`. Do not use the phrase `fresh install` in user-facing text.",
+            "If the user explicitly chooses that new home-directory GBrain setup, run `zebra-gbrain-onboarding prepare-source-repo --fresh-install`, then follow the returned setup section flow.",
             "After any repair, rerun the verify command. Completion is valid only when `verify-existing-install` succeeds.",
         ])
 
@@ -6171,7 +6173,7 @@ public struct ZebraGBrainOnboardingStore {
         return [
             "Do not edit gbrain-setup-state.json directly.",
             "Do not run source registration, default-source, attach, detach, credential, remote topology, VPN, Tailscale, host, or destructive data commands without explicit user confirmation.",
-            "Do not abandon existing-install recovery for a fresh install unless the user explicitly confirms that fallback.",
+            "Do not abandon existing-install recovery for a new home-directory GBrain setup unless the user explicitly confirms that fallback.",
             "Use the installed gbrain CLI help, doctor, status, and remediation output as the primary authority.",
             "Use local GBrain repo/docs only as fallback context when discovered.",
             "Only a successful verify-existing-install run may mark the existing install complete.",
