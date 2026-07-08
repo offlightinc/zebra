@@ -174,7 +174,10 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(launch.startupPrompt.contains("kind: remote_thin_client"), launch.startupPrompt)
         XCTAssertTrue(launch.startupPrompt.contains("kind: fresh_install"), launch.startupPrompt)
         XCTAssertTrue(launch.startupPrompt.contains("nextAction.command"), launch.startupPrompt)
+        XCTAssertTrue(launch.startupPrompt.contains("Do not ask the user to confirm a new setup again"), launch.startupPrompt)
+        XCTAssertTrue(launch.startupPrompt.contains("Do not use that fallback confirmation for `kind: fresh_install`"), launch.startupPrompt)
         XCTAssertFalse(launch.startupPrompt.contains("concrete target path"), launch.startupPrompt)
+        XCTAssertFalse(launch.startupPrompt.contains("unless the user explicitly confirms they want a new GBrain/brain setup"), launch.startupPrompt)
     }
 
     func testDiscoverExistingInstallTargetReturnsRemoteThinClientWithoutLocalPath() throws {
