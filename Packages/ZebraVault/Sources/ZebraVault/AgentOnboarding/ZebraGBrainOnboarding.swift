@@ -48,6 +48,25 @@ public struct ZebraGBrainOnboardingStore {
         public let shellEnvironmentPrefix: String
         public let allowTrustedAutomation: Bool
         public let allowLaunchDirectoryTrust: Bool
+        public let existingInstallVerificationMode: Bool
+
+        public init(
+            launchDirectory: String,
+            startupPrompt: String,
+            runId: String,
+            shellEnvironmentPrefix: String,
+            allowTrustedAutomation: Bool,
+            allowLaunchDirectoryTrust: Bool,
+            existingInstallVerificationMode: Bool = false
+        ) {
+            self.launchDirectory = launchDirectory
+            self.startupPrompt = startupPrompt
+            self.runId = runId
+            self.shellEnvironmentPrefix = shellEnvironmentPrefix
+            self.allowTrustedAutomation = allowTrustedAutomation
+            self.allowLaunchDirectoryTrust = allowLaunchDirectoryTrust
+            self.existingInstallVerificationMode = existingInstallVerificationMode
+        }
     }
 
     struct CompletionResult: Equatable {
@@ -124,6 +143,23 @@ public struct ZebraGBrainOnboardingStore {
         var waitingForUser: PendingUserDecision?
         var lastFailure: String?
         var nextSection: String?
+        var gbrainSetupMode: String?
+        var freshInstallConfirmedAt: String?
+        var existingInstallVerification: ExistingInstallVerification?
+    }
+
+    private struct ExistingInstallVerification: Codable, Equatable {
+        var status: String?
+        var verifiedAt: String?
+        var gbrainExecutablePath: String?
+        var gbrainVersion: String?
+        var doctorOk: Bool?
+        var readProbeOk: Bool?
+        var sourceProbeOk: Bool?
+        var sourceId: String?
+        var reasons: [String]?
+        var preservedReceipt: Bool?
+        var transientFailure: Bool?
     }
 
     private struct EmbeddingDecision: Codable {
@@ -296,6 +332,8 @@ public struct ZebraGBrainOnboardingStore {
     private static let pgliteWasmRuntimeErrorReason = "pglite_wasm_runtime_error"
     private static let sourceProbeRuntimeErrorReason = "source_probe_runtime_error"
     private static let prepareSourceRepoSectionID = "zebra-gbrain-prepare-source"
+    private static let existingInstallVerificationMode = "existing_install_verification"
+    private static let freshInstallMode = "fresh_install"
 
     private static let allowedTargetResolutionMethods: Set<String> = [
         "selected_vault",
@@ -397,6 +435,14 @@ public struct ZebraGBrainOnboardingStore {
         guard let state = loadState() else {
             return []
         }
+        if isExistingInstallVerificationMode(state) {
+            return existingInstallVerificationSnapshots(
+                state: state,
+                isParentRunning: isParentRunning,
+                showsStartForActiveSection: showsStartForActiveSection,
+                wasStartedBefore: wasStartedBefore
+            )
+        }
         let sourcePrepared = state.activeGBrainBinding != nil || state.docsManifest != nil
         let manifestSections = state.docsManifest?.installForAgentsSections ?? []
         let sections = manifestSections.isEmpty
@@ -449,6 +495,9 @@ public struct ZebraGBrainOnboardingStore {
     }
 
     private func fallbackInstallForAgentsSectionsForPendingSourcePrepare(state: State) -> [DocsSection] {
+        guard !isExistingInstallVerificationMode(state) else {
+            return []
+        }
         guard let sourceRepoPath = sourceRepoPathForPendingSourcePrepareProjection(state: state) else {
             return []
         }
@@ -471,6 +520,75 @@ public struct ZebraGBrainOnboardingStore {
         }
         let recommendedPath = (homeDirectoryPath as NSString).appendingPathComponent("gbrain")
         return validGBrainSourceRepoPath(recommendedPath)
+    }
+
+    private func isExistingInstallVerificationMode(_ state: State) -> Bool {
+        state.progress?.gbrainSetupMode == Self.existingInstallVerificationMode
+    }
+
+    private func existingInstallVerificationSnapshots(
+        state: State,
+        isParentRunning: Bool,
+        showsStartForActiveSection: Bool,
+        wasStartedBefore: Bool
+    ) -> [ZebraOnboardingChecklistSubstepSnapshot] {
+        let verification = state.progress?.existingInstallVerification
+        let status = verification?.status
+        let reasons = verification?.reasons ?? []
+        let verified = status == "verified" || status == "existing_install_verified"
+        let transientPreserved = status == "transient_retry_preserved"
+        let diagnosisNeeded = status == "diagnosis_needed" || status == "existing_install_failed"
+        let verificationActive = !verified && !transientPreserved && !diagnosisNeeded
+
+        var snapshots = [
+            ZebraOnboardingChecklistSubstepSnapshot(
+                id: "zebra-gbrain-existing-install-verify",
+                title: Self.existingInstallVerificationTitle(),
+                detail: existingInstallVerificationDetail(status: status, reasons: reasons),
+                isCompleted: verified || transientPreserved,
+                isActive: verificationActive,
+                isWaitingForUser: false,
+                isRunning: isParentRunning && verificationActive,
+                showsStart: showsStartForActiveSection && verificationActive,
+                wasStartedBefore: wasStartedBefore,
+                isAttention: transientPreserved
+            ),
+        ]
+
+        if diagnosisNeeded {
+            snapshots.append(
+                ZebraOnboardingChecklistSubstepSnapshot(
+                    id: "zebra-gbrain-existing-install-diagnosis",
+                    title: Self.existingInstallDiagnosisTitle(),
+                    detail: existingInstallVerificationDetail(status: status, reasons: reasons),
+                    isCompleted: false,
+                    isActive: true,
+                    isWaitingForUser: false,
+                    isRunning: isParentRunning,
+                    showsStart: showsStartForActiveSection,
+                    wasStartedBefore: wasStartedBefore,
+                    isAttention: true
+                )
+            )
+        }
+
+        return snapshots
+    }
+
+    private func existingInstallVerificationDetail(status: String?, reasons: [String]) -> String? {
+        if status == "transient_retry_preserved" {
+            return String(
+                localized: "brain.onboarding.gbrain.substep.existingInstall.transient.detail",
+                defaultValue: "Previous verification is preserved; retry after the transient failure clears."
+            )
+        }
+        guard !reasons.isEmpty else { return nil }
+        let joined = reasons.joined(separator: ", ")
+        let format = String(
+            localized: "brain.onboarding.gbrain.substep.existingInstall.reasons.detail",
+            defaultValue: "Diagnosis evidence: %@"
+        )
+        return String(format: format, joined)
     }
 
     private func validGBrainSourceRepoPath(_ sourceRepoPath: String) -> String? {
@@ -504,6 +622,20 @@ public struct ZebraGBrainOnboardingStore {
         String(
             localized: "brain.onboarding.gbrain.substep.prepareSource",
             defaultValue: "Check and clone GBrain repo"
+        )
+    }
+
+    private static func existingInstallVerificationTitle() -> String {
+        String(
+            localized: "brain.onboarding.gbrain.substep.existingInstall.verify",
+            defaultValue: "Check existing GBrain install"
+        )
+    }
+
+    private static func existingInstallDiagnosisTitle() -> String {
+        String(
+            localized: "brain.onboarding.gbrain.substep.existingInstall.diagnose",
+            defaultValue: "Diagnose existing GBrain install"
         )
     }
 
@@ -544,6 +676,11 @@ public struct ZebraGBrainOnboardingStore {
         ) {
             reasons.append(forbiddenReason)
             return CompletionResult(isComplete: false, reasons: reasons)
+        }
+        if targetHasThinClientReadVerification(resolved.target),
+           receiptIsComplete(receipt, selectedVaultPath: selectedVaultPath),
+           reasons.isEmpty {
+            return CompletionResult(isComplete: true, reasons: [])
         }
         guard let sourceId = nonEmpty(resolved.target.sourceId) else {
             reasons.append("source_not_registered")
@@ -590,7 +727,7 @@ public struct ZebraGBrainOnboardingStore {
             reasons.append(forbiddenReason)
             return CompletionResult(isComplete: false, reasons: reasons)
         }
-        guard nonEmpty(resolved.target.sourceId) != nil else {
+        guard nonEmpty(resolved.target.sourceId) != nil || targetHasThinClientReadVerification(resolved.target) else {
             reasons.append("source_not_registered")
             return CompletionResult(isComplete: false, reasons: reasons)
         }
@@ -599,6 +736,11 @@ public struct ZebraGBrainOnboardingStore {
             return CompletionResult(isComplete: false, reasons: reasons)
         }
         return CompletionResult(isComplete: true, reasons: [])
+    }
+
+    private func targetHasThinClientReadVerification(_ target: Target) -> Bool {
+        target.sourceVerification?.method == "existing_install_thin_client_read_probe"
+            && target.complete == true
     }
 
     public func resolvedBrainRepoTargetPath() -> String? {
@@ -790,10 +932,17 @@ public struct ZebraGBrainOnboardingStore {
         let selectedVault = standardizedExistingDirectoryPath(selectedVaultPath)
         let launchDirectory = onboardingWorkDirectoryPath()
         let allowTrustedAutomation = true
-        let docsSnapshot = prepareDocsSnapshot()
         let runId = "gbrain-\(UUID().uuidString)"
         var state = loadState() ?? State.empty()
         let previousProgress = state.progress
+        let previousMode = previousProgress?.gbrainSetupMode
+        let hasExplicitFreshInstallChoice = previousMode == Self.freshInstallMode
+            && previousProgress?.freshInstallConfirmedAt != nil
+        let existingInstallVerificationMode = !hasExplicitFreshInstallChoice
+        let gbrainSetupMode = existingInstallVerificationMode
+            ? Self.existingInstallVerificationMode
+            : Self.freshInstallMode
+        let docsSnapshot = prepareDocsSnapshot(includeInstallForAgentsSections: !existingInstallVerificationMode)
         let previousDocsFingerprint = Self.docsManifestFingerprint(state.docsManifest)
         state.currentRunId = runId
         state.docsCommit = docsSnapshot?.commit ?? state.docsCommit ?? "unavailable"
@@ -803,10 +952,11 @@ public struct ZebraGBrainOnboardingStore {
         state.selectedAgent = selectedAgent?.rawValue
         let currentDocsFingerprint = Self.docsManifestFingerprint(state.docsManifest)
         let resolvedTargetKey = selectedVault.map(Self.targetKey(for:))
-            ?? previousProgress?.resolvedTargetKey
+            ?? (existingInstallVerificationMode ? nil : previousProgress?.resolvedTargetKey)
         let canReuseProgress = previousProgress != nil
             && previousProgress?.resolvedTargetKey == resolvedTargetKey
             && previousDocsFingerprint == currentDocsFingerprint
+            && !existingInstallVerificationMode
         let completedSections = canReuseProgress ? previousProgress?.completedSections ?? [] : []
         let targetResolution = selectedVault != nil
             ? TargetResolution(
@@ -814,7 +964,7 @@ public struct ZebraGBrainOnboardingStore {
                 method: "selected_vault",
                 confirmedAt: Self.isoTimestamp()
             )
-            : previousProgress?.targetResolution ?? TargetResolution(
+            : (existingInstallVerificationMode ? nil : previousProgress?.targetResolution) ?? TargetResolution(
                 status: "unresolved",
                 method: nil,
                 confirmedAt: nil
@@ -836,7 +986,15 @@ public struct ZebraGBrainOnboardingStore {
             completedSections: completedSections,
             waitingForUser: waitingForUser,
             lastFailure: nil,
-            nextSection: nextSection
+            nextSection: existingInstallVerificationMode ? nil : nextSection,
+            gbrainSetupMode: gbrainSetupMode,
+            freshInstallConfirmedAt: hasExplicitFreshInstallChoice
+                ? previousProgress?.freshInstallConfirmedAt
+                : nil,
+            existingInstallVerification: existingInstallVerificationMode
+                && previousProgress?.resolvedTargetKey == resolvedTargetKey
+                ? previousProgress?.existingInstallVerification
+                : nil
         )
         writeState(state)
 
@@ -854,11 +1012,16 @@ public struct ZebraGBrainOnboardingStore {
             runId: runId,
             shellEnvironmentPrefix: environmentPrefix,
             allowTrustedAutomation: allowTrustedAutomation,
-            allowLaunchDirectoryTrust: false
+            allowLaunchDirectoryTrust: false,
+            existingInstallVerificationMode: existingInstallVerificationMode
         )
     }
 
     private func bootstrapPrompt() -> String {
+        if let state = loadState(),
+           state.progress?.gbrainSetupMode == Self.existingInstallVerificationMode {
+            return existingInstallBootstrapPrompt(selectedVault: state.progress?.selectedVaultPath)
+        }
         var instructions = [
             onboardingLanguage.firstVisibleGBrainSetupInstruction,
             "Do not run tools or read files before printing that line.",
@@ -874,9 +1037,38 @@ public struct ZebraGBrainOnboardingStore {
         return instructions.joined(separator: " ")
     }
 
-    private func prepareDocsSnapshot() -> DocsSnapshot? {
+    private func existingInstallBootstrapPrompt(selectedVault: String?) -> String {
+        var instructions = [
+            onboardingLanguage.firstVisibleGBrainSetupInstruction,
+            "Do not run tools or read files before printing that line.",
+            "This is Zebra GBrain preflight mode. Do not start INSTALL_FOR_AGENTS.md Step 1 and do not create a fresh-install checklist unless the user explicitly confirms they want a new GBrain/brain setup.",
+        ]
+        if let selectedVault {
+            instructions.append(
+                "First run `zebra-gbrain-onboarding verify-existing-install --target \(ZebraAgentLaunchCommand.shellQuote(selectedVault)) --method selected_vault`."
+            )
+        } else {
+            instructions.append(
+                "No selected brain repo target is confirmed yet. First inspect the installed `gbrain` CLI and ask the user to choose an existing brain repo target if one is found. Do not run `verify-existing-install` until you have a concrete target path."
+            )
+        }
+        instructions.append(contentsOf: [
+            "When you run `verify-existing-install`, if it returns `complete: true` with status `verified` or `transient_retry_preserved`, stop fresh-install work and summarize the result.",
+            "If `verify-existing-install` fails with `diagnosis_needed`, run the printed `nextAction.command` before choosing a repair path.",
+            "Treat `failure.reasons` as probe evidence labels, not root-cause taxonomy and not a fixed repair-command mapping.",
+            "Use installed `gbrain` CLI output as the primary authority. Use a local GBrain source repo only as docs/tool fallback when needed.",
+            "If the user explicitly chooses fresh install, run `zebra-gbrain-onboarding prepare-source-repo --fresh-install`, then follow the returned fresh-install section flow.",
+            "Do not edit gbrain-setup-state.json directly. Zebra-owned helper commands are the only authority allowed to write onboarding completion receipts.",
+        ])
+        return instructions.joined(separator: " ")
+    }
+
+    private func prepareDocsSnapshot(includeInstallForAgentsSections: Bool = true) -> DocsSnapshot? {
         if let repoURL = explicitDocsRepoURL() {
-            return prepareLocalDocsSnapshot(repoURL: repoURL)
+            return prepareLocalDocsSnapshot(
+                repoURL: repoURL,
+                includeInstallForAgentsSections: includeInstallForAgentsSections
+            )
         }
         return nil
     }
@@ -891,7 +1083,10 @@ public struct ZebraGBrainOnboardingStore {
         ]
     }
 
-    private func prepareLocalDocsSnapshot(repoURL: URL) -> DocsSnapshot? {
+    private func prepareLocalDocsSnapshot(
+        repoURL: URL,
+        includeInstallForAgentsSections: Bool = true
+    ) -> DocsSnapshot? {
         let commit = gitCommitHash(in: repoURL) ?? "local"
         let snapshotDirectory = stateURL
             .deletingLastPathComponent()
@@ -928,7 +1123,9 @@ public struct ZebraGBrainOnboardingStore {
             sourceKind: "local",
             sourceRef: commit,
             files: files,
-            installForAgentsSections: Self.installForAgentsSections(from: installForAgents)
+            installForAgentsSections: includeInstallForAgentsSections
+                ? Self.installForAgentsSections(from: installForAgents)
+                : []
         )
         return DocsSnapshot(
             commit: commit,
@@ -2617,7 +2814,10 @@ public struct ZebraGBrainOnboardingStore {
         progress.pop("lastFailure", None)
         state["sectionRoles"] = {}
 
-    def write_local_docs_snapshot(state, source_repo_path):
+    def existing_install_verification_mode(state):
+        return ((state.get("progress") or {}).get("gbrainSetupMode") == "existing_install_verification")
+
+    def write_local_docs_snapshot(state, source_repo_path, include_install_sections=True):
         previous_fingerprint = docs_manifest_fingerprint(state.get("docsManifest"))
         commit = git_commit(source_repo_path)
         snapshot_dir = os.path.join(os.path.dirname(state_path), "gbrain-docs", commit)
@@ -2646,17 +2846,17 @@ public struct ZebraGBrainOnboardingStore {
             "sourceKind": "local",
             "sourceRef": commit,
             "files": files,
-            "installForAgentsSections": install_for_agents_sections(install_for_agents),
+            "installForAgentsSections": install_for_agents_sections(install_for_agents) if include_install_sections else [],
         }
         state["docsCommit"] = commit
         state["docsFetchedAt"] = now()
         state["docsSnapshotPath"] = snapshot_dir
         state["docsManifest"] = manifest
-        if docs_manifest_fingerprint(manifest) != previous_fingerprint:
+        if include_install_sections and docs_manifest_fingerprint(manifest) != previous_fingerprint:
             reset_progress_for_docs_change(state, manifest, source_repo_path)
         return {"commit": commit, "path": snapshot_dir, "manifest": manifest}
 
-    def persist_active_binding(path, status):
+    def persist_active_binding(path, status, include_install_sections=True):
         state = load_state()
         binding = {
             "sourceRepoPath": path,
@@ -2667,12 +2867,19 @@ public struct ZebraGBrainOnboardingStore {
         }
         state["schemaVersion"] = 1
         state["activeGBrainBinding"] = binding
-        write_local_docs_snapshot(state, path)
+        if include_install_sections:
+            progress = state.setdefault("progress", {})
+            progress["gbrainSetupMode"] = "fresh_install"
+            progress["freshInstallConfirmedAt"] = now()
+        write_local_docs_snapshot(state, path, include_install_sections=include_install_sections)
         save_state(state)
         return binding
 
     def prepare_source_repo():
         flags = parse_flags(args)
+        state = load_state()
+        fresh_install_requested = bool(flags.get("fresh_install"))
+        include_install_sections = fresh_install_requested or not existing_install_verification_mode(state)
         path = selected_source_repo_path(flags)
         status = classify_source_repo(path)
         if status in {"missing", "empty"}:
@@ -2684,8 +2891,16 @@ public struct ZebraGBrainOnboardingStore {
             raise RuntimeError("gbrain_source_repo_occupied_invalid")
         if not is_valid_gbrain_source_repo(path):
             raise RuntimeError("gbrain_source_repo_invalid")
-        binding = persist_active_binding(os.path.abspath(path), prepared_status)
-        print(json.dumps({"ok": True, "activeGBrainBinding": binding}, sort_keys=True))
+        binding = persist_active_binding(
+            os.path.abspath(path),
+            prepared_status,
+            include_install_sections=include_install_sections,
+        )
+        print(json.dumps({
+            "ok": True,
+            "activeGBrainBinding": binding,
+            "freshInstallSectionsPrepared": include_install_sections,
+        }, sort_keys=True))
 
     def active_source_repo_path():
         path = existing_active_source_repo_path()
@@ -3449,6 +3664,8 @@ public struct ZebraGBrainOnboardingStore {
     def bootstrap_prompt():
         state = load_state()
         progress = state.get("progress") or {}
+        if existing_install_verification_mode(state):
+            return terminal_argument_prompt(existing_install_bootstrap_prompt(state))
         section = progress.get("nextSection") or next_section_title(state)
         section_prompt = build_section_prompt(state, section)
         language = (os.environ.get("ZEBRA_ONBOARDING_LANGUAGE") or "en").lower()
@@ -3465,6 +3682,37 @@ public struct ZebraGBrainOnboardingStore {
             section_prompt,
             "When this section is complete, run the report command shown in the section prompt and continue from its `nextPrompt` stdout.",
         ]))
+
+    def existing_install_bootstrap_prompt(state):
+        progress = state.get("progress") or {}
+        selected_vault = progress.get("selectedVaultPath")
+        verify_command = None
+        if selected_vault:
+            verify_command = (
+                "zebra-gbrain-onboarding verify-existing-install --target "
+                + shell_quote(selected_vault)
+                + " --method selected_vault"
+            )
+        language = (os.environ.get("ZEBRA_ONBOARDING_LANGUAGE") or "en").lower()
+        if language == "ko" or language.startswith("ko-"):
+            first_visible = "Your first visible response must be a brief Korean sentence telling the user that Zebra is checking their existing GBrain install and they should wait. Preserve `Zebra` and `GBrain` exactly."
+        elif language == "ja" or language.startswith("ja-"):
+            first_visible = "Your first visible response must be a brief Japanese sentence telling the user that Zebra is checking their existing GBrain install and they should wait. Preserve `Zebra` and `GBrain` exactly."
+        else:
+            first_visible = "Your first visible response must be exactly:\\nZebra is checking your existing GBrain install. Please wait."
+        return "\\n".join([
+            first_visible,
+            "Do not run tools or read files before printing that line.",
+            "This is Zebra GBrain preflight mode. Do not start INSTALL_FOR_AGENTS.md Step 1 and do not create a fresh-install checklist unless the user explicitly confirms they want a new GBrain/brain setup.",
+            ("First run: " + verify_command) if verify_command else "No selected brain repo target is confirmed yet. First inspect the installed `gbrain` CLI (`gbrain --version`, `gbrain status --json`, `gbrain sources list --json`, and `gbrain doctor --json` when available) and ask the user to choose an existing brain repo target if one is found. Do not run `verify-existing-install` until you have a concrete target path.",
+            "When you run `verify-existing-install`, if it returns `complete: true` with status `verified` or `transient_retry_preserved`, stop fresh-install work and summarize the result. Do not edit `gbrain-setup-state.json` directly.",
+            "If `verify-existing-install` fails with `diagnosis_needed`, run the printed `nextAction.command` before choosing a repair path.",
+            "Treat `failure.reasons` as probe evidence labels, not root-cause taxonomy and not a fixed repair-command mapping.",
+            "Use installed `gbrain` CLI help/doctor/status/remediation output as the primary authority. Use a local GBrain source repo only as docs/tool fallback when needed; to prepare that fallback without starting fresh install, run `zebra-gbrain-onboarding prepare-source-repo`.",
+            "Ask the user before changing source bindings, remote topology, credentials, destructive data state, or abandoning recovery for fresh install.",
+            "If the user explicitly chooses fresh install, run `zebra-gbrain-onboarding prepare-source-repo --fresh-install`, then follow the returned fresh-install section flow.",
+            "After any repair, rerun the verify command. Completion is valid only when `verify-existing-install` succeeds.",
+        ])
 
     def launcher_safe_run_id(run_id):
         safe = "".join(
@@ -3492,8 +3740,10 @@ public struct ZebraGBrainOnboardingStore {
             raise RuntimeError("runtime_missing")
         if not executable:
             raise RuntimeError("runtime_executable_missing")
+        state = load_state()
         source_repo = existing_active_source_repo_path()
-        if not source_repo:
+        existing_mode = existing_install_verification_mode(state)
+        if not source_repo and not existing_mode:
             raise RuntimeError("active_source_repo_missing")
         prompt = bootstrap_prompt()
         path = launcher_script_path(run_id)
@@ -3505,23 +3755,30 @@ public struct ZebraGBrainOnboardingStore {
         lines = [
             "#!/bin/sh",
             "set -eu",
-            'if [ -z "${ZEBRA_GBRAIN_SOURCE_REPO:-}" ]; then',
-            '  eval "$(zebra-gbrain-onboarding active-source-env)"',
-            "fi",
             f"ZEBRA_GBRAIN_BOOTSTRAP_PROMPT_PATH={shell_quote(prompt_path)}",
             'ZEBRA_GBRAIN_BOOTSTRAP_PROMPT=$(cat "$ZEBRA_GBRAIN_BOOTSTRAP_PROMPT_PATH")',
         ]
+        if source_repo:
+            lines[2:2] = [
+                'if [ -z "${ZEBRA_GBRAIN_SOURCE_REPO:-}" ]; then',
+                '  eval "$(zebra-gbrain-onboarding active-source-env)"',
+                "fi",
+            ]
+            workspace = '"$ZEBRA_GBRAIN_SOURCE_REPO"'
+        else:
+            workspace = shell_quote((state.get("progress") or {}).get("launchDirectory") or os.path.dirname(state_path))
         if runtime == "openclaw":
             agent_id = flags.get("agent_id") or "zebra-gbrain-setup"
             session = flags.get("session") or f"agent:{agent_id}:{run_id}"
+            if source_repo:
+                lines.append(f"zebra-gbrain-onboarding prepare-openclaw-agent --executable {shell_quote(executable)} --agent-id {shell_quote(agent_id)}")
             lines.extend([
-                f"zebra-gbrain-onboarding prepare-openclaw-agent --executable {shell_quote(executable)} --agent-id {shell_quote(agent_id)}",
-                'cd "$ZEBRA_GBRAIN_SOURCE_REPO"',
+                f"cd {workspace}",
                 f"exec {shell_quote(executable)} tui --local --session {shell_quote(session)} --message \\\"$ZEBRA_GBRAIN_BOOTSTRAP_PROMPT\\\"",
             ])
         elif runtime == "hermes":
             lines.extend([
-                'cd "$ZEBRA_GBRAIN_SOURCE_REPO"',
+                f"cd {workspace}",
                 f"exec {shell_quote(executable)} chat --tui --source zebra-gbrain-onboarding --query \\\"$ZEBRA_GBRAIN_BOOTSTRAP_PROMPT\\\"",
             ])
         else:
@@ -5651,10 +5908,53 @@ public struct ZebraGBrainOnboardingStore {
                     if isinstance(value, list):
                         return len(value) > 0
                     return bool(value)
-            count = payload.get("count") or payload.get("total") or payload.get("totalResults")
-            if count == 0:
-                return False
+            for key in ["count", "total", "totalResults"]:
+                if key not in payload:
+                    continue
+                count = payload.get(key)
+                if isinstance(count, (int, float)):
+                    return count > 0
+                if isinstance(count, str) and count.strip().isdigit():
+                    return int(count.strip()) > 0
+                return bool(count)
         return bool(payload)
+
+    def existing_install_has_only_transient_reasons(reasons):
+        return bool(reasons) and all(reason == PGLITE_BUSY_REASON for reason in reasons)
+
+    def existing_install_admin_diagnostic_unavailable(text):
+        lower = (text or "").lower()
+        return (
+            "remote snapshot failed" in lower
+            or ("insufficient_scope" in lower and "admin" in lower)
+            or ("requires 'admin' scope" in lower)
+            or ("requires admin scope" in lower)
+            or ("admin scope" in lower and "required" in lower)
+        )
+
+    def existing_install_has_thin_client_source_refusal(source_probe_attempts):
+        return any(
+            attempt.get("reason") == "sources_cli_not_routable"
+            for attempt in (source_probe_attempts or [])
+        )
+
+    def existing_install_source_probe_admin_diagnostic_unavailable(source_probe):
+        return (source_probe or {}).get("reason") in {
+            "remote_status_snapshot_failed",
+            "remote_admin_diagnostic_unavailable",
+        }
+
+    def existing_install_as_thin_client_read_verified(source_probe, source_probe_attempts, source_id):
+        return {
+            "ok": True,
+            "adapter": "remote",
+            "status": "verified_with_admin_diagnostic_unavailable",
+            "method": "existing_install_thin_client_read_probe",
+            "sourceId": source_id,
+            "warning": "remote_admin_diagnostic_unavailable",
+            "diagnosticSourceProbe": source_probe,
+            "sourceProbeAttempts": source_probe_attempts,
+        }
 
     def existing_install_read_probe(executable, target):
         sample = syncable_markdown_sample(target) or "zebra gbrain existing install verification"
@@ -5796,7 +6096,7 @@ public struct ZebraGBrainOnboardingStore {
             return {"ok": False, "adapter": "remote", "status": "error", "reason": "remote_status_invalid_json"}
         warnings = payload.get("warnings") if isinstance(payload, dict) else None
         warning_text = json.dumps(warnings or []) + "\\n" + (result.stderr or "")
-        if "remote snapshot failed" in warning_text.lower():
+        if existing_install_admin_diagnostic_unavailable(warning_text):
             return {"ok": False, "adapter": "remote", "status": "error", "reason": "remote_status_snapshot_failed"}
         target_abs = os.path.abspath(os.path.expanduser(target))
         for entry in collect_source_entries(payload):
@@ -6114,15 +6414,12 @@ public struct ZebraGBrainOnboardingStore {
                 doctor_failed_check_names = doctor_failed_checks(doctor)
                 if not doctor_ok:
                     doctor_reason = transient_probe_reason((doctor.stderr or "") + "\\n" + (doctor.stdout or "")) or "doctor_failed"
-                    reasons.append(doctor_reason)
             except subprocess.TimeoutExpired:
                 doctor_reason = PGLITE_BUSY_REASON
                 doctor_failed_check_names = ["doctor_timeout"]
-                reasons.append(doctor_reason)
             except Exception:
                 doctor_reason = "doctor_failed"
                 doctor_failed_check_names = ["doctor_failed"]
-                reasons.append(doctor_reason)
 
         read_probe = {"ok": False, "status": "not_run"}
         read_reason = None
@@ -6133,95 +6430,144 @@ public struct ZebraGBrainOnboardingStore {
 
         source_probe = {"ok": False, "status": "not_run", "reason": "source_probe_not_run"}
         source_probe_attempts = []
+        warnings = []
         if executable and target and os.path.isdir(target):
             source_probe, source_probe_attempts = existing_install_source_probe(executable, target, source_id)
             if source_probe.get("sourceId"):
                 source_id = source_probe.get("sourceId")
-            if not source_probe.get("ok"):
+
+            thin_client_admin_diagnostic_unavailable = bool(
+                read_probe.get("ok")
+                and existing_install_has_thin_client_source_refusal(source_probe_attempts)
+                and existing_install_source_probe_admin_diagnostic_unavailable(source_probe)
+            )
+            if thin_client_admin_diagnostic_unavailable:
+                warnings.append("remote_admin_diagnostic_unavailable")
+                source_probe = existing_install_as_thin_client_read_verified(
+                    source_probe,
+                    source_probe_attempts,
+                    source_id,
+                )
+            elif not source_probe.get("ok"):
                 reasons.append(source_probe.get("reason") or "source_binding_not_verified")
 
+        doctor_admin_diagnostic_unavailable = bool(
+            doctor_reason
+            and existing_install_admin_diagnostic_unavailable(doctor_reason + "\\n" + "\\n".join(doctor_failed_check_names))
+            and read_probe.get("ok")
+            and existing_install_has_thin_client_source_refusal(source_probe_attempts)
+        )
+        if doctor_admin_diagnostic_unavailable:
+            warnings.append("remote_admin_diagnostic_unavailable")
+        elif doctor_reason:
+            reasons.append(doctor_reason)
+
         reasons = list(dict.fromkeys([reason for reason in reasons if reason]))
-        global_complete = bool(executable and version_ok and doctor_ok and read_probe.get("ok"))
-        complete = bool(global_complete and source_probe.get("ok") and source_id and not reasons)
-        status_value = "existing_install_verified" if complete else "existing_install_failed"
+        warnings = list(dict.fromkeys([warning for warning in warnings if warning]))
+        doctor_effective_ok = bool(doctor_ok or doctor_admin_diagnostic_unavailable)
+        global_complete = bool(executable and version_ok and doctor_effective_ok and read_probe.get("ok"))
+        source_identity_satisfied = bool(source_id or source_probe.get("method") == "existing_install_thin_client_read_probe")
+        complete = bool(global_complete and source_probe.get("ok") and source_identity_satisfied and not reasons)
         verified_at = now()
         key = target_key(target) if target and os.path.isdir(target) else None
-        next_action = None if complete else existing_install_next_action(target, method, source_id)
 
         state = load_state()
         receipt = state.setdefault("receipt", {})
-        receipt["globalReadiness"] = {
-            "complete": global_complete,
-            "gbrainExecutablePath": executable,
-            "doctorOk": doctor_ok,
-            "doctorEffectiveOk": doctor_ok,
-            "verifiedAt": verified_at,
-        }
+        targets = receipt.setdefault("targets", {})
+        existing_target_payload = dict((targets or {}).get(key) or {}) if key else {}
+        preserve_completed_receipt = bool(
+            (not complete)
+            and key
+            and (receipt.get("globalReadiness") or {}).get("complete") is True
+            and existing_target_payload.get("complete") is True
+            and existing_install_has_only_transient_reasons(reasons)
+        )
+        effective_complete = bool(complete or preserve_completed_receipt)
+        status_value = (
+            "verified"
+            if complete
+            else ("transient_retry_preserved" if preserve_completed_receipt else "diagnosis_needed")
+        )
+        next_action = None if complete else existing_install_next_action(target, method, source_id)
+
+        if not preserve_completed_receipt:
+            receipt["globalReadiness"] = {
+                "complete": global_complete,
+                "gbrainExecutablePath": executable,
+                "doctorOk": doctor_ok,
+                "doctorEffectiveOk": doctor_effective_ok,
+                "verifiedAt": verified_at,
+            }
         if key:
             receipt["primaryTargetKey"] = key
-            targets = receipt.setdefault("targets", {})
             target_payload = dict((targets or {}).get(key) or {})
-            target_payload.update({
-                "vaultPath": target,
-                "sourceId": source_id,
-                "profileId": profile_id,
-                "gbrainExecutablePath": executable,
-                "doctorStatus": {
-                    "ok": doctor_ok,
-                    "status": "ok" if doctor_ok else "failed",
-                    "failedChecks": doctor_failed_check_names,
-                },
-                "sourcesCurrentResult": {
-                    "ok": bool(source_probe.get("ok")),
+            if not preserve_completed_receipt:
+                target_payload.update({
+                    "vaultPath": target,
                     "sourceId": source_id,
-                    "localPath": source_probe.get("localPath"),
-                    "status": source_probe.get("status"),
-                    "reason": source_probe.get("reason"),
-                },
-                "searchProbeResult": read_probe,
-                "verifiedAt": verified_at,
-                "complete": complete,
-                "status": status_value,
-                "warnings": [],
-                "targetResolution": {
-                    "method": method,
-                    "confirmedAt": verified_at,
-                },
-                "reasons": reasons,
-            })
-            if source_probe.get("ok"):
-                target_payload["sourceVerification"] = {
-                    "sourceId": source_id,
-                    "targetPath": target,
-                    "verifiedAt": verified_at,
-                    "method": source_probe.get("method") or "existing_install_sources_current_and_list",
+                    "profileId": profile_id,
                     "gbrainExecutablePath": executable,
-                    "gbrainVersion": version,
-                }
-            else:
-                target_payload.pop("sourceVerification", None)
-            targets[key] = target_payload
+                    "doctorStatus": {
+                        "ok": doctor_ok,
+                        "effectiveOk": doctor_effective_ok,
+                        "status": "ok" if doctor_ok else "failed",
+                        "failedChecks": doctor_failed_check_names,
+                    },
+                    "sourcesCurrentResult": {
+                        "ok": bool(source_probe.get("ok")),
+                        "sourceId": source_id,
+                        "localPath": source_probe.get("localPath"),
+                        "status": source_probe.get("status"),
+                        "reason": source_probe.get("reason"),
+                    },
+                    "searchProbeResult": read_probe,
+                    "verifiedAt": verified_at,
+                    "complete": complete,
+                    "status": status_value,
+                    "warnings": warnings,
+                    "targetResolution": {
+                        "method": method,
+                        "confirmedAt": verified_at,
+                    },
+                    "reasons": reasons,
+                })
+                if source_probe.get("ok"):
+                    target_payload["sourceVerification"] = {
+                        "sourceId": source_id,
+                        "targetPath": target,
+                        "verifiedAt": verified_at,
+                        "method": source_probe.get("method") or "existing_install_sources_current_and_list",
+                        "gbrainExecutablePath": executable,
+                        "gbrainVersion": version,
+                    }
+                else:
+                    target_payload.pop("sourceVerification", None)
+                targets[key] = target_payload
             progress = state.setdefault("progress", {})
             progress.setdefault("selectedVaultPath", target)
             progress["resolvedTargetKey"] = key
             progress["targetResolution"] = {
-                "status": "verified" if complete else "failed",
+                "status": status_value,
                 "method": method,
                 "confirmedAt": verified_at,
             }
             progress["existingInstallVerification"] = {
-                "status": "completed" if complete else "failed",
+                "status": status_value,
                 "verifiedAt": verified_at,
                 "gbrainExecutablePath": executable,
                 "gbrainVersion": version,
                 "doctorOk": doctor_ok,
+                "doctorEffectiveOk": doctor_effective_ok,
                 "doctorFailedChecks": doctor_failed_check_names,
                 "readProbe": read_probe,
                 "sourceProbe": source_probe,
                 "sourceProbeAttempts": source_probe_attempts,
                 "sourceId": source_id,
                 "reasons": reasons,
+                "warnings": warnings,
                 "nextAction": next_action,
+                "preservedReceipt": preserve_completed_receipt,
+                "transientFailure": preserve_completed_receipt,
             }
         progress = state.setdefault("progress", {})
         progress["lastStatus"] = status_value
@@ -6232,20 +6578,24 @@ public struct ZebraGBrainOnboardingStore {
             progress.pop("lastFailure", None)
         save_state(state)
         print(json.dumps({
-            "complete": complete,
+            "complete": effective_complete,
             "status": status_value,
             "reasons": reasons,
             "globalReadinessComplete": global_complete,
             "gbrainExecutablePath": executable,
             "gbrainVersion": version,
             "doctorOk": doctor_ok,
+            "doctorEffectiveOk": doctor_effective_ok,
             "doctorFailedChecks": doctor_failed_check_names,
             "readProbe": read_probe,
             "sourceProbe": source_probe,
             "sourceProbeAttempts": source_probe_attempts,
+            "warnings": warnings,
             "nextAction": next_action,
+            "preservedReceipt": preserve_completed_receipt,
+            "transientFailure": preserve_completed_receipt,
         }, sort_keys=True))
-        sys.exit(0 if complete else 1)
+        sys.exit(0 if effective_complete else 1)
 
     def recover_cycle_freshness():
         flags = parse_flags(args)

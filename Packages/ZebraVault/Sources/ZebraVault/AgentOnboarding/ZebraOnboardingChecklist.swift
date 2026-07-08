@@ -1239,12 +1239,14 @@ public enum ZebraOnboardingChecklistCommand {
         runtime: ZebraGBrainRuntimeOnboardingStore.SelectedRuntime,
         language: ZebraOnboardingLanguage = ZebraOnboardingLanguage.current()
     ) -> String {
-        let prepareSourceRepoPrefix = [
-            "printf '%s\\n' \(ZebraAgentLaunchCommand.shellQuote(language.gbrainSourceRepoPrepareMessage))",
-            "zebra-gbrain-onboarding prepare-source-repo",
-            "eval \"$(zebra-gbrain-onboarding active-source-env)\"",
-            "printf '%s\\n' \(ZebraAgentLaunchCommand.shellQuote(language.gbrainRuntimeLauncherPrepareMessage))",
-        ].joined(separator: " && ") + " && "
+        let prepareSourceRepoPrefix = launch.existingInstallVerificationMode
+            ? "printf '%s\\n' \(ZebraAgentLaunchCommand.shellQuote(language.gbrainRuntimeLauncherPrepareMessage)) && "
+            : [
+                "printf '%s\\n' \(ZebraAgentLaunchCommand.shellQuote(language.gbrainSourceRepoPrepareMessage))",
+                "zebra-gbrain-onboarding prepare-source-repo",
+                "eval \"$(zebra-gbrain-onboarding active-source-env)\"",
+                "printf '%s\\n' \(ZebraAgentLaunchCommand.shellQuote(language.gbrainRuntimeLauncherPrepareMessage))",
+            ].joined(separator: " && ") + " && "
         let startupLine = gbrainSetupSelectedRuntimeCommand(
             launch: launch,
             runtime: runtime,

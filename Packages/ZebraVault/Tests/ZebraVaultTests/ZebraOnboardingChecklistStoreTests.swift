@@ -445,6 +445,33 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertLessThan(launcherRange.lowerBound, launchRange.lowerBound)
     }
 
+    func testExistingInstallGBrainStartupLineDoesNotPrepareSourceRepoBeforeRuntimeLaunch() throws {
+        let launch = ZebraGBrainOnboardingStore.LaunchContext(
+            launchDirectory: "/tmp/zebra-gbrain-work",
+            startupPrompt: "setup prompt",
+            runId: "gbrain-test-run",
+            shellEnvironmentPrefix: "export ZEBRA_GBRAIN_STATE='/tmp/state.json' && ",
+            allowTrustedAutomation: true,
+            allowLaunchDirectoryTrust: false,
+            existingInstallVerificationMode: true
+        )
+        let runtime = ZebraGBrainRuntimeOnboardingStore.SelectedRuntime(
+            runtime: "hermes",
+            executablePath: "/tmp/hermes"
+        )
+
+        let line = ZebraOnboardingChecklistCommand.gbrainSetupRuntimeStartupLine(
+            launch: launch,
+            runtime: runtime
+        )
+
+        XCTAssertFalse(line.contains("zebra-gbrain-onboarding prepare-source-repo"), line)
+        XCTAssertFalse(line.contains("eval \"$(zebra-gbrain-onboarding active-source-env)\""), line)
+        XCTAssertTrue(line.contains("zebra-gbrain-onboarding write-runtime-launcher --runtime 'hermes'"), line)
+        XCTAssertTrue(line.contains("--executable '/tmp/hermes'"), line)
+        XCTAssertTrue(line.contains("&& \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""), line)
+    }
+
     func testGBrainStartupLineExecutesSelectedHermesRuntimeAfterSourceRepoSelection() throws {
         let root = try makeTemporaryDirectory()
         let sourceRepo = try writeFakeGBrainSourceRepo(root: root)
@@ -460,7 +487,22 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             appPreferredLocalizations: ["en"],
             preferredLanguages: ["en-US"]
         )
-        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let preflightLaunch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        var state = try stateObject(in: stateURL)
+        var progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        progress["gbrainSetupMode"] = "fresh_install"
+        progress["freshInstallConfirmedAt"] = "2026-07-08T00:00:00Z"
+        state["progress"] = progress
+        try writeJSONObject(state, to: stateURL)
+        let launch = ZebraGBrainOnboardingStore.LaunchContext(
+            launchDirectory: preflightLaunch.launchDirectory,
+            startupPrompt: "Zebra GBrain setup is starting.",
+            runId: preflightLaunch.runId,
+            shellEnvironmentPrefix: preflightLaunch.shellEnvironmentPrefix,
+            allowTrustedAutomation: preflightLaunch.allowTrustedAutomation,
+            allowLaunchDirectoryTrust: preflightLaunch.allowLaunchDirectoryTrust,
+            existingInstallVerificationMode: false
+        )
         let runtime = ZebraGBrainRuntimeOnboardingStore.SelectedRuntime(
             runtime: "hermes",
             executablePath: executable.path
