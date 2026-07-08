@@ -67,6 +67,7 @@ extension ZebraSourceOnboardingState {
 
     struct SourceReadiness: Codable, Equatable, Sendable {
         var gmail: GmailReadiness
+        var agentMemory: AgentMemoryReadiness? = nil
     }
 
     struct GmailReadiness: Codable, Equatable, Sendable {
@@ -89,6 +90,19 @@ extension ZebraSourceOnboardingState {
         var kind: String
         var path: String
         var exists: Bool
+    }
+
+    struct AgentMemoryReadiness: Codable, Equatable, Sendable {
+        var status: String
+        var importableUnitCount: Int
+        var agents: [AgentMemoryCandidate]
+        var reasons: [String]
+    }
+
+    struct AgentMemoryCandidate: Codable, Equatable, Sendable {
+        var agent: String
+        var displayName: String
+        var importableUnitCount: Int
     }
 
     struct Progress: Codable, Equatable, Sendable {

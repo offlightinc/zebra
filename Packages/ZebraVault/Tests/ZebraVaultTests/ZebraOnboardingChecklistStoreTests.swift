@@ -1020,6 +1020,338 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(payload["normalizedSourceList"] as? [String], [])
     }
 
+    func testSourceOnboardingHelperOffersAgentMemoryOnlyWhenImportableContentExists() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let onboardingDirectory = stateURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: onboardingDirectory, withIntermediateDirectories: true)
+        try writeJSONObject(
+            [
+                "schemaVersion": 1,
+                "phase": "complete",
+                "selectedAgent": "codex",
+                "candidates": [
+                    [
+                        "id": "codex",
+                        "displayName": "Codex",
+                        "installState": "installed",
+                        "terminalLaunchable": true,
+                    ],
+                ],
+            ],
+            to: onboardingDirectory.appendingPathComponent("agent-cli-state.json", isDirectory: false)
+        )
+        let codexDirectory = root.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexDirectory, withIntermediateDirectories: true)
+        try """
+        # Personal Codex Instructions
+
+        Prefer concise source summaries for Zebra import tests.
+        """.write(
+            to: codexDirectory.appendingPathComponent("AGENTS.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+        ]
+        let status = try runProcess(
+            executableURL: helperURL,
+            arguments: ["status", "--json"],
+            environment: environment
+        )
+        XCTAssertEqual(status.status, 0, "stdout:\n\(status.stdout)\nstderr:\n\(status.stderr)")
+        let payload = try jsonObject(from: status.stdout)
+        XCTAssertTrue((payload["sourceInputPrompt"] as? String)?.contains("기존 agent memory") == true)
+        let suggestion = try XCTUnwrap(payload["agentMemorySuggestion"] as? [String: Any])
+        XCTAssertEqual(suggestion["available"] as? Bool, true)
+        XCTAssertEqual(suggestion["importableUnitCount"] as? Int, 1)
+
+        let intake = try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "기존 agent memory"],
+            environment: environment
+        )
+        XCTAssertEqual(intake.status, 0, "stdout:\n\(intake.stdout)\nstderr:\n\(intake.stderr)")
+        let intakePayload = try jsonObject(from: intake.stdout)
+        XCTAssertEqual(intakePayload["normalizedSourceList"] as? [String], ["agent-memory"])
+        XCTAssertEqual(intakePayload["confirmationPrompt"] as? String, "기존 agent memory로 이해했습니다. 맞나요?")
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.progress.sourceRows["agent-memory"]?.displayName, "기존 agent memory")
+        XCTAssertEqual(loaded.progress.sourceRows["agent-memory"]?.type, "agent-memory")
+    }
+
+    func testSourceOnboardingHelperDoesNotOfferEmptyAgentMemory() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let onboardingDirectory = stateURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: onboardingDirectory, withIntermediateDirectories: true)
+        try writeJSONObject(
+            [
+                "schemaVersion": 1,
+                "phase": "complete",
+                "selectedAgent": "codex",
+                "candidates": [
+                    [
+                        "id": "codex",
+                        "displayName": "Codex",
+                        "installState": "installed",
+                        "terminalLaunchable": true,
+                    ],
+                ],
+            ],
+            to: onboardingDirectory.appendingPathComponent("agent-cli-state.json", isDirectory: false)
+        )
+        let codexDirectory = root.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexDirectory, withIntermediateDirectories: true)
+        try "   \n".write(
+            to: codexDirectory.appendingPathComponent("AGENTS.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let status = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["status", "--json"],
+            environment: [
+                "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+                "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+                "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+                "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            ]
+        )
+
+        XCTAssertEqual(status.status, 0, "stdout:\n\(status.stdout)\nstderr:\n\(status.stderr)")
+        let payload = try jsonObject(from: status.stdout)
+        XCTAssertFalse((payload["sourceInputPrompt"] as? String)?.contains("기존 agent memory") == true)
+        let suggestion = try XCTUnwrap(payload["agentMemorySuggestion"] as? [String: Any])
+        XCTAssertEqual(suggestion["available"] as? Bool, false)
+        XCTAssertEqual(suggestion["importableUnitCount"] as? Int, 0)
+    }
+
+    func testSourceOnboardingHelperBlocksAgentMemoryIngestBeforeApproval() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let onboardingDirectory = stateURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: onboardingDirectory, withIntermediateDirectories: true)
+        try writeJSONObject(
+            [
+                "schemaVersion": 1,
+                "phase": "complete",
+                "selectedAgent": "codex",
+                "candidates": [
+                    [
+                        "id": "codex",
+                        "displayName": "Codex",
+                        "installState": "installed",
+                        "terminalLaunchable": true,
+                    ],
+                ],
+            ],
+            to: onboardingDirectory.appendingPathComponent("agent-cli-state.json", isDirectory: false)
+        )
+        let codexDirectory = root.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexDirectory, withIntermediateDirectories: true)
+        try "Do not ingest before explicit approval.\n".write(
+            to: codexDirectory.appendingPathComponent("AGENTS.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+        ]
+
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["intake", "--raw", "기존 agent memory"], environment: environment).status, 0)
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["confirm", "--answer", "yes"], environment: environment).status, 0)
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["next"], environment: environment).status, 0)
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["agent-memory", "choose-scope", "--scope", "sample"], environment: environment).status, 0)
+
+        let blocked = try runProcess(
+            executableURL: helperURL,
+            arguments: ["agent-memory", "ingest"],
+            environment: environment
+        )
+
+        XCTAssertEqual(blocked.status, 1, "stdout:\n\(blocked.stdout)\nstderr:\n\(blocked.stderr)")
+        let payload = try jsonObject(from: blocked.stdout)
+        XCTAssertEqual(payload["reason"] as? String, "ingest_plan_unconfirmed")
+        let artifact = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("source-ingest-artifacts", isDirectory: true)
+            .appendingPathComponent("agent-memory-knowledge.md", isDirectory: false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: artifact.path))
+    }
+
+    func testSourceOnboardingHelperRunsAgentMemorySourceToCompletion() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let onboardingDirectory = stateURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: onboardingDirectory, withIntermediateDirectories: true)
+        try writeJSONObject(
+            [
+                "schemaVersion": 1,
+                "phase": "complete",
+                "selectedAgent": "codex",
+                "candidates": [
+                    [
+                        "id": "codex",
+                        "displayName": "Codex",
+                        "installState": "installed",
+                        "terminalLaunchable": true,
+                    ],
+                ],
+            ],
+            to: onboardingDirectory.appendingPathComponent("agent-cli-state.json", isDirectory: false)
+        )
+        let codexDirectory = root.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexDirectory, withIntermediateDirectories: true)
+        try "Remember Zebra import behavior tests.\n".write(
+            to: codexDirectory.appendingPathComponent("AGENTS.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+        ]
+
+        _ = try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "기존 agent memory"],
+            environment: environment
+        )
+        _ = try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        )
+        let next = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+        XCTAssertEqual(next.status, 0, "stdout:\n\(next.stdout)\nstderr:\n\(next.stderr)")
+        XCTAssertEqual(try jsonObject(from: next.stdout)["nextPlaybookStepID"] as? String, "review_found_agents")
+
+        _ = try runProcess(
+            executableURL: helperURL,
+            arguments: ["agent-memory", "choose-scope", "--scope", "sample"],
+            environment: environment
+        )
+        _ = try runProcess(
+            executableURL: helperURL,
+            arguments: ["agent-memory", "confirm-plan", "--answer", "yes"],
+            environment: environment
+        )
+        let ingest = try runProcess(
+            executableURL: helperURL,
+            arguments: ["agent-memory", "ingest"],
+            environment: environment
+        )
+        XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
+        let ingestPayload = try jsonObject(from: ingest.stdout)
+        let artifactPath = try XCTUnwrap(ingestPayload["artifactPath"] as? String)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: artifactPath))
+        let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
+        XCTAssertTrue(artifact.contains("source: agent-memory"))
+        XCTAssertTrue(artifact.contains("Remember Zebra import behavior tests."))
+
+        let verify = try runProcess(
+            executableURL: helperURL,
+            arguments: ["agent-memory", "verify-readback"],
+            environment: environment
+        )
+        XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
+        XCTAssertEqual(try jsonObject(from: verify.stdout)["nextPlaybookStepID"] as? String, "complete")
+
+        let blockedAfterVerify = try runProcess(
+            executableURL: helperURL,
+            arguments: ["agent-memory", "choose-scope", "--scope", "all"],
+            environment: environment
+        )
+        XCTAssertEqual(blockedAfterVerify.status, 1, "stdout:\n\(blockedAfterVerify.stdout)\nstderr:\n\(blockedAfterVerify.stderr)")
+        let blockedPayload = try jsonObject(from: blockedAfterVerify.stdout)
+        XCTAssertEqual(blockedPayload["reason"] as? String, "source_completion_report_required")
+        XCTAssertEqual(blockedPayload["pendingSourceID"] as? String, "agent-memory")
+
+        let report = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--source", "agent-memory"],
+            environment: environment
+        )
+        XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.progress.sourceRows["agent-memory"]?.status, "checked")
+    }
+
     @MainActor
     func testSourceOnboardingHelperStatusRejectsStaleAdapterReceipt() throws {
         let root = try makeTemporaryDirectory()

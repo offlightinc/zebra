@@ -1094,6 +1094,8 @@ public enum ZebraOnboardingChecklistCommand {
         - Hermes vault access still needs separate verification; if this run is in Hermes, explicitly verify listing and smoke-read before ingest.
         - Treat the brain write target path only as Zebra's selected brain repo write context. Do not use it as an Obsidian source vault path.
         - Ask which sources Zebra should understand for this first source intake.
+        - Always run `zebra-source-onboarding status --json` before asking. If its `sourceInputPrompt` is present, use that prompt as the user-facing source question instead of inventing separate copy.
+        - If the status payload offers existing agent memory as a source option, fold it into the same source-selection question. Do not ask a separate "found agent memory" question.
         - Normalize source aliases into source candidates when they are in the current source catalog.
         - Keep inputs that are not in the current catalog as uncataloged sources; do not describe them to the user as unavailable or impossible.
         - The source-list confirmation question must include every source the user named, including uncataloged sources.
@@ -1105,7 +1107,7 @@ public enum ZebraOnboardingChecklistCommand {
         Helper flow:
         1. Run zebra-source-onboarding status --json first to create or inspect the current compact state.
         2. If status shows a pending source confirmation, ask that confirmation question before collecting new source input.
-        3. If no source input has been recorded yet, ask the user for free-text source input.
+        3. If no source input has been recorded yet, ask the user for free-text source input using the helper-provided `sourceInputPrompt` when available.
         4. Run zebra-source-onboarding intake with the raw answer and your extracted candidates.
            Example:
            zebra-source-onboarding intake --raw "옵시디언, 지메일 사용자소스" --candidate obsidian=옵시디언 --candidate gmail=지메일 --uncataloged custom-source=사용자소스
