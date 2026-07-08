@@ -172,6 +172,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(launch.existingInstallVerificationMode)
         XCTAssertTrue(launch.startupPrompt.contains("discover-existing-install-target"), launch.startupPrompt)
         XCTAssertTrue(launch.startupPrompt.contains("kind: remote_thin_client"), launch.startupPrompt)
+        XCTAssertTrue(launch.startupPrompt.contains("kind: fresh_install"), launch.startupPrompt)
         XCTAssertTrue(launch.startupPrompt.contains("nextAction.command"), launch.startupPrompt)
         XCTAssertFalse(launch.startupPrompt.contains("concrete target path"), launch.startupPrompt)
     }
@@ -236,7 +237,7 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
     }
 
-    func testDiscoverExistingInstallTargetAsksForPathWhenNarrowDiscoveryFails() throws {
+    func testDiscoverExistingInstallTargetStartsFreshInstallWhenGBrainIsMissingAndNoEvidenceExists() throws {
         let root = try makeTemporaryDirectory()
         let emptyBin = root.appendingPathComponent("empty-bin", isDirectory: true)
         try FileManager.default.createDirectory(at: emptyBin, withIntermediateDirectories: true)
@@ -251,6 +252,33 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         let result = try runHelper(
             stateURL: stateURL,
             path: emptyBin.path,
+            arguments: ["discover-existing-install-target"]
+        )
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let payload = try helperPayload(result.stdout)
+        XCTAssertEqual(payload["kind"] as? String, "fresh_install")
+        XCTAssertEqual(payload["reason"] as? String, "missing_gbrain_executable")
+        XCTAssertNil(payload["askUserFor"])
+        let nextAction = try XCTUnwrap(payload["nextAction"] as? [String: Any])
+        XCTAssertEqual(nextAction["kind"] as? String, "start_fresh_install")
+        XCTAssertEqual(nextAction["command"] as? String, "zebra-gbrain-onboarding prepare-source-repo --fresh-install")
+    }
+
+    func testDiscoverExistingInstallTargetAsksForPathWhenGBrainExistsButNarrowDiscoveryFails() throws {
+        let root = try makeTemporaryDirectory()
+        let bin = try installFakeGBrainWithoutLocalTarget(root: root)
+        let stateURL = root.appendingPathComponent("state.json", isDirectory: false)
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
             arguments: ["discover-existing-install-target"]
         )
 
@@ -8367,6 +8395,35 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         fi
         if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
           echo '{"mode":"thin-client","remoteMCP":{"url":"\(remoteMCPURL)","scopes":["read","write"]},"warnings":["remote snapshot failed: Remote tool get_status_snapshot failed: {\\"error\\":\\"insufficient_scope\\",\\"message\\":\\"Operation get_status_snapshot requires admin scope\\",\\"your_scopes\\":[\\"read\\",\\"write\\"]}"]}'
+          exit 0
+        fi
+        exit 1
+        """
+        .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return bin
+    }
+
+    private func installFakeGBrainWithoutLocalTarget(root: URL) throws -> URL {
+        let bin = root.appendingPathComponent("fake-gbrain-no-target-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let script = bin.appendingPathComponent("gbrain", isDirectory: false)
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo "gbrain test"
+          exit 0
+        fi
+        if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
+          echo '{"mode":"pglite","sync":{"sources":[]}}'
+          exit 0
+        fi
+        if [ "$1" = "sources" ] && [ "$2" = "current" ]; then
+          echo "no current source" >&2
+          exit 1
+        fi
+        if [ "$1" = "sources" ] && [ "$2" = "list" ]; then
+          echo '{"sources":[]}'
           exit 0
         fi
         exit 1

@@ -1047,7 +1047,7 @@ public struct ZebraGBrainOnboardingStore {
             )
         } else {
             instructions.append(
-                "No selected local brain repo target is confirmed yet. First run `zebra-gbrain-onboarding discover-existing-install-target`. If it returns `kind: remote_thin_client`, treat the remote MCP URL as a remote-only target, do not ask for a local brain repo path, and run the printed `nextAction.command`. If it returns `kind: local_vault`, run the printed `nextAction.command`. Only ask the user for a local brain/vault repo path when it returns `kind: unresolved` with `askUserFor: brain_repo_path`."
+                "No selected local brain repo target is confirmed yet. First run `zebra-gbrain-onboarding discover-existing-install-target`. If it returns `kind: remote_thin_client`, treat the remote MCP URL as a remote-only target, do not ask for a local brain repo path, and run the printed `nextAction.command`. If it returns `kind: local_vault`, run the printed `nextAction.command`. If it returns `kind: fresh_install`, run the printed `nextAction.command` and continue the fresh GBrain setup flow. Only ask the user for a local brain/vault repo path when it returns `kind: unresolved` with `askUserFor: brain_repo_path`."
             )
         }
         instructions.append(contentsOf: [
@@ -3704,7 +3704,7 @@ public struct ZebraGBrainOnboardingStore {
             first_visible,
             "Do not run tools or read files before printing that line.",
             "This is Zebra GBrain preflight mode. Do not start INSTALL_FOR_AGENTS.md Step 1 and do not create a GBrain setup checklist unless the user explicitly confirms they want a new GBrain/brain setup.",
-            ("First run: " + verify_command) if verify_command else "No selected local brain repo target is confirmed yet. First run: zebra-gbrain-onboarding discover-existing-install-target. If it returns `kind: remote_thin_client`, treat the remote MCP URL as a remote-only target, do not ask for a local brain repo path, and run its `nextAction.command`. If it returns `kind: local_vault`, run its `nextAction.command`. Only ask the user for a local brain/vault repo path when it returns `kind: unresolved` with `askUserFor: brain_repo_path`.",
+            ("First run: " + verify_command) if verify_command else "No selected local brain repo target is confirmed yet. First run: zebra-gbrain-onboarding discover-existing-install-target. If it returns `kind: remote_thin_client`, treat the remote MCP URL as a remote-only target, do not ask for a local brain repo path, and run its `nextAction.command`. If it returns `kind: local_vault`, run its `nextAction.command`. If it returns `kind: fresh_install`, run its `nextAction.command` and continue the fresh GBrain setup flow. Only ask the user for a local brain/vault repo path when it returns `kind: unresolved` with `askUserFor: brain_repo_path`.",
             "When you run `verify-existing-install`, if it returns `complete: true` with status `verified` or `transient_retry_preserved`, stop new GBrain setup work and summarize the result. Do not edit `gbrain-setup-state.json` directly.",
             "If `verify-existing-install` fails with `diagnosis_needed`, run the printed `nextAction.command` before choosing a repair path.",
             "Treat `failure.reasons` as probe evidence labels, not root-cause taxonomy and not a fixed repair-command mapping.",
@@ -6262,6 +6262,13 @@ public struct ZebraGBrainOnboardingStore {
             "instruction": "Run this command before asking for a new local brain repo path or starting a new GBrain setup.",
         }
 
+    def fresh_install_next_action():
+        return {
+            "kind": "start_fresh_install",
+            "command": "zebra-gbrain-onboarding prepare-source-repo --fresh-install",
+            "instruction": "Run this command to prepare the GBrain source repo and continue the fresh setup flow. The brain/vault repo target is chosen later in Step 3.",
+        }
+
     def discover_local_path_from_entries(payload, preferred_source_id=None):
         entries = collect_source_entries(payload)
         preferred = []
@@ -6329,6 +6336,7 @@ public struct ZebraGBrainOnboardingStore {
         targets = receipt.get("targets") or {}
 
         selected_vault = progress.get("selectedVaultPath")
+        has_existing_install_evidence = bool(selected_vault or receipt.get("primaryTargetKey") or progress.get("resolvedTargetKey") or targets)
         if selected_vault and os.path.isdir(os.path.abspath(os.path.expanduser(selected_vault))):
             print(json.dumps(
                 discovered_local_vault_payload(
@@ -6454,6 +6462,15 @@ public struct ZebraGBrainOnboardingStore {
                 "ok": False,
                 "reason": "missing_gbrain_executable",
             })
+            if not has_existing_install_evidence:
+                print(json.dumps({
+                    "kind": "fresh_install",
+                    "reason": "missing_gbrain_executable",
+                    "probes": probes,
+                    "nextAction": fresh_install_next_action(),
+                    "instruction": "No selected vault, cached receipt, remote thin-client evidence, or gbrain executable was found. Start fresh GBrain setup; do not ask for a brain/vault repo path until Step 3.",
+                }, sort_keys=True))
+                sys.exit(0)
 
         print(json.dumps({
             "kind": "unresolved",

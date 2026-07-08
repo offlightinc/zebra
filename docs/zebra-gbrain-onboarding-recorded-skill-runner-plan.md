@@ -270,11 +270,20 @@ local_vault
   -> nextAction.command = verify-existing-install --target <path> ...
 
 unresolved
+  -> gbrain executable 은 있으나 좁은 확인 범위에서 local/PGLite brain repo target 을 못 찾음
   -> askUserFor = brain_repo_path
   -> 이때만 사용자에게 local brain/vault repo path 를 묻는다
+
+fresh_install
+  -> selectedVault 없음
+  -> cached receipt / previous resolved target 없음
+  -> remote thin-client evidence 없음
+  -> gbrain executable 없음
+  -> nextAction.command = prepare-source-repo --fresh-install
+  -> 새 GBrain setup/install flow 로 진행한다
 ```
 
-thin-client remote 는 local brain/vault repo 가 아예 없는 것이 정상일 수 있으므로, local path absence 를 실패로 보지 않는다. PGLite/local topology 에서는 local repo path 가 실제 target 이므로 위 좁은 범위에서 못 찾으면 즉시 사용자에게 path 를 묻는다.
+thin-client remote 는 local brain/vault repo 가 아예 없는 것이 정상일 수 있으므로, local path absence 를 실패로 보지 않는다. PGLite/local topology 에서는 local repo path 가 실제 target 이므로 gbrain executable 이 있는데 위 좁은 범위에서 못 찾으면 즉시 사용자에게 기존 local brain/vault repo path 를 묻는다. 반대로 gbrain executable 자체가 없고 selected vault / receipt / remote evidence 도 없으면 기존 설치 target unresolved 가 아니라 신규 설치 시작 상태로 본다. 이때 source repo 준비는 `prepare-source-repo --fresh-install` 이 맡고, brain/vault repo target 은 Step 3 에서 만들거나 선택한다.
 
 ### Verifier 검사 축
 
