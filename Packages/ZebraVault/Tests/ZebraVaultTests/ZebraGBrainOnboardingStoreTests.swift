@@ -6896,6 +6896,71 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertTrue(store.isSetupCompleted(selectedVaultPath: nil))
     }
 
+    func testExistingInstallCompletionUsesVerifiedResolvedTargetWhenSelectedVaultWasHomeCandidate() throws {
+        let root = try makeTemporaryDirectory()
+        let selectedHome = root.appendingPathComponent("home", isDirectory: true)
+        let verifiedVault = selectedHome.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: verifiedVault, withIntermediateDirectories: true)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeExistingInstallMismatchState(
+            stateURL,
+            selectedPath: selectedHome.path,
+            verifiedPath: verifiedVault.path,
+            mode: "existing_install_verification",
+            verificationStatus: "verified"
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: selectedHome.path
+        )
+
+        XCTAssertTrue(store.isSetupCompletedFromCachedReceipt(selectedVaultPath: selectedHome.path))
+    }
+
+    func testFreshInstallCompletionDoesNotUseVerifiedResolvedTargetFallback() throws {
+        let root = try makeTemporaryDirectory()
+        let selectedHome = root.appendingPathComponent("home", isDirectory: true)
+        let verifiedVault = selectedHome.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: verifiedVault, withIntermediateDirectories: true)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeExistingInstallMismatchState(
+            stateURL,
+            selectedPath: selectedHome.path,
+            verifiedPath: verifiedVault.path,
+            mode: "fresh_install",
+            verificationStatus: "verified"
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: selectedHome.path
+        )
+
+        XCTAssertFalse(store.isSetupCompletedFromCachedReceipt(selectedVaultPath: selectedHome.path))
+    }
+
+    func testExistingInstallCompletionDoesNotUseFallbackForDifferentExplicitVault() throws {
+        let root = try makeTemporaryDirectory()
+        let explicitVault = root.appendingPathComponent("other-vault", isDirectory: true)
+        let verifiedVault = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: explicitVault, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: verifiedVault, withIntermediateDirectories: true)
+        let stateURL = root.appendingPathComponent("state.json")
+        try writeExistingInstallMismatchState(
+            stateURL,
+            selectedPath: explicitVault.path,
+            verifiedPath: verifiedVault.path,
+            mode: "existing_install_verification",
+            verificationStatus: "verified",
+            selectedReasons: ["source_not_registered"]
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path
+        )
+
+        XCTAssertFalse(store.isSetupCompletedFromCachedReceipt(selectedVaultPath: explicitVault.path))
+    }
+
     func testReportRejectsTargetFlagsOutsideCreateBrainCompletion() throws {
         let root = try makeTemporaryDirectory()
         let repo = try writeGuardDocs(root: root)
@@ -7489,6 +7554,83 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         }
         """
         try json.write(to: stateURL, atomically: true, encoding: .utf8)
+    }
+
+    private func writeExistingInstallMismatchState(
+        _ stateURL: URL,
+        selectedPath: String,
+        verifiedPath: String,
+        mode: String,
+        verificationStatus: String,
+        selectedReasons: [String] = [
+            "implicit_home_target",
+            "read_probe_failed",
+            "source_not_registered",
+        ]
+    ) throws {
+        let selectedKey = "vault:\((selectedPath as NSString).standardizingPath)"
+        let verifiedKey = "vault:\((verifiedPath as NSString).standardizingPath)"
+        let object: [String: Any] = [
+            "schemaVersion": 1,
+            "progress": [
+                "launchDirectory": stateURL.deletingLastPathComponent().path,
+                "selectedVaultPath": selectedPath,
+                "resolvedTargetKey": verifiedKey,
+                "gbrainSetupMode": mode,
+                "existingInstallVerification": [
+                    "status": verificationStatus,
+                    "sourceId": "brain",
+                    "readProbeOk": true,
+                    "sourceProbeOk": true,
+                ],
+                "targetResolution": [
+                    "status": "verified",
+                    "method": "selected_vault",
+                    "confirmedAt": "2026-07-09T00:00:00Z",
+                ],
+            ],
+            "receipt": [
+                "globalReadiness": [
+                    "complete": true,
+                    "doctorOk": true,
+                    "doctorEffectiveOk": true,
+                    "verifiedAt": "2026-07-09T00:00:00Z",
+                ],
+                "primaryTargetKey": verifiedKey,
+                "targets": [
+                    selectedKey: [
+                        "vaultPath": selectedPath,
+                        "complete": false,
+                        "status": "diagnosis_needed",
+                        "reasons": selectedReasons,
+                        "targetResolution": [
+                            "method": "selected_vault",
+                            "confirmedAt": "2026-07-09T00:00:00Z",
+                        ],
+                    ],
+                    verifiedKey: [
+                        "vaultPath": verifiedPath,
+                        "sourceId": "brain",
+                        "complete": true,
+                        "status": "verified",
+                        "targetResolution": [
+                            "method": "selected_vault",
+                            "confirmedAt": "2026-07-09T00:00:00Z",
+                        ],
+                        "sourceVerification": [
+                            "sourceId": "brain",
+                            "targetPath": verifiedPath,
+                            "verifiedAt": "2026-07-09T00:00:00Z",
+                            "method": "existing_install_sources_current_and_list",
+                            "gbrainExecutablePath": "/tmp/gbrain",
+                            "gbrainVersion": "gbrain test",
+                        ],
+                    ],
+                ],
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: stateURL, options: .atomic)
     }
 
     private func writeActiveProgress(
