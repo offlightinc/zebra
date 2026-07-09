@@ -59,6 +59,104 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         )
     }
 
+    func testVerifyExistingInstallHelperBindsRecommendedSourceRepoWithoutFreshInstallSections() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let sourceRepo = try writeFakeGBrainSourceRepo(root: root, name: "gbrain")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "A reusable onboarding verification note.\n".write(
+            to: vault.appendingPathComponent("note.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: vault.path)
+        let stateURL = root.appendingPathComponent("state.json", isDirectory: false)
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: vault.path, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "verify-existing-install",
+                "--target", vault.path,
+                "--method", "selected_vault",
+                "--source-id", "brain",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let payload = try helperPayload(result.stdout)
+        let payloadBinding = try XCTUnwrap(payload["activeGBrainBinding"] as? [String: Any])
+        XCTAssertEqual(payloadBinding["sourceRepoPath"] as? String, sourceRepo.path)
+        XCTAssertEqual(payloadBinding["sourceRepoStatus"] as? String, "reused")
+
+        let state = try stateObject(in: stateURL)
+        let binding = try XCTUnwrap(state["activeGBrainBinding"] as? [String: Any])
+        XCTAssertEqual(binding["sourceRepoPath"] as? String, sourceRepo.path)
+        XCTAssertEqual(binding["sourceRepoStatus"] as? String, "reused")
+        XCTAssertEqual(binding["sourceRepoIsRecommended"] as? Bool, true)
+
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        XCTAssertEqual(progress["gbrainSetupMode"] as? String, "existing_install_verification")
+        XCTAssertNil(progress["freshInstallConfirmedAt"])
+        XCTAssertEqual(progress["completedSections"] as? [String], [])
+
+        let docsManifest = try XCTUnwrap(state["docsManifest"] as? [String: Any])
+        XCTAssertEqual(docsManifest["sourceRepoPath"] as? String, sourceRepo.path)
+        XCTAssertEqual((docsManifest["installForAgentsSections"] as? [[String: Any]])?.count, 0)
+    }
+
+    func testVerifyExistingInstallHelperDoesNotBindInvalidRecommendedSourceRepo() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let invalidSourceRepo = root.appendingPathComponent("gbrain", isDirectory: true)
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: invalidSourceRepo, withIntermediateDirectories: true)
+        try "not a gbrain source repo\n".write(
+            to: invalidSourceRepo.appendingPathComponent("sentinel.txt", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "A reusable onboarding verification note.\n".write(
+            to: vault.appendingPathComponent("note.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        let bin = try installFakeGBrain(root: root, sourceId: "brain", localPath: vault.path)
+        let stateURL = root.appendingPathComponent("state.json", isDirectory: false)
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["PATH": bin.path]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: vault.path, selectedAgent: .codex))
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "verify-existing-install",
+                "--target", vault.path,
+                "--method", "selected_vault",
+                "--source-id", "brain",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0, "stdout: \(result.stdout) stderr: \(result.stderr)")
+        let payload = try helperPayload(result.stdout)
+        XCTAssertTrue(payload["activeGBrainBinding"] == nil || payload["activeGBrainBinding"] is NSNull)
+        XCTAssertNil(try stateObject(in: stateURL)["activeGBrainBinding"])
+        XCTAssertEqual(
+            try String(contentsOf: invalidSourceRepo.appendingPathComponent("sentinel.txt"), encoding: .utf8),
+            "not a gbrain source repo\n"
+        )
+    }
+
     func testVerifyExistingInstallHelperUsesRemoteStatusWhenSourcesCliIsThinClientRefused() throws {
         let root = try makeTemporaryDirectory()
         let vault = root.appendingPathComponent("brain", isDirectory: true)

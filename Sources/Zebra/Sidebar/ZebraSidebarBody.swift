@@ -140,6 +140,9 @@ struct ZebraSidebarBody: View {
             }
             refreshOnboardingChecklist()
         }
+        .onChange(of: vaultState.selectedVaultWasExplicitlyChosen) { _ in
+            refreshOnboardingChecklist()
+        }
         .onChange(of: emailListStore.isConnected) { _ in
             refreshOnboardingChecklist()
         }

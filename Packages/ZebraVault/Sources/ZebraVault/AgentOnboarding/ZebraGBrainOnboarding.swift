@@ -2786,6 +2786,28 @@ public struct ZebraGBrainOnboardingStore {
             return os.path.abspath(os.path.expanduser(path))
         return None
 
+    def ensure_existing_install_source_binding(state, timestamp):
+        binding = state.get("activeGBrainBinding") or {}
+        existing_path = binding.get("sourceRepoPath")
+        if existing_path:
+            expanded = os.path.abspath(os.path.expanduser(existing_path))
+            if is_valid_gbrain_source_repo(expanded):
+                return binding
+        candidate = default_source_repo_path()
+        if not is_valid_gbrain_source_repo(candidate):
+            return None
+        binding = {
+            "sourceRepoPath": candidate,
+            "sourceRepoStatus": "reused",
+            "gbrainHomePath": gbrain_home_directory(),
+            "sourceRepoIsRecommended": is_recommended_source_repo_path(candidate),
+            "confirmedAt": timestamp,
+        }
+        state["schemaVersion"] = 1
+        state["activeGBrainBinding"] = binding
+        write_local_docs_snapshot(state, candidate, include_install_sections=False)
+        return binding
+
     def selected_source_repo_path(flags):
         explicit = flags.get("path") or os.environ.get("ZEBRA_GBRAIN_SOURCE_REPO")
         if explicit:
@@ -6975,6 +6997,9 @@ public struct ZebraGBrainOnboardingStore {
             progress["lastFailure"] = ",".join(reasons)
         else:
             progress.pop("lastFailure", None)
+        active_binding = None
+        if effective_complete and not is_thin_client_remote:
+            active_binding = ensure_existing_install_source_binding(state, verified_at)
         save_state(state)
         print(json.dumps({
             "complete": effective_complete,
@@ -6993,6 +7018,7 @@ public struct ZebraGBrainOnboardingStore {
             "nextAction": next_action,
             "preservedReceipt": preserve_completed_receipt,
             "transientFailure": preserve_completed_receipt,
+            "activeGBrainBinding": active_binding,
         }, sort_keys=True))
         sys.exit(0 if effective_complete else 1)
 

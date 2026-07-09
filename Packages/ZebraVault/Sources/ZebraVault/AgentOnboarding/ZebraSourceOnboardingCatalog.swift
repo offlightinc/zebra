@@ -100,6 +100,7 @@ enum ZebraSourceOnboardingCatalog {
             } else {
                 guard !seenUncatalogedIDs.contains(match.id) else { continue }
                 seenUncatalogedIDs.insert(match.id)
+                normalizedSourceList.append(match.id)
                 uncatalogedSources.append(
                     ZebraSourceOnboardingState.UncatalogedSource(
                         rawValue: match.rawValue,
@@ -114,16 +115,34 @@ enum ZebraSourceOnboardingCatalog {
 
         let rows = Dictionary(
             uniqueKeysWithValues: normalizedSourceList.compactMap { id -> (String, ZebraSourceOnboardingState.SourceRow)? in
-                guard let definition = supportedSources.first(where: { $0.id == id }) else { return nil }
+                if let definition = supportedSources.first(where: { $0.id == id }) {
+                    return (
+                        id,
+                        ZebraSourceOnboardingState.SourceRow(
+                            id: definition.id,
+                            displayName: definition.displayName,
+                            type: definition.type,
+                            phase: "intake",
+                            status: "unchecked",
+                            selectionState: "pending_confirmation",
+                            updatedAt: nil
+                        )
+                    )
+                }
+                guard let uncataloged = uncatalogedSources.first(where: { $0.normalizedValue == id }) else {
+                    return nil
+                }
                 return (
                     id,
                     ZebraSourceOnboardingState.SourceRow(
-                        id: definition.id,
-                        displayName: definition.displayName,
-                        type: definition.type,
+                        id: id,
+                        displayName: uncataloged.displayName ?? uncataloged.rawValue,
+                        type: "uncataloged",
                         phase: "intake",
                         status: "unchecked",
                         selectionState: "pending_confirmation",
+                        playbookID: "uncataloged.agent-fallback",
+                        playbookVersion: "v1",
                         updatedAt: nil
                     )
                 )

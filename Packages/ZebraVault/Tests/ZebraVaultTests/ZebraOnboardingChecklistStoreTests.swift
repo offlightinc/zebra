@@ -188,6 +188,95 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testExistingInstallMismatchCompletesGBrainParentFromVerifiedResolvedTarget() throws {
+        let root = try makeTemporaryDirectory()
+        let selectedHome = root.appendingPathComponent("home", isDirectory: true)
+        let verifiedVault = selectedHome.appendingPathComponent("brain", isDirectory: true)
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: verifiedVault, withIntermediateDirectories: true)
+        try writeExistingInstallMismatchGBrainState(
+            stateURL: gbrainStateURL,
+            selectedPath: selectedHome.path,
+            verifiedPath: verifiedVault.path,
+            mode: "existing_install_verification",
+            verificationStatus: "verified"
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: selectedHome.path,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+        store.syncExternalState(selectedVaultPath: selectedHome.path)
+        store.beginLaunch(stepID: .gbrain)
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
+        XCTAssertTrue(store.completedStepIDs.contains(.gbrain))
+        XCTAssertTrue(gbrain.isCompleted)
+        XCTAssertFalse(gbrain.isRunning)
+        XCTAssertEqual(gbrain.substeps, [])
+    }
+
+    @MainActor
+    func testFreshInstallMismatchDoesNotCompleteGBrainParentFromVerifiedResolvedTarget() throws {
+        let root = try makeTemporaryDirectory()
+        let selectedHome = root.appendingPathComponent("home", isDirectory: true)
+        let verifiedVault = selectedHome.appendingPathComponent("brain", isDirectory: true)
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: verifiedVault, withIntermediateDirectories: true)
+        try writeExistingInstallMismatchGBrainState(
+            stateURL: gbrainStateURL,
+            selectedPath: selectedHome.path,
+            verifiedPath: verifiedVault.path,
+            mode: "fresh_install",
+            verificationStatus: "verified"
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: selectedHome.path,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+        store.syncExternalState(selectedVaultPath: selectedHome.path)
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
+        XCTAssertFalse(store.completedStepIDs.contains(.gbrain))
+        XCTAssertFalse(gbrain.isCompleted)
+    }
+
+    @MainActor
+    func testExplicitDifferentVaultMismatchDoesNotCompleteGBrainParentFromVerifiedResolvedTarget() throws {
+        let root = try makeTemporaryDirectory()
+        let explicitVault = root.appendingPathComponent("other-vault", isDirectory: true)
+        let verifiedVault = root.appendingPathComponent("brain", isDirectory: true)
+        let onboardingDirectory = root.appendingPathComponent("onboarding", isDirectory: true)
+        let gbrainStateURL = onboardingDirectory.appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: explicitVault, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: verifiedVault, withIntermediateDirectories: true)
+        try writeExistingInstallMismatchGBrainState(
+            stateURL: gbrainStateURL,
+            selectedPath: explicitVault.path,
+            verifiedPath: verifiedVault.path,
+            mode: "existing_install_verification",
+            verificationStatus: "verified",
+            selectedReasons: ["source_not_registered"]
+        )
+
+        let store = ZebraOnboardingChecklistStore(
+            homeDirectoryPath: root.path,
+            gbrainOnboardingStateURL: gbrainStateURL
+        )
+        store.syncExternalState(selectedVaultPath: explicitVault.path)
+        store.refreshDetectedCompletion(for: .gbrain)
+
+        let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
+        XCTAssertFalse(store.completedStepIDs.contains(.gbrain))
+        XCTAssertFalse(gbrain.isCompleted)
+    }
+
+    @MainActor
     func testSourceOnboardingIsActiveAfterAdapterCompletion() throws {
         let root = try makeTemporaryDirectory()
         let vault = root.appendingPathComponent("brain", isDirectory: true)
@@ -986,7 +1075,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         XCTAssertEqual(intake.status, 0, "stdout:\n\(intake.stdout)\nstderr:\n\(intake.stderr)")
         let intakePayload = try jsonObject(from: intake.stdout)
-        XCTAssertEqual(intakePayload["normalizedSourceList"] as? [String], ["obsidian", "gmail"])
+        XCTAssertEqual(intakePayload["normalizedSourceList"] as? [String], ["obsidian", "gmail", "custom-source"])
         XCTAssertEqual(intakePayload["uncatalogedSources"] as? [String], ["custom-source"])
         XCTAssertNil(intakePayload["unsupportedInputs"])
         XCTAssertEqual(intakePayload["sourceConfirmationStatus"] as? String, "pending")
@@ -994,15 +1083,19 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         let store = makeChecklistStore(homeURL: root)
         let loaded = try XCTUnwrap(store.loadSourceOnboardingState())
-        XCTAssertEqual(loaded.status, .attention)
+        XCTAssertEqual(loaded.status, .running)
         XCTAssertEqual(loaded.progress.rawSourceInput, "옵시디언, 지메일 사용자소스")
-        XCTAssertEqual(loaded.progress.normalizedSourceList, ["obsidian", "gmail"])
+        XCTAssertEqual(loaded.progress.normalizedSourceList, ["obsidian", "gmail", "custom-source"])
         XCTAssertEqual(loaded.progress.uncatalogedSources.map(\.normalizedValue), ["custom-source"])
         XCTAssertEqual(loaded.progress.uncatalogedSources.first?.rawValue, "사용자소스")
         XCTAssertEqual(loaded.progress.uncatalogedSources.first?.reason, "not_in_current_catalog")
         XCTAssertEqual(loaded.progress.sourceRows["obsidian"]?.selectionState, "pending_confirmation")
         XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.selectionState, "pending_confirmation")
-        XCTAssertNil(loaded.progress.sourceRows["custom-source"])
+        XCTAssertEqual(loaded.progress.sourceRows["custom-source"]?.displayName, "사용자소스")
+        XCTAssertEqual(loaded.progress.sourceRows["custom-source"]?.type, "uncataloged")
+        XCTAssertEqual(loaded.progress.sourceRows["custom-source"]?.selectionState, "pending_confirmation")
+        XCTAssertEqual(loaded.progress.sourceRows["custom-source"]?.playbookID, "uncataloged.agent-fallback")
+        XCTAssertEqual(loaded.progress.sourceRows["custom-source"]?.playbookVersion, "v1")
         XCTAssertEqual(loaded.sourceReadiness.gmail.localArtifact?.path, emailArtifact.path)
         XCTAssertNotEqual(loaded.sourceReadiness.gmail.connectionPath, emailArtifact.path)
 
@@ -1030,18 +1123,20 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(confirm.status, 0, "stdout:\n\(confirm.stdout)\nstderr:\n\(confirm.stderr)")
         let confirmed = try XCTUnwrap(store.loadSourceOnboardingState())
         XCTAssertNotEqual(confirmed.status, .completed)
-        XCTAssertEqual(confirmed.status, .attention)
+        XCTAssertEqual(confirmed.status, .ready)
         XCTAssertEqual(confirmed.progress.sourceConfirmation?.status, .confirmed)
         XCTAssertNil(confirmed.progress.pendingQuestion)
         XCTAssertEqual(confirmed.progress.sourceRows["obsidian"]?.selectionState, "confirmed")
         XCTAssertEqual(confirmed.progress.sourceRows["gmail"]?.selectionState, "confirmed")
+        XCTAssertEqual(confirmed.progress.sourceRows["custom-source"]?.selectionState, "confirmed")
 
         let sourceSnapshot = try XCTUnwrap(store.snapshots.first { $0.id == .sourceOnboarding })
         let sourceSubsteps = sourceSnapshot.substeps
         XCTAssertNil(sourceSubsteps.first { $0.id == "source-confirmation" })
         let obsidianSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "source-row-obsidian" })
         let gmailSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "source-row-gmail" })
-        let customSourceSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "uncataloged-source-custom-source" })
+        let customSourceSubstep = try XCTUnwrap(sourceSubsteps.first { $0.id == "source-row-custom-source" })
+        XCTAssertNil(sourceSubsteps.first { $0.id == "uncataloged-source-custom-source" })
         XCTAssertNil(sourceSubsteps.first { $0.id == "gmail-readiness" })
 
         XCTAssertEqual(obsidianSubstep.title, "Obsidian")
@@ -1051,7 +1146,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertNil(gmailSubstep.detail)
         XCTAssertEqual(customSourceSubstep.title, "사용자소스")
         XCTAssertNil(customSourceSubstep.detail)
-        XCTAssertTrue(customSourceSubstep.isAttention)
+        XCTAssertFalse(customSourceSubstep.isAttention)
 
         let status = try runProcess(
             executableURL: helperURL,
@@ -1062,6 +1157,67 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let statusPayload = try jsonObject(from: status.stdout)
         XCTAssertEqual(statusPayload["statePath"] as? String, stateURL.path)
         XCTAssertEqual(statusPayload["sourceConfirmationStatus"] as? String, "confirmed")
+    }
+
+    @MainActor
+    func testSourceOnboardingUncatalogedExplicitSourceKeepsRawInputOrder() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        let intake = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "intake",
+                "--raw", "사용자소스, 지메일, 옵시디언",
+                "--candidate", "gmail=지메일",
+                "--candidate", "obsidian=옵시디언",
+                "--uncataloged", "custom-source=사용자소스",
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(intake.status, 0, "stdout:\n\(intake.stdout)\nstderr:\n\(intake.stderr)")
+        let intakePayload = try jsonObject(from: intake.stdout)
+        XCTAssertEqual(intakePayload["normalizedSourceList"] as? [String], ["custom-source", "gmail", "obsidian"])
+        XCTAssertEqual(intakePayload["confirmationPrompt"] as? String, "사용자소스, Gmail, Obsidian로 이해했습니다. 맞나요?")
+
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.progress.normalizedSourceList, ["custom-source", "gmail", "obsidian"])
+
+        let confirm = try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        )
+        XCTAssertEqual(confirm.status, 0, "stdout:\n\(confirm.stdout)\nstderr:\n\(confirm.stderr)")
+
+        let next = try runProcess(executableURL: helperURL, arguments: ["next"], environment: environment)
+        XCTAssertEqual(next.status, 0, "stdout:\n\(next.stdout)\nstderr:\n\(next.stderr)")
+        let nextPayload = try jsonObject(from: next.stdout)
+        XCTAssertEqual(nextPayload["nextSourceID"] as? String, "custom-source")
+        XCTAssertEqual(nextPayload["nextPlaybookID"] as? String, "uncataloged.agent-fallback")
+        XCTAssertEqual(nextPayload["nextPlaybookStepID"] as? String, "classify_source")
     }
 
     @MainActor
@@ -1117,6 +1273,369 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             XCTAssertFalse(text.contains("STALE RUNTIME PLAYBOOK"), "\(filename) was not overwritten")
             XCTAssertTrue(text.contains(marker), "\(filename) missing latest marker \(marker):\n\(text)")
         }
+    }
+
+    @MainActor
+    func testSourceOnboardingUncatalogedFallbackHappyPathCompletesThroughHelperBoundary() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let gbrainTarget = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainTarget, withIntermediateDirectories: true)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: gbrainTarget.path)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_GBRAIN_WRITE_TARGET_PATH": gbrainTarget.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        let intake = try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "카카오톡", "--uncataloged", "kakaotalk=카카오톡"],
+            environment: environment
+        )
+        XCTAssertEqual(intake.status, 0, "stdout:\n\(intake.stdout)\nstderr:\n\(intake.stderr)")
+        let intakePayload = try jsonObject(from: intake.stdout)
+        XCTAssertEqual(intakePayload["normalizedSourceList"] as? [String], ["kakaotalk"])
+        XCTAssertEqual(intakePayload["uncatalogedSources"] as? [String], ["kakaotalk"])
+
+        let confirm = try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        )
+        XCTAssertEqual(confirm.status, 0, "stdout:\n\(confirm.stdout)\nstderr:\n\(confirm.stderr)")
+
+        let next = try runProcess(executableURL: helperURL, arguments: ["next"], environment: environment)
+        XCTAssertEqual(next.status, 0, "stdout:\n\(next.stdout)\nstderr:\n\(next.stderr)")
+        var payload = try jsonObject(from: next.stdout)
+        XCTAssertEqual(payload["nextSourceID"] as? String, "kakaotalk")
+        XCTAssertEqual(payload["nextPlaybookID"] as? String, "uncataloged.agent-fallback")
+        XCTAssertEqual(payload["nextPlaybookVersion"] as? String, "v1")
+        XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "classify_source")
+        XCTAssertNil(payload["reason"])
+        XCTAssertTrue(try XCTUnwrap(payload["nextPrompt"] as? String).contains("fallback report"))
+
+        let approvedExport = root.appendingPathComponent("approved-kakaotalk-export.txt", isDirectory: false)
+        try "approved sample body for GBrain ingest".write(to: approvedExport, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: approvedExport.path)
+
+        let reports: [(step: String, summary: String, extra: [String])] = [
+            ("classify_source", "category: app export; confidence high", []),
+            ("research_access_paths", "export path available; api_not_applicable", []),
+            ("choose_strategy", "strategy: export", []),
+            ("smoke_read", "smoke read passed for two sample rows", []),
+            ("propose_ingest_scope", "scope: one approved export sample", []),
+            ("confirm_ingest_plan", "approved scope: one export sample", []),
+            (
+                "ingest",
+                "wrote approved fallback ingest artifact",
+                [
+                    "--ingest-title", "KakaoTalk Sample",
+                    "--ingest-file", approvedExport.path,
+                    "--ingest-provenance", "synthetic export fixture",
+                ]
+            ),
+            ("verify_readback", "readback passed with provenance", []),
+        ]
+        for report in reports {
+            let result = try runProcess(
+                executableURL: helperURL,
+                arguments: [
+                    "fallback", "report",
+                    "--source", "kakaotalk",
+                    "--step", report.step,
+                    "--status", "completed",
+                    "--summary", report.summary,
+                ] + report.extra,
+                environment: environment
+            )
+            XCTAssertEqual(result.status, 0, "step \(report.step) stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+            payload = try jsonObject(from: result.stdout)
+        }
+
+        XCTAssertEqual(payload["nextSourceID"] as? String, "kakaotalk")
+        XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "complete")
+        let pending = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(pending.status, .running)
+        XCTAssertEqual(pending.progress.sourceRows["kakaotalk"]?.phase, "complete")
+        XCTAssertEqual(pending.progress.sourceRows["kakaotalk"]?.playbookStepID, "complete")
+
+        let finalReport = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--source", "kakaotalk"],
+            environment: environment
+        )
+        XCTAssertEqual(finalReport.status, 0, "stdout:\n\(finalReport.stdout)\nstderr:\n\(finalReport.stderr)")
+        let finalPayload = try jsonObject(from: finalReport.stdout)
+        XCTAssertEqual(finalPayload["complete"] as? Bool, true)
+        let completed = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(completed.status, .completed)
+        XCTAssertEqual(completed.progress.sourceRows["kakaotalk"]?.status, "checked")
+
+        let artifacts = try FileManager.default.contentsOfDirectory(atPath: gbrainTarget.path)
+        let artifactName = try XCTUnwrap(artifacts.first { $0.hasPrefix("source-onboarding-kakaotalk") })
+        let artifactText = try String(
+            contentsOf: gbrainTarget.appendingPathComponent(artifactName, isDirectory: false),
+            encoding: .utf8
+        )
+        XCTAssertTrue(artifactText.contains("approved sample body for GBrain ingest"), artifactText)
+        XCTAssertTrue(artifactText.contains("synthetic export fixture"), artifactText)
+
+        let runStatePath = try XCTUnwrap(completed.progress.sourceRows["kakaotalk"]?.runStatePath)
+        let fallbackRunRoot = stateURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("fallback-runs", isDirectory: true)
+        let fallbackRunDirs = try FileManager.default.contentsOfDirectory(at: fallbackRunRoot, includingPropertiesForKeys: nil)
+        let fallbackRun = try XCTUnwrap(fallbackRunDirs.first { $0.lastPathComponent.hasPrefix("kakaotalk-") })
+        let controlPlaneText = try [
+            String(contentsOf: stateURL, encoding: .utf8),
+            String(contentsOfFile: runStatePath, encoding: .utf8),
+            String(contentsOf: fallbackRun.appendingPathComponent("fallback-summary.json", isDirectory: false), encoding: .utf8),
+            String(contentsOf: fallbackRun.appendingPathComponent("promotion-candidate.json", isDirectory: false), encoding: .utf8),
+            String(contentsOf: fallbackRun.appendingPathComponent("playbook-draft.md", isDirectory: false), encoding: .utf8),
+        ].joined(separator: "\n")
+        XCTAssertFalse(controlPlaneText.contains("approved sample body for GBrain ingest"), controlPlaneText)
+        XCTAssertFalse(controlPlaneText.contains(approvedExport.path), controlPlaneText)
+    }
+
+    @MainActor
+    func testSourceOnboardingFallbackIngestWithoutGBrainTargetStaysAttention() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        XCTAssertEqual(
+            try runProcess(
+                executableURL: helperURL,
+                arguments: ["intake", "--raw", "KakaoTalk", "--uncataloged", "kakaotalk=KakaoTalk"],
+                environment: environment
+            ).status,
+            0
+        )
+        XCTAssertEqual(
+            try runProcess(executableURL: helperURL, arguments: ["confirm", "--answer", "yes"], environment: environment).status,
+            0
+        )
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["next"], environment: environment).status, 0)
+
+        let completedSteps = [
+            ("classify_source", "category: app export; confidence high"),
+            ("research_access_paths", "export path available; api_not_applicable"),
+            ("choose_strategy", "strategy: export"),
+            ("smoke_read", "smoke read passed for two sample rows"),
+            ("propose_ingest_scope", "scope: one approved export sample"),
+            ("confirm_ingest_plan", "approved scope: one export sample"),
+        ]
+        for (step, summary) in completedSteps {
+            let result = try runProcess(
+                executableURL: helperURL,
+                arguments: [
+                    "fallback", "report",
+                    "--source", "kakaotalk",
+                    "--step", step,
+                    "--status", "completed",
+                    "--summary", summary,
+                ],
+                environment: environment
+            )
+            XCTAssertEqual(result.status, 0, "step \(step) stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        }
+
+        let approvedExport = root.appendingPathComponent("approved-kakaotalk-export.txt", isDirectory: false)
+        try "approved sample body that requires a configured GBrain target".write(
+            to: approvedExport,
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: approvedExport.path)
+
+        let ingest = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "fallback", "report",
+                "--source", "kakaotalk",
+                "--step", "ingest",
+                "--status", "completed",
+                "--summary", "attempted approved fallback ingest",
+                "--ingest-title", "KakaoTalk Sample",
+                "--ingest-file", approvedExport.path,
+                "--ingest-provenance", "synthetic export fixture",
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(ingest.status, 1, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
+        let payload = try jsonObject(from: ingest.stdout)
+        XCTAssertEqual(payload["reason"] as? String, "gbrain_target_missing")
+        XCTAssertEqual(payload["nextSourceID"] as? String, "kakaotalk")
+        XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "ingest")
+
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        let row = try XCTUnwrap(loaded.progress.sourceRows["kakaotalk"])
+        XCTAssertEqual(row.status, "attention")
+        XCTAssertEqual(row.phase, "ingest")
+        XCTAssertEqual(row.playbookStepID, "ingest")
+        XCTAssertEqual(row.attentionReason, "waiting:gbrain_target_missing")
+        XCTAssertNotEqual(row.playbookStepID, "verify_readback")
+
+        let controlPlaneText = try [
+            String(contentsOf: stateURL, encoding: .utf8),
+            String(contentsOfFile: try XCTUnwrap(row.runStatePath), encoding: .utf8),
+        ].joined(separator: "\n")
+        XCTAssertFalse(controlPlaneText.contains("approved sample body that requires a configured GBrain target"), controlPlaneText)
+        XCTAssertFalse(controlPlaneText.contains(approvedExport.path), controlPlaneText)
+    }
+
+    @MainActor
+    func testSourceOnboardingFallbackWaitingKeepsControlPlaneSanitizedAndResumable() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root
+            .appendingPathComponent("onboarding", isDirectory: true)
+            .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        XCTAssertEqual(
+            try runProcess(
+                executableURL: helperURL,
+                arguments: ["intake", "--raw", "Custom Export", "--uncataloged", "custom-export=Custom Export"],
+                environment: environment
+            ).status,
+            0
+        )
+        XCTAssertEqual(
+            try runProcess(executableURL: helperURL, arguments: ["confirm", "--answer", "yes"], environment: environment).status,
+            0
+        )
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["next"], environment: environment).status, 0)
+
+        let rawSummary = "need user export at /Users/hanwool/private/chat.txt token=sk-abc123 OAuth_code=secret123 raw body: hello from private chat"
+        let waiting = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "fallback", "report",
+                "--source", "custom-export",
+                "--step", "classify_source",
+                "--status", "waiting",
+                "--summary", rawSummary,
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(waiting.status, 0, "stdout:\n\(waiting.stdout)\nstderr:\n\(waiting.stderr)")
+        let waitingPayload = try jsonObject(from: waiting.stdout)
+        XCTAssertEqual(waitingPayload["nextSourceID"] as? String, "custom-export")
+        XCTAssertEqual(waitingPayload["nextPlaybookStepID"] as? String, "classify_source")
+        XCTAssertTrue((waitingPayload["reason"] as? String)?.hasPrefix("waiting:") == true)
+
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertNotEqual(loaded.status, .completed)
+        XCTAssertEqual(loaded.progress.sourceRows["custom-export"]?.status, "attention")
+        XCTAssertEqual(loaded.progress.sourceRows["custom-export"]?.playbookStepID, "classify_source")
+        XCTAssertTrue(loaded.progress.sourceRows["custom-export"]?.attentionReason?.hasPrefix("waiting:") == true)
+
+        let resumed = try runProcess(executableURL: helperURL, arguments: ["next"], environment: environment)
+        XCTAssertEqual(resumed.status, 0, "stdout:\n\(resumed.stdout)\nstderr:\n\(resumed.stderr)")
+        let resumedPayload = try jsonObject(from: resumed.stdout)
+        XCTAssertEqual(resumedPayload["nextSourceID"] as? String, "custom-export")
+        XCTAssertEqual(resumedPayload["nextPlaybookStepID"] as? String, "classify_source")
+
+        let blocked = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "fallback", "report",
+                "--source", "custom-export",
+                "--step", "classify_source",
+                "--status", "attention",
+                "--summary", "no viable path until vendor export is available",
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(blocked.status, 0, "stdout:\n\(blocked.stdout)\nstderr:\n\(blocked.stderr)")
+        let blockedPayload = try jsonObject(from: blocked.stdout)
+        XCTAssertTrue((blockedPayload["reason"] as? String)?.hasPrefix("blocked:") == true)
+
+        let onboardingRoot = stateURL.deletingLastPathComponent()
+        let blockedState = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(blockedState.progress.sourceRows["custom-export"]?.status, "attention")
+        XCTAssertTrue(blockedState.progress.sourceRows["custom-export"]?.attentionReason?.hasPrefix("blocked:") == true)
+        let controlPlaneTextParts = try [
+            String(contentsOf: stateURL, encoding: .utf8),
+            String(contentsOfFile: try XCTUnwrap(blockedState.progress.sourceRows["custom-export"]?.runStatePath), encoding: .utf8),
+            String(contentsOfFile: try XCTUnwrap(resumedPayload["nextPromptPath"] as? String), encoding: .utf8),
+        ]
+        let fallbackRunRoot = onboardingRoot.appendingPathComponent("fallback-runs", isDirectory: true)
+        let fallbackRunDirs = try FileManager.default.contentsOfDirectory(at: fallbackRunRoot, includingPropertiesForKeys: nil)
+        let fallbackRun = try XCTUnwrap(fallbackRunDirs.first { $0.lastPathComponent.hasPrefix("custom-export-") })
+        let fallbackArtifactTexts = try [
+            "fallback-summary.json",
+            "promotion-candidate.json",
+            "playbook-draft.md",
+            "redaction-report.json",
+        ].map {
+            try String(contentsOf: fallbackRun.appendingPathComponent($0, isDirectory: false), encoding: .utf8)
+        }
+        let combinedControlPlane = (controlPlaneTextParts + fallbackArtifactTexts).joined(separator: "\n")
+        XCTAssertFalse(combinedControlPlane.contains("sk-abc123"), combinedControlPlane)
+        XCTAssertFalse(combinedControlPlane.contains("secret123"), combinedControlPlane)
+        XCTAssertFalse(combinedControlPlane.contains("/Users/hanwool/private/chat.txt"), combinedControlPlane)
+        XCTAssertFalse(combinedControlPlane.contains("hello from private chat"), combinedControlPlane)
+        XCTAssertTrue(combinedControlPlane.contains("<redacted-secret>"), combinedControlPlane)
+        XCTAssertTrue(combinedControlPlane.contains("<redacted-body>"), combinedControlPlane)
     }
 
     @MainActor
@@ -7934,6 +8453,88 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 "primaryTargetKey": targetKey,
                 "targets": [
                     targetKey: target,
+                ],
+            ],
+        ]
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: stateURL, options: .atomic)
+    }
+
+    private func writeExistingInstallMismatchGBrainState(
+        stateURL: URL,
+        selectedPath: String,
+        verifiedPath: String,
+        mode: String,
+        verificationStatus: String,
+        selectedReasons: [String] = [
+            "implicit_home_target",
+            "read_probe_failed",
+            "source_not_registered",
+        ]
+    ) throws {
+        let selectedKey = "vault:\((selectedPath as NSString).standardizingPath)"
+        let verifiedKey = "vault:\((verifiedPath as NSString).standardizingPath)"
+        let timestamp = "2026-07-09T00:00:00Z"
+        let state: [String: Any] = [
+            "schemaVersion": 1,
+            "progress": [
+                "selectedVaultPath": selectedPath,
+                "resolvedTargetKey": verifiedKey,
+                "gbrainSetupMode": mode,
+                "existingInstallVerification": [
+                    "status": verificationStatus,
+                    "sourceId": "brain",
+                    "readProbeOk": true,
+                    "sourceProbeOk": true,
+                    "verifiedAt": timestamp,
+                ],
+                "targetResolution": [
+                    "status": "verified",
+                    "method": "selected_vault",
+                    "confirmedAt": timestamp,
+                ],
+            ],
+            "receipt": [
+                "globalReadiness": [
+                    "complete": true,
+                    "doctorOk": true,
+                    "doctorEffectiveOk": true,
+                    "verifiedAt": timestamp,
+                ],
+                "primaryTargetKey": verifiedKey,
+                "targets": [
+                    selectedKey: [
+                        "vaultPath": selectedPath,
+                        "complete": false,
+                        "status": "diagnosis_needed",
+                        "reasons": selectedReasons,
+                        "targetResolution": [
+                            "method": "selected_vault",
+                            "confirmedAt": timestamp,
+                        ],
+                    ],
+                    verifiedKey: [
+                        "vaultPath": verifiedPath,
+                        "sourceId": "brain",
+                        "complete": true,
+                        "status": "verified",
+                        "targetResolution": [
+                            "method": "selected_vault",
+                            "confirmedAt": timestamp,
+                        ],
+                        "sourceVerification": [
+                            "sourceId": "brain",
+                            "targetPath": verifiedPath,
+                            "verifiedAt": timestamp,
+                            "method": "existing_install_sources_current_and_list",
+                            "gbrainExecutablePath": "/tmp/gbrain",
+                            "gbrainVersion": "gbrain test",
+                        ],
+                    ],
                 ],
             ],
         ]

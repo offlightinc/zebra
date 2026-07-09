@@ -531,7 +531,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
     ) throws -> ZebraSourceOnboardingState {
         let normalized = ZebraSourceOnboardingCatalog.normalize(rawSourceInput: rawSourceInput)
         var state = sourceOnboardingPreviewState(now: now)
-        state.status = normalized.uncatalogedSources.isEmpty ? .running : .attention
+        state.status = .running
         state.progress = ZebraSourceOnboardingState.Progress(
             rawSourceInput: normalized.rawSourceInput,
             normalizedSourceList: normalized.normalizedSourceList,
@@ -559,7 +559,7 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         let sourceIDs = state.progress.normalizedSourceList
         let prompt = state.progress.sourceConfirmation?.prompt
             ?? ZebraSourceOnboardingCatalog.confirmationPrompt(for: sourceIDs)
-        state.status = state.progress.uncatalogedSources.isEmpty ? .ready : .attention
+        state.status = .ready
         state.progress.sourceConfirmation = ZebraSourceOnboardingState.SourceConfirmation(
             sourceIDs: sourceIDs,
             prompt: prompt,
@@ -635,7 +635,8 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             )
         }
 
-        for uncataloged in state.progress.uncatalogedSources {
+        for uncataloged in state.progress.uncatalogedSources
+            where state.progress.sourceRows[uncataloged.normalizedValue] == nil {
             substeps.append(uncatalogedSourceSubstep(uncataloged))
         }
 

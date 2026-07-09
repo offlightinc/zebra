@@ -541,6 +541,7 @@ struct ZebraSourceOnboardingHelper {
     import urllib.parse
     import urllib.request
     import uuid
+    import hashlib
     from datetime import datetime, timezone
     from pathlib import Path
 
@@ -1154,6 +1155,25 @@ struct ZebraSourceOnboardingHelper {
         "sections": {},
     }
 
+    fallback_playbook = {
+        "id": "uncataloged.agent-fallback",
+        "version": "v1",
+        "sourceID": "uncataloged",
+        "initialStepID": "classify_source",
+        "steps": [
+            "classify_source",
+            "research_access_paths",
+            "choose_strategy",
+            "smoke_read",
+            "propose_ingest_scope",
+            "confirm_ingest_plan",
+            "ingest",
+            "verify_readback",
+            "complete",
+        ],
+        "sections": {},
+    }
+
     def parse_playbook_markdown(path, fallback=None):
         fallback = fallback or obsidian_playbook_fallback
         result = {
@@ -1293,6 +1313,242 @@ struct ZebraSourceOnboardingHelper {
             "updatedAt": timestamp,
         }
 
+    def uncataloged_record_for(progress, source_id):
+        records = progress.get("uncatalogedSources")
+        if not isinstance(records, list):
+            return {}
+        for item in records:
+            if isinstance(item, dict) and item.get("normalizedValue") == source_id:
+                return item
+        return {}
+
+    def fallback_source_row_for(progress, source_id, timestamp):
+        record = uncataloged_record_for(progress, source_id)
+        return {
+            "id": source_id,
+            "displayName": record.get("displayName") or record.get("rawValue") or source_id,
+            "type": "uncataloged",
+            "phase": "intake",
+            "status": "unchecked",
+            "selectionState": "confirmed",
+            "playbookID": fallback_playbook["id"],
+            "playbookVersion": fallback_playbook["version"],
+            "updatedAt": timestamp,
+        }
+
+    def is_fallback_source_row(row):
+        return isinstance(row, dict) and (
+            row.get("type") == "uncataloged"
+            or row.get("playbookID") == fallback_playbook["id"]
+        )
+
+    def set_fallback_row_state(state, source_id, row_status, phase, step_id, timestamp=None, attention_reason=None, result_summary=None, run_state_path=None):
+        timestamp = timestamp or now()
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else fallback_source_row_for(progress, source_id, timestamp)
+        row["status"] = row_status
+        row["phase"] = phase
+        row["selectionState"] = "confirmed"
+        row["type"] = "uncataloged"
+        row["playbookID"] = fallback_playbook["id"]
+        row["playbookVersion"] = fallback_playbook["version"]
+        row["playbookStepID"] = step_id
+        row["updatedAt"] = timestamp
+        if attention_reason:
+            row["attentionReason"] = attention_reason
+        else:
+            row.pop("attentionReason", None)
+        if result_summary:
+            row["resultSummary"] = result_summary
+        if run_state_path:
+            row["runStatePath"] = run_state_path
+        rows[source_id] = row
+        progress["sourceRows"] = rows
+        if source_id not in ensure_execution_order(progress):
+            progress["executionOrder"].append(source_id)
+        if row_status in {"checked", "skipped"}:
+            if progress.get("activeSourceID") == source_id:
+                progress["activeSourceID"] = None
+        else:
+            progress["activeSourceID"] = source_id
+        state["status"] = source_completion_status(state)
+        state["updatedAt"] = timestamp
+        return state
+
+    def fallback_phase_for_step(step_id):
+        if step_id in {"classify_source", "research_access_paths", "choose_strategy"}:
+            return "investigate"
+        if step_id in {"smoke_read"}:
+            return "preflight"
+        if step_id in {"propose_ingest_scope", "confirm_ingest_plan"}:
+            return "scope"
+        if step_id == "ingest":
+            return "ingest"
+        if step_id == "verify_readback":
+            return "verify"
+        if step_id == "complete":
+            return "complete"
+        return "intake"
+
+    def next_fallback_step_id(step_id):
+        steps = fallback_playbook["steps"]
+        if step_id not in steps:
+            return fallback_playbook["initialStepID"]
+        index = steps.index(step_id)
+        if index + 1 >= len(steps):
+            return "complete"
+        return steps[index + 1]
+
+    def redaction_report():
+        return {"secret": 0, "privatePath": 0, "rawBody": 0}
+
+    def sanitize_control_plane_text(value, report=None, limit=320):
+        if report is None:
+            report = redaction_report()
+        text = str(value or "")
+        secret_patterns = [
+            r"(?i)\\bsk-[A-Za-z0-9_-]{6,}\\b",
+            r"(?i)\\bcvis_[A-Za-z0-9_-]{6,}\\b",
+            r"(?i)\\bxox[a-z]-[A-Za-z0-9_-]{6,}\\b",
+            r"(?i)\\b(?:token|cookie|password|secret|oauth(?:_code)?|code)\\s*[:=]\\s*[^\\s,;]+",
+        ]
+        for pattern in secret_patterns:
+            text, count = re.subn(pattern, "<redacted-secret>", text)
+            report["secret"] = report.get("secret", 0) + count
+        def replace_private_path(match):
+            report["privatePath"] = report.get("privatePath", 0) + 1
+            basename = Path(match.group(0)).name or "path"
+            digest = hashlib.sha256(match.group(0).encode("utf-8")).hexdigest()[:12]
+            return "<private-path:" + basename + ":" + digest + ">"
+        text = re.sub(r"/Users/[^\\s'\\\"`]+", replace_private_path, text)
+        text, body_count = re.subn(
+            r"(?is)\\b(raw\\s+body|body|message\\s+body|document\\s+text)\\s*[:=].*",
+            r"\\1:<redacted-body>",
+            text,
+        )
+        report["rawBody"] = report.get("rawBody", 0) + body_count
+        text = " ".join(text.split())
+        if len(text) > limit:
+            text = text[: limit - 3].rstrip() + "..."
+        return text
+
+    def fallback_run_state(source_id):
+        run_state = load_source_run_state(source_id)
+        if not run_state.get("fallbackRunID"):
+            run_state["fallbackRunID"] = str(uuid.uuid4())
+        return run_state
+
+    def fallback_run_directory(source_id, run_state):
+        run_id = run_state.get("fallbackRunID") or str(uuid.uuid4())
+        directory = state_path.parent / "fallback-runs" / (prompt_file_safe_name(source_id) + "-" + prompt_file_safe_name(run_id))
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def write_json_file(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\\n")
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except Exception:
+            pass
+
+    def write_fallback_artifacts(source_id, run_state, event):
+        directory = fallback_run_directory(source_id, run_state)
+        compact = {
+            "schemaVersion": 1,
+            "sourceID": source_id,
+            "playbookID": fallback_playbook["id"],
+            "playbookVersion": fallback_playbook["version"],
+            "currentStepID": event.get("stepID"),
+            "status": event.get("status"),
+            "summary": event.get("sanitizedSummary"),
+            "attentionReason": event.get("attentionReason"),
+            "strategy": run_state.get("strategy"),
+            "ingestScope": run_state.get("ingestScope"),
+            "gbrainArtifact": run_state.get("gbrainArtifact"),
+            "updatedAt": event.get("updatedAt"),
+        }
+        write_json_file(directory / "fallback-summary.json", compact)
+        write_json_file(directory / "promotion-candidate.json", {
+            "schemaVersion": 1,
+            "sourceID": source_id,
+            "observedSteps": run_state.get("observedSteps", []),
+            "implementationNotes": compact_completion_value(event.get("sanitizedSummary"), limit=240),
+            "latestStatus": event.get("status"),
+            "latestAttentionReason": event.get("attentionReason"),
+        })
+        playbook_lines = [
+            "# Uncataloged Source Fallback Draft",
+            "",
+            "source: " + source_id,
+            "playbook: " + fallback_playbook["id"] + "." + fallback_playbook["version"],
+            "latest_step: " + str(event.get("stepID") or ""),
+            "latest_status: " + str(event.get("status") or ""),
+            "",
+            "## Sanitized Notes",
+            "",
+            str(event.get("sanitizedSummary") or ""),
+        ]
+        (directory / "playbook-draft.md").write_text("\\n".join(playbook_lines).rstrip() + "\\n", encoding="utf-8")
+        try:
+            os.chmod(directory / "playbook-draft.md", 0o600)
+        except Exception:
+            pass
+        write_json_file(directory / "redaction-report.json", {
+            "schemaVersion": 1,
+            "sourceID": source_id,
+            "redactions": event.get("redactions", redaction_report()),
+            "updatedAt": event.get("updatedAt"),
+        })
+        return {
+            "directoryName": directory.name,
+            "summaryFile": "fallback-summary.json",
+            "promotionFile": "promotion-candidate.json",
+            "playbookDraftFile": "playbook-draft.md",
+            "redactionReportFile": "redaction-report.json",
+        }
+
+    def gbrain_target_directory(state):
+        entry = state.get("entryContext") if isinstance(state.get("entryContext"), dict) else {}
+        for key in ["gbrainTargetPath", "gbrainWriteTargetPath"]:
+            raw = entry.get(key)
+            if isinstance(raw, str) and raw.strip():
+                candidate = Path(raw).expanduser()
+                candidate.mkdir(parents=True, exist_ok=True)
+                return candidate
+        return None
+
+    def write_fallback_gbrain_artifact(state, source_id, title, body, provenance):
+        target = gbrain_target_directory(state)
+        if target is None:
+            return None
+        safe_title = prompt_file_safe_name(title or source_id)
+        path = target / ("source-onboarding-" + prompt_file_safe_name(source_id) + "-" + safe_title + ".md")
+        text = "\\n".join([
+            "---",
+            "source: " + source_id,
+            "playbook: " + fallback_playbook["id"] + ".v1",
+            "provenance: " + str(provenance or "uncataloged fallback ingest"),
+            "---",
+            "",
+            "# " + str(title or source_id),
+            "",
+            str(body or "").rstrip(),
+            "",
+        ]).rstrip() + "\\n"
+        path.write_text(text, encoding="utf-8")
+        digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
+        return {
+            "basename": path.name,
+            "pathHash": digest,
+            "kind": "gbrain-markdown",
+        }
+
     def ensure_progress(state):
         progress = state.get("progress")
         if not isinstance(progress, dict):
@@ -1347,8 +1603,7 @@ struct ZebraSourceOnboardingHelper {
             isinstance(row, dict) and row.get("status") == "attention"
             for row in rows.values()
         )
-        uncataloged = progress.get("uncatalogedSources") if isinstance(progress.get("uncatalogedSources"), list) else []
-        if has_attention_row or uncataloged:
+        if has_attention_row:
             return "attention"
         if all_execution_sources_finished(progress):
             return "completed"
@@ -2609,7 +2864,7 @@ struct ZebraSourceOnboardingHelper {
         ''').strip()
 
     def source_completion_report_prompt(source_id, row):
-        display = source_display_name(source_id)
+        display = row.get("displayName") or source_display_name(source_id)
         summary_text = row.get("resultSummary") or (display + " Source Onboarding is ready to report complete.")
         language = onboarding_language()
         if language == "ko":
@@ -2986,6 +3241,9 @@ struct ZebraSourceOnboardingHelper {
         elif source_id == "agent-memory":
             playbook = agent_memory_playbook()
             prompt = agent_memory_step_prompt(step_id, state, row)
+        elif is_fallback_source_row(row):
+            playbook = fallback_playbook
+            prompt = fallback_step_prompt(source_id, step_id, state, row)
         else:
             return {}
         if step_id == "complete":
@@ -2999,6 +3257,86 @@ struct ZebraSourceOnboardingHelper {
             "nextPrompt": prompt,
             "nextPromptPath": path,
         }
+
+    def fallback_step_prompt(source_id, step_id, state, row):
+        progress = ensure_progress(state)
+        record = uncataloged_record_for(progress, source_id)
+        display = row.get("displayName") or record.get("displayName") or record.get("rawValue") or source_id
+        run_state = load_source_run_state(source_id)
+        last_summary = run_state.get("lastSummary") or "not recorded"
+        gbrain_artifact = run_state.get("gbrainArtifact") or {}
+        artifact_ref = gbrain_artifact.get("basename") if isinstance(gbrain_artifact, dict) else None
+        if step_id == "classify_source":
+            instruction = textwrap.dedent(f'''
+            Classify `{display}` as one or more of: app, web service, file/export, CLI, API, or manual upload.
+            Do not ingest yet. Report only a compact classification:
+            `zebra-source-onboarding fallback report --source {source_id} --step classify_source --status completed --summary "<category and confidence>"`
+            ''').strip()
+        elif step_id == "research_access_paths":
+            instruction = textwrap.dedent(f'''
+            Research viable read paths for `{display}` using local app/CLI/config checks, official docs, or user-provided export information.
+            Do not store raw source bodies in Source Onboarding state. Report compact findings:
+            `zebra-source-onboarding fallback report --source {source_id} --step research_access_paths --status completed --summary "<access paths and rejected paths>"`
+            ''').strip()
+        elif step_id == "choose_strategy":
+            instruction = textwrap.dedent(f'''
+            Choose one strategy for `{display}`: api, export, local_file, manual_upload, or no_viable_path.
+            If no path is currently viable, report `--status attention` with a `blocked:` summary.
+            Otherwise report the selected compact strategy.
+            ''').strip()
+        elif step_id == "smoke_read":
+            instruction = textwrap.dedent(f'''
+            Attempt a read-only smoke read for `{display}` within the selected strategy. Do not perform broad ingest.
+            If user action is needed, report `--status waiting` and make the summary start with what the user must do.
+            If the path is blocked, report `--status attention` with a blocked reason.
+            ''').strip()
+        elif step_id == "propose_ingest_scope":
+            instruction = textwrap.dedent(f'''
+            Propose the ingest scope for `{display}`: source subset, sensitivity, expected size, cost/duration risk, and target artifact shape.
+            Do not write source body to GBrain yet.
+            Report the compact scope proposal as completed.
+            ''').strip()
+        elif step_id == "confirm_ingest_plan":
+            instruction = textwrap.dedent(f'''
+            Ask the user for explicit approval before ingesting `{display}` into the active GBrain target.
+            Only after the user approves, run:
+            `zebra-source-onboarding fallback report --source {source_id} --step confirm_ingest_plan --status completed --summary "approved scope: <scope>"`
+            If the user does not approve, use `--status waiting` or `--status skipped` as appropriate.
+            ''').strip()
+        elif step_id == "ingest":
+            instruction = textwrap.dedent(f'''
+            Ingest only the user-approved `{display}` scope into the GBrain target.
+            If the helper should write an export-derived markdown artifact, pass only a user-approved file reference to this ingest step:
+            `zebra-source-onboarding fallback report --source {source_id} --step ingest --status completed --summary "<compact ingest result>" --ingest-title "<title>" --ingest-file "<approved-export-file>" --ingest-provenance "<provenance>"`
+            Do not pass raw source body as a CLI argument. The helper reads the approved file and writes its body to the GBrain target artifact, not to Source Onboarding state or fallback promotion artifacts.
+            ''').strip()
+        elif step_id == "verify_readback":
+            instruction = textwrap.dedent(f'''
+            Verify the GBrain ingest artifact for `{display}` can be read back and contains expected provenance/schema.
+            Current GBrain artifact reference: `{artifact_ref or "not recorded"}`
+            If readback succeeds, report completed; the helper will move to the completion-report boundary.
+            ''').strip()
+        else:
+            instruction = "Fallback Source Onboarding is complete. Run the completion report command when prompted."
+        return textwrap.dedent(f'''
+        Zebra Source Onboarding: `{display}` is an uncataloged source using the generic agent fallback runner.
+
+        Playbook: {fallback_playbook["id"]} {fallback_playbook["version"]}
+        Current step: `{step_id}`
+        Last compact summary: `{last_summary}`
+
+        Boundary rules:
+        - Work only this source and this fallback step.
+        - Use `zebra-source-onboarding fallback report` as the only Source Onboarding state transition path for this fallback source.
+        - Do not edit `source-onboarding-state.json` directly.
+        - Do not store raw source body, token, cookie, OAuth code, private full path, raw CLI stdout, or transcript content in Source Onboarding state or fallback promotion artifacts.
+        - Approved source body may be written only to the GBrain ingest target after `confirm_ingest_plan` is complete.
+        - Continue only from helper stdout `nextPrompt`; use `nextPromptPath` only as a fallback/debug file.
+
+        Step instructions:
+
+        {instruction}
+        ''').strip()
 
     def set_gmail_row_state(state, row_status, phase, step_id, timestamp=None, attention_reason=None, result_summary=None, run_state_path=None):
         timestamp = timestamp or now()
@@ -3579,6 +3917,19 @@ struct ZebraSourceOnboardingHelper {
                 result_summary=result_summary,
                 run_state_path=run_state_path,
             )
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else {}
+        if is_fallback_source_row(row):
+            return set_fallback_row_state(
+                state,
+                source_id,
+                "running",
+                "complete",
+                "complete",
+                result_summary=result_summary,
+                run_state_path=run_state_path,
+            )
         return state
 
     def report_source_completion(state, source_id):
@@ -3627,6 +3978,19 @@ struct ZebraSourceOnboardingHelper {
             run_state.update({"completionReportPending": False, "completionReportedAt": timestamp, "updatedAt": timestamp})
             run_path = save_source_run_state(source_id, run_state)
             state = set_agent_memory_row_state(state, disposition, "complete", "complete", timestamp=timestamp, result_summary=summary_text, run_state_path=run_path)
+        elif is_fallback_source_row(row):
+            run_state.update({"completionReportPending": False, "completionReportedAt": timestamp, "updatedAt": timestamp})
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_fallback_row_state(
+                state,
+                source_id,
+                disposition,
+                "complete",
+                "complete",
+                timestamp=timestamp,
+                result_summary=summary_text,
+                run_state_path=run_path,
+            )
         else:
             return None, {"ok": False, "reason": "unknown_source", "sourceID": source_id}, 1
         save_json(state)
@@ -4545,6 +4909,29 @@ struct ZebraSourceOnboardingHelper {
             return start_apple_reminders_from_next(state)
         if source_id == "agent-memory":
             return start_agent_memory_from_next(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else {}
+        if is_fallback_source_row(row):
+            if row.get("playbookID") == fallback_playbook["id"] and row.get("status") in {"running", "attention"}:
+                step_id = row.get("playbookStepID") if row.get("playbookStepID") in fallback_playbook["steps"] else fallback_playbook["initialStepID"]
+                payload = summary(state)
+                payload.update(source_next_prompt_payload(state, source_id, step_id))
+                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                return 0
+            timestamp = now()
+            state = set_fallback_row_state(
+                state,
+                source_id,
+                "running",
+                fallback_phase_for_step(fallback_playbook["initialStepID"]),
+                fallback_playbook["initialStepID"],
+                timestamp=timestamp,
+            )
+            save_json(state)
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, source_id, fallback_playbook["initialStepID"]))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
         if source_id != "gmail":
             payload = summary(state)
             payload["ok"] = False
@@ -4552,7 +4939,6 @@ struct ZebraSourceOnboardingHelper {
             payload["reason"] = "source_runner_not_implemented"
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
-        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
         row = rows.get("gmail") if isinstance(rows.get("gmail"), dict) else {}
         if row.get("playbookID") == gmail_playbook["id"] and row.get("status") in {"running", "attention"}:
             step_id = row.get("playbookStepID") if row.get("playbookStepID") in gmail_playbook["steps"] else gmail_playbook["initialStepID"]
@@ -8135,7 +8521,18 @@ struct ZebraSourceOnboardingHelper {
             match = best_alias_match(raw, definition["aliases"])
             if match:
                 matches.append((match[0], source_id, match[1]))
-        return [(source_id, raw_value) for _, source_id, raw_value in sorted(matches)]
+        return sorted(matches)
+
+    def explicit_source_position(raw, source_id, raw_value, fallback_position):
+        aliases = []
+        if raw_value:
+            aliases.append(raw_value)
+        if source_id:
+            aliases.append(source_id)
+        match = best_alias_match(raw, aliases)
+        if match:
+            return match[0]
+        return fallback_position
 
     def add_uncataloged(items, seen, source_id, raw_value, reason="not_in_current_catalog"):
         normalized = source_id.strip().lower()
@@ -8190,32 +8587,53 @@ struct ZebraSourceOnboardingHelper {
                 before = len(uncataloged_sources)
                 add_uncataloged(uncataloged_sources, seen_uncataloged, normalized, raw_value)
                 if include_prompt and len(uncataloged_sources) > before:
+                    source_ids.append(normalized)
                     remember_prompt(normalized, raw_value)
 
-        for source_id, raw_value in scan_aliases(raw):
-            consider(source_id, raw_value)
-        for source_id, raw_value in candidates:
-            consider(source_id, raw_value, include_prompt=True)
-        for source_id, raw_value in uncataloged_pairs:
+        ordered_inputs = []
+        for index, (position, source_id, raw_value) in enumerate(scan_aliases(raw)):
+            ordered_inputs.append((position, 0, index, source_id, raw_value))
+        fallback_base = len(raw) + 1000
+        for index, (source_id, raw_value) in enumerate(candidates):
+            position = explicit_source_position(raw, source_id, raw_value, fallback_base + index)
+            ordered_inputs.append((position, 1, index, source_id, raw_value))
+        for index, (source_id, raw_value) in enumerate(uncataloged_pairs):
+            position = explicit_source_position(raw, source_id, raw_value, fallback_base + len(candidates) + index)
+            ordered_inputs.append((position, 2, index, source_id, raw_value))
+        for _, _, _, source_id, raw_value in sorted(ordered_inputs):
             consider(source_id, raw_value, include_prompt=True)
 
         timestamp = now()
         rows = {}
         for source_id in source_ids:
-            definition = supported[source_id]
-            rows[source_id] = {
-                "id": source_id,
-                "displayName": definition["displayName"],
-                "type": definition["type"],
-                "phase": "intake",
-                "status": "unchecked",
-                "selectionState": "pending_confirmation",
-                "updatedAt": timestamp,
-            }
+            if source_id in supported:
+                definition = supported[source_id]
+                rows[source_id] = {
+                    "id": source_id,
+                    "displayName": definition["displayName"],
+                    "type": definition["type"],
+                    "phase": "intake",
+                    "status": "unchecked",
+                    "selectionState": "pending_confirmation",
+                    "updatedAt": timestamp,
+                }
+            else:
+                record = next((item for item in uncataloged_sources if isinstance(item, dict) and item.get("normalizedValue") == source_id), {})
+                rows[source_id] = {
+                    "id": source_id,
+                    "displayName": record.get("displayName") or record.get("rawValue") or source_id,
+                    "type": "uncataloged",
+                    "phase": "intake",
+                    "status": "unchecked",
+                    "selectionState": "pending_confirmation",
+                    "playbookID": fallback_playbook["id"],
+                    "playbookVersion": fallback_playbook["version"],
+                    "updatedAt": timestamp,
+                }
         prompt = confirmation_prompt(prompt_names)
         state = {
             "schemaVersion": 1,
-            "status": "attention" if uncataloged_sources else "running",
+            "status": "running",
             "entryContext": entry_context(),
             "sourceReadiness": source_readiness(),
             "progress": {
@@ -8268,9 +8686,13 @@ struct ZebraSourceOnboardingHelper {
         timestamp = now()
         previous = progress.get("sourceConfirmation") if isinstance(progress.get("sourceConfirmation"), dict) else {}
         uncataloged_sources = progress.get("uncatalogedSources") if isinstance(progress.get("uncatalogedSources"), list) else progress.get("unsupportedInputs") if isinstance(progress.get("unsupportedInputs"), list) else []
-        display_names = [source_display_name(source_id) for source_id in source_ids]
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        display_names = []
+        for source_id in source_ids:
+            row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else {}
+            display_names.append(row.get("displayName") or source_display_name(source_id))
         for item in uncataloged_sources:
-            if isinstance(item, dict):
+            if isinstance(item, dict) and item.get("normalizedValue") not in source_ids:
                 display_names.append(item.get("displayName") or item.get("rawValue") or item.get("normalizedValue"))
         prompt = previous.get("prompt") or confirmation_prompt([name for name in display_names if name])
         is_yes = answer in {"yes", "y"}
@@ -8281,7 +8703,6 @@ struct ZebraSourceOnboardingHelper {
             "confirmedAt": timestamp if is_yes else None,
             "updatedAt": timestamp,
         }
-        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
         if is_yes:
             progress["pendingQuestion"] = None
             for source_id in source_ids:
@@ -8299,7 +8720,7 @@ struct ZebraSourceOnboardingHelper {
         state["progress"] = progress
         uncataloged_sources = progress.get("uncatalogedSources") if isinstance(progress.get("uncatalogedSources"), list) else progress.get("unsupportedInputs") if isinstance(progress.get("unsupportedInputs"), list) else []
         if is_yes:
-            state["status"] = "attention" if uncataloged_sources else "ready"
+            state["status"] = "ready"
         else:
             state["status"] = "running"
         state["updatedAt"] = timestamp
@@ -8359,8 +8780,10 @@ struct ZebraSourceOnboardingHelper {
         if status_value != "completed":
             print("--status must be completed", file=sys.stderr)
             sys.exit(2)
-        if source_id not in supported:
-            print("--source must be one of: " + ", ".join(sorted(supported.keys())), file=sys.stderr)
+        state = load_or_create_state()
+        rows = ensure_progress(state).get("sourceRows") if isinstance(ensure_progress(state).get("sourceRows"), dict) else {}
+        if source_id not in supported and source_id not in rows:
+            print("--source must be a known source row", file=sys.stderr)
             sys.exit(2)
         return source_id
 
@@ -8419,6 +8842,284 @@ struct ZebraSourceOnboardingHelper {
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
 
+    def parse_fallback_report_args():
+        parsed = {
+            "source": "",
+            "step": "",
+            "status": "",
+            "summary": "",
+            "ingestTitle": "",
+            "ingestFile": "",
+            "ingestProvenance": "",
+        }
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == "--source" and index + 1 < len(args):
+                parsed["source"] = args[index + 1].strip().lower()
+                index += 2
+            elif token == "--step" and index + 1 < len(args):
+                parsed["step"] = args[index + 1].strip()
+                index += 2
+            elif token == "--status" and index + 1 < len(args):
+                parsed["status"] = args[index + 1].strip().lower()
+                index += 2
+            elif token == "--summary" and index + 1 < len(args):
+                parsed["summary"] = args[index + 1]
+                index += 2
+            elif token == "--ingest-title" and index + 1 < len(args):
+                parsed["ingestTitle"] = args[index + 1]
+                index += 2
+            elif token == "--ingest-file" and index + 1 < len(args):
+                parsed["ingestFile"] = args[index + 1]
+                index += 2
+            elif token == "--ingest-provenance" and index + 1 < len(args):
+                parsed["ingestProvenance"] = args[index + 1]
+                index += 2
+            else:
+                print("unknown or incomplete fallback report argument: " + token, file=sys.stderr)
+                sys.exit(2)
+        if not parsed["source"]:
+            print("--source is required", file=sys.stderr)
+            sys.exit(2)
+        if parsed["step"] not in fallback_playbook["steps"]:
+            print("--step must be one of: " + ", ".join(fallback_playbook["steps"]), file=sys.stderr)
+            sys.exit(2)
+        if parsed["status"] not in {"completed", "waiting", "attention", "skipped"}:
+            print("--status must be completed, waiting, attention, or skipped", file=sys.stderr)
+            sys.exit(2)
+        if not parsed["summary"].strip():
+            print("--summary is required", file=sys.stderr)
+            sys.exit(2)
+        return parsed
+
+    def fallback_report():
+        if not args or args[0] != "report":
+            print("fallback requires the report subcommand", file=sys.stderr)
+            return 2
+        del args[:1]
+        parsed = parse_fallback_report_args()
+        source_id = parsed["source"]
+        state = load_or_create_state()
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else None
+        if not row:
+            payload = summary(state)
+            payload.update({"ok": False, "reason": "unknown_source", "sourceID": source_id})
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if not is_fallback_source_row(row):
+            payload = summary(state)
+            payload.update({"ok": False, "reason": "source_not_fallback", "sourceID": source_id})
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if progress.get("activeSourceID") != source_id:
+            payload = summary(state)
+            payload.update({"ok": False, "reason": "source_not_active", "sourceID": source_id})
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        current_step = row.get("playbookStepID") or fallback_playbook["initialStepID"]
+        if parsed["step"] != current_step:
+            payload = summary(state)
+            payload.update({
+                "ok": False,
+                "reason": "fallback_step_mismatch",
+                "sourceID": source_id,
+                "expectedStepID": current_step,
+                "reportedStepID": parsed["step"],
+            })
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+
+        redactions = redaction_report()
+        sanitized_summary = sanitize_control_plane_text(parsed["summary"], redactions)
+        timestamp = now()
+        run_state = fallback_run_state(source_id)
+        observed = run_state.get("observedSteps") if isinstance(run_state.get("observedSteps"), list) else []
+        event = {
+            "stepID": parsed["step"],
+            "status": parsed["status"],
+            "sanitizedSummary": sanitized_summary,
+            "redactions": redactions,
+            "updatedAt": timestamp,
+        }
+        observed.append(event)
+        run_state["observedSteps"] = observed[-32:]
+        run_state["lastSummary"] = sanitized_summary
+        run_state["lastStepID"] = parsed["step"]
+        run_state["lastStatus"] = parsed["status"]
+        run_state["updatedAt"] = timestamp
+
+        if parsed["step"] == "choose_strategy" and parsed["status"] == "completed":
+            run_state["strategy"] = sanitized_summary
+        if parsed["step"] == "propose_ingest_scope" and parsed["status"] == "completed":
+            run_state["ingestScope"] = sanitized_summary
+        if parsed["step"] == "confirm_ingest_plan" and parsed["status"] == "completed":
+            run_state["ingestPlanConfirmed"] = True
+        if parsed["step"] == "ingest" and parsed["status"] == "completed":
+            if not run_state.get("ingestPlanConfirmed"):
+                state = set_fallback_row_state(
+                    state,
+                    source_id,
+                    "attention",
+                    fallback_phase_for_step("confirm_ingest_plan"),
+                    "confirm_ingest_plan",
+                    timestamp=timestamp,
+                    attention_reason="waiting:ingest_plan_unconfirmed",
+                    result_summary="Ingest plan confirmation is required before fallback ingest.",
+                )
+                save_json(state)
+                payload = summary(state)
+                payload.update(source_next_prompt_payload(state, source_id, "confirm_ingest_plan"))
+                payload.update({"ok": False, "reason": "ingest_plan_unconfirmed"})
+                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                return 1
+            if parsed["ingestFile"]:
+                ingest_file = Path(parsed["ingestFile"]).expanduser()
+                try:
+                    ingest_body = ingest_file.read_text(encoding="utf-8")
+                except Exception:
+                    run_state["ingestFailureReason"] = "ingest_file_unreadable"
+                    run_path = save_source_run_state(source_id, run_state)
+                    state = set_fallback_row_state(
+                        state,
+                        source_id,
+                        "attention",
+                        fallback_phase_for_step("ingest"),
+                        "ingest",
+                        timestamp=timestamp,
+                        attention_reason="waiting:ingest_file_unreadable",
+                        result_summary="The approved ingest file could not be read.",
+                        run_state_path=run_path,
+                    )
+                    save_json(state)
+                    payload = summary(state)
+                    payload.update(source_next_prompt_payload(state, source_id, "ingest"))
+                    payload.update({"ok": False, "reason": "ingest_file_unreadable"})
+                    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                    return 1
+                artifact = write_fallback_gbrain_artifact(
+                    state,
+                    source_id,
+                    parsed["ingestTitle"] or source_id,
+                    ingest_body,
+                    parsed["ingestProvenance"] or sanitized_summary,
+                )
+                if artifact:
+                    run_state["gbrainArtifact"] = artifact
+                else:
+                    run_state["ingestFailureReason"] = "gbrain_target_missing"
+                    run_path = save_source_run_state(source_id, run_state)
+                    state = set_fallback_row_state(
+                        state,
+                        source_id,
+                        "attention",
+                        fallback_phase_for_step("ingest"),
+                        "ingest",
+                        timestamp=timestamp,
+                        attention_reason="waiting:gbrain_target_missing",
+                        result_summary="GBrain target is required before fallback ingest can write approved source body.",
+                        run_state_path=run_path,
+                    )
+                    save_json(state)
+                    payload = summary(state)
+                    payload.update(source_next_prompt_payload(state, source_id, "ingest"))
+                    payload.update({"ok": False, "reason": "gbrain_target_missing"})
+                    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                    return 1
+
+        attention_reason = None
+        if parsed["status"] == "waiting":
+            attention_reason = "waiting:" + sanitized_summary
+            run_path = save_source_run_state(source_id, run_state)
+            event["attentionReason"] = attention_reason
+            run_state["fallbackArtifacts"] = write_fallback_artifacts(source_id, run_state, event)
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_fallback_row_state(
+                state,
+                source_id,
+                "attention",
+                fallback_phase_for_step(parsed["step"]),
+                parsed["step"],
+                timestamp=timestamp,
+                attention_reason=attention_reason,
+                result_summary=sanitized_summary,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, source_id, parsed["step"]))
+            payload["reason"] = attention_reason
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        if parsed["status"] == "attention":
+            if sanitized_summary.startswith("blocked:") or sanitized_summary.startswith("waiting:"):
+                attention_reason = sanitized_summary
+            else:
+                attention_reason = "blocked:" + sanitized_summary
+            run_path = save_source_run_state(source_id, run_state)
+            event["attentionReason"] = attention_reason
+            run_state["fallbackArtifacts"] = write_fallback_artifacts(source_id, run_state, event)
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_fallback_row_state(
+                state,
+                source_id,
+                "attention",
+                fallback_phase_for_step(parsed["step"]),
+                parsed["step"],
+                timestamp=timestamp,
+                attention_reason=attention_reason,
+                result_summary=sanitized_summary,
+                run_state_path=run_path,
+            )
+            save_json(state)
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, source_id, parsed["step"]))
+            payload["reason"] = attention_reason
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        if parsed["status"] == "skipped":
+            run_state["completionDisposition"] = "skipped"
+            run_state["completionSummary"] = sanitized_summary
+            run_path = save_source_run_state(source_id, run_state)
+            event["attentionReason"] = None
+            run_state["fallbackArtifacts"] = write_fallback_artifacts(source_id, run_state, event)
+            state = mark_source_completion_pending(state, source_id, "skipped", sanitized_summary, run_state=run_state)
+            save_json(state)
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, source_id, "complete"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+
+        next_step = next_fallback_step_id(parsed["step"])
+        run_path = save_source_run_state(source_id, run_state)
+        event["attentionReason"] = None
+        run_state["fallbackArtifacts"] = write_fallback_artifacts(source_id, run_state, event)
+        run_path = save_source_run_state(source_id, run_state)
+        if parsed["step"] == "verify_readback":
+            state = mark_source_completion_pending(state, source_id, "checked", sanitized_summary, run_state=run_state)
+            save_json(state)
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, source_id, "complete"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        state = set_fallback_row_state(
+            state,
+            source_id,
+            "running",
+            fallback_phase_for_step(next_step),
+            next_step,
+            timestamp=timestamp,
+            result_summary=sanitized_summary,
+            run_state_path=run_path,
+        )
+        save_json(state)
+        payload = summary(state)
+        payload.update(source_next_prompt_payload(state, source_id, next_step))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
     if command == "intake":
         intake()
     elif command == "confirm":
@@ -8441,6 +9142,8 @@ struct ZebraSourceOnboardingHelper {
         sys.exit(apple_reminders_command())
     elif command == "agent-memory":
         sys.exit(agent_memory_command())
+    elif command == "fallback":
+        sys.exit(fallback_report())
     elif command == "status":
         status()
     else:
