@@ -2185,6 +2185,16 @@ final class PostHogAnalyticsPropertiesTests: XCTestCase {
 }
 
 final class ZebraPostHogAnalyticsPropertiesTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        ZebraPostHogAnalytics.clearTelemetryHashSaltForTesting()
+    }
+
+    override func tearDown() {
+        ZebraPostHogAnalytics.clearTelemetryHashSaltForTesting()
+        super.tearDown()
+    }
+
     func testZebraSuperPropertiesIdentifyProductAndPlatform() {
         let properties = ZebraPostHogAnalytics.superProperties(
             infoDictionary: [
@@ -2203,6 +2213,62 @@ final class ZebraPostHogAnalyticsPropertiesTests: XCTestCase {
         XCTAssertTrue(ZebraPostHogAnalytics.shouldFlushAfterCapture(event: "zebra_app_active_daily"))
         XCTAssertTrue(ZebraPostHogAnalytics.shouldFlushAfterCapture(event: "zebra_app_active_hourly"))
         XCTAssertFalse(ZebraPostHogAnalytics.shouldFlushAfterCapture(event: "cmux_daily_active"))
+    }
+
+    func testZebraPostHogProjectTokenComesFromInfoDictionary() {
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.postHogProjectToken(
+                infoDictionary: ["ZebraPostHogProjectToken": " phc_zebra_test "]
+            ),
+            "phc_zebra_test"
+        )
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.postHogProjectToken(
+                infoDictionary: ["ZebraPostHogProjectToken": "REPLACE_WITH_ZEBRA_POSTHOG_PROJECT_TOKEN"]
+            ),
+            ""
+        )
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.postHogProjectToken(infoDictionary: [:]),
+            ""
+        )
+    }
+
+    func testZebraPostHogProjectTokenDebugEnvironmentOverrideIsExplicit() {
+        let environment = ["ZEBRA_POSTHOG_API_KEY": "phc_debug_override"]
+        let infoDictionary = ["ZebraPostHogProjectToken": "phc_info_dictionary"]
+
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.postHogProjectToken(
+                infoDictionary: infoDictionary,
+                environment: environment,
+                allowEnvironmentOverride: true
+            ),
+            "phc_debug_override"
+        )
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.postHogProjectToken(
+                infoDictionary: infoDictionary,
+                environment: environment,
+                allowEnvironmentOverride: false
+            ),
+            "phc_info_dictionary"
+        )
+    }
+
+    func testStableHashUsesExplicitSalt() {
+        let value = "/Users/example/brain/tasks/private-task.md"
+        let saltA = Data(repeating: 0x11, count: 32)
+        let saltB = Data(repeating: 0x22, count: 32)
+
+        let firstHash = ZebraPostHogAnalytics.stableHash(value, salt: saltA)
+        let secondHash = ZebraPostHogAnalytics.stableHash(value, salt: saltA)
+        let otherSaltHash = ZebraPostHogAnalytics.stableHash(value, salt: saltB)
+
+        XCTAssertEqual(firstHash, secondHash)
+        XCTAssertNotEqual(firstHash, otherSaltHash)
+        XCTAssertEqual(firstHash.count, 64)
+        XCTAssertTrue(firstHash.allSatisfy { $0.isHexDigit && !$0.isUppercase })
     }
 
     func testSidebarInteractionHashesItemIDAndDoesNotEmitRawID() {
@@ -2225,6 +2291,7 @@ final class ZebraPostHogAnalyticsPropertiesTests: XCTestCase {
         XCTAssertNil(properties["path"])
         XCTAssertNotEqual(properties["item_id_hash"] as? String, "/Users/example/brain/tasks/private-task.md")
         XCTAssertEqual((properties["item_id_hash"] as? String)?.count, 64)
+        XCTAssertTrue((properties["item_id_hash"] as? String)?.allSatisfy { $0.isHexDigit && !$0.isUppercase } ?? false)
     }
 
     func testSidebarInteractionEventNamesSplitBroadSidebarTaxonomy() {
@@ -2326,6 +2393,7 @@ final class ZebraPostHogAnalyticsPropertiesTests: XCTestCase {
         XCTAssertNil(properties["path"])
         XCTAssertNotEqual(properties["path_hash"] as? String, "/Users/example/brain/tasks/private-task.md")
         XCTAssertEqual((properties["path_hash"] as? String)?.count, 64)
+        XCTAssertTrue((properties["path_hash"] as? String)?.allSatisfy { $0.isHexDigit && !$0.isUppercase } ?? false)
     }
 }
 

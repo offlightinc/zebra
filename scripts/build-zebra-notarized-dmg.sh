@@ -13,9 +13,13 @@ SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-Developer ID Application: OFFLIGHT I
 APP_ENTITLEMENTS="${ZEBRA_APP_ENTITLEMENTS:-zebra.release.entitlements}"
 HELPER_ENTITLEMENTS="${ZEBRA_HELPER_ENTITLEMENTS:-cmux-helper.entitlements}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
+ZEBRA_POSTHOG_INFO_KEY="ZebraPostHogProjectToken"
+ZEBRA_POSTHOG_PLACEHOLDER="REPLACE_WITH_ZEBRA_POSTHOG_PROJECT_TOKEN"
 SKIP_BUILD=0
 SKIP_SIGN=0
 SKIP_NOTARIZE=0
+REQUIRE_POSTHOG_KEY=0
+DISABLE_POSTHOG=0
 
 usage() {
   cat <<'EOF'
@@ -29,6 +33,8 @@ Options:
   --skip-build             Reuse the existing build-zebra-release app.
   --skip-sign              Skip app and DMG signing for local packaging tests.
   --skip-notarize          Create a signed DMG without notarizing it.
+  --require-posthog-key    Fail when ZEBRA_POSTHOG_API_KEY is not set.
+  --disable-posthog        Build successfully with Zebra telemetry disabled.
   -h, --help               Show this help.
 
 Environment overrides:
@@ -38,6 +44,7 @@ Environment overrides:
   ZEBRA_APP_ENTITLEMENTS   Default: zebra.release.entitlements
   ZEBRA_DERIVED_DATA       Default: build-zebra-release
   ZEBRA_DMG_PATH           Default: dist/Zebra.dmg
+  ZEBRA_POSTHOG_API_KEY    Optional local/release PostHog project token.
 EOF
 }
 
@@ -64,6 +71,14 @@ while [[ $# -gt 0 ]]; do
       SKIP_NOTARIZE=1
       shift
       ;;
+    --require-posthog-key)
+      REQUIRE_POSTHOG_KEY=1
+      shift
+      ;;
+    --disable-posthog)
+      DISABLE_POSTHOG=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -75,6 +90,20 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$DISABLE_POSTHOG" -eq 1 && "$REQUIRE_POSTHOG_KEY" -eq 1 ]]; then
+  echo "error: --disable-posthog cannot be combined with --require-posthog-key" >&2
+  exit 1
+fi
+
+ZEBRA_POSTHOG_PROJECT_TOKEN="${ZEBRA_POSTHOG_API_KEY:-}"
+if [[ "$DISABLE_POSTHOG" -eq 1 ]]; then
+  ZEBRA_POSTHOG_PROJECT_TOKEN=""
+fi
+if [[ "$REQUIRE_POSTHOG_KEY" -eq 1 && -z "$ZEBRA_POSTHOG_PROJECT_TOKEN" ]]; then
+  echo "error: ZEBRA_POSTHOG_API_KEY is required for this build" >&2
+  exit 1
+fi
 
 require_tool() {
   command -v "$1" >/dev/null || {
@@ -256,6 +285,16 @@ fi
   || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_NAME" "$INFO_PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$INFO_PLIST" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$INFO_PLIST"
+
+if [[ -n "$ZEBRA_POSTHOG_PROJECT_TOKEN" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :${ZEBRA_POSTHOG_INFO_KEY} $ZEBRA_POSTHOG_PROJECT_TOKEN" "$INFO_PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :${ZEBRA_POSTHOG_INFO_KEY} string $ZEBRA_POSTHOG_PROJECT_TOKEN" "$INFO_PLIST"
+  echo "==> Zebra PostHog project token injected"
+else
+  /usr/libexec/PlistBuddy -c "Set :${ZEBRA_POSTHOG_INFO_KEY} $ZEBRA_POSTHOG_PLACEHOLDER" "$INFO_PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :${ZEBRA_POSTHOG_INFO_KEY} string $ZEBRA_POSTHOG_PLACEHOLDER" "$INFO_PLIST"
+  echo "==> Zebra PostHog project token not set; telemetry disabled"
+fi
 
 echo "==> applying Zebra localization overlay"
 python3 scripts/apply-zebra-localization-overlay.py \

@@ -2,12 +2,18 @@ import AppKit
 import CryptoKit
 import Foundation
 import PostHog
+import Security
 import ZebraVault
 
 final class ZebraPostHogAnalytics {
     static let shared = ZebraPostHogAnalytics()
 
-    private let bundledAPIKey = "phc_vfXhAnvheAk3cpRpZJwt5n4YRxyMqiGBU6GU6c4q5boE"
+    private static let hashSaltDefaultsKey = "zebra.posthog.hashSalt.v1"
+    private static let hashDomainSeparator = "zebra-posthog-v1"
+    private static let hashSaltLock = NSLock()
+    private static let projectTokenInfoDictionaryKey = "ZebraPostHogProjectToken"
+    private static let projectTokenPlaceholder = "REPLACE_WITH_ZEBRA_POSTHOG_PROJECT_TOKEN"
+
     private let host = "https://us.i.posthog.com"
 
     private let dailyActiveEvent = "zebra_app_active_daily"
@@ -32,17 +38,27 @@ final class ZebraPostHogAnalytics {
     }
 
     private var apiKey: String {
-        let envKey = ProcessInfo.processInfo.environment["ZEBRA_POSTHOG_API_KEY"] ?? ""
-        if !envKey.isEmpty { return envKey }
-        return bundledAPIKey
+#if DEBUG
+        return Self.postHogProjectToken(
+            infoDictionary: Bundle.main.infoDictionary ?? [:],
+            environment: ProcessInfo.processInfo.environment,
+            allowEnvironmentOverride: true
+        )
+#else
+        return Self.postHogProjectToken(
+            infoDictionary: Bundle.main.infoDictionary ?? [:],
+            environment: ProcessInfo.processInfo.environment,
+            allowEnvironmentOverride: false
+        )
+#endif
     }
 
     private var isEnabled: Bool {
         guard TelemetrySettings.enabledForCurrentLaunch else { return false }
 #if DEBUG
-        return ProcessInfo.processInfo.environment["ZEBRA_POSTHOG_ENABLE"] == "1"
+        return ProcessInfo.processInfo.environment["ZEBRA_POSTHOG_ENABLE"] == "1" && !apiKey.isEmpty
 #else
-        return !apiKey.isEmpty && apiKey != "REPLACE_WITH_ZEBRA_POSTHOG_PUBLIC_KEY"
+        return !apiKey.isEmpty
 #endif
     }
 
@@ -524,6 +540,27 @@ final class ZebraPostHogAnalytics {
         }
     }
 
+    nonisolated static func postHogProjectToken(
+        infoDictionary: [String: Any],
+        environment: [String: String] = [:],
+        allowEnvironmentOverride: Bool = false
+    ) -> String {
+        if allowEnvironmentOverride,
+           let envToken = normalizedPostHogProjectToken(environment["ZEBRA_POSTHOG_API_KEY"]) {
+            return envToken
+        }
+
+        return normalizedPostHogProjectToken(infoDictionary[projectTokenInfoDictionaryKey]) ?? ""
+    }
+
+    nonisolated private static func normalizedPostHogProjectToken(_ value: Any?) -> String? {
+        guard let value = value as? String else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed != projectTokenPlaceholder else { return nil }
+        return trimmed
+    }
+
     nonisolated static func promptLengthBucket(_ length: Int) -> String {
         switch max(0, length) {
         case 0:
@@ -540,9 +577,54 @@ final class ZebraPostHogAnalytics {
     }
 
     nonisolated static func stableHash(_ value: String) -> String {
-        let digest = SHA256.hash(data: Data(value.utf8))
+        stableHash(value, salt: telemetryHashSalt())
+    }
+
+    nonisolated static func stableHash(_ value: String, salt: Data) -> String {
+        var data = Data()
+        data.append(Data(hashDomainSeparator.utf8))
+        data.append(0 as UInt8)
+        data.append(salt)
+        data.append(0 as UInt8)
+        data.append(Data(value.utf8))
+        let digest = SHA256.hash(data: data)
         return digest.map { String(format: "%02x", $0) }.joined()
     }
+
+    nonisolated private static func telemetryHashSalt(defaults: UserDefaults = .standard) -> Data {
+        hashSaltLock.lock()
+        defer { hashSaltLock.unlock() }
+
+        if let encoded = defaults.string(forKey: hashSaltDefaultsKey),
+           let data = Data(base64Encoded: encoded),
+           data.count == 32 {
+            return data
+        }
+
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = bytes.withUnsafeMutableBytes { buffer in
+            SecRandomCopyBytes(kSecRandomDefault, buffer.count, buffer.baseAddress!)
+        }
+
+        let data: Data
+        if status == errSecSuccess {
+            data = Data(bytes)
+        } else {
+            let fallback = "\(UUID().uuidString):\(UUID().uuidString):\(Date().timeIntervalSince1970)"
+            data = Data(SHA256.hash(data: Data(fallback.utf8)))
+        }
+
+        defaults.set(data.base64EncodedString(), forKey: hashSaltDefaultsKey)
+        return data
+    }
+
+#if DEBUG
+    nonisolated static func clearTelemetryHashSaltForTesting(defaults: UserDefaults = .standard) {
+        hashSaltLock.lock()
+        defer { hashSaltLock.unlock() }
+        defaults.removeObject(forKey: hashSaltDefaultsKey)
+    }
+#endif
 
     nonisolated private static func baseEventProperties(infoDictionary: [String: Any]) -> [String: Any] {
         versionProperties(infoDictionary: infoDictionary)
