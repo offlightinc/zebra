@@ -636,7 +636,11 @@ public struct ZebraGBrainOnboardingStore {
         if clearStaleLegacyWaitingForUserIfNeeded(in: &state, receipt: receipt, selectedVaultPath: selectedVaultPath) {
             writeState(state)
         }
-        guard let resolved = resolveTarget(in: receipt, selectedVaultPath: selectedVaultPath) else {
+        guard let resolved = resolveCompletionTarget(
+            in: state,
+            receipt: receipt,
+            selectedVaultPath: selectedVaultPath
+        ) else {
             return CompletionResult(isComplete: false, reasons: ["receipt_target_missing"])
         }
 
@@ -645,7 +649,7 @@ public struct ZebraGBrainOnboardingStore {
             reasons.append("target_confirmation_missing")
         }
         if targetHasThinClientRemoteVerification(resolved.target),
-           receiptIsComplete(receipt, selectedVaultPath: selectedVaultPath),
+           receiptIsComplete(receipt, resolvedTarget: resolved),
            reasons.isEmpty {
             return CompletionResult(isComplete: true, reasons: [])
         }
@@ -661,7 +665,7 @@ public struct ZebraGBrainOnboardingStore {
             return CompletionResult(isComplete: false, reasons: reasons)
         }
         if targetHasThinClientReadVerification(resolved.target),
-           receiptIsComplete(receipt, selectedVaultPath: selectedVaultPath),
+           receiptIsComplete(receipt, resolvedTarget: resolved),
            reasons.isEmpty {
             return CompletionResult(isComplete: true, reasons: [])
         }
@@ -690,7 +694,11 @@ public struct ZebraGBrainOnboardingStore {
         if clearStaleLegacyWaitingForUserIfNeeded(in: &state, receipt: receipt, selectedVaultPath: selectedVaultPath) {
             writeState(state)
         }
-        guard let resolved = resolveTarget(in: receipt, selectedVaultPath: selectedVaultPath) else {
+        guard let resolved = resolveCompletionTarget(
+            in: state,
+            receipt: receipt,
+            selectedVaultPath: selectedVaultPath
+        ) else {
             return CompletionResult(isComplete: false, reasons: ["receipt_target_missing"])
         }
 
@@ -699,7 +707,7 @@ public struct ZebraGBrainOnboardingStore {
             reasons.append("target_confirmation_missing")
         }
         if targetHasThinClientRemoteVerification(resolved.target) {
-            guard receiptIsComplete(receipt, selectedVaultPath: selectedVaultPath) else {
+            guard receiptIsComplete(receipt, resolvedTarget: resolved) else {
                 reasons.append("receipt_incomplete")
                 return CompletionResult(isComplete: false, reasons: reasons)
             }
@@ -722,7 +730,7 @@ public struct ZebraGBrainOnboardingStore {
             reasons.append("source_not_registered")
             return CompletionResult(isComplete: false, reasons: reasons)
         }
-        guard receiptIsComplete(receipt, selectedVaultPath: selectedVaultPath) else {
+        guard receiptIsComplete(receipt, resolvedTarget: resolved) else {
             reasons.append("receipt_incomplete")
             return CompletionResult(isComplete: false, reasons: reasons)
         }
@@ -860,6 +868,17 @@ public struct ZebraGBrainOnboardingStore {
         guard receipt.globalReadiness?.complete == true else { return false }
         if let resolved = resolveTarget(in: receipt, selectedVaultPath: selectedVaultPath) {
             return resolved.target.complete == true
+        }
+        return receipt.targets?.values.contains { $0.complete == true } == true
+    }
+
+    private func receiptIsComplete(
+        _ receipt: Receipt,
+        resolvedTarget: (key: String, target: Target)?
+    ) -> Bool {
+        guard receipt.globalReadiness?.complete == true else { return false }
+        if let resolvedTarget {
+            return resolvedTarget.target.complete == true
         }
         return receipt.targets?.values.contains { $0.complete == true } == true
     }
@@ -1251,6 +1270,50 @@ public struct ZebraGBrainOnboardingStore {
             return nil
         }
         return (primaryTargetKey, target)
+    }
+
+    private func resolveCompletionTarget(
+        in state: State,
+        receipt: Receipt,
+        selectedVaultPath: String?
+    ) -> (key: String, target: Target)? {
+        let selected = resolveTarget(in: receipt, selectedVaultPath: selectedVaultPath)
+        guard let fallback = existingInstallVerifiedResolvedTarget(in: state, receipt: receipt) else {
+            return selected
+        }
+        guard let selected else {
+            return fallback
+        }
+        guard selected.target.complete != true,
+              selected.key != fallback.key,
+              selectedTargetIsImplicitHomeCandidate(selected.target) else {
+            return selected
+        }
+        return fallback
+    }
+
+    private func selectedTargetIsImplicitHomeCandidate(_ target: Target) -> Bool {
+        target.reasons?.contains("implicit_home_target") == true
+    }
+
+    private func existingInstallVerifiedResolvedTarget(
+        in state: State,
+        receipt: Receipt
+    ) -> (key: String, target: Target)? {
+        guard state.progress?.gbrainSetupMode == Self.existingInstallVerificationMode,
+              state.progress?.existingInstallVerification?.status == "verified",
+              let targets = receipt.targets,
+              receipt.globalReadiness?.complete == true else {
+            return nil
+        }
+        let key = nonEmpty(state.progress?.resolvedTargetKey) ?? nonEmpty(receipt.primaryTargetKey)
+        guard let key,
+              let target = targets[key],
+              target.complete == true,
+              target.status == "verified" || target.sourceVerification != nil else {
+            return nil
+        }
+        return (key, target)
     }
 
     private func targetResolutionVerifies(_ resolution: TargetResolution?) -> Bool {
