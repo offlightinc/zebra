@@ -29,10 +29,30 @@ struct GoalsListView: View {
             ),
             onSelectFile: onSelectFile,
             onPickerSelect: { [weak viewState] picker in
+                ZebraTelemetry.trackSidebarInteraction(
+                    area: .picker,
+                    surface: .goal,
+                    action: picker.telemetryAction,
+                    value: picker.rawValue
+                )
                 viewState?.picker = picker
             },
             onChangeStatus: { [weak store] entry, newStatus in
                 guard let store else { return }
+                ZebraTelemetry.trackSidebarInteraction(
+                    area: .statusButton,
+                    surface: .goal,
+                    action: .status,
+                    itemID: entry.absolutePath,
+                    value: newStatus.rawValue
+                )
+                ZebraTelemetry.trackVaultDocumentChanged(
+                    action: .update,
+                    objectType: .goal,
+                    changeOrigin: .interactive,
+                    changeSource: .sidebar,
+                    path: entry.absolutePath
+                )
                 // Optimistic: store 의 entry 를 즉시 갱신 → 사이드바 UI 가 watcher
                 // 재파싱 라운드트립 없이 반영됨. unrecognizedStatusRaw 도 같이
                 // 클리어 (picker 로 선택한 valid 값이라 이전 raw 무효).
@@ -291,6 +311,17 @@ private struct GoalsPicker: View {
 }
 
 private extension GoalsViewState.Picker {
+    var telemetryAction: ZebraTelemetrySidebarAction {
+        switch self {
+        case .outline:
+            return .structure
+        case .cadence:
+            return .cadence
+        case .status:
+            return .status
+        }
+    }
+
     var title: String {
         switch self {
         case .outline:
@@ -345,6 +376,12 @@ private struct OutlineLayout: View {
                     toggle(id: item.entry.goalId)
                 },
                 onRowTap: { [path = item.entry.absolutePath] in
+                    ZebraTelemetry.trackSidebarInteraction(
+                        area: .row,
+                        surface: .goal,
+                        action: .select,
+                        itemID: path
+                    )
                     onSelectFile(path)
                 }
             )
@@ -447,6 +484,12 @@ private struct CadenceLayout: View {
                         isCompleted: entry.status == .completed,
                         isSelected: activePaths.contains(entry.absolutePath),
                         onTap: { [path = entry.absolutePath] in
+                            ZebraTelemetry.trackSidebarInteraction(
+                                area: .row,
+                                surface: .goal,
+                                action: .select,
+                                itemID: path
+                            )
                             onSelectFile(path)
                         }
                     )
@@ -545,6 +588,12 @@ private struct StatusLayout: View {
             isCompleted: entry.status == .completed,
             isSelected: activePaths.contains(entry.absolutePath),
             onTap: { [path = entry.absolutePath] in
+                ZebraTelemetry.trackSidebarInteraction(
+                    area: .row,
+                    surface: .goal,
+                    action: .select,
+                    itemID: path
+                )
                 onSelectFile(path)
             },
             onChangeStatus: { newStatus in

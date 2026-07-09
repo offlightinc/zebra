@@ -57,7 +57,9 @@ final class MarkdownPanelController: ObservableObject {
 
     /// Toggle only this markdown panel's user intent.
     func toggleInspector() {
-        setInspectorVisibility(!wantsInspectorVisible)
+        let newVisible = !wantsInspectorVisible
+        setInspectorVisibility(newVisible)
+        ZebraTelemetry.trackInspectorToggled(visible: newVisible)
     }
 
     /// Set this panel's inspector visibility intent. Auto-collapse in the view

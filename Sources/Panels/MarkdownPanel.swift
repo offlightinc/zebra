@@ -126,6 +126,13 @@ final class MarkdownPanel: Panel, ObservableObject, FilePreviewTextEditingPanel 
         do {
             try outcome.newSource.write(toFile: filePath, atomically: true, encoding: .utf8)
             content = outcome.newSource
+            ZebraTelemetry.trackVaultDocumentChanged(
+                action: .update,
+                objectType: kind.zebraTelemetryObjectType,
+                changeOrigin: .interactive,
+                changeSource: .markdownPanel,
+                path: filePath
+            )
         } catch {
             NSLog("MarkdownPanel.applyStatusChange failed: \(error)")
         }
@@ -150,6 +157,13 @@ final class MarkdownPanel: Panel, ObservableObject, FilePreviewTextEditingPanel 
         do {
             try outcome.newSource.write(toFile: filePath, atomically: true, encoding: .utf8)
             content = outcome.newSource
+            ZebraTelemetry.trackVaultDocumentChanged(
+                action: .update,
+                objectType: zebraTelemetryObjectType(for: outcome.newSource),
+                changeOrigin: .interactive,
+                changeSource: .markdownPanel,
+                path: filePath
+            )
         } catch {
             NSLog("MarkdownPanel.applyPropertyChange failed: \(error)")
         }
@@ -232,6 +246,13 @@ final class MarkdownPanel: Panel, ObservableObject, FilePreviewTextEditingPanel 
                 self.originalTextContent = currentContent
                 self.isDirty = self.textContent != currentContent
                 self.isFileUnavailable = false
+                ZebraTelemetry.trackVaultDocumentChanged(
+                    action: .update,
+                    objectType: self.zebraTelemetryObjectType(for: currentContent),
+                    changeOrigin: .interactive,
+                    changeSource: .markdownPanel,
+                    path: self.filePath
+                )
                 GlobalSearchCoordinator.shared.captureMarkdownPanel(self)
             case .failed(let fileExists):
                 self.isFileUnavailable = !fileExists
@@ -310,6 +331,28 @@ final class MarkdownPanel: Panel, ObservableObject, FilePreviewTextEditingPanel 
             return .loaded(content: decoded, encoding: .isoLatin1)
         }
         return .unavailable
+    }
+
+    private func zebraTelemetryObjectType(for source: String) -> ZebraTelemetryObjectType {
+        let parse = BrainObjectParser.parse(source, filename: (filePath as NSString).lastPathComponent)
+        if case .success(let object) = parse.result {
+            switch object {
+            case .task(_):
+                return .task
+            case .goal(_):
+                return .goal
+            case .note(_), .unknown(_):
+                break
+            }
+        }
+        return Self.zebraTelemetryObjectTypeForPath(filePath)
+    }
+
+    private static func zebraTelemetryObjectTypeForPath(_ path: String) -> ZebraTelemetryObjectType {
+        let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        if components.contains("tasks") { return .task }
+        if components.contains("goals") { return .goal }
+        return .document
     }
 
     private func applyPendingSearchNeedleIfPossible() {
@@ -492,5 +535,16 @@ final class MarkdownPanel: Panel, ObservableObject, FilePreviewTextEditingPanel 
         // DispatchSource cancel is safe from any thread.
         fileWatchSource?.cancel()
         directoryWatchSource?.cancel()
+    }
+}
+
+private extension BrainStatusMutator.Kind {
+    var zebraTelemetryObjectType: ZebraTelemetryObjectType {
+        switch self {
+        case .task:
+            return .task
+        case .goal:
+            return .goal
+        }
     }
 }

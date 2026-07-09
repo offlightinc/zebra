@@ -88,7 +88,16 @@ struct TaskListRow: View, Equatable {
         // Without contentShape, Button's plain hit region is the glyph's
         // visible shape — stroked-outline statuses (todo) and the thin
         // PriorityBars expose only a few points of tappable area.
-        Button(action: { showStatusPicker = true }) {
+        Button(action: {
+            ZebraTelemetry.trackSidebarInteraction(
+                area: .statusButton,
+                surface: .task,
+                action: .click,
+                itemID: task.absolutePath,
+                value: task.status?.rawValue ?? "none"
+            )
+            showStatusPicker = true
+        }) {
             Group {
                 if let status = task.status {
                     StatusGlyph(status: status)

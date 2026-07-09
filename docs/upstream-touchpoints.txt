@@ -4,7 +4,7 @@
 
 # Adapter / DI seams
 Sources/cmuxApp.swift                     # ZebraAppearanceDefaults first-launch default registration around settings bootstrap
-Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment + tabManager-scoped Zebra socket bridge registration + ZebraSidebarDefaults.defaultWidth fallback + first automatic welcome command seam
+Sources/AppDelegate.swift                  # ZebraServices.injectIntoEnvironment + tabManager-scoped Zebra socket bridge registration + ZebraSidebarDefaults.defaultWidth fallback + first automatic welcome command seam + ZebraPostHogAnalytics lifecycle callsites
 Sources/ContentView.swift                  # SidebarSlots composer + \.sidebarExtraLeadingInset + commandPalette PanelType.email branches
 Sources/Panels/PanelContentView.swift      # \.markdownPanelViewFactory + \.customPanelViewFactory + PanelType.email render branch
 Sources/Panels/MarkdownPanel.swift         # didCloseNotification + applyStatusChange + applyPropertyChange
@@ -41,6 +41,7 @@ Sources/Auth/AuthEnvironment.swift
 cmuxTests/FileDropOverlayViewTests.swift
 cmuxTests/MarkdownPanelTests.swift
 cmuxTests/SessionPersistenceTests.swift
+cmuxTests/GhosttyConfigTests.swift
 cmux.xcodeproj/project.pbxproj
 
 # Docs

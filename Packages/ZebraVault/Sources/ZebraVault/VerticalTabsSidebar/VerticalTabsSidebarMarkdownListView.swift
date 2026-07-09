@@ -46,6 +46,12 @@ struct VerticalTabsSidebarMarkdownListView: View {
                                     depth: 0,
                                     isSelected: activePaths.contains(entry.absolutePath),
                                     onTap: { [path = entry.absolutePath] in
+                                        ZebraTelemetry.trackSidebarInteraction(
+                                            area: .row,
+                                            surface: .document,
+                                            action: .select,
+                                            itemID: path
+                                        )
                                         onSelectFile(path)
                                     }
                                 )
@@ -165,7 +171,16 @@ private struct MarkdownFolderSubtreeView: View {
             displayName: folder.displayName,
             depth: depth,
             expanded: expanded,
-            onTap: { toggleCollapse(folderPath: folder.folderPath) }
+            onTap: {
+                ZebraTelemetry.trackSidebarInteraction(
+                    area: .row,
+                    surface: .document,
+                    action: .toggle,
+                    itemID: folder.folderPath,
+                    value: expanded ? "collapse" : "expand"
+                )
+                toggleCollapse(folderPath: folder.folderPath)
+            }
         )
         if expanded {
             ForEach(folder.subfolders) { sub in
@@ -183,6 +198,12 @@ private struct MarkdownFolderSubtreeView: View {
                     depth: depth + 1,
                     isSelected: activePaths.contains(entry.absolutePath),
                     onTap: { [path = entry.absolutePath] in
+                        ZebraTelemetry.trackSidebarInteraction(
+                            area: .row,
+                            surface: .document,
+                            action: .select,
+                            itemID: path
+                        )
                         onSelectFile(path)
                     }
                 )

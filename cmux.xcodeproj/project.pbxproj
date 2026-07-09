@@ -200,6 +200,7 @@
 		C7A50A000000000000000002 /* TerminalControllerPaneResizeSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A50A000000000000000001 /* TerminalControllerPaneResizeSupport.swift */; };
 		C7A50B000000000000000002 /* TerminalControllerV2ParamParsingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A50B000000000000000001 /* TerminalControllerV2ParamParsingSupport.swift */; };
 		8A29A4F24C4743E39B0D8E11 /* Zebra/Environment/ZebraAppearanceDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A29A4F14C4743E39B0D8E11 /* Zebra/Environment/ZebraAppearanceDefaults.swift */; };
+		A5F00A000000000000000002 /* Zebra/Environment/ZebraPostHogAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5F00A000000000000000001 /* Zebra/Environment/ZebraPostHogAnalytics.swift */; };
 		46E0CCF933273FBF602555A3 /* Zebra/Environment/ZebraServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AD520CC2C6DD547257B9CAC /* Zebra/Environment/ZebraServices.swift */; };
 		3953C2B7E5A8E8CC9A1357FD /* Zebra/Panels/MarkdownPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 258A948FC450218CA8C4D2EA /* Zebra/Panels/MarkdownPanelController.swift */; };
 		EDCD9F45C2F5408F731B4991 /* Zebra/Panels/ZebraMarkdownPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C75F6DB4882044231FD3D7C5 /* Zebra/Panels/ZebraMarkdownPanelView.swift */; };
@@ -752,6 +753,7 @@
 		C7A504000000000000000001 /* TaskManagerTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskManagerTypes.swift; sourceTree = "<group>"; };
 		C7A505000000000000000001 /* TerminalControllerTopSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalControllerTopSupport.swift; sourceTree = "<group>"; };
 		8A29A4F14C4743E39B0D8E11 /* Zebra/Environment/ZebraAppearanceDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Environment/ZebraAppearanceDefaults.swift"; sourceTree = "<group>"; };
+		A5F00A000000000000000001 /* Zebra/Environment/ZebraPostHogAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Environment/ZebraPostHogAnalytics.swift"; sourceTree = "<group>"; };
 		1AD520CC2C6DD547257B9CAC /* Zebra/Environment/ZebraServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Environment/ZebraServices.swift"; sourceTree = "<group>"; };
 		A5C00100A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Adapters/MarkdownPanel+ZebraVault.swift"; sourceTree = "<group>"; };
 		258A948FC450218CA8C4D2EA /* Zebra/Panels/MarkdownPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Zebra/Panels/MarkdownPanelController.swift"; sourceTree = "<group>"; };
@@ -1339,6 +1341,7 @@
 				D1320AA0D1320AA0D1320AA4 /* AppIconDockTilePlugin.swift */,
 				A5C00100A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift */,
 				8A29A4F14C4743E39B0D8E11 /* Zebra/Environment/ZebraAppearanceDefaults.swift */,
+				A5F00A000000000000000001 /* Zebra/Environment/ZebraPostHogAnalytics.swift */,
 				1AD520CC2C6DD547257B9CAC /* Zebra/Environment/ZebraServices.swift */,
 				258A948FC450218CA8C4D2EA /* Zebra/Panels/MarkdownPanelController.swift */,
 				C75F6DB4882044231FD3D7C5 /* Zebra/Panels/ZebraMarkdownPanelView.swift */,
@@ -2071,6 +2074,7 @@
 				C3873001C3873001C3873001 /* GhosttyCrashBreadcrumb.swift in Sources */,
 				A5C00101A1B2C3D4E5F60718 /* Zebra/Adapters/MarkdownPanel+ZebraVault.swift in Sources */,
 				8A29A4F24C4743E39B0D8E11 /* Zebra/Environment/ZebraAppearanceDefaults.swift in Sources */,
+				A5F00A000000000000000002 /* Zebra/Environment/ZebraPostHogAnalytics.swift in Sources */,
 				46E0CCF933273FBF602555A3 /* Zebra/Environment/ZebraServices.swift in Sources */,
 				3953C2B7E5A8E8CC9A1357FD /* Zebra/Panels/MarkdownPanelController.swift in Sources */,
 				EDCD9F45C2F5408F731B4991 /* Zebra/Panels/ZebraMarkdownPanelView.swift in Sources */,

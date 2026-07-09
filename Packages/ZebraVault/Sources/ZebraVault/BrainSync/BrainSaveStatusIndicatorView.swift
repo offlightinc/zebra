@@ -20,7 +20,15 @@ public struct BrainSaveStatusIndicatorView: View {
             labelColor: labelColor,
             isDisabled: isSaving || service.isRefreshing,
             accessibilityIdentifier: "BrainSaveStatusIndicator",
-            action: { service.refresh() }
+            action: {
+                ZebraTelemetry.trackSidebarInteraction(
+                    area: .statusButton,
+                    surface: .sync,
+                    action: .click,
+                    value: telemetryStatus
+                )
+                service.refresh()
+            }
         ) {
             BrainSaveStatusTooltipView(
                 snapshot: service.snapshot,
@@ -69,6 +77,20 @@ public struct BrainSaveStatusIndicatorView: View {
             return BVColor.syncRedLabel
         default:
             return BVColor.fg
+        }
+    }
+
+    private var telemetryStatus: String {
+        if service.isRefreshing { return "syncing" }
+        switch service.snapshot.status {
+        case .saved:
+            return "saved"
+        case .saving:
+            return "syncing"
+        case .failed:
+            return "error"
+        case .unknown:
+            return "unknown"
         }
     }
 

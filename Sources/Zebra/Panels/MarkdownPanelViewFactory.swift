@@ -265,6 +265,12 @@ private struct ZebraEmailPanelHost: View {
             userPrompt: text
         )
         guard let startupLine = launchPlan.startupLine else { return }
+        ZebraTelemetry.trackChatPillPromptSubmitted(
+            surface: "email",
+            submitMethod: "enter",
+            agent: agent.rawValue,
+            promptLength: text.count
+        )
 
         #if DEBUG
         if !launchPlan.launchEnvironmentReady {

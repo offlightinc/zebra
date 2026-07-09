@@ -10966,6 +10966,12 @@ private struct VerticalTabsSidebarVaultMenu: View {
             } else {
                 ForEach(vaultState.vaults) { vault in
                     Button {
+                        ZebraTelemetry.trackSidebarInteraction(
+                            area: .vaultButton,
+                            surface: .vault,
+                            action: .select,
+                            itemID: vault.path
+                        )
                         vaultState.selectVault(vault)
                     } label: {
                         Label(
@@ -10979,6 +10985,12 @@ private struct VerticalTabsSidebarVaultMenu: View {
             }
 
             Button {
+                ZebraTelemetry.trackSidebarInteraction(
+                    area: .vaultButton,
+                    surface: .vault,
+                    action: .click,
+                    value: "choose_folder"
+                )
                 chooseVaultFolder()
             } label: {
                 Label(

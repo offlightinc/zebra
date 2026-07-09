@@ -28,11 +28,20 @@ public final class VaultIndexStore: ObservableObject {
     private struct ScanResult: Sendable {
         let markdownFiles: [MarkdownFileEntry]
         let goals: [GoalEntry]
+        let telemetrySnapshot: [String: DocumentTelemetrySnapshotEntry]
+    }
+
+    private struct DocumentTelemetrySnapshotEntry: Sendable {
+        let absolutePath: String
+        let objectType: ZebraTelemetryObjectType
+        let fileSize: Int64
+        let contentModificationDate: Date?
     }
 
     private var watcher: VaultRecursiveFileWatcher?
     private var scanTask: Task<Void, Never>?
     private var rescanWorkItem: DispatchWorkItem?
+    private var telemetrySnapshot: [String: DocumentTelemetrySnapshotEntry]?
 
     deinit {
         scanTask?.cancel()
@@ -45,6 +54,7 @@ public final class VaultIndexStore: ObservableObject {
         let resolved = (trimmed?.isEmpty == false) ? trimmed : nil
         guard resolved != rootPath else { return }
 
+        telemetrySnapshot = nil
         rootPath = resolved
         goalsRootPath = resolved.map { vault in
             vault.hasSuffix("/") ? vault + "goals" : vault + "/goals"
@@ -59,6 +69,7 @@ public final class VaultIndexStore: ObservableObject {
             rescanWorkItem = nil
             markdownFiles = []
             goals = []
+            telemetrySnapshot = nil
             isScanning = false
             lastError = nil
             return
@@ -111,12 +122,15 @@ public final class VaultIndexStore: ObservableObject {
                 guard self.rootPath == snapshotRoot else { return }
                 switch result {
                 case .success(let scanResult):
+                    self.emitVaultDocumentTelemetryDiff(newSnapshot: scanResult.telemetrySnapshot)
+                    self.telemetrySnapshot = scanResult.telemetrySnapshot
                     self.markdownFiles = scanResult.markdownFiles
                     self.goals = scanResult.goals
                     self.lastError = nil
                 case .failure(let error):
                     self.markdownFiles = []
                     self.goals = []
+                    self.telemetrySnapshot = nil
                     self.lastError = error.localizedDescription
                 }
                 self.isScanning = false
@@ -128,7 +142,12 @@ public final class VaultIndexStore: ObservableObject {
         let markdownFiles = scanMarkdown(root: root)
         let goalsRoot = root.hasSuffix("/") ? root + "goals" : root + "/goals"
         let goals = scanGoals(root: goalsRoot)
-        return .success(ScanResult(markdownFiles: markdownFiles, goals: goals))
+        let telemetrySnapshot = documentTelemetrySnapshot(root: root, markdownFiles: markdownFiles)
+        return .success(ScanResult(
+            markdownFiles: markdownFiles,
+            goals: goals,
+            telemetrySnapshot: telemetrySnapshot
+        ))
     }
 
     nonisolated private static func scanMarkdown(root: String) -> [MarkdownFileEntry] {
@@ -235,6 +254,80 @@ public final class VaultIndexStore: ObservableObject {
             lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
         }
         return entries
+    }
+
+    private func emitVaultDocumentTelemetryDiff(
+        newSnapshot: [String: DocumentTelemetrySnapshotEntry]
+    ) {
+        guard let oldSnapshot = telemetrySnapshot else { return }
+
+        for (path, newEntry) in newSnapshot where oldSnapshot[path] == nil {
+            ZebraTelemetry.trackVaultDocumentChanged(
+                action: .create,
+                objectType: newEntry.objectType,
+                changeOrigin: .unknown,
+                changeSource: .vaultIndexDiff,
+                path: newEntry.absolutePath
+            )
+        }
+
+        for (path, oldEntry) in oldSnapshot where newSnapshot[path] == nil {
+            ZebraTelemetry.trackVaultDocumentChanged(
+                action: .delete,
+                objectType: oldEntry.objectType,
+                changeOrigin: .unknown,
+                changeSource: .vaultIndexDiff,
+                path: oldEntry.absolutePath
+            )
+        }
+
+        for (path, newEntry) in newSnapshot {
+            guard let oldEntry = oldSnapshot[path] else { continue }
+            guard oldEntry.fileSize != newEntry.fileSize ||
+                oldEntry.contentModificationDate != newEntry.contentModificationDate else {
+                continue
+            }
+            ZebraTelemetry.trackVaultDocumentChanged(
+                action: .update,
+                objectType: newEntry.objectType,
+                changeOrigin: .unknown,
+                changeSource: .vaultIndexDiff,
+                path: newEntry.absolutePath
+            )
+        }
+    }
+
+    nonisolated private static func documentTelemetrySnapshot(
+        root: String,
+        markdownFiles: [MarkdownFileEntry]
+    ) -> [String: DocumentTelemetrySnapshotEntry] {
+        var snapshot: [String: DocumentTelemetrySnapshotEntry] = [:]
+        for entry in markdownFiles {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: entry.absolutePath)
+            let fileSize = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+            let mtime = attrs?[.modificationDate] as? Date
+            snapshot[entry.absolutePath] = DocumentTelemetrySnapshotEntry(
+                absolutePath: entry.absolutePath,
+                objectType: documentTelemetryObjectType(root: root, path: entry.absolutePath),
+                fileSize: fileSize,
+                contentModificationDate: mtime
+            )
+        }
+        return snapshot
+    }
+
+    nonisolated private static func documentTelemetryObjectType(
+        root: String,
+        path: String
+    ) -> ZebraTelemetryObjectType {
+        let rootURL = URL(fileURLWithPath: root, isDirectory: true).standardizedFileURL
+        let pathURL = URL(fileURLWithPath: path, isDirectory: false).standardizedFileURL
+        let rootPath = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
+        guard pathURL.path.hasPrefix(rootPath) else { return .unknown }
+        let relative = String(pathURL.path.dropFirst(rootPath.count))
+        if relative.hasPrefix("tasks/") { return .task }
+        if relative.hasPrefix("goals/") { return .goal }
+        return .document
     }
 
     nonisolated private static func relativeParent(of absolutePath: String, root: String) -> String {

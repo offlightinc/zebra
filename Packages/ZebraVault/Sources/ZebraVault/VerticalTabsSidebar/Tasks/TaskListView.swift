@@ -30,17 +30,51 @@ struct TaskListView: View {
                     viewModel.filters.first(where: { $0.field == field })
                         ?? TaskFilter(field: field, op: .is, values: [])
                 },
-                onPickGroupBy: { viewModel.groupBy = $0 },
-                onPickSort: { viewModel.pickSort($0) },
+                onPickGroupBy: {
+                    ZebraTelemetry.trackSidebarInteraction(
+                        area: .toolbar,
+                        surface: .task,
+                        action: .group,
+                        value: $0.rawValue
+                    )
+                    viewModel.groupBy = $0
+                },
+                onPickSort: {
+                    ZebraTelemetry.trackSidebarInteraction(
+                        area: .toolbar,
+                        surface: .task,
+                        action: .sort,
+                        value: $0.rawValue
+                    )
+                    viewModel.pickSort($0)
+                },
                 onPickField: { field in
+                    ZebraTelemetry.trackSidebarInteraction(
+                        area: .toolbar,
+                        surface: .task,
+                        action: .filter,
+                        value: field.rawValue
+                    )
                     if !viewModel.filters.contains(where: { $0.field == field }) {
                         viewModel.filters.append(TaskFilter(field: field, op: .is, values: []))
                     }
                 },
                 onChangeFilterValues: { updated in
+                    ZebraTelemetry.trackSidebarInteraction(
+                        area: .toolbar,
+                        surface: .task,
+                        action: .filter,
+                        value: updated.field.rawValue
+                    )
                     viewModel.setFilter(updated)
                 },
                 onChangeMyOwnerFilter: { updated in
+                    ZebraTelemetry.trackSidebarInteraction(
+                        area: .toolbar,
+                        surface: .task,
+                        action: .filter,
+                        value: updated == nil ? "owner_all" : "owner_selected"
+                    )
                     viewModel.myOwnerFilter = updated
                 },
                 onCloseFilter: {
@@ -192,7 +226,15 @@ struct TaskListView: View {
                             TaskListRow(
                                 task: task,
                                 isSelected: activePaths.contains(task.absolutePath),
-                                onOpen: { onSelectFile($0.absolutePath) },
+                                onOpen: {
+                                    ZebraTelemetry.trackSidebarInteraction(
+                                        area: .row,
+                                        surface: .task,
+                                        action: .select,
+                                        itemID: $0.absolutePath
+                                    )
+                                    onSelectFile($0.absolutePath)
+                                },
                                 onChangeStatus: { task, newStatus in
                                     writeStatus(task: task, newStatus: newStatus)
                                 },
@@ -214,6 +256,20 @@ struct TaskListView: View {
     // MARK: - Frontmatter writeback (Phase 7)
 
     private func writeStatus(task: TaskItem, newStatus: BrainTaskStatus) {
+        ZebraTelemetry.trackSidebarInteraction(
+            area: .statusButton,
+            surface: .task,
+            action: .status,
+            itemID: task.absolutePath,
+            value: newStatus.rawValue
+        )
+        ZebraTelemetry.trackVaultDocumentChanged(
+            action: .update,
+            objectType: .task,
+            changeOrigin: .interactive,
+            changeSource: .sidebar,
+            path: task.absolutePath
+        )
         // Optimistic: snap the in-memory model immediately so the row icon
         // updates without waiting for the file-system round-trip. Watcher
         // reparse later reconciles (same value → no visible jump).
@@ -234,6 +290,13 @@ struct TaskListView: View {
     }
 
     private func writePriority(task: TaskItem, newPriority: BrainPriority?) {
+        ZebraTelemetry.trackVaultDocumentChanged(
+            action: .update,
+            objectType: .task,
+            changeOrigin: .interactive,
+            changeSource: .sidebar,
+            path: task.absolutePath
+        )
         store.replace(task.with(priority: .some(newPriority)))
         BrainStatusMutator.applyPropertyChange(
             at: task.absolutePath,
@@ -244,6 +307,13 @@ struct TaskListView: View {
     }
 
     private func writeDue(task: TaskItem, newDate: Date?) {
+        ZebraTelemetry.trackVaultDocumentChanged(
+            action: .update,
+            objectType: .task,
+            changeOrigin: .interactive,
+            changeSource: .sidebar,
+            path: task.absolutePath
+        )
         store.replace(task.with(dueDate: .some(newDate)))
         let oldSerialized = task.dueDate.map { BrainDateOnlyCodec.storageString(fromPickerDate: $0) }
         let newSerialized = newDate.map { BrainDateOnlyCodec.storageString(fromPickerDate: $0) }

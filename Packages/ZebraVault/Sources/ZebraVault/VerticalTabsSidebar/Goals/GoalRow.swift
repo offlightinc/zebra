@@ -107,7 +107,15 @@ struct GoalStatusRow: View {
     @ViewBuilder
     private var statusButton: some View {
         // Task 와 동일 3분기 패턴 (status / unrecognized / nil).
-        Button(action: { showStatusPicker = true }) {
+        Button(action: {
+            ZebraTelemetry.trackSidebarInteraction(
+                area: .statusButton,
+                surface: .goal,
+                action: .click,
+                value: status?.rawValue ?? "none"
+            )
+            showStatusPicker = true
+        }) {
             Group {
                 if let status {
                     StatusGlyph(shape: status.glyphShape)
@@ -159,4 +167,3 @@ private func goalRowTitle(_ displayName: String, isCompleted: Bool) -> some View
         .lineLimit(1)
         .truncationMode(.tail)
 }
-

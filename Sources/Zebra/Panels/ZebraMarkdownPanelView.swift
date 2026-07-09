@@ -82,6 +82,9 @@ struct ZebraMarkdownPanelView<
         .onChange(of: panel.focusFlashToken) { _ in
             triggerFocusFlashAnimation()
         }
+        .onChange(of: chatPillExpanded) { newValue in
+            ZebraTelemetry.trackChatPillToggled(expanded: newValue)
+        }
         .onAppear {
             inspectorWidth = clampedInspectorWidth(storedInspectorWidth, containerWidth: .infinity)
         }
@@ -564,6 +567,12 @@ struct ZebraMarkdownPanelView<
             }
         )
         guard let startupLine = launchPlan.startupLine else { return }
+        ZebraTelemetry.trackChatPillPromptSubmitted(
+            surface: surface.telemetrySurface,
+            submitMethod: "enter",
+            agent: agent.rawValue,
+            promptLength: text.count
+        )
 
         #if DEBUG
         if !launchPlan.launchEnvironmentReady {
@@ -646,6 +655,21 @@ struct ZebraMarkdownPanelView<
             return rootPath
         }
         return (panel.filePath as NSString).deletingLastPathComponent
+    }
+}
+
+private extension MarkdownChatPillContextSurface {
+    var telemetrySurface: String {
+        switch self {
+        case .task:
+            return "task"
+        case .goal:
+            return "goal"
+        case .email:
+            return "email"
+        case .fallback:
+            return "markdown"
+        }
     }
 }
 

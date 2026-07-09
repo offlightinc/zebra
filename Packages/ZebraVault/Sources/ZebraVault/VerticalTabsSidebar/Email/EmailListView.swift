@@ -314,7 +314,15 @@ struct EmailListView: View {
                             EmailThreadRow(
                                 thread: thread,
                                 isSelected: selectedThreadId == thread.id,
-                                onSelect: { onSelectThread(thread) }
+                                onSelect: {
+                                    ZebraTelemetry.trackSidebarInteraction(
+                                        area: .row,
+                                        surface: .email,
+                                        action: .select,
+                                        itemID: thread.id
+                                    )
+                                    onSelectThread(thread)
+                                }
                             )
                         }
                     }
@@ -377,7 +385,15 @@ private struct EmailListToolbar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(action: toggleFilterPopover) {
+            Button(action: {
+                ZebraTelemetry.trackSidebarInteraction(
+                    area: .toolbar,
+                    surface: .email,
+                    action: .filter,
+                    value: filterStep == nil ? "open" : "close"
+                )
+                toggleFilterPopover()
+            }) {
                 HStack(spacing: 5) {
                     FilterFunnelIcon().frame(width: 12, height: 12)
                     Text(String(localized: "email.toolbar.filter", defaultValue: "필터"))
@@ -399,7 +415,15 @@ private struct EmailListToolbar: View {
             }
             Spacer()
             if let onRefresh {
-                Button(action: onRefresh) {
+                Button(action: {
+                    ZebraTelemetry.trackSidebarInteraction(
+                        area: .statusButton,
+                        surface: .sync,
+                        action: .click,
+                        value: isSyncing ? "syncing" : "unknown"
+                    )
+                    onRefresh()
+                }) {
                     Group {
                         if isSyncing {
                             ProgressView()

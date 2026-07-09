@@ -1105,7 +1105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         if telemetryEnabled && !isRunningUnderXCTest {
-            PostHogAnalytics.shared.startIfNeeded()
+            ZebraPostHogAnalytics.shared.startIfNeeded()
         }
 
         let forceDuplicateLaunchObserver = env["CMUX_UI_TEST_ENABLE_DUPLICATE_LAUNCH_OBSERVER"] == "1"
@@ -1479,7 +1479,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             "tabCount": tabManager?.tabs.count ?? 0
         ])
         if TelemetrySettings.enabledForCurrentLaunch && !isRunningUnderXCTestCached {
-            PostHogAnalytics.shared.trackActive(reason: "didBecomeActive")
+            ZebraPostHogAnalytics.shared.trackAppActive(reason: "didBecomeActive")
         }
 
         guard let notificationStore else { return }
@@ -1568,7 +1568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         VSCodeServeWebController.shared.stop()
         BrowserProfileStore.shared.flushPendingSaves()
         if TelemetrySettings.enabledForCurrentLaunch {
-            PostHogAnalytics.shared.flush()
+            ZebraPostHogAnalytics.shared.flush()
         }
         ghosttyCrashBreadcrumbTask?.cancel()
         ghosttyCrashBreadcrumbTask = nil

@@ -52,6 +52,12 @@ struct ZebraSidebarBody: View {
                             store: onboardingChecklistStore,
                             isCardCollapsed: isOnboardingChecklistCollapsed,
                             action: {
+                                ZebraTelemetry.trackSidebarInteraction(
+                                    area: .gettingStarted,
+                                    surface: .onboarding,
+                                    action: .toggle,
+                                    value: isOnboardingChecklistCollapsed ? "show" : "hide"
+                                )
                                 withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
                                     isOnboardingChecklistCollapsed.toggle()
                                 }
@@ -149,12 +155,19 @@ struct ZebraSidebarBody: View {
         ZebraOnboardingChecklistCard(
             store: onboardingChecklistStore,
             onStartStep: { stepID in
+                ZebraTelemetry.trackOnboardingStartClicked(source: stepID.rawValue)
                 startOnboardingChecklistStep(stepID)
             },
             onStopStep: { stepID in
                 stopOnboardingChecklistStep(stepID)
             },
             onCollapse: {
+                ZebraTelemetry.trackSidebarInteraction(
+                    area: .gettingStarted,
+                    surface: .onboarding,
+                    action: .toggle,
+                    value: "hide"
+                )
                 withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
                     isOnboardingChecklistCollapsed = true
                 }

@@ -52,6 +52,7 @@ struct ZebraServices {
         // every call so racing main-window creation is harmless.
         MinimalModeSidebarTitlebarControlsMetrics.extraLeadingInset =
             VerticalTabsSidebarModeRail.fixedWidth
+        ZebraTelemetry.sink = ZebraTelemetryPostHogBridge.shared
         let vault = VerticalTabsSidebarVaultState()
         let brainSync = BrainSyncSelectionService()
         brainSync.attachVaultSource(vault)

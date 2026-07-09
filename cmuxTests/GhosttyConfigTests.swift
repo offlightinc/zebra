@@ -2184,6 +2184,151 @@ final class PostHogAnalyticsPropertiesTests: XCTestCase {
     }
 }
 
+final class ZebraPostHogAnalyticsPropertiesTests: XCTestCase {
+    func testZebraSuperPropertiesIdentifyProductAndPlatform() {
+        let properties = ZebraPostHogAnalytics.superProperties(
+            infoDictionary: [
+                "CFBundleShortVersionString": "0.31.0",
+                "CFBundleVersion": "230",
+            ]
+        )
+
+        XCTAssertEqual(properties["product"] as? String, "zebra")
+        XCTAssertEqual(properties["platform"] as? String, "zebra_desktop")
+        XCTAssertEqual(properties["app_version"] as? String, "0.31.0")
+        XCTAssertEqual(properties["app_build"] as? String, "230")
+    }
+
+    func testZebraActivePropertiesUseZebraEventFlushPolicy() {
+        XCTAssertTrue(ZebraPostHogAnalytics.shouldFlushAfterCapture(event: "zebra_app_active_daily"))
+        XCTAssertTrue(ZebraPostHogAnalytics.shouldFlushAfterCapture(event: "zebra_app_active_hourly"))
+        XCTAssertFalse(ZebraPostHogAnalytics.shouldFlushAfterCapture(event: "cmux_daily_active"))
+    }
+
+    func testSidebarInteractionHashesItemIDAndDoesNotEmitRawID() {
+        let properties = ZebraPostHogAnalytics.sidebarInteractionProperties(
+            area: "row",
+            surface: "task",
+            action: "select",
+            itemID: "/Users/example/brain/tasks/private-task.md",
+            value: nil,
+            infoDictionary: [:]
+        )
+
+        XCTAssertEqual(properties["sidebar_area"] as? String, "row")
+        XCTAssertEqual(properties["sidebar_mode"] as? String, "task")
+        XCTAssertEqual(properties["interaction_type"] as? String, "select")
+        XCTAssertNil(properties["area"])
+        XCTAssertNil(properties["surface"])
+        XCTAssertNil(properties["action"])
+        XCTAssertNil(properties["item_id"])
+        XCTAssertNil(properties["path"])
+        XCTAssertNotEqual(properties["item_id_hash"] as? String, "/Users/example/brain/tasks/private-task.md")
+        XCTAssertEqual((properties["item_id_hash"] as? String)?.count, 64)
+    }
+
+    func testSidebarInteractionEventNamesSplitBroadSidebarTaxonomy() {
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.sidebarInteractionEventName(area: "mode_rail", surface: "task"),
+            "zebra_sidebar_mode_interacted"
+        )
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.sidebarInteractionEventName(area: "row", surface: "task"),
+            "zebra_sidebar_row_selected"
+        )
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.sidebarInteractionEventName(area: "picker", surface: "goal"),
+            "zebra_sidebar_picker_changed"
+        )
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.sidebarInteractionEventName(area: "toolbar", surface: "task"),
+            "zebra_sidebar_toolbar_changed"
+        )
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.sidebarInteractionEventName(area: "status_button", surface: "task"),
+            "zebra_sidebar_item_status_changed"
+        )
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.sidebarInteractionEventName(area: "status_button", surface: "sync"),
+            "zebra_sidebar_sync_status_clicked"
+        )
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.sidebarInteractionEventName(area: "vault_button", surface: "vault"),
+            "zebra_sidebar_vault_clicked"
+        )
+        XCTAssertEqual(
+            ZebraPostHogAnalytics.sidebarInteractionEventName(area: "getting_started", surface: "onboarding"),
+            "zebra_sidebar_onboarding_toggled"
+        )
+    }
+
+    func testSidebarToolbarAndPickerPropertiesUseControlAndSelectedValue() {
+        let toolbarProperties = ZebraPostHogAnalytics.sidebarInteractionProperties(
+            area: "toolbar",
+            surface: "task",
+            action: "group",
+            itemID: nil,
+            value: "status",
+            infoDictionary: [:]
+        )
+        XCTAssertEqual(toolbarProperties["sidebar_area"] as? String, "toolbar")
+        XCTAssertEqual(toolbarProperties["sidebar_mode"] as? String, "task")
+        XCTAssertEqual(toolbarProperties["interaction_type"] as? String, "change")
+        XCTAssertEqual(toolbarProperties["control_name"] as? String, "group_by")
+        XCTAssertEqual(toolbarProperties["selected_value"] as? String, "status")
+
+        let pickerProperties = ZebraPostHogAnalytics.sidebarInteractionProperties(
+            area: "picker",
+            surface: "goal",
+            action: "structure",
+            itemID: nil,
+            value: "outline",
+            infoDictionary: [:]
+        )
+        XCTAssertEqual(pickerProperties["sidebar_area"] as? String, "picker")
+        XCTAssertEqual(pickerProperties["sidebar_mode"] as? String, "goal")
+        XCTAssertEqual(pickerProperties["interaction_type"] as? String, "change")
+        XCTAssertEqual(pickerProperties["control_name"] as? String, "structure")
+        XCTAssertEqual(pickerProperties["selected_value"] as? String, "outline")
+    }
+
+    func testChatPillPropertiesBucketPromptLengthWithoutPromptText() {
+        let properties = ZebraPostHogAnalytics.chatPillPromptSubmittedProperties(
+            surface: "markdown",
+            submitMethod: "enter",
+            agent: "codex",
+            promptLength: 101,
+            infoDictionary: [:]
+        )
+
+        XCTAssertEqual(properties["surface"] as? String, "markdown")
+        XCTAssertEqual(properties["submit_method"] as? String, "enter")
+        XCTAssertEqual(properties["agent"] as? String, "codex")
+        XCTAssertEqual(properties["prompt_length_bucket"] as? String, "101_500")
+        XCTAssertNil(properties["prompt"])
+        XCTAssertNil(properties["prompt_text"])
+    }
+
+    func testVaultDocumentChangedHashesPathAndDoesNotEmitRawPath() {
+        let properties = ZebraPostHogAnalytics.vaultDocumentChangedProperties(
+            action: "update",
+            objectType: "task",
+            changeOrigin: "interactive",
+            changeSource: "sidebar",
+            path: "/Users/example/brain/tasks/private-task.md",
+            infoDictionary: [:]
+        )
+
+        XCTAssertEqual(properties["action"] as? String, "update")
+        XCTAssertEqual(properties["object_type"] as? String, "task")
+        XCTAssertEqual(properties["change_origin"] as? String, "interactive")
+        XCTAssertEqual(properties["change_source"] as? String, "sidebar")
+        XCTAssertNil(properties["path"])
+        XCTAssertNotEqual(properties["path_hash"] as? String, "/Users/example/brain/tasks/private-task.md")
+        XCTAssertEqual((properties["path_hash"] as? String)?.count, 64)
+    }
+}
+
 final class GhosttyMouseFocusTests: XCTestCase {
     func testShouldRequestFirstResponderForMouseFocusWhenEnabledAndWindowIsActive() {
         XCTAssertTrue(

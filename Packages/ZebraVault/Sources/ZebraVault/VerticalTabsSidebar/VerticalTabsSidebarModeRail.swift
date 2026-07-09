@@ -45,6 +45,13 @@ public struct VerticalTabsSidebarModeRail: View {
         let isSelected = state.selectedMode == mode
         let isActiveAndVisible = isSelected && state.listVisible
         Button {
+            ZebraTelemetry.trackSidebarInteraction(
+                area: .modeRail,
+                surface: ZebraTelemetrySidebarSurface(mode: mode),
+                action: isSelected ? .toggle : .select,
+                itemID: mode.rawValue,
+                value: isSelected ? (state.listVisible ? "hide" : "show") : nil
+            )
             state.handleIconClick(mode)
         } label: {
             Image(systemName: mode.symbolName)

@@ -81,8 +81,26 @@ public struct BrainSyncIndicatorView: View {
         #if DEBUG
         NSLog("[BrainSync] indicator clicked. isSyncing=\(service.isSyncing) state=\(String(describing: service.state))")
         #endif
+        ZebraTelemetry.trackSidebarInteraction(
+            area: .statusButton,
+            surface: .sync,
+            action: .click,
+            value: telemetryStatus
+        )
         guard !service.isSyncing else { return }
         if case .failed? = service.state { return }
         service.triggerSync()
+    }
+
+    private var telemetryStatus: String {
+        if service.isSyncing { return "syncing" }
+        switch service.state {
+        case .synced?:
+            return "synced"
+        case .failed?:
+            return "error"
+        case nil:
+            return "unknown"
+        }
     }
 }
