@@ -9,6 +9,7 @@ enum TaskFilterPopoverStep: Equatable {
 
 /// Top toolbar: `+ Filter` + `Sort` (left) + `Group: …` + `내 것` toggle (right).
 struct TaskListToolbar: View {
+    let showsSortAndGroup: Bool
     let groupBy: TaskGroupBy
     let sort: TaskSort
     let sortDirection: TaskSortDirection
@@ -35,8 +36,10 @@ struct TaskListToolbar: View {
     var body: some View {
         HStack(spacing: 0) {
             filterButton
-            sortButton
-            groupButton
+            if showsSortAndGroup {
+                sortButton
+                groupButton
+            }
             Spacer(minLength: 0)
             myToggleButton
         }

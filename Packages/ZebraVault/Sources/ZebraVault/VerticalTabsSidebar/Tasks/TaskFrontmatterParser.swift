@@ -41,6 +41,16 @@ enum TaskFrontmatterParser {
         let dueDate = parseDate(kv["due"]?.trimmedUnquoted)
         let createdDate = parseDate(kv["created"]?.trimmedUnquoted)
         let updatedDate = parseDate(kv["updated"]?.trimmedUnquoted)
+        let plannedStartRaw = kv["planned_start_at"]?.trimmedUnquoted
+        let plannedEndRaw = kv["planned_end_at"]?.trimmedUnquoted
+        let plannedInterval = BrainPlannedDateTimeCodec.validatedInterval(
+            startRaw: plannedStartRaw,
+            endRaw: plannedEndRaw
+        )
+        let hasInvalidPlannedInterval = BrainPlannedDateTimeCodec.hasAnyBoundary(
+            startRaw: plannedStartRaw,
+            endRaw: plannedEndRaw
+        ) && plannedInterval == nil
 
         let goalRaw = kv["goal"]?.trimmedUnquoted
         let goalSlug: String? = {
@@ -82,6 +92,9 @@ enum TaskFrontmatterParser {
             dueDate: dueDate,
             createdDate: createdDate,
             updatedDate: updatedDate,
+            plannedStartDate: plannedInterval?.start,
+            plannedEndDate: plannedInterval?.end,
+            hasInvalidPlannedInterval: hasInvalidPlannedInterval,
             goalSlug: goalSlug,
             relatedProjects: relatedProjects,
             tags: tags

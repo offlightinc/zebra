@@ -1,6 +1,20 @@
 import Foundation
 import Combine
 
+enum TaskListViewMode: String, CaseIterable, Hashable, Sendable {
+    case all
+    case todayPlan
+
+    var label: String {
+        switch self {
+        case .all:
+            return String(localized: "task.view.all", defaultValue: "All")
+        case .todayPlan:
+            return String(localized: "task.view.todayPlan", defaultValue: "Today")
+        }
+    }
+}
+
 enum TaskGroupBy: String, CaseIterable, Hashable, Sendable {
     case status
     case priority
@@ -114,6 +128,9 @@ struct TaskGroup: Identifiable, Sendable {
 
 @MainActor
 final class TaskListViewModel: ObservableObject {
+    @Published var viewMode: TaskListViewMode = .all {
+        didSet { persistState() }
+    }
     @Published var groupBy: TaskGroupBy = .status {
         didSet { persistState() }
     }
@@ -145,6 +162,7 @@ final class TaskListViewModel: ObservableObject {
 
         let restored = VerticalTabsSidebarViewStatePersistence.loadTaskState(rootPath: rootPath)
         isRestoringState = true
+        viewMode = restored.resolvedViewMode
         groupBy = restored.resolvedGroupBy
         sort = restored.resolvedSort
         sortDirection = restored.resolvedSortDirection
@@ -197,7 +215,8 @@ final class TaskListViewModel: ObservableObject {
                 sortDirection: sortDirection,
                 filters: filters,
                 collapsedSections: collapsedSections,
-                myOwnerFilter: myOwnerFilter
+                myOwnerFilter: myOwnerFilter,
+                viewMode: viewMode
             ),
             rootPath: rootPath
         )
@@ -368,6 +387,79 @@ final class TaskListViewModel: ObservableObject {
         case .project:
             return groupMulti(tasks)
         }
+    }
+
+    func plannedGroups(
+        from tasks: [TaskItem],
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> [TaskGroup] {
+        Self.groupPlannedTasks(visibleTasks(from: tasks), now: now, calendar: calendar)
+    }
+
+    static func groupPlannedTasks(
+        _ tasks: [TaskItem],
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> [TaskGroup] {
+        let dayStart = calendar.startOfDay(for: now)
+        guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { return [] }
+
+        var today: [TaskItem] = []
+        var later: [TaskItem] = []
+        var invalid: [TaskItem] = []
+
+        for task in tasks {
+            if task.hasInvalidPlannedInterval {
+                invalid.append(task)
+            } else if let interval = task.plannedInterval {
+                if interval.start < dayEnd && interval.end > dayStart {
+                    today.append(task)
+                } else if interval.start >= dayEnd {
+                    later.append(task)
+                }
+            }
+        }
+
+        func plannedOrder(_ lhs: TaskItem, _ rhs: TaskItem) -> Bool {
+            let left = lhs.plannedStartDate ?? .distantFuture
+            let right = rhs.plannedStartDate ?? .distantFuture
+            if left != right { return left < right }
+            return lhs.absolutePath < rhs.absolutePath
+        }
+
+        var groups: [TaskGroup] = []
+        if !today.isEmpty {
+            groups.append(TaskGroup(
+                key: TaskGroupKey(
+                    raw: "planned_today",
+                    label: String(localized: "task.plan.group.today", defaultValue: "Today"),
+                    order: 0
+                ),
+                items: today.sorted(by: plannedOrder)
+            ))
+        }
+        if !later.isEmpty {
+            groups.append(TaskGroup(
+                key: TaskGroupKey(
+                    raw: "planned_later",
+                    label: String(localized: "task.plan.group.later", defaultValue: "Later"),
+                    order: 1
+                ),
+                items: later.sorted(by: plannedOrder)
+            ))
+        }
+        if !invalid.isEmpty {
+            groups.append(TaskGroup(
+                key: TaskGroupKey(
+                    raw: "planned_invalid",
+                    label: String(localized: "task.plan.group.needsReview", defaultValue: "Needs review"),
+                    order: 2
+                ),
+                items: invalid.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            ))
+        }
+        return groups
     }
 
     private static func groupBySingleKey(

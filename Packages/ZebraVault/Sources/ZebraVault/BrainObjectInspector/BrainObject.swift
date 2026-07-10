@@ -22,6 +22,9 @@ public struct TaskObject {
     public var owner: String?
     public var reviewer: String?
     public var due: BrainDate?
+    public var plannedStartAt: Date?
+    public var plannedEndAt: Date?
+    public var hasInvalidPlannedInterval: Bool
     public var related: [BrainObjectRef]
     public var blockedBy: [BrainObjectRef]
     public var blockedReason: String?
@@ -523,6 +526,12 @@ public enum BrainObjectParser {
 extension BrainObjectParser {
     fileprivate static func buildTask(pairs: [(String, YamlValue)], title: String, body: String) -> TaskObject {
         let dict = Dictionary(uniqueKeysWithValues: pairs.map { ($0.0, $0.1) })
+        let plannedStartRaw = dict["planned_start_at"]?.scalar
+        let plannedEndRaw = dict["planned_end_at"]?.scalar
+        let plannedInterval = BrainPlannedDateTimeCodec.validatedInterval(
+            startRaw: plannedStartRaw,
+            endRaw: plannedEndRaw
+        )
         return TaskObject(
             title: title,
             status: dict["status"]?.scalar.flatMap(parseStatus(_:)),
@@ -530,6 +539,12 @@ extension BrainObjectParser {
             owner: dict["owner"]?.scalar,
             reviewer: dict["reviewer"]?.scalar,
             due: dict["due"]?.scalar.flatMap(parseDate(_:)),
+            plannedStartAt: plannedInterval?.start,
+            plannedEndAt: plannedInterval?.end,
+            hasInvalidPlannedInterval: BrainPlannedDateTimeCodec.hasAnyBoundary(
+                startRaw: plannedStartRaw,
+                endRaw: plannedEndRaw
+            ) && plannedInterval == nil,
             related: refList(dict["related"]),
             blockedBy: refList(dict["blocked_by"]),
             blockedReason: dict["blocked_reason"]?.scalar,

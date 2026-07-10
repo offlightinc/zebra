@@ -18,6 +18,7 @@ struct TaskListView: View {
         return VStack(spacing: 0) {
             collapseAllToolbar(tasks: tasksSnapshot)
             TaskListToolbar(
+                showsSortAndGroup: viewModel.viewMode == .all,
                 groupBy: viewModel.groupBy,
                 sort: viewModel.sort,
                 sortDirection: viewModel.sortDirection,
@@ -106,11 +107,11 @@ struct TaskListView: View {
     // 중 펼친 게 한 개라도 있을 때". 그룹이 0개 (no tasks / no grouping=all 만)
     // 인 경우는 비활성화하지만 자리는 유지 → 첫 줄이 점프 안 함.
     private func collapseAllToolbar(tasks: [TaskItem]) -> some View {
-        let displayTasks = viewModel.displayTasks(from: tasks)
-        let groups = TaskListViewModel.groupTasks(displayTasks, by: viewModel.groupBy)
+        let groups = groupsForDisplay(tasks: tasks)
         let allCollapsed = !groups.isEmpty && groups.allSatisfy { viewModel.collapsedSections.contains($0.key.raw) }
         let canCollapse = store.rootPath != nil && !groups.isEmpty && !allCollapsed
         return HStack(spacing: 0) {
+            taskViewModeSwitcher
             Spacer(minLength: 0)
             Button {
                 viewModel.collapsedSections = Set(groups.map { $0.key.raw })
@@ -136,6 +137,35 @@ struct TaskListView: View {
         .frame(height: ZebraSidebarMetrics.firstRowTopOffset)
     }
 
+    private var taskViewModeSwitcher: some View {
+        HStack(spacing: 2) {
+            ForEach(TaskListViewMode.allCases, id: \.self) { mode in
+                Button {
+                    ZebraTelemetry.trackSidebarInteraction(
+                        area: .toolbar,
+                        surface: .task,
+                        action: .click,
+                        value: "view_\(mode.rawValue)"
+                    )
+                    viewModel.viewMode = mode
+                } label: {
+                    Text(mode.label)
+                        .font(.system(size: 10.5, weight: viewModel.viewMode == mode ? .semibold : .regular))
+                        .foregroundColor(viewModel.viewMode == mode ? BVColor.fg : BVColor.fgMute)
+                        .padding(.horizontal, 7)
+                        .frame(height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(viewModel.viewMode == mode ? BVColor.bgElev : Color.clear)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("VerticalTabsSidebar.Tasks.viewMode.\(mode.rawValue)")
+            }
+        }
+    }
+
     @ViewBuilder
     private func listContent(tasks: [TaskItem]) -> some View {
         if store.rootPath == nil {
@@ -151,8 +181,12 @@ struct TaskListView: View {
             placeholder(String(localized: "task.list.empty.error", defaultValue: "Failed to load: \(error)"))
         } else if tasks.isEmpty {
             placeholder(String(localized: "task.list.empty.noTasks", defaultValue: "No tasks in vault"))
-        } else if viewModel.displayTasks(from: tasks).isEmpty {
-            placeholder(String(localized: "task.list.empty.noMatches", defaultValue: "No matching tasks"))
+        } else if groupsForDisplay(tasks: tasks).isEmpty {
+            placeholder(
+                viewModel.viewMode == .todayPlan
+                    ? String(localized: "task.plan.empty", defaultValue: "No planned tasks")
+                    : String(localized: "task.list.empty.noMatches", defaultValue: "No matching tasks")
+            )
         } else {
             listScrollView(tasks: tasks)
         }
@@ -196,8 +230,7 @@ struct TaskListView: View {
     }
 
     private func listScrollView(tasks: [TaskItem]) -> some View {
-        let displayTasks = viewModel.displayTasks(from: tasks)
-        let groups = TaskListViewModel.groupTasks(displayTasks, by: viewModel.groupBy)
+        let groups = groupsForDisplay(tasks: tasks)
         return ScrollView {
             LazyVStack(spacing: 0, pinnedViews: []) {
                 ForEach(groups) { group in
@@ -226,6 +259,7 @@ struct TaskListView: View {
                             TaskListRow(
                                 task: task,
                                 isSelected: activePaths.contains(task.absolutePath),
+                                showsPlannedTime: viewModel.viewMode == .todayPlan,
                                 onOpen: {
                                     ZebraTelemetry.trackSidebarInteraction(
                                         area: .row,
@@ -250,6 +284,18 @@ struct TaskListView: View {
                 }
             }
             .padding(.bottom, 12)
+        }
+    }
+
+    private func groupsForDisplay(tasks: [TaskItem]) -> [TaskGroup] {
+        switch viewModel.viewMode {
+        case .all:
+            return TaskListViewModel.groupTasks(
+                viewModel.displayTasks(from: tasks),
+                by: viewModel.groupBy
+            )
+        case .todayPlan:
+            return viewModel.plannedGroups(from: tasks)
         }
     }
 

@@ -1939,6 +1939,7 @@ struct ZebraSourceOnboardingHelper {
             "freeMinutes": None,
             "scheduledMinutes": None,
             "plannedTaskCount": None,
+            "scheduledTaskPaths": [],
             "calendarWriteStatus": None,
             "calendarEventIDs": [],
             "reason": reason,
@@ -1972,8 +1973,8 @@ struct ZebraSourceOnboardingHelper {
             5. 명확한 안이 있으면 하나를 추천하고, 실제 우선순위 충돌이 있을 때만 두 안을 제시해 사용자의 선택을 기다리세요.
             6. 선택이 끝나면 가용시간을 계산한 단일 최종 일정안을 보여주세요. 이 단계에서는 캘린더를 쓰지 마세요.
             7. 최종안을 보여준 뒤 `zebra-source-onboarding planner propose --calendar-coverage "<읽은 범위>" --free-minutes <분> --scheduled-minutes <분> --task-count <개>`로 보고하세요.
-            8. 사용자가 현재 최종안을 명시적으로 승인한 경우에만 캘린더를 반영하세요.
-            9. 읽기 전용으로 끝나면 `planner report --status completed --calendar-write-status not_requested`를, 실제 반영이 끝나면 `--calendar-write-status executed`와 각 `--event-id`를 보고하세요.
+            8. 사용자가 현재 최종안을 명시적으로 승인하면 adapter-native task마다 `planned_start_at`과 `planned_end_at`을 함께 쓰고 다시 읽어 검증하세요. 그 뒤에만 캘린더 반영 여부를 별도로 물으세요.
+            9. `planner report`에는 시간이 기록된 각 task를 `--task-path tasks/<slug>.md`로 반복해서 전달하세요. 캘린더를 쓰지 않으면 `--calendar-write-status not_requested`, 실제 반영이 끝나면 `executed`와 각 `--event-id`를 보고하세요.
 
             `pending_approval`은 완료가 아닙니다. planner가 completed 또는 skipped가 될 때까지 Source Onboarding 완료라고 말하지 마세요.
             ''').strip()
@@ -1988,8 +1989,8 @@ struct ZebraSourceOnboardingHelper {
             5. 明確な案があれば一案を推薦し、実際の優先順位衝突がある場合だけ二案を示して選択を待ちます。
             6. 選択後に read-only の最終案を一つ示し、この段階ではカレンダーを書き換えません。
             7. `planner propose` で coverage/free/scheduled/task count を報告します。
-            8. 現在の最終案が明示承認された場合だけカレンダーへ反映します。
-            9. 最後に `planner report` で `not_requested` または実行済みの `executed` を報告します。
+            8. 現在の最終案が明示承認されたら、adapter-native task に `planned_start_at` と `planned_end_at` を一緒に書き、readback で検証します。その後、カレンダー反映を別に確認します。
+            9. 時刻を書いた task ごとに `planner report --task-path tasks/<slug>.md` を渡し、カレンダー未反映なら `not_requested`、実行済みなら `executed` と event ID を報告します。
 
             `pending_approval` は完了ではありません。
             ''').strip()
@@ -2003,8 +2004,8 @@ struct ZebraSourceOnboardingHelper {
         5. Recommend one plan when the winner is clear. Show two alternatives only for a real priority tradeoff, then wait for the user's choice.
         6. After selection, show one capacity-safe final schedule before any calendar write.
         7. Report that final proposal with `planner propose` and its coverage/free/scheduled/task counts.
-        8. Write only after explicit approval of the current final schedule.
-        9. Finish with `planner report` using `not_requested` for read-only completion or `executed` plus event IDs after real writes.
+        8. After explicit approval of the current final schedule, write both `planned_start_at` and `planned_end_at` to each adapter-native task and verify them by readback. Ask about calendar writes separately after task scheduling succeeds.
+        9. Pass every scheduled task to `planner report` with repeated `--task-path tasks/<slug>.md`. Use `not_requested` for no calendar write or `executed` plus event IDs after real calendar writes.
 
         `pending_approval` is not completion. Do not say Source Onboarding is complete until planner is completed or skipped.
         ''').strip()
@@ -2016,6 +2017,7 @@ struct ZebraSourceOnboardingHelper {
             "freeMinutes": None,
             "scheduledMinutes": None,
             "plannedTaskCount": None,
+            "taskPaths": [],
             "calendarWriteStatus": "",
             "calendarEventIDs": [],
             "reason": "",
@@ -2033,6 +2035,8 @@ struct ZebraSourceOnboardingHelper {
                 parsed["scheduledMinutes"] = int(args[index + 1])
             elif token == "--task-count" and index + 1 < len(args):
                 parsed["plannedTaskCount"] = int(args[index + 1])
+            elif token == "--task-path" and index + 1 < len(args):
+                parsed["taskPaths"].append(args[index + 1].strip())
             elif token == "--calendar-write-status" and index + 1 < len(args):
                 parsed["calendarWriteStatus"] = args[index + 1].strip().lower()
             elif token == "--event-id" and index + 1 < len(args):
@@ -2043,6 +2047,86 @@ struct ZebraSourceOnboardingHelper {
                 raise ValueError("unknown or incomplete argument: " + token)
             index += 2
         return parsed
+
+    def planned_task_frontmatter(path):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            return None
+        lines = text[:16384].splitlines()
+        if not lines or lines[0].strip() != "---":
+            return None
+        values = {}
+        for raw in lines[1:]:
+            stripped = raw.strip()
+            if stripped == "---":
+                return values
+            if not stripped or raw[:1].isspace() or ":" not in raw:
+                continue
+            key, value = raw.split(":", 1)
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                value = value[1:-1]
+            values[key.strip()] = value
+        return None
+
+    def parse_planned_timestamp(raw):
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        value = raw.strip()
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed
+
+    def validated_planned_task_path(state, raw_path):
+        target = gbrain_target_directory(state)
+        if target is None:
+            return None, "gbrain_target_missing"
+        target = target.resolve(strict=False)
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = target / candidate
+        candidate = candidate.resolve(strict=False)
+        tasks_root = (target / "tasks").resolve(strict=False)
+        try:
+            candidate.relative_to(tasks_root)
+        except Exception:
+            return None, "planned_task_path_outside_tasks"
+        if candidate.suffix.lower() != ".md" or not candidate.is_file():
+            return None, "planned_task_file_missing"
+        values = planned_task_frontmatter(candidate)
+        if not isinstance(values, dict) or values.get("type", "").lower() != "task":
+            return None, "planned_task_type_missing"
+        start_raw = values.get("planned_start_at")
+        end_raw = values.get("planned_end_at")
+        if not start_raw or not end_raw:
+            return None, "planned_task_interval_missing"
+        start = parse_planned_timestamp(start_raw)
+        end = parse_planned_timestamp(end_raw)
+        if start is None or end is None:
+            return None, "planned_task_timestamp_invalid"
+        if end <= start:
+            return None, "planned_task_interval_invalid"
+        return str(candidate), None
+
+    def validated_planned_task_paths(state, raw_paths):
+        validated = []
+        seen = set()
+        for raw_path in raw_paths:
+            task_path, reason = validated_planned_task_path(state, raw_path)
+            if reason:
+                return None, reason, raw_path
+            if task_path in seen:
+                return None, "planned_task_path_duplicate", raw_path
+            seen.add(task_path)
+            validated.append(task_path)
+        return validated, None, None
 
     def daily_plan_command():
         subcommand = args.pop(0) if args else "status"
@@ -2114,9 +2198,23 @@ struct ZebraSourceOnboardingHelper {
                     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
                     return 1
                 write_status = parsed.get("calendarWriteStatus")
+                raw_task_paths = parsed.get("taskPaths") or daily_plan.get("scheduledTaskPaths") or []
+                scheduled_task_paths, path_reason, failed_path = validated_planned_task_paths(state, raw_task_paths)
+                if path_reason:
+                    payload = summary(state)
+                    payload.update({"ok": False, "reason": path_reason, "taskPath": failed_path})
+                    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                    return 1
+                planned_count = daily_plan.get("plannedTaskCount")
+                if isinstance(planned_count, int) and len(scheduled_task_paths) > planned_count:
+                    payload = summary(state)
+                    payload.update({"ok": False, "reason": "planned_task_path_count_exceeds_plan"})
+                    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                    return 1
                 if write_status == "pending_approval":
                     daily_plan.update({
                         "status": "awaiting_calendar_approval",
+                        "scheduledTaskPaths": scheduled_task_paths,
                         "calendarWriteStatus": "pending_approval",
                         "reason": "calendar_write_pending_approval",
                     })
@@ -2127,6 +2225,7 @@ struct ZebraSourceOnboardingHelper {
                         return 2
                     daily_plan.update({
                         "status": "completed",
+                        "scheduledTaskPaths": scheduled_task_paths,
                         "calendarWriteStatus": write_status,
                         "calendarEventIDs": event_ids,
                         "reason": None,

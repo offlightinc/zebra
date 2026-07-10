@@ -11,6 +11,7 @@ enum VerticalTabsSidebarViewStatePersistence {
         var filters: [TaskFilterState]
         var collapsedSections: [String]
         var myOwnerFilter: TaskFilterState?
+        var viewMode: String? = nil
 
         static let empty = TaskState(
             groupBy: TaskGroupBy.status.rawValue,
@@ -18,7 +19,8 @@ enum VerticalTabsSidebarViewStatePersistence {
             sortDirection: TaskSort.title.defaultDirection.rawValue,
             filters: [],
             collapsedSections: [],
-            myOwnerFilter: nil
+            myOwnerFilter: nil,
+            viewMode: TaskListViewMode.all.rawValue
         )
     }
 
@@ -90,7 +92,8 @@ extension VerticalTabsSidebarViewStatePersistence.TaskState {
         sortDirection: TaskSortDirection = TaskSort.title.defaultDirection,
         filters: [TaskFilter],
         collapsedSections: Set<String>,
-        myOwnerFilter: TaskFilter?
+        myOwnerFilter: TaskFilter?,
+        viewMode: TaskListViewMode = .all
     ) {
         self.groupBy = groupBy.rawValue
         self.sort = sort.rawValue
@@ -98,6 +101,7 @@ extension VerticalTabsSidebarViewStatePersistence.TaskState {
         self.filters = filters.map(VerticalTabsSidebarViewStatePersistence.TaskFilterState.init(filter:))
         self.collapsedSections = collapsedSections.sorted()
         self.myOwnerFilter = myOwnerFilter.map(VerticalTabsSidebarViewStatePersistence.TaskFilterState.init(filter:))
+        self.viewMode = viewMode.rawValue
     }
 
     var resolvedMyOwnerFilter: TaskFilter? {
@@ -106,6 +110,10 @@ extension VerticalTabsSidebarViewStatePersistence.TaskState {
 
     var resolvedGroupBy: TaskGroupBy {
         TaskGroupBy(rawValue: groupBy) ?? .status
+    }
+
+    var resolvedViewMode: TaskListViewMode {
+        viewMode.flatMap(TaskListViewMode.init(rawValue:)) ?? .all
     }
 
     var resolvedSort: TaskSort {

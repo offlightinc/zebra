@@ -106,6 +106,28 @@ public struct TaskInspectorView: View {
                             onChangeProperty?("due", oldSerialized, newSerialized)
                         }
                     }
+                    if let start = task.plannedStartAt, let end = task.plannedEndAt {
+                        PropertyRow(
+                            label: String(localized: "brain.row.plannedTime", defaultValue: "Planned"),
+                            icon: "calendar.badge.clock"
+                        ) {
+                            Text(Self.plannedTimeText(start: start, end: end))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(BVColor.fgMute)
+                        }
+                    } else if task.hasInvalidPlannedInterval {
+                        PropertyRow(
+                            label: String(localized: "brain.row.plannedTime", defaultValue: "Planned"),
+                            icon: "exclamationmark.triangle"
+                        ) {
+                            Text(String(
+                                localized: "task.plan.invalid",
+                                defaultValue: "Invalid planned time"
+                            ))
+                            .font(.system(size: 11))
+                            .foregroundColor(BVColor.priorityHigh)
+                        }
+                    }
                     PropertyRow(label: String(localized: "brain.row.tags", defaultValue: "Tags"), icon: "number") {
                         TagFlow(tags: task.tags, singleLine: true)
                     }
@@ -176,6 +198,16 @@ public struct TaskInspectorView: View {
                 }
             }
         }
+    }
+
+    private static func plannedTimeText(start: Date, end: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.setLocalizedDateFormatFromTemplate("MMM d jmm")
+        let endFormatter = DateFormatter()
+        endFormatter.locale = .current
+        endFormatter.setLocalizedDateFormatFromTemplate("jmm")
+        return "\(formatter.string(from: start))–\(endFormatter.string(from: end))"
     }
 }
 

@@ -110,7 +110,8 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
                 TaskFilter(field: .owner, op: .isNot, values: ["여한우리"]),
             ],
             collapsedSections: ["todo", "done"],
-            myOwnerFilter: myFilter
+            myOwnerFilter: myFilter,
+            viewMode: .todayPlan
         )
 
         VerticalTabsSidebarViewStatePersistence.saveTaskState(state, rootPath: root, defaults: defaults)
@@ -122,6 +123,7 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
         XCTAssertEqual(restored.resolvedFilters, state.resolvedFilters)
         XCTAssertEqual(Set(restored.collapsedSections), ["todo", "done"])
         XCTAssertEqual(restored.resolvedMyOwnerFilter, myFilter)
+        XCTAssertEqual(restored.resolvedViewMode, .todayPlan)
     }
 
     func testTaskStateNilMyOwnerFilterRoundTrips() throws {
@@ -166,6 +168,23 @@ final class VerticalTabsSidebarViewStatePersistenceTests: XCTestCase {
 
         XCTAssertEqual(state.resolvedSort, .updated)
         XCTAssertEqual(state.resolvedSortDirection, .descending)
+    }
+
+    func testMissingOrUnknownTaskViewModeFallsBackToAll() {
+        let missing = VerticalTabsSidebarViewStatePersistence.TaskState(
+            groupBy: TaskGroupBy.status.rawValue,
+            sort: TaskSort.title.rawValue,
+            sortDirection: nil,
+            filters: [],
+            collapsedSections: [],
+            myOwnerFilter: nil,
+            viewMode: nil
+        )
+        var unknown = missing
+        unknown.viewMode = "future-mode"
+
+        XCTAssertEqual(missing.resolvedViewMode, .all)
+        XCTAssertEqual(unknown.resolvedViewMode, .all)
     }
 
     func testDocumentStateIsScopedByRootPath() throws {

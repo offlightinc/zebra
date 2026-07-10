@@ -3873,9 +3873,38 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             "awaiting_approval"
         )
 
+        let missingPlannedInterval = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "planner", "report", "--status", "completed",
+                "--calendar-write-status", "pending_approval",
+                "--task-path", "tasks/share-pricing-draft.md",
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(missingPlannedInterval.status, 1)
+        XCTAssertEqual(
+            try jsonObject(from: missingPlannedInterval.stdout)["reason"] as? String,
+            "planned_task_interval_missing"
+        )
+
+        try """
+        ---
+        type: task
+        title: Share pricing draft
+        status: todo
+        planned_start_at: 2026-07-10T11:00:00+09:00
+        planned_end_at: 2026-07-10T12:30:00+09:00
+        ---
+        """.write(to: taskURL, atomically: true, encoding: .utf8)
+
         let pendingCalendar = try runProcess(
             executableURL: helperURL,
-            arguments: ["planner", "report", "--status", "completed", "--calendar-write-status", "pending_approval"],
+            arguments: [
+                "planner", "report", "--status", "completed",
+                "--calendar-write-status", "pending_approval",
+                "--task-path", "tasks/share-pricing-draft.md",
+            ],
             environment: environment
         )
         XCTAssertEqual(pendingCalendar.status, 0)
@@ -3901,6 +3930,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let completedPlan = try XCTUnwrap(plannerCompletedPayload["dailyPlan"] as? [String: Any])
         XCTAssertEqual(completedPlan["calendarWriteStatus"] as? String, "executed")
         XCTAssertEqual(completedPlan["calendarEventIDs"] as? [String], ["calendar-event-1"])
+        XCTAssertEqual(completedPlan["scheduledTaskPaths"] as? [String], [expectedTaskPath])
         let dailyPlanSubstep = try XCTUnwrap(
             checklistStore.sourceOnboardingSubstepsFromCachedState(
                 isParentRunning: false,

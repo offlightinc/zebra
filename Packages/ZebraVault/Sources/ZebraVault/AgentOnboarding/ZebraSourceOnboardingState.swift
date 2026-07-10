@@ -334,6 +334,7 @@ extension ZebraSourceOnboardingState {
         var freeMinutes: Int?
         var scheduledMinutes: Int?
         var plannedTaskCount: Int?
+        var scheduledTaskPaths: [String]?
         var calendarWriteStatus: String?
         var calendarEventIDs: [String]
         var reason: String?
@@ -347,6 +348,7 @@ extension ZebraSourceOnboardingState {
             freeMinutes: Int? = nil,
             scheduledMinutes: Int? = nil,
             plannedTaskCount: Int? = nil,
+            scheduledTaskPaths: [String]? = [],
             calendarWriteStatus: String? = nil,
             calendarEventIDs: [String] = [],
             reason: String? = nil,
@@ -359,6 +361,7 @@ extension ZebraSourceOnboardingState {
             self.freeMinutes = freeMinutes
             self.scheduledMinutes = scheduledMinutes
             self.plannedTaskCount = plannedTaskCount
+            self.scheduledTaskPaths = scheduledTaskPaths
             self.calendarWriteStatus = calendarWriteStatus
             self.calendarEventIDs = calendarEventIDs
             self.reason = reason

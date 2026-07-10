@@ -6,6 +6,7 @@ import SwiftUI
 struct TaskListRow: View, Equatable {
     let task: TaskItem
     let isSelected: Bool
+    let showsPlannedTime: Bool
     let onOpen: (TaskItem) -> Void
     let onChangeStatus: (TaskItem, BrainTaskStatus) -> Void
     let onChangePriority: (TaskItem, BrainPriority?) -> Void
@@ -19,7 +20,9 @@ struct TaskListRow: View, Equatable {
     @State private var rowHover = false
 
     static func == (lhs: TaskListRow, rhs: TaskListRow) -> Bool {
-        lhs.task == rhs.task && lhs.isSelected == rhs.isSelected
+        lhs.task == rhs.task
+            && lhs.isSelected == rhs.isSelected
+            && lhs.showsPlannedTime == rhs.showsPlannedTime
     }
 
     var body: some View {
@@ -32,7 +35,9 @@ struct TaskListRow: View, Equatable {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if !isCompleted,
+            if showsPlannedTime {
+                plannedTimeLabel
+            } else if !isCompleted,
                let due = task.dueDate,
                let descriptor = SidebarDueLabel.descriptor(for: due) {
                 Button(action: { showDuePicker = true }) {
@@ -80,6 +85,38 @@ struct TaskListRow: View, Equatable {
     private var isCompleted: Bool {
         guard let s = task.status else { return false }
         return s == .done || s == .canceled
+    }
+
+    @ViewBuilder
+    private var plannedTimeLabel: some View {
+        if let start = task.plannedStartDate, let end = task.plannedEndDate {
+            Text(Self.plannedTimeText(start: start, end: end))
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundColor(BVColor.fgMute)
+                .lineLimit(1)
+        } else if task.hasInvalidPlannedInterval {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(BVColor.priorityHigh)
+                .safeHelp(String(
+                    localized: "task.plan.invalid.tooltip",
+                    defaultValue: "Planned start and end times need review"
+                ))
+        }
+    }
+
+    private static func plannedTimeText(start: Date, end: Date) -> String {
+        let calendar = Calendar.current
+        let time = DateFormatter()
+        time.locale = .current
+        time.dateFormat = DateFormatter.dateFormat(fromTemplate: "jmm", options: 0, locale: .current)
+        if calendar.isDateInToday(start) {
+            return "\(time.string(from: start))–\(time.string(from: end))"
+        }
+        let day = DateFormatter()
+        day.locale = .current
+        day.setLocalizedDateFormatFromTemplate("MMM d")
+        return "\(day.string(from: start)) · \(time.string(from: start))"
     }
 
     @ViewBuilder

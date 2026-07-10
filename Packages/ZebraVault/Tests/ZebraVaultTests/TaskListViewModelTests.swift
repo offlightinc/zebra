@@ -196,6 +196,27 @@ final class TaskListViewModelTests: XCTestCase {
         XCTAssertEqual(displayed.map(\.absolutePath), ["/tmp/soon.md", "/tmp/later.md"])
     }
 
+    @MainActor
+    func testPlannedGroupsSeparateTodayLaterAndInvalidInPlannedOrder() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
+        let now = try XCTUnwrap(BrainPlannedDateTimeCodec.date(fromStorageString: "2026-07-10T12:00:00+09:00"))
+        let tasks = [
+            task(path: "/tmp/later.md", title: "Later", plannedStart: "2026-07-11T09:00:00+09:00", plannedEnd: "2026-07-11T10:00:00+09:00"),
+            task(path: "/tmp/today-2.md", title: "Second", plannedStart: "2026-07-10T14:00:00+09:00", plannedEnd: "2026-07-10T15:00:00+09:00"),
+            task(path: "/tmp/invalid.md", title: "Broken", invalidPlannedInterval: true),
+            task(path: "/tmp/today-1.md", title: "First", status: .done, plannedStart: "2026-07-10T09:00:00+09:00", plannedEnd: "2026-07-10T10:00:00+09:00"),
+            task(path: "/tmp/unplanned.md", title: "Unplanned"),
+        ]
+
+        let groups = TaskListViewModel.groupPlannedTasks(tasks, now: now, calendar: calendar)
+
+        XCTAssertEqual(groups.map(\.key.raw), ["planned_today", "planned_later", "planned_invalid"])
+        XCTAssertEqual(groups[0].items.map(\.absolutePath), ["/tmp/today-1.md", "/tmp/today-2.md"])
+        XCTAssertEqual(groups[1].items.map(\.absolutePath), ["/tmp/later.md"])
+        XCTAssertEqual(groups[2].items.map(\.absolutePath), ["/tmp/invalid.md"])
+    }
+
     private func task(
         path: String,
         title: String,
@@ -203,7 +224,10 @@ final class TaskListViewModelTests: XCTestCase {
         priority: BrainPriority? = nil,
         due: String? = nil,
         created: String? = nil,
-        updated: String? = nil
+        updated: String? = nil,
+        plannedStart: String? = nil,
+        plannedEnd: String? = nil,
+        invalidPlannedInterval: Bool = false
     ) -> TaskItem {
         TaskItem(
             absolutePath: path,
@@ -216,6 +240,9 @@ final class TaskListViewModelTests: XCTestCase {
             dueDate: due.flatMap { BrainDateOnlyCodec.date(fromStorageString: $0) },
             createdDate: created.flatMap { BrainDateOnlyCodec.date(fromStorageString: $0) },
             updatedDate: updated.flatMap { BrainDateOnlyCodec.date(fromStorageString: $0) },
+            plannedStartDate: plannedStart.flatMap { BrainPlannedDateTimeCodec.date(fromStorageString: $0) },
+            plannedEndDate: plannedEnd.flatMap { BrainPlannedDateTimeCodec.date(fromStorageString: $0) },
+            hasInvalidPlannedInterval: invalidPlannedInterval,
             goalSlug: nil,
             relatedProjects: [],
             tags: []
