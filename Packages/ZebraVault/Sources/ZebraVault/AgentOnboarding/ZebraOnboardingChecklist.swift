@@ -176,6 +176,14 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         completedCount < totalCount
     }
 
+    public static func didBecomeComplete(
+        previousCompletedStepIDs previous: Set<ZebraOnboardingChecklistStepID>,
+        currentCompletedStepIDs current: Set<ZebraOnboardingChecklistStepID>
+    ) -> Bool {
+        !enabledStepIDs.isSubset(of: previous)
+            && enabledStepIDs.isSubset(of: current)
+    }
+
     public static func automaticStepToStart(
         previousCompletedStepIDs previous: Set<ZebraOnboardingChecklistStepID>,
         currentCompletedStepIDs current: Set<ZebraOnboardingChecklistStepID>,
@@ -1453,42 +1461,38 @@ public struct ZebraOnboardingChecklistCard: View {
     }
 
     public var body: some View {
-        Group {
-            if store.isVisible {
-                VStack(spacing: 0) {
-                    header
-                    VStack(spacing: 0) {
-                        ForEach(store.snapshots) { snapshot in
-                            ZebraOnboardingChecklistRow(
-                                snapshot: snapshot,
-                                title: Self.title(for: snapshot.id),
-                                isSubstepListCollapsed: collapsedSubstepStepIDs.contains(snapshot.id),
-                                onToggleSubstepList: toggleSubstepListAction(for: snapshot),
-                                onStart: { onStartStep(snapshot.id) },
-                                onStop: onStopStep.map { callback in { callback(snapshot.id) } },
-                                onDevelopmentToggle: developmentToggleAction(for: snapshot.id)
-                            )
-                        }
-                    }
-                    .padding(.bottom, 5)
-                }
-                .background(ZebraOnboardingChecklistPalette.panel)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(ZebraOnboardingChecklistPalette.panelBorder, lineWidth: 1)
-                )
-                .shadow(color: BVColor.shadow, radius: 24, x: 0, y: 10)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("ZebraOnboardingChecklistCard")
-                .onAppear {
-                    store.prefetchGBrainDocsIfNeeded()
-                    observedCompletedStepIDs = store.completedStepIDs
-                }
-                .onChange(of: store.completedStepIDs) { _, completedStepIDs in
-                    handleCompletionChange(completedStepIDs)
+        VStack(spacing: 0) {
+            header
+            VStack(spacing: 0) {
+                ForEach(store.snapshots) { snapshot in
+                    ZebraOnboardingChecklistRow(
+                        snapshot: snapshot,
+                        title: Self.title(for: snapshot.id),
+                        isSubstepListCollapsed: collapsedSubstepStepIDs.contains(snapshot.id),
+                        onToggleSubstepList: toggleSubstepListAction(for: snapshot),
+                        onStart: { onStartStep(snapshot.id) },
+                        onStop: onStopStep.map { callback in { callback(snapshot.id) } },
+                        onDevelopmentToggle: developmentToggleAction(for: snapshot.id)
+                    )
                 }
             }
+            .padding(.bottom, 5)
+        }
+        .background(ZebraOnboardingChecklistPalette.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(ZebraOnboardingChecklistPalette.panelBorder, lineWidth: 1)
+        )
+        .shadow(color: BVColor.shadow, radius: 24, x: 0, y: 10)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("ZebraOnboardingChecklistCard")
+        .onAppear {
+            store.prefetchGBrainDocsIfNeeded()
+            observedCompletedStepIDs = store.completedStepIDs
+        }
+        .onChange(of: store.completedStepIDs) { _, completedStepIDs in
+            handleCompletionChange(completedStepIDs)
         }
     }
 
@@ -1626,31 +1630,27 @@ public struct ZebraOnboardingChecklistRailButton: View {
     }
 
     public var body: some View {
-        Group {
-            if store.isVisible {
-                Button(action: action) {
-                    Image(systemName: "list.number")
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundColor(isCardCollapsed ? BVColor.fgMute : BVColor.fg)
-                        .frame(width: 36, height: 36)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(isCardCollapsed ? Color.clear : BVColor.bgHover)
-                        )
-                        .contentShape(Rectangle())
-                        .overlay(alignment: .topTrailing) {
-                            if isCardCollapsed {
-                                progressBadge
-                                    .offset(x: 6, y: -3)
-                            }
-                        }
+        Button(action: action) {
+            Image(systemName: "list.number")
+                .font(.system(size: 16, weight: .regular))
+                .foregroundColor(isCardCollapsed ? BVColor.fgMute : BVColor.fg)
+                .frame(width: 36, height: 36)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isCardCollapsed ? Color.clear : BVColor.bgHover)
+                )
+                .contentShape(Rectangle())
+                .overlay(alignment: .topTrailing) {
+                    if isCardCollapsed && store.isVisible {
+                        progressBadge
+                            .offset(x: 6, y: -3)
+                    }
                 }
-                .buttonStyle(.plain)
-                .help(helpText)
-                .accessibilityLabel(helpText)
-                .accessibilityIdentifier("ZebraOnboardingChecklistRailButton")
-            }
         }
+        .buttonStyle(.plain)
+        .help(helpText)
+        .accessibilityLabel(helpText)
+        .accessibilityIdentifier("ZebraOnboardingChecklistRailButton")
     }
 
     private var progressBadge: some View {

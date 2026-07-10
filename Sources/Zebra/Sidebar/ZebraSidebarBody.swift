@@ -443,6 +443,14 @@ struct ZebraSidebarBody: View {
             return
         }
         observedOnboardingCompletedStepIDs = completedStepIDs
+        if ZebraOnboardingChecklistStore.didBecomeComplete(
+            previousCompletedStepIDs: previousCompletedStepIDs,
+            currentCompletedStepIDs: completedStepIDs
+        ) {
+            withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
+                isOnboardingChecklistCollapsed = true
+            }
+        }
         if ZebraOnboardingChecklistStore.shouldBeginChainedRuntimeHandoff(
             previousCompletedStepIDs: previousCompletedStepIDs,
             currentCompletedStepIDs: completedStepIDs,
