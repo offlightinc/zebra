@@ -28,7 +28,7 @@ Treat `/Users/hanwool/brain-offlight` as a git-backed markdown repo when creatin
 
 - **작업 분류를 먼저 한다.** 요청이 upstream cmux 공통 동작인지, Zebra 제품 동작인지, 둘을 잇는 adapter/touchpoint 인지 구분한 뒤 진행한다.
 - **Zebra 판단은 Zebra-owned overlay 에 둔다.** 새 정책/브랜딩/릴리즈 흐름/제품 전용 동작은 `Packages/ZebraVault/**`, `Sources/Zebra/**`, `scripts/build-zebra-*.sh`, 또는 명시된 adapter/touchpoint 로 둔다. upstream cmux 파일 변경은 마지막 선택지다.
-- **앱 이름이 중요하면 Debug 빌드와 Zebra 릴리즈 빌드를 구분한다.** `./scripts/reload.sh --tag <tag>` 는 개발용 `cmux DEV <tag>.app` 을 만든다. Zebra 브랜드 산출물은 release overlay 가 만드는 `Zebra.app` / `dist/Zebra.dmg` 이다.
+- **Zebra Debug 빌드는 브랜드 overlay 를 사용한다.** `./scripts/reload-zebra.sh --tag <tag>` 는 upstream Debug 앱을 먼저 만든 뒤 `Zebra DEV <tag>.app` 으로 복사하고 Zebra 이름, 격리된 bundle id, localization overlay 를 적용한다. 순수 cmux 개발 확인이 필요할 때만 `./scripts/reload.sh --tag <tag>` 를 직접 사용한다. 정식 산출물은 release overlay 가 만드는 `Zebra.app` / `dist/Zebra.dmg` 이다.
 - **Zebra 브랜드 릴리즈는 `scripts/build-zebra-notarized-dmg.sh` 를 우선 확인한다.** 기본값은 app name `Zebra`, bundle id `com.offlight.zebra`, derived data `build-zebra-release`, DMG `dist/Zebra.dmg`.
 - **`PRODUCT_NAME=Zebra` 를 xcodebuild 에 직접 넘기지 않는다.** 과거에 Swift package resource bundle 이름까지 `Zebra.bundle` 로 바뀌어 duplicate-output 빌드 실패가 났다. 검증된 방식은 upstream `cmux.app` 을 먼저 빌드하고, `Zebra.app` 으로 복사한 뒤 `Info.plist` 의 `CFBundleName`, `CFBundleDisplayName`, `CFBundleIdentifier` 를 패치하고 서명/노타라이즈하는 것이다.
 - **히스토리가 필요하면 `/Users/dan/brain-offlight/ops/zebra-notarized-dmg-release.md` 를 먼저 확인한다.** 이 파일은 Zebra release overlay 의 런북이고, `AGENTS.md` 는 그 원칙을 작업 중 자동으로 따르게 하는 가드레일이다.
@@ -67,28 +67,28 @@ on machines that never installed the legacy plist. Reverse with
 ## Local dev
 
 Codex build rule: when Codex needs to run a Zebra Debug reload, request escalated
-permissions before the first build attempt and run `./scripts/reload.sh --tag <tag>`
+permissions before the first build attempt and run `./scripts/reload-zebra.sh --tag <tag>`
 under that approval. Do not try a non-escalated reload first. The script writes
 GhosttyKit cache locks under `~/.cache/cmux/ghosttykit`, which is outside the Codex
 workspace sandbox. Without escalation, `ensure-ghosttykit.sh` may loop forever
 printing `Waiting for GhosttyKit cache lock...` because the lock `mkdir` fails with
 `Operation not permitted`. When requesting approval, keep the prefix narrow to
-`./scripts/reload.sh`; do not request broad shell prefixes such as `bash`, `zsh`, or
+`./scripts/reload-zebra.sh`; do not request broad shell prefixes such as `bash`, `zsh`, or
 `python3`.
 
 After making code changes, always run the reload script with a tag to build the Debug app:
 
 ```bash
-./scripts/reload.sh --tag fix-zsh-autosuggestions
+./scripts/reload-zebra.sh --tag fix-zsh-autosuggestions
 ```
 
-By default, `reload.sh` builds but does **not** launch the app. The script prints the `.app` path so the user can cmd-click to open it. After a successful build, it always terminates any running app with the same tag (so cmd-clicking launches the freshly-built binary instead of foregrounding the stale instance). Pass `--launch` to open the app automatically after the build:
+By default, `reload-zebra.sh` builds but does **not** launch the app. The script prints the `.app` path so the user can cmd-click to open it. After a successful build, its underlying `reload.sh` terminates any running app with the same tag. Pass `--launch` to open the branded app automatically after the overlay and re-sign complete:
 
 ```bash
-./scripts/reload.sh --tag fix-zsh-autosuggestions --launch
+./scripts/reload-zebra.sh --tag fix-zsh-autosuggestions --launch
 ```
 
-`reload.sh` prints an `App path:` line with the absolute path to the built `.app`. Use that path to build a cmd-clickable `file://` URL. Steps:
+`reload-zebra.sh` prints a final `App path:` line with the absolute path to the branded `.app`. Use that path to build a cmd-clickable `file://` URL. Steps:
 
 1. Grab the path from the `App path:` line in `reload.sh` output.
 2. Prepend `file://` and URL-encode spaces as `%20`. Do not hardcode any part of the path.
@@ -98,25 +98,25 @@ By default, `reload.sh` builds but does **not** launch the app. The script print
 Example. If `reload.sh` output contains:
 ```
 App path:
-  /Users/someone/Library/Developer/Xcode/DerivedData/cmux-my-tag/Build/Products/Debug/cmux DEV my-tag.app
+  /Users/someone/Library/Developer/Xcode/DerivedData/cmux-my-tag/Build/Products/Debug/Zebra DEV my-tag.app
 ```
 
 **Claude Code** outputs:
 ```markdown
 =======================================================
-[cmux DEV my-tag.app](file:///Users/someone/Library/Developer/Xcode/DerivedData/cmux-my-tag/Build/Products/Debug/cmux%20DEV%20my-tag.app)
+[Zebra DEV my-tag.app](file:///Users/someone/Library/Developer/Xcode/DerivedData/cmux-my-tag/Build/Products/Debug/Zebra%20DEV%20my-tag.app)
 =======================================================
 ```
 
 **Codex** outputs:
 ```
 =======================================================
-[my-tag: cmux DEV my-tag.app](file:///Users/someone/Library/Developer/Xcode/DerivedData/cmux-my-tag/Build/Products/Debug/cmux%20DEV%20my-tag.app)
+[my-tag: Zebra DEV my-tag.app](file:///Users/someone/Library/Developer/Xcode/DerivedData/cmux-my-tag/Build/Products/Debug/Zebra%20DEV%20my-tag.app)
 =======================================================
 ```
 
 Never use `/tmp/cmux-<tag>/...` app links in chat output.
-Never report a successful `reload.sh` build with only a raw `/Users/.../*.app` path. The user should be able to click the markdown link and launch the tagged app directly.
+Never report a successful Zebra Debug build with only a raw `/Users/.../*.app` path. The user should be able to click the markdown link and launch the tagged app directly.
 
 For CLI or socket dogfood against a tagged Debug app, use the tag-bound helper and set `CMUX_TAG`.
 Do not use `/tmp/cmux-cli` for tagged dogfood, since that symlink points at the most recently
@@ -133,10 +133,10 @@ ambient cmux terminal context (`CMUX_SOCKET`, `CMUX_SOCKET_PASSWORD`, workspace/
 IDs, cmuxd socket, and debug log), then sets `CMUX_SOCKET_PATH`, `CMUX_BUNDLE_ID`, and
 `CMUX_BUNDLED_CLI_PATH` for the selected tag.
 
-After making code changes, always use `reload.sh --tag` to build. **Never run bare `xcodebuild` or `open` an untagged `cmux DEV.app`.** Untagged builds share the default debug socket and bundle ID with other agents, causing conflicts and stealing focus.
+After making Zebra code changes, always use `reload-zebra.sh --tag` to build. **Never run bare `xcodebuild` or `open` an untagged `cmux DEV.app`.** Untagged builds share the default debug socket and bundle ID with other agents, causing conflicts and stealing focus.
 
 ```bash
-./scripts/reload.sh --tag <your-branch-slug>
+./scripts/reload-zebra.sh --tag <your-branch-slug>
 ```
 
 If you only need to verify the build compiles (no launch), use a tagged derivedDataPath:
@@ -157,12 +157,14 @@ When rebuilding cmuxd for release/bundling, always use ReleaseFast:
 cd cmuxd && zig build -Doptimize=ReleaseFast
 ```
 
-`reload` = build the Debug app (tag required) and terminate any running app with the same tag. Pass `--launch` to also open the freshly-built app:
+`reload-zebra` = build the standard Zebra-branded Debug app (tag required) and terminate any running app with the same tag. Pass `--launch` to also open the freshly-built app after the brand overlay is applied:
 
 ```bash
-./scripts/reload.sh --tag <tag>
-./scripts/reload.sh --tag <tag> --launch
+./scripts/reload-zebra.sh --tag <tag>
+./scripts/reload-zebra.sh --tag <tag> --launch
 ```
+
+`reload.sh` remains the upstream cmux-branded Debug path for work that specifically needs the unmodified cmux product identity.
 
 `reloadp` = kill and launch the Release app:
 
@@ -185,7 +187,7 @@ cd cmuxd && zig build -Doptimize=ReleaseFast
 For parallel/isolated builds (e.g., testing a feature alongside the main app), use `--tag` with a short descriptive name:
 
 ```bash
-./scripts/reload.sh --tag fix-blur-effect
+./scripts/reload-zebra.sh --tag fix-blur-effect
 ```
 
 This creates an isolated app with its own name, bundle ID, socket, and derived data path so it runs side-by-side with the main app. Important: use a non-`/tmp` derived data path if you need xcframework resolution (the script handles this automatically).
@@ -251,10 +253,10 @@ tail -f "$(cat /tmp/cmux-last-debug-log-path 2>/dev/null || echo /tmp/cmux-debug
 ```
 
 - Untagged Debug app: `/tmp/cmux-debug.log`
-- Tagged Debug app (`./scripts/reload.sh --tag <tag>`): `/tmp/cmux-debug-<tag>.log`
-- `reload.sh` writes the current path to `/tmp/cmux-last-debug-log-path`
-- `reload.sh` writes the selected dev CLI path to `/tmp/cmux-last-cli-path`
-- `reload.sh` updates `/tmp/cmux-cli` and `$HOME/.local/bin/cmux-dev` to that CLI
+- Tagged Debug app (`./scripts/reload-zebra.sh --tag <tag>`): `/tmp/cmux-debug-<tag>.log`
+- The underlying `reload.sh` writes the current path to `/tmp/cmux-last-debug-log-path`
+- The underlying `reload.sh` writes the selected dev CLI path to `/tmp/cmux-last-cli-path`
+- The underlying `reload.sh` updates `/tmp/cmux-cli` and `$HOME/.local/bin/cmux-dev` to that CLI
 
 - Implementation: `Packages/CMUXDebugLog/Sources/CMUXDebugLog/DebugEventLog.swift`
 - App shim: `Sources/App/DebugLogging.swift`
