@@ -6,7 +6,6 @@ struct TaskListView: View {
     let onSelectFile: (String) -> Void
     @StateObject private var viewModel = TaskListViewModel()
     @State private var filterStep: TaskFilterPopoverStep?
-    @State private var showMyOwnerMenu = false
 
     var body: some View {
         // Read store.tasks directly in body so SwiftUI's ObservedObject
@@ -18,18 +17,26 @@ struct TaskListView: View {
         return VStack(spacing: 0) {
             collapseAllToolbar(tasks: tasksSnapshot)
             TaskListToolbar(
+                viewMode: viewModel.viewMode,
                 showsSortAndGroup: viewModel.viewMode == .all,
                 groupBy: viewModel.groupBy,
                 sort: viewModel.sort,
                 sortDirection: viewModel.sortDirection,
-                myOwnerFilter: viewModel.myOwnerFilter,
                 existingFilterFields: Set(viewModel.filters.map(\.field)),
                 availableOwners: availableOwners,
                 filterStep: $filterStep,
-                showMyOwnerMenu: $showMyOwnerMenu,
                 currentFilter: { field in
                     viewModel.filters.first(where: { $0.field == field })
                         ?? TaskFilter(field: field, op: .is, values: [])
+                },
+                onPickViewMode: { mode in
+                    ZebraTelemetry.trackSidebarInteraction(
+                        area: .toolbar,
+                        surface: .task,
+                        action: .click,
+                        value: "view_\(mode.rawValue)"
+                    )
+                    viewModel.viewMode = mode
                 },
                 onPickGroupBy: {
                     ZebraTelemetry.trackSidebarInteraction(
@@ -69,15 +76,6 @@ struct TaskListView: View {
                     )
                     viewModel.setFilter(updated)
                 },
-                onChangeMyOwnerFilter: { updated in
-                    ZebraTelemetry.trackSidebarInteraction(
-                        area: .toolbar,
-                        surface: .task,
-                        action: .filter,
-                        value: updated == nil ? "owner_all" : "owner_selected"
-                    )
-                    viewModel.myOwnerFilter = updated
-                },
                 onCloseFilter: {
                     // Empty values → remove the chip on dismiss.
                     if case .value(let f) = filterStep,
@@ -111,7 +109,6 @@ struct TaskListView: View {
         let allCollapsed = !groups.isEmpty && groups.allSatisfy { viewModel.collapsedSections.contains($0.key.raw) }
         let canCollapse = store.rootPath != nil && !groups.isEmpty && !allCollapsed
         return HStack(spacing: 0) {
-            taskViewModeSwitcher
             Spacer(minLength: 0)
             Button {
                 viewModel.collapsedSections = Set(groups.map { $0.key.raw })
@@ -135,35 +132,6 @@ struct TaskListView: View {
         }
         .padding(.horizontal, 6)
         .frame(height: ZebraSidebarMetrics.firstRowTopOffset)
-    }
-
-    private var taskViewModeSwitcher: some View {
-        HStack(spacing: 2) {
-            ForEach(TaskListViewMode.allCases, id: \.self) { mode in
-                Button {
-                    ZebraTelemetry.trackSidebarInteraction(
-                        area: .toolbar,
-                        surface: .task,
-                        action: .click,
-                        value: "view_\(mode.rawValue)"
-                    )
-                    viewModel.viewMode = mode
-                } label: {
-                    Text(mode.label)
-                        .font(.system(size: 10.5, weight: viewModel.viewMode == mode ? .semibold : .regular))
-                        .foregroundColor(viewModel.viewMode == mode ? BVColor.fg : BVColor.fgMute)
-                        .padding(.horizontal, 7)
-                        .frame(height: 22)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(viewModel.viewMode == mode ? BVColor.bgElev : Color.clear)
-                        )
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("VerticalTabsSidebar.Tasks.viewMode.\(mode.rawValue)")
-            }
-        }
     }
 
     @ViewBuilder

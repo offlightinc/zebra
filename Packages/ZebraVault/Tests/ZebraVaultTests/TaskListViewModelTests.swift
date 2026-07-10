@@ -217,11 +217,62 @@ final class TaskListViewModelTests: XCTestCase {
         XCTAssertEqual(groups[2].items.map(\.absolutePath), ["/tmp/invalid.md"])
     }
 
+    @MainActor
+    func testPlannedGroupsHonorRegularOwnerFilter() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
+        let now = try XCTUnwrap(BrainPlannedDateTimeCodec.date(fromStorageString: "2026-07-10T12:00:00+09:00"))
+        let viewModel = TaskListViewModel()
+        viewModel.filters = [TaskFilter(field: .owner, op: .is, values: ["dan"])]
+        let tasks = [
+            task(path: "/tmp/dan.md", title: "Dan", owner: "dan", plannedStart: "2026-07-10T14:00:00+09:00", plannedEnd: "2026-07-10T15:00:00+09:00"),
+            task(path: "/tmp/other.md", title: "Other", owner: "other", plannedStart: "2026-07-10T13:00:00+09:00", plannedEnd: "2026-07-10T14:00:00+09:00"),
+        ]
+
+        let groups = viewModel.plannedGroups(from: tasks, now: now, calendar: calendar)
+
+        XCTAssertEqual(groups.flatMap(\.items).map(\.absolutePath), ["/tmp/dan.md"])
+    }
+
+    @MainActor
+    func testLegacyOwnerShortcutMigratesIntoVisibleOwnerFilter() {
+        let migrated = TaskListViewModel.migratedFilters(
+            [TaskFilter(field: .status, op: .is, values: ["todo"])],
+            legacyOwnerFilter: TaskFilter(field: .owner, op: .is, values: ["dan"])
+        )
+
+        XCTAssertEqual(migrated.count, 2)
+        XCTAssertEqual(migrated.first(where: { $0.field == .owner })?.values, ["dan"])
+    }
+
+    @MainActor
+    func testLegacyAndRegularOwnerFiltersPreserveTheirIntersection() {
+        let migrated = TaskListViewModel.migratedFilters(
+            [TaskFilter(field: .owner, op: .is, values: ["dan", "han"])],
+            legacyOwnerFilter: TaskFilter(field: .owner, op: .is, values: ["han", "namho"])
+        )
+        let owner = migrated.first(where: { $0.field == .owner })
+
+        XCTAssertEqual(owner?.op, .is)
+        XCTAssertEqual(owner?.values, ["han"])
+
+        let noMatch = TaskListViewModel.migratedFilters(
+            [TaskFilter(field: .owner, op: .is, values: ["dan"])],
+            legacyOwnerFilter: TaskFilter(field: .owner, op: .is, values: ["han"])
+        )
+        let visible = TaskListViewModel.applyFilters(
+            [task(path: "/tmp/dan.md", title: "Dan", owner: "dan")],
+            noMatch
+        )
+        XCTAssertTrue(visible.isEmpty)
+    }
+
     private func task(
         path: String,
         title: String,
         status: BrainTaskStatus? = .todo,
         priority: BrainPriority? = nil,
+        owner: String? = nil,
         due: String? = nil,
         created: String? = nil,
         updated: String? = nil,
@@ -236,7 +287,7 @@ final class TaskListViewModelTests: XCTestCase {
             status: status,
             unrecognizedStatusRaw: nil,
             priority: priority,
-            ownerSlug: nil,
+            ownerSlug: owner,
             dueDate: due.flatMap { BrainDateOnlyCodec.date(fromStorageString: $0) },
             createdDate: created.flatMap { BrainDateOnlyCodec.date(fromStorageString: $0) },
             updatedDate: updated.flatMap { BrainDateOnlyCodec.date(fromStorageString: $0) },

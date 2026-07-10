@@ -1,29 +1,29 @@
 import SwiftUI
 
-/// Two-step filter popover state for the Filter button. The "내 것" toolbar
-/// entry uses its own state (`showMyOwnerMenu`) and does not flow through here.
+/// Two-step filter popover state for the Filter button.
 enum TaskFilterPopoverStep: Equatable {
     case field
     case value(TaskFilterField)
 }
 
-/// Top toolbar: `+ Filter` + `Sort` (left) + `Group: …` + `내 것` toggle (right).
+/// Task view controls. View mode stays on the left; filtering/sorting/grouping
+/// stay right-aligned. `ViewThatFits` swaps the text controls for icon-only
+/// controls before a narrow sidebar can overlap or clip them.
 struct TaskListToolbar: View {
+    let viewMode: TaskListViewMode
     let showsSortAndGroup: Bool
     let groupBy: TaskGroupBy
     let sort: TaskSort
     let sortDirection: TaskSortDirection
-    let myOwnerFilter: TaskFilter?
     let existingFilterFields: Set<TaskFilterField>
     let availableOwners: [String]
     @Binding var filterStep: TaskFilterPopoverStep?
-    @Binding var showMyOwnerMenu: Bool
     let currentFilter: (TaskFilterField) -> TaskFilter
+    let onPickViewMode: (TaskListViewMode) -> Void
     let onPickGroupBy: (TaskGroupBy) -> Void
     let onPickSort: (TaskSort) -> Void
     let onPickField: (TaskFilterField) -> Void
     let onChangeFilterValues: (TaskFilter) -> Void
-    let onChangeMyOwnerFilter: (TaskFilter?) -> Void
     let onCloseFilter: () -> Void
 
     @State private var showGroupByMenu = false
@@ -31,17 +31,11 @@ struct TaskListToolbar: View {
     @State private var filterHover = false
     @State private var sortHover = false
     @State private var groupHover = false
-    @State private var myHover = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            filterButton
-            if showsSortAndGroup {
-                sortButton
-                groupButton
-            }
-            Spacer(minLength: 0)
-            myToggleButton
+        ViewThatFits(in: .horizontal) {
+            toolbarRow(compact: false)
+            toolbarRow(compact: true)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(BVColor.bg)
@@ -50,26 +44,24 @@ struct TaskListToolbar: View {
         }
     }
 
-    private var isMyActive: Bool {
-        guard let mf = myOwnerFilter else { return false }
-        return !mf.values.isEmpty
+    private func toolbarRow(compact: Bool) -> some View {
+        HStack(spacing: 0) {
+            viewModePicker
+                .fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 8)
+            HStack(spacing: 0) {
+                filterButton(compact: compact)
+                if showsSortAndGroup {
+                    sortButton(compact: compact)
+                    groupButton(compact: compact)
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(maxWidth: .infinity)
     }
 
-    /// "내 것" picker 는 single-select 라 아바타로 노출 가능한 경우는 값이 한 개이고
-    /// `__unassigned__` 가 아닐 때뿐. op 가 `.isNot` 이면 의미가 반대(그 사람 제외)
-    /// 이므로 아바타로 표시하면 오해를 부른다 — fallback silhouette 으로 돌린다.
-    /// 그 외(0개·미지정·legacy multi 잔재)도 마찬가지.
-    private var selectedOwnerSlug: String? {
-        guard let mf = myOwnerFilter,
-              mf.op == .is,
-              mf.values.count == 1,
-              let v = mf.values.first,
-              v != "__unassigned__"
-        else { return nil }
-        return v
-    }
-
-    private var filterButton: some View {
+    private func filterButton(compact: Bool) -> some View {
         Button(action: {
             if filterStep == nil {
                 filterStep = .field
@@ -84,8 +76,10 @@ struct TaskListToolbar: View {
             HStack(spacing: 5) {
                 FilterFunnelIcon()
                     .frame(width: 12, height: 12)
-                Text(String(localized: "task.toolbar.filter", defaultValue: "Filter"))
-                    .font(.system(size: 11.5))
+                if !compact {
+                    Text(String(localized: "task.toolbar.filter", defaultValue: "Filter"))
+                        .font(.system(size: 11.5))
+                }
             }
             .foregroundColor(BVColor.fgMute)
             .padding(.horizontal, 7).padding(.vertical, 4)
@@ -100,21 +94,31 @@ struct TaskListToolbar: View {
         .panelPopover(isPresented: filterPopoverPresented, alignment: .leading) {
             filterPopoverContent
         }
+        .safeHelp(String(localized: "task.toolbar.filter", defaultValue: "Filter"))
+        .accessibilityIdentifier("VerticalTabsSidebar.Tasks.filter")
     }
 
-    private var sortButton: some View {
+    private func sortButton(compact: Bool) -> some View {
         Button(action: { showSortMenu = true }) {
-            HStack(spacing: 5) {
-                Text(String(localized: "task.toolbar.sort", defaultValue: "Sort"))
-                    .font(.system(size: 11.5))
-                    .foregroundColor(BVColor.fgMute)
-                Text(sort.label)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundColor(BVColor.fg)
-                    .lineLimit(1)
-                SortDirectionGlyph(direction: sortDirection)
-                    .foregroundColor(BVColor.fgMute)
-                    .frame(width: 7, height: 12)
+            Group {
+                if compact {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(BVColor.fgMute)
+                } else {
+                    HStack(spacing: 5) {
+                        Text(String(localized: "task.toolbar.sort", defaultValue: "Sort"))
+                            .font(.system(size: 11.5))
+                            .foregroundColor(BVColor.fgMute)
+                        Text(sort.label)
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundColor(BVColor.fg)
+                            .lineLimit(1)
+                        SortDirectionGlyph(direction: sortDirection)
+                            .foregroundColor(BVColor.fgMute)
+                            .frame(width: 7, height: 12)
+                    }
+                }
             }
             .padding(.horizontal, 7).padding(.vertical, 4)
             .background(
@@ -130,64 +134,35 @@ struct TaskListToolbar: View {
                 onPickSort(opt)
             }
         }
+        .safeHelp(String(localized: "task.toolbar.sort", defaultValue: "Sort"))
+        .accessibilityIdentifier("VerticalTabsSidebar.Tasks.sort")
     }
 
-    private var myToggleButton: some View {
-        Button(action: { showMyOwnerMenu = true }) {
+    private func groupButton(compact: Bool) -> some View {
+        Button(action: { showGroupByMenu = true }) {
             Group {
-                if let slug = selectedOwnerSlug {
-                    PersonAvatarGlyph(slug: slug, size: 16)
+                if compact {
+                    Image(systemName: "rectangle.3.group")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(BVColor.fgMute)
                 } else {
-                    Image(systemName: isMyActive ? "person.crop.circle.fill" : "person.crop.circle")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(isMyActive ? BVColor.accent : BVColor.fgMute)
+                    HStack(spacing: 5) {
+                        Text(String(localized: "task.toolbar.group", defaultValue: "Group"))
+                            .font(.system(size: 11.5))
+                            .foregroundColor(BVColor.fgMute)
+                        Text(groupBy.label)
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundColor(BVColor.fg)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                        FlatDownCarat()
+                            .fill(BVColor.fgMute)
+                            .frame(width: 4.5, height: 2.5)
+                            .padding(.leading, 3)
+                    }
                 }
             }
-            .padding(.horizontal, 7).padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(myHover ? BVColor.bgHover : Color.clear)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { myHover = $0 }
-        .panelPopover(isPresented: $showMyOwnerMenu, alignment: .trailing) {
-            TaskFilterValuePicker(
-                field: .owner,
-                current: myOwnerFilter ?? TaskFilter(field: .owner, op: .is, values: []),
-                availableOwners: availableOwners,
-                onChange: { updated in
-                    onChangeMyOwnerFilter(updated.values.isEmpty ? nil : updated)
-                },
-                compact: true,
-                singleSelect: true,
-                onCommit: { showMyOwnerMenu = false }
-            )
-        }
-        .safeHelp(
-            String(localized: "task.toolbar.my.tooltip", defaultValue: "Show my tasks")
-        )
-    }
-
-    private var groupButton: some View {
-        Button(action: { showGroupByMenu = true }) {
-            HStack(spacing: 5) {
-                Text(String(localized: "task.toolbar.group", defaultValue: "Group"))
-                    .font(.system(size: 11.5))
-                    .foregroundColor(BVColor.fgMute)
-                Text(groupBy.label)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundColor(BVColor.fg)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                // 가로:세로 약 1.8:1 비율의 납작한 down-triangle. macOS SF Pro의
-                // "▾" U+25BE는 정사각에 가까워 HTML 디자인의 납작한 비율과 다르다.
-                FlatDownCarat()
-                    .fill(BVColor.fgMute)
-                    .frame(width: 4.5, height: 2.5)
-                    .padding(.leading, 3)
-            }
+            .foregroundColor(BVColor.fgMute)
             .padding(.horizontal, 7).padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 5)
@@ -204,6 +179,44 @@ struct TaskListToolbar: View {
                 onPickGroupBy(opt)
             }
         }
+        .safeHelp(String(localized: "task.toolbar.group", defaultValue: "Group"))
+        .accessibilityIdentifier("VerticalTabsSidebar.Tasks.group")
+    }
+
+    private var viewModePicker: some View {
+        HStack(spacing: 2) {
+            viewModeButton(.all, systemName: "list.bullet")
+            viewModeButton(.todayPlan, systemName: "calendar")
+        }
+        .padding(2)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(BVColor.bgElev)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(BVColor.border, lineWidth: 1)
+        )
+    }
+
+    private func viewModeButton(_ mode: TaskListViewMode, systemName: String) -> some View {
+        Button {
+            onPickViewMode(mode)
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(viewMode == mode ? BVColor.fg : BVColor.fgMute)
+                .frame(width: 24, height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(viewMode == mode ? BVColor.bgHover : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .safeHelp(mode.label)
+        .accessibilityLabel(mode.label)
+        .accessibilityIdentifier("VerticalTabsSidebar.Tasks.viewMode.\(mode.rawValue)")
     }
 
     private var filterPopoverPresented: Binding<Bool> {

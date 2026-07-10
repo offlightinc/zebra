@@ -146,13 +146,6 @@ final class TaskListViewModel: ObservableObject {
     @Published var collapsedSections: Set<String> = [] {
         didSet { persistState() }
     }
-    /// Owner filter applied via the "내 것" toolbar entry-point. Kept separate from
-    /// `filters` so the chip row can render it as a distinct chip and the toolbar
-    /// can own its own popover. nil = inactive.
-    @Published var myOwnerFilter: TaskFilter? = nil {
-        didSet { persistState() }
-    }
-
     private var persistenceRootPath: String?
     private var isRestoringState = false
 
@@ -166,10 +159,17 @@ final class TaskListViewModel: ObservableObject {
         groupBy = restored.resolvedGroupBy
         sort = restored.resolvedSort
         sortDirection = restored.resolvedSortDirection
-        filters = restored.resolvedFilters
+        filters = Self.migratedFilters(
+            restored.resolvedFilters,
+            legacyOwnerFilter: restored.resolvedMyOwnerFilter
+        )
         collapsedSections = Set(restored.collapsedSections)
-        myOwnerFilter = restored.resolvedMyOwnerFilter
         isRestoringState = false
+        if restored.resolvedMyOwnerFilter != nil {
+            // Rewrite once without the retired shortcut state so future loads
+            // have one visible owner-filter source of truth.
+            persistState()
+        }
     }
 
     func setFilter(_ filter: TaskFilter) {
@@ -185,11 +185,7 @@ final class TaskListViewModel: ObservableObject {
     }
 
     func visibleTasks(from tasks: [TaskItem]) -> [TaskItem] {
-        var allFilters = filters
-        if let mf = myOwnerFilter, !mf.values.isEmpty {
-            allFilters.append(mf)
-        }
-        return Self.applyFilters(tasks, allFilters)
+        Self.applyFilters(tasks, filters)
     }
 
     func displayTasks(from tasks: [TaskItem]) -> [TaskItem] {
@@ -215,11 +211,66 @@ final class TaskListViewModel: ObservableObject {
                 sortDirection: sortDirection,
                 filters: filters,
                 collapsedSections: collapsedSections,
-                myOwnerFilter: myOwnerFilter,
+                myOwnerFilter: nil,
                 viewMode: viewMode
             ),
             rootPath: rootPath
         )
+    }
+
+    /// Converts the retired single-owner toolbar filter into the regular owner
+    /// filter without changing the effective AND semantics of saved state.
+    static func migratedFilters(
+        _ filters: [TaskFilter],
+        legacyOwnerFilter: TaskFilter?
+    ) -> [TaskFilter] {
+        guard let legacyOwnerFilter,
+              legacyOwnerFilter.field == .owner,
+              !legacyOwnerFilter.values.isEmpty else { return filters }
+
+        var result = filters
+        guard let index = result.firstIndex(where: { $0.field == .owner }) else {
+            result.append(legacyOwnerFilter)
+            return result
+        }
+
+        let existing = result[index]
+        let existingValues = Set(existing.values)
+        let legacyValues = Set(legacyOwnerFilter.values)
+        let merged: TaskFilter
+
+        switch (existing.op, legacyOwnerFilter.op) {
+        case (.is, .is):
+            let intersection = existingValues.intersection(legacyValues).sorted()
+            merged = TaskFilter(
+                field: .owner,
+                op: .is,
+                values: intersection.isEmpty ? ["__no_owner_matches__"] : intersection
+            )
+        case (.is, .isNot):
+            let remaining = existingValues.subtracting(legacyValues).sorted()
+            merged = TaskFilter(
+                field: .owner,
+                op: .is,
+                values: remaining.isEmpty ? ["__no_owner_matches__"] : remaining
+            )
+        case (.isNot, .is):
+            let remaining = legacyValues.subtracting(existingValues).sorted()
+            merged = TaskFilter(
+                field: .owner,
+                op: .is,
+                values: remaining.isEmpty ? ["__no_owner_matches__"] : remaining
+            )
+        case (.isNot, .isNot):
+            merged = TaskFilter(
+                field: .owner,
+                op: .isNot,
+                values: existingValues.union(legacyValues).sorted()
+            )
+        }
+
+        result[index] = merged
+        return result
     }
 
     /// Filter chain: 필드 내 OR (values 배열 포함), 필드 간 AND (every).
