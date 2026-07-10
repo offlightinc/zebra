@@ -1330,7 +1330,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(payload["nextPlaybookVersion"] as? String, "v1")
         XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "classify_source")
         XCTAssertNil(payload["reason"])
-        XCTAssertTrue(try XCTUnwrap(payload["nextPrompt"] as? String).contains("fallback report"))
+        let initialPrompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+        XCTAssertTrue(initialPrompt.contains("fallback report"))
+        XCTAssertFalse(initialPrompt.contains("Blocked Recovery Prompt"), initialPrompt)
+        XCTAssertFalse(initialPrompt.contains("skip this source for this Source Onboarding run"), initialPrompt)
 
         let approvedExport = root.appendingPathComponent("approved-kakaotalk-export.txt", isDirectory: false)
         try "approved sample body for GBrain ingest".write(to: approvedExport, atomically: true, encoding: .utf8)
@@ -1581,6 +1584,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(waitingPayload["nextSourceID"] as? String, "custom-export")
         XCTAssertEqual(waitingPayload["nextPlaybookStepID"] as? String, "classify_source")
         XCTAssertTrue((waitingPayload["reason"] as? String)?.hasPrefix("waiting:") == true)
+        let waitingPrompt = try XCTUnwrap(waitingPayload["nextPrompt"] as? String)
+        XCTAssertTrue(waitingPrompt.contains("Waiting Prompt"), waitingPrompt)
+        XCTAssertTrue(waitingPrompt.contains("Needed action:"), waitingPrompt)
+        XCTAssertFalse(waitingPrompt.contains("Blocked Recovery Prompt"), waitingPrompt)
+        XCTAssertFalse(waitingPrompt.contains("skip this source for this Source Onboarding run"), waitingPrompt)
 
         let loaded = try readSourceOnboardingState(at: stateURL)
         XCTAssertNotEqual(loaded.status, .completed)
@@ -1593,6 +1601,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let resumedPayload = try jsonObject(from: resumed.stdout)
         XCTAssertEqual(resumedPayload["nextSourceID"] as? String, "custom-export")
         XCTAssertEqual(resumedPayload["nextPlaybookStepID"] as? String, "classify_source")
+        let resumedWaitingPrompt = try XCTUnwrap(resumedPayload["nextPrompt"] as? String)
+        XCTAssertTrue(resumedWaitingPrompt.contains("Waiting Prompt"), resumedWaitingPrompt)
+        XCTAssertFalse(resumedWaitingPrompt.contains("Blocked Recovery Prompt"), resumedWaitingPrompt)
 
         let blocked = try runProcess(
             executableURL: helperURL,
@@ -1608,6 +1619,14 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(blocked.status, 0, "stdout:\n\(blocked.stdout)\nstderr:\n\(blocked.stderr)")
         let blockedPayload = try jsonObject(from: blocked.stdout)
         XCTAssertTrue((blockedPayload["reason"] as? String)?.hasPrefix("blocked:") == true)
+        XCTAssertEqual(blockedPayload["nextSourceID"] as? String, "custom-export")
+        XCTAssertEqual(blockedPayload["nextPlaybookStepID"] as? String, "classify_source")
+        let blockedPrompt = try XCTUnwrap(blockedPayload["nextPrompt"] as? String)
+        XCTAssertTrue(blockedPrompt.contains("Blocked Recovery Prompt"), blockedPrompt)
+        XCTAssertTrue(blockedPrompt.contains("no viable path until vendor export is available"), blockedPrompt)
+        XCTAssertTrue(blockedPrompt.contains("provide the needed action and continue"), blockedPrompt)
+        XCTAssertTrue(blockedPrompt.contains("skip this source for this Source Onboarding run"), blockedPrompt)
+        XCTAssertTrue(blockedPrompt.contains("zebra-source-onboarding fallback report --source custom-export --step classify_source --status skipped"), blockedPrompt)
 
         let onboardingRoot = stateURL.deletingLastPathComponent()
         let blockedState = try readSourceOnboardingState(at: stateURL)
@@ -1636,6 +1655,36 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(combinedControlPlane.contains("hello from private chat"), combinedControlPlane)
         XCTAssertTrue(combinedControlPlane.contains("<redacted-secret>"), combinedControlPlane)
         XCTAssertTrue(combinedControlPlane.contains("<redacted-body>"), combinedControlPlane)
+
+        let skipped = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "fallback", "report",
+                "--source", "custom-export",
+                "--step", "classify_source",
+                "--status", "skipped",
+                "--summary", "user chose to skip Custom Export during this Source Onboarding run",
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(skipped.status, 0, "stdout:\n\(skipped.stdout)\nstderr:\n\(skipped.stderr)")
+        let skippedPayload = try jsonObject(from: skipped.stdout)
+        XCTAssertEqual(skippedPayload["nextSourceID"] as? String, "custom-export")
+        XCTAssertEqual(skippedPayload["nextPlaybookStepID"] as? String, "complete")
+
+        let finalReport = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--source", "custom-export"],
+            environment: environment
+        )
+        XCTAssertEqual(finalReport.status, 0, "stdout:\n\(finalReport.stdout)\nstderr:\n\(finalReport.stderr)")
+        let finalPayload = try jsonObject(from: finalReport.stdout)
+        XCTAssertEqual(finalPayload["completedSourceDisposition"] as? String, "skipped")
+        XCTAssertEqual(finalPayload["complete"] as? Bool, true)
+
+        let completedState = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(completedState.status, .completed)
+        XCTAssertEqual(completedState.progress.sourceRows["custom-export"]?.status, "skipped")
     }
 
     @MainActor

@@ -3258,6 +3258,120 @@ struct ZebraSourceOnboardingHelper {
             "nextPromptPath": path,
         }
 
+    def fallback_attention_prompt_suffix(source_id, step_id, display, row):
+        if row.get("status") != "attention":
+            return ""
+        if row.get("playbookStepID") != step_id:
+            return ""
+        reason = str(row.get("attentionReason") or "").strip()
+        if not reason:
+            return ""
+
+        def reason_body(prefix):
+            body = reason[len(prefix):].strip() if reason.startswith(prefix) else reason
+            return compact_completion_value(body or reason, limit=240)
+
+        language = onboarding_language()
+        if reason.startswith("blocked:"):
+            blocker = reason_body("blocked:")
+            skip_summary = "user chose to skip " + display + " during this Source Onboarding run"
+            if language == "ko":
+                return textwrap.dedent(f'''
+
+                # Blocked Recovery Prompt
+                `{display}`는 여기까지 확인했지만 현재 조건으로는 더 진행할 수 없습니다.
+
+                막힌 이유:
+                - {blocker}
+
+                계속하려면 필요한 export file, permission, CLI auth, readable file, 또는 access method를 사용자가 제공해야 합니다.
+                사용자에게 필요한 조치를 제공해서 계속할지, 아니면 이번 Source Onboarding run에서 이 source를 건너뛸지 물어보세요.
+
+                사용자가 계속하겠다고 하면 필요한 조치를 기다린 뒤 같은 source/step을 재시도하세요.
+                사용자가 건너뛰겠다고 하면 아래 명령으로 이 source를 닫으세요:
+
+                ```bash
+                zebra-source-onboarding fallback report --source {source_id} --step {step_id} --status skipped --summary "{skip_summary}"
+                ```
+                ''').rstrip()
+            if language == "ja":
+                return textwrap.dedent(f'''
+
+                # Blocked Recovery Prompt
+                `{display}` はここまで確認しましたが、現在の条件ではこれ以上進めません。
+
+                ブロック理由:
+                - {blocker}
+
+                続行するには、必要な export file、permission、CLI auth、readable file、または access method をユーザーが提供する必要があります。
+                必要な対応を提供して続行するか、この Source Onboarding run ではこの source をスキップするかをユーザーに尋ねてください。
+
+                ユーザーが続行を選んだら、必要な対応を待って同じ source/step を再試行してください。
+                ユーザーがスキップを選んだら、次のコマンドでこの source を閉じてください:
+
+                ```bash
+                zebra-source-onboarding fallback report --source {source_id} --step {step_id} --status skipped --summary "{skip_summary}"
+                ```
+                ''').rstrip()
+            return textwrap.dedent(f'''
+
+            # Blocked Recovery Prompt
+            `{display}` has been checked as far as possible, but the current conditions leave no currently viable next step.
+
+            Blocked reason:
+            - {blocker}
+
+            Continuing requires the user to provide the missing export file, permission, CLI auth, readable file, or access method.
+            Ask the user whether they want to provide the needed action and continue, or skip this source for this Source Onboarding run.
+
+            If the user chooses to continue, wait for the missing prerequisite and retry this same source/step.
+            If the user chooses to skip, close this source with:
+
+            ```bash
+            zebra-source-onboarding fallback report --source {source_id} --step {step_id} --status skipped --summary "{skip_summary}"
+            ```
+            ''').rstrip()
+
+        if reason.startswith("waiting:"):
+            action = reason_body("waiting:")
+            if language == "ko":
+                return textwrap.dedent(f'''
+
+                # Waiting Prompt
+                `{display}`는 사용자 조치가 필요해서 대기 중입니다.
+
+                필요한 조치:
+                - {action}
+
+                사용자에게 위 조치를 안내하고, 조치가 준비되면 같은 source/step을 재시도하세요.
+                이 상태를 no viable path 또는 terminal blocked로 설명하지 마세요.
+                ''').rstrip()
+            if language == "ja":
+                return textwrap.dedent(f'''
+
+                # Waiting Prompt
+                `{display}` はユーザー対応が必要なため待機中です。
+
+                必要な対応:
+                - {action}
+
+                ユーザーに上の対応を案内し、対応が準備できたら同じ source/step を再試行してください。
+                この状態を no viable path や terminal blocked として説明しないでください。
+                ''').rstrip()
+            return textwrap.dedent(f'''
+
+            # Waiting Prompt
+            `{display}` is waiting on user action.
+
+            Needed action:
+            - {action}
+
+            Tell the user the needed action, then retry this same source/step once it is available.
+            Do not describe this as no viable path or terminal blocked.
+            ''').rstrip()
+
+        return ""
+
     def fallback_step_prompt(source_id, step_id, state, row):
         progress = ensure_progress(state)
         record = uncataloged_record_for(progress, source_id)
@@ -3331,11 +3445,14 @@ struct ZebraSourceOnboardingHelper {
         - Do not edit `source-onboarding-state.json` directly.
         - Do not store raw source body, token, cookie, OAuth code, private full path, raw CLI stdout, or transcript content in Source Onboarding state or fallback promotion artifacts.
         - Approved source body may be written only to the GBrain ingest target after `confirm_ingest_plan` is complete.
+        - Do not ask the user to skip after a first failed attempt. Before reporting `blocked:`, exhaust reasonable local checks, a small retry when safe, and at least one viable alternative access path or user-provided export/manual-upload path.
+        - Use `waiting:` only when a known user action is likely enough to let this source continue. Use `blocked:` only when no currently viable next step remains.
         - Continue only from helper stdout `nextPrompt`; use `nextPromptPath` only as a fallback/debug file.
 
         Step instructions:
 
         {instruction}
+        {fallback_attention_prompt_suffix(source_id, step_id, display, row)}
         ''').strip()
 
     def set_gmail_row_state(state, row_status, phase, step_id, timestamp=None, attention_reason=None, result_summary=None, run_state_path=None):
