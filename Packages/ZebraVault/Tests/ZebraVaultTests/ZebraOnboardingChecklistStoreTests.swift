@@ -14,6 +14,33 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testDidBecomeCompleteOnlyOnTransitionToAllEnabledStepsCompleted() {
+        let allSteps: Set<ZebraOnboardingChecklistStepID> = [
+            .agent, .gbrainRuntime, .gbrain, .adapter, .sourceOnboarding,
+        ]
+        let oneRemaining = allSteps.subtracting([.sourceOnboarding])
+
+        XCTAssertTrue(
+            ZebraOnboardingChecklistStore.didBecomeComplete(
+                previousCompletedStepIDs: oneRemaining,
+                currentCompletedStepIDs: allSteps
+            )
+        )
+        XCTAssertFalse(
+            ZebraOnboardingChecklistStore.didBecomeComplete(
+                previousCompletedStepIDs: allSteps,
+                currentCompletedStepIDs: allSteps
+            )
+        )
+        XCTAssertFalse(
+            ZebraOnboardingChecklistStore.didBecomeComplete(
+                previousCompletedStepIDs: oneRemaining,
+                currentCompletedStepIDs: oneRemaining
+            )
+        )
+    }
+
+    @MainActor
     func testChecklistInsertsRuntimeSetupBeforeGBrainAndShiftsNumbers() throws {
         let root = try makeTemporaryDirectory()
         let runtimeStateURL = root
