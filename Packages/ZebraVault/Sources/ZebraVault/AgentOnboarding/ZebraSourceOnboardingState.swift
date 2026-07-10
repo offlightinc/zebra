@@ -114,6 +114,8 @@ extension ZebraSourceOnboardingState {
         var activeSourceID: String?
         var sourceRows: [String: SourceRow]
         var pendingQuestion: PendingQuestion?
+        var actionReview: ActionReview?
+        var dailyPlan: DailyPlan?
         // Deferred source-order slice:
         // var importanceOrder: [String]
 
@@ -125,7 +127,9 @@ extension ZebraSourceOnboardingState {
             executionOrder: [String]? = nil,
             activeSourceID: String? = nil,
             sourceRows: [String: SourceRow] = [:],
-            pendingQuestion: PendingQuestion? = nil
+            pendingQuestion: PendingQuestion? = nil,
+            actionReview: ActionReview? = nil,
+            dailyPlan: DailyPlan? = nil
         ) {
             self.rawSourceInput = rawSourceInput
             self.normalizedSourceList = normalizedSourceList
@@ -135,6 +139,8 @@ extension ZebraSourceOnboardingState {
             self.activeSourceID = activeSourceID
             self.sourceRows = sourceRows
             self.pendingQuestion = pendingQuestion
+            self.actionReview = actionReview
+            self.dailyPlan = dailyPlan
         }
 
         private enum CodingKeys: String, CodingKey {
@@ -147,6 +153,8 @@ extension ZebraSourceOnboardingState {
             case activeSourceID
             case sourceRows
             case pendingQuestion
+            case actionReview
+            case dailyPlan
         }
 
         init(from decoder: Decoder) throws {
@@ -177,6 +185,14 @@ extension ZebraSourceOnboardingState {
                 PendingQuestion.self,
                 forKey: .pendingQuestion
             )
+            actionReview = try container.decodeIfPresent(
+                ActionReview.self,
+                forKey: .actionReview
+            )
+            dailyPlan = try container.decodeIfPresent(
+                DailyPlan.self,
+                forKey: .dailyPlan
+            )
         }
 
         func encode(to encoder: Encoder) throws {
@@ -189,6 +205,8 @@ extension ZebraSourceOnboardingState {
             try container.encodeIfPresent(activeSourceID, forKey: .activeSourceID)
             try container.encode(sourceRows, forKey: .sourceRows)
             try container.encodeIfPresent(pendingQuestion, forKey: .pendingQuestion)
+            try container.encodeIfPresent(actionReview, forKey: .actionReview)
+            try container.encodeIfPresent(dailyPlan, forKey: .dailyPlan)
         }
     }
 
@@ -266,5 +284,85 @@ extension ZebraSourceOnboardingState {
         var prompt: String
         var status: String
         var askedAt: Date?
+    }
+
+    struct ActionReview: Codable, Equatable, Sendable {
+        var required: Bool
+        var status: String
+        var reviewID: String?
+        var manifestPath: String?
+        var skillPath: String?
+        var eligibleSourceCount: Int?
+        var candidateCount: Int?
+        var approvedCount: Int?
+        var taskPaths: [String]
+        var reason: String?
+        var updatedAt: Date?
+
+        init(
+            required: Bool,
+            status: String,
+            reviewID: String? = nil,
+            manifestPath: String? = nil,
+            skillPath: String? = nil,
+            eligibleSourceCount: Int? = nil,
+            candidateCount: Int? = nil,
+            approvedCount: Int? = nil,
+            taskPaths: [String] = [],
+            reason: String? = nil,
+            updatedAt: Date? = nil
+        ) {
+            self.required = required
+            self.status = status
+            self.reviewID = reviewID
+            self.manifestPath = manifestPath
+            self.skillPath = skillPath
+            self.eligibleSourceCount = eligibleSourceCount
+            self.candidateCount = candidateCount
+            self.approvedCount = approvedCount
+            self.taskPaths = taskPaths
+            self.reason = reason
+            self.updatedAt = updatedAt
+        }
+    }
+
+    struct DailyPlan: Codable, Equatable, Sendable {
+        var required: Bool
+        var status: String
+        var skillPath: String?
+        var calendarCoverage: String?
+        var freeMinutes: Int?
+        var scheduledMinutes: Int?
+        var plannedTaskCount: Int?
+        var calendarWriteStatus: String?
+        var calendarEventIDs: [String]
+        var reason: String?
+        var updatedAt: Date?
+
+        init(
+            required: Bool,
+            status: String,
+            skillPath: String? = nil,
+            calendarCoverage: String? = nil,
+            freeMinutes: Int? = nil,
+            scheduledMinutes: Int? = nil,
+            plannedTaskCount: Int? = nil,
+            calendarWriteStatus: String? = nil,
+            calendarEventIDs: [String] = [],
+            reason: String? = nil,
+            updatedAt: Date? = nil
+        ) {
+            self.required = required
+            self.status = status
+            self.skillPath = skillPath
+            self.calendarCoverage = calendarCoverage
+            self.freeMinutes = freeMinutes
+            self.scheduledMinutes = scheduledMinutes
+            self.plannedTaskCount = plannedTaskCount
+            self.calendarWriteStatus = calendarWriteStatus
+            self.calendarEventIDs = calendarEventIDs
+            self.reason = reason
+            self.updatedAt = updatedAt
+        }
     }
 }

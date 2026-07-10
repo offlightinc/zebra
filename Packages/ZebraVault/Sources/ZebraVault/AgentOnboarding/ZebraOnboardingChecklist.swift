@@ -616,6 +616,14 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         if state.progress.sourceRows.values.contains(where: { $0.status == "attention" }) {
             return StepCompletionResult(isComplete: false, reasons: ["source_row_attention"])
         }
+        if let actionReview = state.progress.actionReview, actionReview.required,
+           actionReview.status != "completed", actionReview.status != "skipped" {
+            return StepCompletionResult(isComplete: false, reasons: ["source_action_review_incomplete"])
+        }
+        if let dailyPlan = state.progress.dailyPlan, dailyPlan.required,
+           dailyPlan.status != "completed", dailyPlan.status != "skipped" {
+            return StepCompletionResult(isComplete: false, reasons: ["source_daily_plan_incomplete"])
+        }
         return StepCompletionResult(isComplete: true, reasons: [])
     }
 
@@ -648,7 +656,66 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
             substeps.append(uncatalogedSourceSubstep(uncataloged))
         }
 
+        if let actionReview = state.progress.actionReview, actionReview.required {
+            substeps.append(sourceActionReviewSubstep(actionReview, isParentRunning: isParentRunning))
+        }
+        if let dailyPlan = state.progress.dailyPlan, dailyPlan.required {
+            substeps.append(sourceDailyPlanSubstep(dailyPlan, isParentRunning: isParentRunning))
+        }
+
         return substeps
+    }
+
+    private func sourceActionReviewSubstep(
+        _ review: ZebraSourceOnboardingState.ActionReview,
+        isParentRunning: Bool
+    ) -> ZebraOnboardingChecklistSubstepSnapshot {
+        let isCompleted = review.status == "completed"
+        let isSkipped = review.status == "skipped"
+        let isAttention = review.status == "attention"
+        let isTerminal = isCompleted || isSkipped
+        return ZebraOnboardingChecklistSubstepSnapshot(
+            id: "source-action-review",
+            title: String(
+                localized: "brain.onboarding.source.actionReview",
+                defaultValue: "Find your first tasks"
+            ),
+            detail: review.reason,
+            isCompleted: isCompleted,
+            isActive: !isTerminal,
+            isWaitingForUser: review.status == "awaiting_approval",
+            isRunning: isParentRunning && !isTerminal && !isAttention,
+            showsStart: false,
+            wasStartedBefore: review.status != "ready",
+            isAttention: isAttention,
+            isSkipped: isSkipped
+        )
+    }
+
+    private func sourceDailyPlanSubstep(
+        _ plan: ZebraSourceOnboardingState.DailyPlan,
+        isParentRunning: Bool
+    ) -> ZebraOnboardingChecklistSubstepSnapshot {
+        let isCompleted = plan.status == "completed"
+        let isSkipped = plan.status == "skipped"
+        let isAttention = plan.status == "attention"
+        let isTerminal = isCompleted || isSkipped
+        return ZebraOnboardingChecklistSubstepSnapshot(
+            id: "source-daily-plan",
+            title: String(
+                localized: "brain.onboarding.source.dailyPlan",
+                defaultValue: "Plan your first day"
+            ),
+            detail: plan.reason,
+            isCompleted: isCompleted,
+            isActive: !isTerminal,
+            isWaitingForUser: plan.status == "awaiting_approval" || plan.status == "awaiting_calendar_approval",
+            isRunning: isParentRunning && !isTerminal && !isAttention,
+            showsStart: false,
+            wasStartedBefore: plan.status != "ready",
+            isAttention: isAttention,
+            isSkipped: isSkipped
+        )
     }
 
     private func sourceRowSubstep(
