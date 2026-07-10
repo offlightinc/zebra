@@ -231,6 +231,34 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$APP_PLIST"
           /usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$APP_PLIST"
 
+      - name: Inject Zebra PostHog token into Info.plist
+        if: steps.guard_release_assets.outputs.skip_all != 'true'
+        env:
+          ZEBRA_POSTHOG_API_KEY: ${{ secrets.ZEBRA_POSTHOG_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ZEBRA_POSTHOG_API_KEY:-}" ]; then
+            echo "Missing ZEBRA_POSTHOG_API_KEY secret" >&2
+            exit 1
+          fi
+
+          APP_PLIST="build-universal/Build/Products/Release/cmux.app/Contents/Info.plist"
+          INFO_KEY="ZebraPostHogProjectToken"
+          PLACEHOLDER="REPLACE_WITH_ZEBRA_POSTHOG_PROJECT_TOKEN"
+          /usr/libexec/PlistBuddy -c "Set :${INFO_KEY} ${ZEBRA_POSTHOG_API_KEY}" "$APP_PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :${INFO_KEY} string ${ZEBRA_POSTHOG_API_KEY}" "$APP_PLIST"
+
+          INJECTED_TOKEN="$(/usr/libexec/PlistBuddy -c "Print :${INFO_KEY}" "$APP_PLIST")"
+          if [ -z "$INJECTED_TOKEN" ] || [ "$INJECTED_TOKEN" = "$PLACEHOLDER" ]; then
+            echo "Zebra PostHog token was not injected into Info.plist" >&2
+            exit 1
+          fi
+          if [ "$INJECTED_TOKEN" != "$ZEBRA_POSTHOG_API_KEY" ]; then
+            echo "Zebra PostHog token in Info.plist does not match the release secret" >&2
+            exit 1
+          fi
+          echo "Zebra PostHog token injected into Info.plist"
+
       - name: Import signing cert
         if: steps.guard_release_assets.outputs.skip_all != 'true'
         env:
