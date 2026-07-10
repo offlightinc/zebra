@@ -2562,6 +2562,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let memoLog = root.appendingPathComponent("memo.log", isDirectory: false)
         let brain = root.appendingPathComponent("brain", isDirectory: true)
         try FileManager.default.createDirectory(at: brain, withIntermediateDirectories: true)
+        let sourceToTasksSkill = brain.appendingPathComponent(
+            ".gbrain-adapter/skills/source-to-tasks/SKILL.md",
+            isDirectory: false
+        )
+        try FileManager.default.createDirectory(
+            at: sourceToTasksSkill.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "source-to-tasks\n".write(to: sourceToTasksSkill, atomically: true, encoding: .utf8)
 
         let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
         let gbrainStateURL = root
@@ -2748,8 +2757,24 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
         loaded = try readSourceOnboardingState(at: stateURL)
-        XCTAssertEqual(loaded.status, .completed)
+        XCTAssertEqual(loaded.status, .running)
         XCTAssertEqual(loaded.progress.sourceRows["apple-notes"]?.status, "checked")
+        XCTAssertEqual(loaded.progress.actionReview?.status, "ready")
+
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["actions", "begin"],
+            environment: environment
+        ).status, 0)
+        let skipReview = try runProcess(
+            executableURL: helperURL,
+            arguments: ["actions", "report", "--status", "skipped", "--reason", "no_candidates"],
+            environment: environment
+        )
+        XCTAssertEqual(skipReview.status, 0, "stdout:\n\(skipReview.stdout)\nstderr:\n\(skipReview.stderr)")
+        loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.status, .completed)
+        XCTAssertEqual(loaded.progress.actionReview?.status, "skipped")
     }
 
     @MainActor
@@ -3551,6 +3576,311 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         XCTAssertEqual(duplicateReport.status, 1, "stdout:\n\(duplicateReport.stdout)\nstderr:\n\(duplicateReport.stderr)")
         XCTAssertEqual(try jsonObject(from: duplicateReport.stdout)["reason"] as? String, "source_not_active")
+    }
+
+    @MainActor
+    func testSourceOnboardingActionReviewRequiresApprovalAndValidTaskReceipt() throws {
+        let root = try makeTemporaryDirectory()
+        let vault = root.appendingPathComponent("brain", isDirectory: true)
+        let sourceRepo = root.appendingPathComponent("repos/gbrain", isDirectory: true)
+        let adapterRepo = root.appendingPathComponent("repos/gbrain-adapter", isDirectory: true)
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root.appendingPathComponent("onboarding/gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root.appendingPathComponent("onboarding/gbrain-adapter-state.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: vault.appendingPathComponent("sources", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: vault.appendingPathComponent("tasks", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".gbrain-adapter/skills/source-to-tasks", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".gbrain-adapter/skills/zebra-daily-planner", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: sourceRepo, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: adapterRepo, withIntermediateDirectories: true)
+        try "source-to-tasks\n".write(
+            to: vault.appendingPathComponent(".gbrain-adapter/skills/source-to-tasks/SKILL.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "zebra-daily-planner\n".write(
+            to: vault.appendingPathComponent(".gbrain-adapter/skills/zebra-daily-planner/SKILL.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let artifactURL = vault.appendingPathComponent("sources/obsidian-direct-markdown.md", isDirectory: false)
+        try "# Imported source\n\n- Send the pricing draft tomorrow.\n".write(
+            to: artifactURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        let preexistingTaskURL = vault.appendingPathComponent("tasks/existing-task.md", isDirectory: false)
+        try "---\ntype: task\ntitle: Existing task\nstatus: todo\n---\n".write(
+            to: preexistingTaskURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: vault.path,
+            executablePath: "/usr/bin/true",
+            sourceRepoPath: sourceRepo.path
+        )
+        try writeCompletedAdapterState(
+            stateURL: adapterStateURL,
+            targetVaultPath: vault.path,
+            adapterRepoPath: adapterRepo.path
+        )
+
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: vault.path)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_GBRAIN_WRITE_TARGET_PATH": vault.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+        let initialStatus = try runProcess(executableURL: helperURL, arguments: ["status"], environment: environment)
+        XCTAssertEqual(initialStatus.status, 0, "stdout:\n\(initialStatus.stdout)\nstderr:\n\(initialStatus.stderr)")
+
+        let runStateURL = stateURL.deletingLastPathComponent()
+            .appendingPathComponent("source-run-state", isDirectory: true)
+            .appendingPathComponent("obsidian.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: runStateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let runState: [String: Any] = [
+            "artifactPath": artifactURL.path,
+            "readbackStatus": "passed",
+            "completionDisposition": "checked",
+            "completionSummary": "Obsidian ingest readback verified.",
+            "completionReportPending": true,
+        ]
+        try JSONSerialization.data(withJSONObject: runState, options: [.prettyPrinted, .sortedKeys])
+            .write(to: runStateURL, options: .atomic)
+
+        var state = try stateObject(in: stateURL)
+        var progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        progress["normalizedSourceList"] = ["obsidian"]
+        progress["executionOrder"] = ["obsidian"]
+        progress["activeSourceID"] = "obsidian"
+        progress["sourceRows"] = [
+            "obsidian": [
+                "id": "obsidian",
+                "displayName": "Obsidian",
+                "type": "vault",
+                "phase": "complete",
+                "status": "running",
+                "selectionState": "confirmed",
+                "playbookID": "obsidian.direct-markdown",
+                "playbookVersion": "v1",
+                "playbookStepID": "complete",
+                "resultSummary": "Obsidian ingest readback verified.",
+                "runStatePath": runStateURL.path,
+            ],
+        ]
+        state["status"] = "running"
+        state["progress"] = progress
+        try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+            .write(to: stateURL, options: .atomic)
+
+        let report = try runProcess(
+            executableURL: helperURL,
+            arguments: ["report", "--status", "completed", "--source", "obsidian"],
+            environment: environment
+        )
+        XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
+        let reportPayload = try jsonObject(from: report.stdout)
+        XCTAssertEqual(reportPayload["complete"] as? Bool, false)
+        let readyReview = try XCTUnwrap(reportPayload["actionReview"] as? [String: Any])
+        XCTAssertEqual(readyReview["status"] as? String, "ready")
+        XCTAssertEqual(readyReview["eligibleSourceCount"] as? Int, 1)
+        XCTAssertTrue(try XCTUnwrap(reportPayload["nextPrompt"] as? String).contains("source-to-tasks/SKILL.md"))
+        let manifestPath = try XCTUnwrap(readyReview["manifestPath"] as? String)
+        let manifest = try stateObject(in: URL(fileURLWithPath: manifestPath))
+        let sources = try XCTUnwrap(manifest["sources"] as? [[String: Any]])
+        let expectedArtifactPath = artifactURL.path.hasPrefix("/var/") ? "/private\(artifactURL.path)" : artifactURL.path
+        XCTAssertEqual(sources.first?["artifactPath"] as? String, expectedArtifactPath)
+        let existingTaskPaths = try XCTUnwrap(manifest["existingTaskPaths"] as? [String])
+        XCTAssertEqual(existingTaskPaths.count, 1)
+
+        let reportBeforeApproval = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "actions", "report", "--status", "completed",
+                "--candidate-count", "1", "--approved-count", "1",
+                "--task-path", "tasks/existing-task.md",
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(reportBeforeApproval.status, 1)
+        XCTAssertEqual(
+            try jsonObject(from: reportBeforeApproval.stdout)["reason"] as? String,
+            "action_review_approval_required"
+        )
+
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["actions", "begin"],
+            environment: environment
+        ).status, 0)
+        let awaiting = try runProcess(
+            executableURL: helperURL,
+            arguments: ["actions", "awaiting-approval", "--candidate-count", "2"],
+            environment: environment
+        )
+        XCTAssertEqual(awaiting.status, 0)
+        XCTAssertEqual(
+            (try jsonObject(from: awaiting.stdout)["actionReview"] as? [String: Any])?["status"] as? String,
+            "awaiting_approval"
+        )
+        let checklistStore = makeChecklistStore(homeURL: root)
+        var actionSubstep = try XCTUnwrap(
+            checklistStore.sourceOnboardingSubstepsFromCachedState(
+                isParentRunning: true,
+                showsStartForActiveSource: false
+            ).first(where: { $0.id == "source-action-review" })
+        )
+        XCTAssertTrue(actionSubstep.isWaitingForUser)
+        XCTAssertTrue(actionSubstep.isRunning)
+
+        let preexistingReport = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "actions", "report", "--status", "completed",
+                "--candidate-count", "2", "--approved-count", "1",
+                "--task-path", "tasks/existing-task.md",
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(preexistingReport.status, 1)
+        XCTAssertEqual(
+            try jsonObject(from: preexistingReport.stdout)["reason"] as? String,
+            "task_preexisted_action_review"
+        )
+
+        let outsideTask = vault.appendingPathComponent("not-a-task.md", isDirectory: false)
+        try "---\ntype: task\n---\n".write(to: outsideTask, atomically: true, encoding: .utf8)
+        let invalidReport = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "actions", "report", "--status", "completed",
+                "--candidate-count", "2", "--approved-count", "1",
+                "--task-path", outsideTask.path,
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(invalidReport.status, 1)
+        XCTAssertEqual(try jsonObject(from: invalidReport.stdout)["reason"] as? String, "task_path_outside_tasks")
+
+        let taskURL = vault.appendingPathComponent("tasks/share-pricing-draft.md", isDirectory: false)
+        try "---\ntype: task\ntitle: Share pricing draft\nstatus: todo\n---\n".write(
+            to: taskURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        let completed = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "actions", "report", "--status", "completed",
+                "--candidate-count", "2", "--approved-count", "1",
+                "--task-path", "tasks/share-pricing-draft.md",
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(completed.status, 0, "stdout:\n\(completed.stdout)\nstderr:\n\(completed.stderr)")
+        let completedPayload = try jsonObject(from: completed.stdout)
+        XCTAssertEqual(completedPayload["complete"] as? Bool, false)
+        XCTAssertEqual(completedPayload["status"] as? String, "running")
+        let completedReview = try XCTUnwrap(completedPayload["actionReview"] as? [String: Any])
+        XCTAssertEqual(completedReview["status"] as? String, "completed")
+        XCTAssertEqual(completedReview["approvedCount"] as? Int, 1)
+        let expectedTaskPath = taskURL.path.hasPrefix("/var/") ? "/private\(taskURL.path)" : taskURL.path
+        XCTAssertEqual(completedReview["taskPaths"] as? [String], [expectedTaskPath])
+        let readyPlan = try XCTUnwrap(completedPayload["dailyPlan"] as? [String: Any])
+        XCTAssertEqual(readyPlan["status"] as? String, "ready")
+        XCTAssertTrue(try XCTUnwrap(completedPayload["nextPrompt"] as? String).contains("zebra-daily-planner/SKILL.md"))
+        actionSubstep = try XCTUnwrap(
+            checklistStore.sourceOnboardingSubstepsFromCachedState(
+                isParentRunning: false,
+                showsStartForActiveSource: false
+            ).first(where: { $0.id == "source-action-review" })
+        )
+        XCTAssertTrue(actionSubstep.isCompleted)
+
+        let reportBeforeProposal = try runProcess(
+            executableURL: helperURL,
+            arguments: ["planner", "report", "--status", "completed", "--calendar-write-status", "not_requested"],
+            environment: environment
+        )
+        XCTAssertEqual(reportBeforeProposal.status, 1)
+        XCTAssertEqual(try jsonObject(from: reportBeforeProposal.stdout)["reason"] as? String, "daily_plan_proposal_required")
+
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["planner", "begin"],
+            environment: environment
+        ).status, 0)
+        let proposed = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "planner", "propose",
+                "--calendar-coverage", "work calendar only; personal calendar not in scope",
+                "--free-minutes", "480",
+                "--scheduled-minutes", "240",
+                "--task-count", "3",
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(proposed.status, 0, "stdout:\n\(proposed.stdout)\nstderr:\n\(proposed.stderr)")
+        XCTAssertEqual(
+            (try jsonObject(from: proposed.stdout)["dailyPlan"] as? [String: Any])?["status"] as? String,
+            "awaiting_approval"
+        )
+
+        let pendingCalendar = try runProcess(
+            executableURL: helperURL,
+            arguments: ["planner", "report", "--status", "completed", "--calendar-write-status", "pending_approval"],
+            environment: environment
+        )
+        XCTAssertEqual(pendingCalendar.status, 0)
+        let pendingPayload = try jsonObject(from: pendingCalendar.stdout)
+        XCTAssertEqual(pendingPayload["complete"] as? Bool, false)
+        XCTAssertEqual(
+            (pendingPayload["dailyPlan"] as? [String: Any])?["status"] as? String,
+            "awaiting_calendar_approval"
+        )
+
+        let plannerCompleted = try runProcess(
+            executableURL: helperURL,
+            arguments: [
+                "planner", "report", "--status", "completed",
+                "--calendar-write-status", "executed", "--event-id", "calendar-event-1",
+            ],
+            environment: environment
+        )
+        XCTAssertEqual(plannerCompleted.status, 0, "stdout:\n\(plannerCompleted.stdout)\nstderr:\n\(plannerCompleted.stderr)")
+        let plannerCompletedPayload = try jsonObject(from: plannerCompleted.stdout)
+        XCTAssertEqual(plannerCompletedPayload["complete"] as? Bool, true)
+        XCTAssertEqual(plannerCompletedPayload["status"] as? String, "completed")
+        let completedPlan = try XCTUnwrap(plannerCompletedPayload["dailyPlan"] as? [String: Any])
+        XCTAssertEqual(completedPlan["calendarWriteStatus"] as? String, "executed")
+        XCTAssertEqual(completedPlan["calendarEventIDs"] as? [String], ["calendar-event-1"])
+        let dailyPlanSubstep = try XCTUnwrap(
+            checklistStore.sourceOnboardingSubstepsFromCachedState(
+                isParentRunning: false,
+                showsStartForActiveSource: false
+            ).first(where: { $0.id == "source-daily-plan" })
+        )
+        XCTAssertTrue(dailyPlanSubstep.isCompleted)
     }
 
     @MainActor
@@ -8797,6 +9127,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                     "adapterSkillRouter": true,
                     "adapterSkillDailyTaskManager": true,
                     "adapterSkillDailyTaskPrep": true,
+                    "adapterSkillSourceToTasks": true,
+                    "adapterSkillZebraDailyPlanner": true,
                     "goalsReadme": true,
                     "tasksReadme": true,
                     "resolverBlock": true,
@@ -8827,11 +9159,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             at: vault.appendingPathComponent(".gbrain-adapter/skills/daily-task-prep", isDirectory: true),
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".gbrain-adapter/skills/source-to-tasks", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".gbrain-adapter/skills/zebra-daily-planner", isDirectory: true),
+            withIntermediateDirectories: true
+        )
         try FileManager.default.createDirectory(at: vault.appendingPathComponent("goals", isDirectory: true), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: vault.appendingPathComponent("tasks", isDirectory: true), withIntermediateDirectories: true)
         try "router\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/router/SKILL.md"), atomically: true, encoding: .utf8)
         try "manager\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/daily-task-manager/SKILL.md"), atomically: true, encoding: .utf8)
         try "prep\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/daily-task-prep/SKILL.md"), atomically: true, encoding: .utf8)
+        try "source-to-tasks\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/source-to-tasks/SKILL.md"), atomically: true, encoding: .utf8)
+        try "zebra-daily-planner\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/zebra-daily-planner/SKILL.md"), atomically: true, encoding: .utf8)
         try "goals\n".write(to: vault.appendingPathComponent("goals/README.md"), atomically: true, encoding: .utf8)
         try "tasks\n".write(to: vault.appendingPathComponent("tasks/README.md"), atomically: true, encoding: .utf8)
         for file in ["RESOLVER.md", "schema.md", "AGENTS.md"] {

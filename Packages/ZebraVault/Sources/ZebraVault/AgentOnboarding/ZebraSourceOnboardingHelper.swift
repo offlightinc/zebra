@@ -995,6 +995,8 @@ struct ZebraSourceOnboardingHelper {
                 "activeSourceID": None,
                 "sourceRows": {},
                 "pendingQuestion": None,
+                "actionReview": None,
+                "dailyPlan": None,
             },
             "updatedAt": timestamp,
         }
@@ -1022,6 +1024,8 @@ struct ZebraSourceOnboardingHelper {
             "activeSourceID": None,
             "sourceRows": {},
             "pendingQuestion": None,
+            "actionReview": None,
+            "dailyPlan": None,
         })
         return state
 
@@ -1561,6 +1565,8 @@ struct ZebraSourceOnboardingHelper {
         progress.setdefault("activeSourceID", None)
         progress.setdefault("sourceRows", {})
         progress.setdefault("pendingQuestion", None)
+        progress.setdefault("actionReview", None)
+        progress.setdefault("dailyPlan", None)
         state["progress"] = progress
         return progress
 
@@ -1606,8 +1612,544 @@ struct ZebraSourceOnboardingHelper {
         if has_attention_row:
             return "attention"
         if all_execution_sources_finished(progress):
-            return "completed"
+            action_review = progress.get("actionReview") if isinstance(progress.get("actionReview"), dict) else None
+            # States created before source action review shipped remain complete.
+            if not action_review or not action_review.get("required"):
+                return "completed"
+            if action_review.get("status") in {"completed", "skipped"}:
+                daily_plan = progress.get("dailyPlan") if isinstance(progress.get("dailyPlan"), dict) else None
+                # States completed before daily planning shipped remain complete.
+                if not daily_plan or not daily_plan.get("required"):
+                    return "completed"
+                if daily_plan.get("status") in {"completed", "skipped"}:
+                    return "completed"
+                if daily_plan.get("status") == "attention":
+                    return "attention"
+                return "running"
+            if action_review.get("status") == "attention":
+                return "attention"
+            return "running"
         return "running"
+
+    def action_review_manifest_path():
+        return state_path.parent / "source-action-review-manifest.json"
+
+    def action_review_source_records(state):
+        progress = ensure_progress(state)
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        records = []
+        for source_id in ensure_execution_order(progress):
+            row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else {}
+            if row.get("status") != "checked":
+                continue
+            run_state = load_source_run_state(source_id)
+            artifact_value = run_state.get("artifactPath") or run_state.get("gbrainArtifact")
+            if not isinstance(artifact_value, str) or not artifact_value.strip():
+                continue
+            artifact = Path(artifact_value).expanduser()
+            if not artifact.is_file():
+                continue
+            readback_status = run_state.get("readbackStatus")
+            if readback_status and readback_status != "passed":
+                continue
+            records.append({
+                "sourceID": source_id,
+                "displayName": row.get("displayName") or source_display_name(source_id),
+                "artifactPath": str(artifact.resolve(strict=False)),
+                "readbackStatus": readback_status or "passed",
+                "resultSummary": row.get("resultSummary") or run_state.get("completionSummary"),
+                "runStatePath": row.get("runStatePath"),
+            })
+        return records
+
+    def prepare_action_review(state):
+        progress = ensure_progress(state)
+        existing = progress.get("actionReview") if isinstance(progress.get("actionReview"), dict) else None
+        if existing and existing.get("required"):
+            return state, existing
+        timestamp = now()
+        records = action_review_source_records(state)
+        review_id = str(uuid.uuid4())
+        target = gbrain_target_directory(state)
+        target_path = str(target.resolve(strict=False)) if target is not None else ""
+        existing_task_paths = []
+        if target is not None:
+            tasks_directory = target / "tasks"
+            if tasks_directory.is_dir():
+                existing_task_paths = sorted(
+                    str(path.resolve(strict=False))
+                    for path in tasks_directory.glob("*.md")
+                    if path.is_file()
+                )
+        manifest_path = action_review_manifest_path()
+        manifest = {
+            "schemaVersion": 1,
+            "reviewID": review_id,
+            "brainTargetPath": target_path,
+            "sourceOnboardingStatePath": str(state_path),
+            "createdAt": timestamp,
+            "sources": records,
+            "existingTaskPaths": existing_task_paths,
+        }
+        write_json_file(manifest_path, manifest)
+        skill_path = target / ".gbrain-adapter/skills/source-to-tasks/SKILL.md" if target is not None else None
+        if target is None or not records:
+            status_value = "skipped"
+            reason = "no_eligible_artifacts"
+        elif skill_path is None or not skill_path.is_file():
+            status_value = "attention"
+            reason = "source_to_tasks_skill_missing"
+        else:
+            status_value = "ready"
+            reason = None
+        review = {
+            "required": True,
+            "status": status_value,
+            "reviewID": review_id,
+            "manifestPath": str(manifest_path),
+            "skillPath": str(skill_path) if skill_path is not None else None,
+            "eligibleSourceCount": len(records),
+            "candidateCount": None,
+            "approvedCount": None,
+            "taskPaths": [],
+            "reason": reason,
+            "updatedAt": timestamp,
+        }
+        progress["actionReview"] = review
+        state["status"] = source_completion_status(state)
+        state["updatedAt"] = timestamp
+        save_json(state)
+        return state, review
+
+    def validated_action_task_path(state, raw_path):
+        target = gbrain_target_directory(state)
+        if target is None:
+            return None, "gbrain_target_missing"
+        target = target.resolve(strict=False)
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = target / candidate
+        candidate = candidate.resolve(strict=False)
+        tasks_root = (target / "tasks").resolve(strict=False)
+        try:
+            candidate.relative_to(tasks_root)
+        except Exception:
+            return None, "task_path_outside_tasks"
+        if candidate.suffix.lower() != ".md" or not candidate.is_file():
+            return None, "task_file_missing"
+        try:
+            content = candidate.read_text(encoding="utf-8")
+        except Exception:
+            return None, "task_file_unreadable"
+        if not re.search(r"(?m)^type:\\s*task\\s*$", content[:4096]):
+            return None, "task_type_missing"
+        review = ensure_progress(state).get("actionReview")
+        manifest = load_json(Path(review.get("manifestPath") or "")) if isinstance(review, dict) else {}
+        existing_paths = manifest.get("existingTaskPaths") if isinstance(manifest.get("existingTaskPaths"), list) else []
+        if str(candidate) in existing_paths:
+            return None, "task_preexisted_action_review"
+        return str(candidate), None
+
+    def parse_action_review_args():
+        parsed = {
+            "status": "",
+            "candidateCount": None,
+            "approvedCount": None,
+            "taskPaths": [],
+            "reason": "",
+        }
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == "--status" and index + 1 < len(args):
+                parsed["status"] = args[index + 1].strip().lower()
+                index += 2
+            elif token == "--candidate-count" and index + 1 < len(args):
+                parsed["candidateCount"] = int(args[index + 1])
+                index += 2
+            elif token == "--approved-count" and index + 1 < len(args):
+                parsed["approvedCount"] = int(args[index + 1])
+                index += 2
+            elif token == "--task-path" and index + 1 < len(args):
+                parsed["taskPaths"].append(args[index + 1])
+                index += 2
+            elif token == "--reason" and index + 1 < len(args):
+                parsed["reason"] = args[index + 1].strip()
+                index += 2
+            else:
+                raise ValueError("unknown or incomplete argument: " + token)
+        return parsed
+
+    def action_review_command():
+        subcommand = args.pop(0) if args else "status"
+        state = load_or_create_state()
+        progress = ensure_progress(state)
+        review = progress.get("actionReview") if isinstance(progress.get("actionReview"), dict) else None
+        if not review or not review.get("required"):
+            payload = summary(state)
+            payload.update({"ok": False, "reason": "action_review_not_ready"})
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if subcommand == "status":
+            payload = summary(state)
+            payload["actionReview"] = review
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        timestamp = now()
+        if subcommand == "begin":
+            if review.get("status") in {"completed", "skipped"}:
+                payload = summary(state)
+                payload.update({"ok": False, "reason": "action_review_already_terminal", "actionReview": review})
+                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                return 1
+            if review.get("status") == "attention":
+                payload = summary(state)
+                payload.update({"ok": False, "reason": review.get("reason") or "action_review_attention", "actionReview": review})
+                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                return 1
+            review["status"] = "extracting"
+        elif subcommand == "awaiting-approval":
+            try:
+                parsed = parse_action_review_args()
+            except (ValueError, TypeError):
+                print("invalid action review arguments", file=sys.stderr)
+                return 2
+            candidate_count = parsed.get("candidateCount")
+            if not isinstance(candidate_count, int) or candidate_count < 1 or candidate_count > 5:
+                print("--candidate-count must be between 1 and 5", file=sys.stderr)
+                return 2
+            review["status"] = "awaiting_approval"
+            review["candidateCount"] = candidate_count
+        elif subcommand == "report":
+            try:
+                parsed = parse_action_review_args()
+            except (ValueError, TypeError):
+                print("invalid action review arguments", file=sys.stderr)
+                return 2
+            status_value = parsed.get("status")
+            if status_value == "skipped":
+                reason = parsed.get("reason")
+                if reason not in {"no_candidates", "user_skipped", "no_eligible_artifacts"}:
+                    print("invalid or missing --reason", file=sys.stderr)
+                    return 2
+                if reason == "user_skipped" and review.get("status") != "awaiting_approval":
+                    payload = summary(state)
+                    payload.update({"ok": False, "reason": "action_review_approval_required"})
+                    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                    return 1
+                review.update({
+                    "status": "skipped",
+                    "reason": reason,
+                    "candidateCount": parsed.get("candidateCount") or review.get("candidateCount") or 0,
+                    "approvedCount": 0,
+                    "taskPaths": [],
+                })
+            elif status_value == "completed":
+                candidate_count = parsed.get("candidateCount")
+                approved_count = parsed.get("approvedCount")
+                raw_paths = parsed.get("taskPaths") or []
+                if review.get("status") != "awaiting_approval":
+                    payload = summary(state)
+                    payload.update({"ok": False, "reason": "action_review_approval_required"})
+                    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                    return 1
+                if not isinstance(candidate_count, int) or candidate_count < 1 or candidate_count > 5:
+                    print("--candidate-count must be between 1 and 5", file=sys.stderr)
+                    return 2
+                if not isinstance(approved_count, int) or approved_count < 1 or approved_count > candidate_count:
+                    print("--approved-count must be between 1 and candidate count", file=sys.stderr)
+                    return 2
+                if review.get("candidateCount") != candidate_count:
+                    payload = summary(state)
+                    payload.update({"ok": False, "reason": "candidate_count_mismatch"})
+                    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                    return 1
+                if len(raw_paths) != approved_count:
+                    print("--task-path count must equal --approved-count", file=sys.stderr)
+                    return 2
+                validated = []
+                for raw_path in raw_paths:
+                    task_path, reason = validated_action_task_path(state, raw_path)
+                    if reason:
+                        payload = summary(state)
+                        payload.update({"ok": False, "reason": reason, "taskPath": raw_path})
+                        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                        return 1
+                    validated.append(task_path)
+                review.update({
+                    "status": "completed",
+                    "reason": None,
+                    "candidateCount": candidate_count,
+                    "approvedCount": approved_count,
+                    "taskPaths": validated,
+                })
+            else:
+                print("--status must be completed or skipped", file=sys.stderr)
+                return 2
+        else:
+            print("unknown actions command: " + subcommand, file=sys.stderr)
+            return 2
+        review["updatedAt"] = timestamp
+        progress["actionReview"] = review
+        daily_plan = None
+        if subcommand == "report" and review.get("status") in {"completed", "skipped"}:
+            state, daily_plan = prepare_daily_plan(state)
+            progress = ensure_progress(state)
+        state["status"] = source_completion_status(state)
+        state["updatedAt"] = timestamp
+        save_json(state)
+        payload = summary(state)
+        payload["actionReview"] = review
+        if daily_plan:
+            payload["dailyPlan"] = daily_plan
+            payload["nextPrompt"] = daily_plan_handoff_prompt(daily_plan)
+        payload["complete"] = state.get("status") == "completed"
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def prepare_daily_plan(state):
+        progress = ensure_progress(state)
+        existing = progress.get("dailyPlan") if isinstance(progress.get("dailyPlan"), dict) else None
+        if existing and existing.get("required"):
+            return state, existing
+        timestamp = now()
+        target = gbrain_target_directory(state)
+        skill_path = target / ".gbrain-adapter/skills/zebra-daily-planner/SKILL.md" if target is not None else None
+        adapter = load_json(adapter_state_path)
+        adapter_receipt = adapter.get("receipt") if isinstance(adapter.get("receipt"), dict) else {}
+        adapter_checks = adapter_receipt.get("checks") if isinstance(adapter_receipt.get("checks"), dict) else {}
+        planner_expected = adapter_checks.get("adapterSkillZebraDailyPlanner") is True
+        if target is None or not planner_expected:
+            required_value = False
+            status_value = "skipped"
+            reason = "gbrain_target_missing" if target is None else "legacy_adapter_without_daily_planner"
+        elif skill_path is None or not skill_path.is_file():
+            required_value = True
+            status_value = "attention"
+            reason = "zebra_daily_planner_skill_missing"
+        else:
+            required_value = True
+            status_value = "ready"
+            reason = None
+        daily_plan = {
+            "required": required_value,
+            "status": status_value,
+            "skillPath": str(skill_path) if skill_path is not None else None,
+            "calendarCoverage": None,
+            "freeMinutes": None,
+            "scheduledMinutes": None,
+            "plannedTaskCount": None,
+            "calendarWriteStatus": None,
+            "calendarEventIDs": [],
+            "reason": reason,
+            "updatedAt": timestamp,
+        }
+        progress["dailyPlan"] = daily_plan
+        state["status"] = source_completion_status(state)
+        state["updatedAt"] = timestamp
+        save_json(state)
+        return state, daily_plan
+
+    def daily_plan_handoff_prompt(daily_plan):
+        status_value = daily_plan.get("status")
+        reason = daily_plan.get("reason") or "daily_planner_attention"
+        skill_path = daily_plan.get("skillPath") or "missing"
+        language = onboarding_language()
+        if status_value == "attention":
+            if language == "ko":
+                return f"하루 계획을 시작할 수 없습니다. 원인: `{reason}`. gbrain-adapter 설치를 다시 실행한 뒤 재개하세요."
+            if language == "ja":
+                return f"一日の計画を開始できません。理由: `{reason}`。gbrain-adapter を再インストールしてから再開してください。"
+            return f"Daily planning cannot start. Reason: `{reason}`. Re-run gbrain-adapter installation, then resume."
+        if language == "ko":
+            return textwrap.dedent(f'''
+            이제 오늘 하루를 실제로 계획하세요.
+
+            1. `zebra-source-onboarding planner begin`을 실행하세요.
+            2. `{skill_path}` 스킬을 읽고 그대로 따르세요.
+            3. 승인된 범위의 오늘 캘린더와 현재 brain의 활성 태스크·목표를 읽으세요.
+            4. 스킬의 Quick/Routine/First-run/Rescue 모드를 내부적으로 고르세요. 사용자가 질문 생략을 명시하지 않았다면 최종 시간표 전에 최소 한 번 방향을 맞추고, 질문은 한 번에 하나만 한 뒤 답을 기다리세요.
+            5. 명확한 안이 있으면 하나를 추천하고, 실제 우선순위 충돌이 있을 때만 두 안을 제시해 사용자의 선택을 기다리세요.
+            6. 선택이 끝나면 가용시간을 계산한 단일 최종 일정안을 보여주세요. 이 단계에서는 캘린더를 쓰지 마세요.
+            7. 최종안을 보여준 뒤 `zebra-source-onboarding planner propose --calendar-coverage "<읽은 범위>" --free-minutes <분> --scheduled-minutes <분> --task-count <개>`로 보고하세요.
+            8. 사용자가 현재 최종안을 명시적으로 승인한 경우에만 캘린더를 반영하세요.
+            9. 읽기 전용으로 끝나면 `planner report --status completed --calendar-write-status not_requested`를, 실제 반영이 끝나면 `--calendar-write-status executed`와 각 `--event-id`를 보고하세요.
+
+            `pending_approval`은 완료가 아닙니다. planner가 completed 또는 skipped가 될 때까지 Source Onboarding 완료라고 말하지 마세요.
+            ''').strip()
+        if language == "ja":
+            return textwrap.dedent(f'''
+            次に、今日一日を実際に計画してください。
+
+            1. `zebra-source-onboarding planner begin` を実行します。
+            2. `{skill_path}` を読み、その契約に従います。
+            3. 承認済み範囲の今日のカレンダーと active tasks/goals を読みます。
+            4. Quick/Routine/First-run/Rescue mode を内部で選びます。ユーザーが質問の省略を明示しない限り、最終時間割の前に少なくとも一度方向性を確認し、質問は一度に一つだけ行って回答を待ちます。
+            5. 明確な案があれば一案を推薦し、実際の優先順位衝突がある場合だけ二案を示して選択を待ちます。
+            6. 選択後に read-only の最終案を一つ示し、この段階ではカレンダーを書き換えません。
+            7. `planner propose` で coverage/free/scheduled/task count を報告します。
+            8. 現在の最終案が明示承認された場合だけカレンダーへ反映します。
+            9. 最後に `planner report` で `not_requested` または実行済みの `executed` を報告します。
+
+            `pending_approval` は完了ではありません。
+            ''').strip()
+        return textwrap.dedent(f'''
+        Now build today's real plan.
+
+        1. Run `zebra-source-onboarding planner begin`.
+        2. Read and follow `{skill_path}`.
+        3. Read today's calendars inside the approved scope plus active brain tasks and goals.
+        4. Internally choose Quick, Routine, First-run, or Rescue mode. Unless the user explicitly skips questions, require at least one direction-alignment turn before clock times. Ask at most one question per turn and wait for the answer.
+        5. Recommend one plan when the winner is clear. Show two alternatives only for a real priority tradeoff, then wait for the user's choice.
+        6. After selection, show one capacity-safe final schedule before any calendar write.
+        7. Report that final proposal with `planner propose` and its coverage/free/scheduled/task counts.
+        8. Write only after explicit approval of the current final schedule.
+        9. Finish with `planner report` using `not_requested` for read-only completion or `executed` plus event IDs after real writes.
+
+        `pending_approval` is not completion. Do not say Source Onboarding is complete until planner is completed or skipped.
+        ''').strip()
+
+    def parse_daily_plan_args():
+        parsed = {
+            "status": "",
+            "calendarCoverage": "",
+            "freeMinutes": None,
+            "scheduledMinutes": None,
+            "plannedTaskCount": None,
+            "calendarWriteStatus": "",
+            "calendarEventIDs": [],
+            "reason": "",
+        }
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == "--status" and index + 1 < len(args):
+                parsed["status"] = args[index + 1].strip().lower()
+            elif token == "--calendar-coverage" and index + 1 < len(args):
+                parsed["calendarCoverage"] = args[index + 1].strip()
+            elif token == "--free-minutes" and index + 1 < len(args):
+                parsed["freeMinutes"] = int(args[index + 1])
+            elif token == "--scheduled-minutes" and index + 1 < len(args):
+                parsed["scheduledMinutes"] = int(args[index + 1])
+            elif token == "--task-count" and index + 1 < len(args):
+                parsed["plannedTaskCount"] = int(args[index + 1])
+            elif token == "--calendar-write-status" and index + 1 < len(args):
+                parsed["calendarWriteStatus"] = args[index + 1].strip().lower()
+            elif token == "--event-id" and index + 1 < len(args):
+                parsed["calendarEventIDs"].append(args[index + 1].strip())
+            elif token == "--reason" and index + 1 < len(args):
+                parsed["reason"] = args[index + 1].strip()
+            else:
+                raise ValueError("unknown or incomplete argument: " + token)
+            index += 2
+        return parsed
+
+    def daily_plan_command():
+        subcommand = args.pop(0) if args else "status"
+        state = load_or_create_state()
+        progress = ensure_progress(state)
+        daily_plan = progress.get("dailyPlan") if isinstance(progress.get("dailyPlan"), dict) else None
+        if not daily_plan or not daily_plan.get("required"):
+            payload = summary(state)
+            payload.update({"ok": False, "reason": "daily_plan_not_ready"})
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if subcommand == "status":
+            payload = summary(state)
+            payload["dailyPlan"] = daily_plan
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        if daily_plan.get("status") == "attention":
+            payload = summary(state)
+            payload.update({"ok": False, "reason": daily_plan.get("reason") or "daily_plan_attention"})
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        timestamp = now()
+        try:
+            parsed = parse_daily_plan_args() if subcommand in {"propose", "report"} else {}
+        except (ValueError, TypeError):
+            print("invalid planner arguments", file=sys.stderr)
+            return 2
+        if subcommand == "begin":
+            if daily_plan.get("status") in {"completed", "skipped"}:
+                payload = summary(state)
+                payload.update({"ok": False, "reason": "daily_plan_already_terminal"})
+                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                return 1
+            daily_plan["status"] = "planning"
+        elif subcommand == "propose":
+            free_minutes = parsed.get("freeMinutes")
+            scheduled_minutes = parsed.get("scheduledMinutes")
+            task_count = parsed.get("plannedTaskCount")
+            coverage = parsed.get("calendarCoverage")
+            if not coverage or not isinstance(free_minutes, int) or free_minutes < 0:
+                print("calendar coverage and non-negative free minutes are required", file=sys.stderr)
+                return 2
+            if not isinstance(scheduled_minutes, int) or scheduled_minutes < 0 or scheduled_minutes > free_minutes:
+                print("scheduled minutes must be between zero and free minutes", file=sys.stderr)
+                return 2
+            if not isinstance(task_count, int) or task_count < 0 or task_count > 5:
+                print("task count must be between zero and five", file=sys.stderr)
+                return 2
+            daily_plan.update({
+                "status": "awaiting_approval",
+                "calendarCoverage": coverage,
+                "freeMinutes": free_minutes,
+                "scheduledMinutes": scheduled_minutes,
+                "plannedTaskCount": task_count,
+                "calendarWriteStatus": "not_requested",
+                "reason": None,
+            })
+        elif subcommand == "report":
+            status_value = parsed.get("status")
+            if status_value == "skipped":
+                if parsed.get("reason") != "user_skipped":
+                    print("skipped planner requires --reason user_skipped", file=sys.stderr)
+                    return 2
+                daily_plan.update({"status": "skipped", "reason": "user_skipped"})
+            elif status_value == "completed":
+                if daily_plan.get("status") not in {"awaiting_approval", "awaiting_calendar_approval"}:
+                    payload = summary(state)
+                    payload.update({"ok": False, "reason": "daily_plan_proposal_required"})
+                    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                    return 1
+                write_status = parsed.get("calendarWriteStatus")
+                if write_status == "pending_approval":
+                    daily_plan.update({
+                        "status": "awaiting_calendar_approval",
+                        "calendarWriteStatus": "pending_approval",
+                        "reason": "calendar_write_pending_approval",
+                    })
+                elif write_status in {"not_requested", "executed"}:
+                    event_ids = [value for value in parsed.get("calendarEventIDs", []) if value]
+                    if write_status == "executed" and not event_ids:
+                        print("executed calendar writes require at least one --event-id", file=sys.stderr)
+                        return 2
+                    daily_plan.update({
+                        "status": "completed",
+                        "calendarWriteStatus": write_status,
+                        "calendarEventIDs": event_ids,
+                        "reason": None,
+                    })
+                else:
+                    print("calendar write status must be not_requested, pending_approval, or executed", file=sys.stderr)
+                    return 2
+            else:
+                print("planner report status must be completed or skipped", file=sys.stderr)
+                return 2
+        else:
+            print("unknown planner command: " + subcommand, file=sys.stderr)
+            return 2
+        daily_plan["updatedAt"] = timestamp
+        progress["dailyPlan"] = daily_plan
+        state["status"] = source_completion_status(state)
+        state["updatedAt"] = timestamp
+        save_json(state)
+        payload = summary(state)
+        payload["dailyPlan"] = daily_plan
+        payload["complete"] = state.get("status") == "completed"
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
 
     def pending_completion_source_id(state):
         progress = ensure_progress(state)
@@ -3142,6 +3684,91 @@ struct ZebraSourceOnboardingHelper {
 
         After showing that completion result, clearly tell the user that all selected Source Onboarding sources are complete, then stop.
         There is no next source, so do not run another helper command.
+        ''').strip()
+
+    def source_action_review_handoff_prompt(source_id, summary_text, review, detail_lines=None):
+        completion_block = source_completion_result_block(source_id, summary_text, detail_lines)
+        language = onboarding_language()
+        status_value = review.get("status")
+        if status_value == "attention":
+            reason = review.get("reason") or "source_action_review_attention"
+            if language == "ko":
+                return textwrap.dedent(f'''
+                ```text
+                {completion_block}
+                ```
+
+                소스 인제스트는 완료됐지만 태스크 검토를 시작할 수 없습니다.
+                원인: `{reason}`
+                gbrain-adapter 설치 단계를 다시 실행한 뒤 Source Onboarding을 재개하세요.
+                ''').strip()
+            if language == "ja":
+                return textwrap.dedent(f'''
+                ```text
+                {completion_block}
+                ```
+
+                ソースの取り込みは完了しましたが、タスクレビューを開始できません。
+                理由: `{reason}`
+                gbrain-adapter のインストール手順を再実行してから Source Onboarding を再開してください。
+                ''').strip()
+            return textwrap.dedent(f'''
+            ```text
+            {completion_block}
+            ```
+
+            Source ingest completed, but task review cannot start.
+            Reason: `{reason}`
+            Re-run the gbrain-adapter installation step, then resume Source Onboarding.
+            ''').strip()
+        manifest_path = review.get("manifestPath") or "missing"
+        skill_path = review.get("skillPath") or "missing"
+        if language == "ko":
+            return textwrap.dedent(f'''
+            ```text
+            {completion_block}
+            ```
+
+            이제 방금 인제스트한 자료에서 실행할 일을 찾으세요.
+
+            1. `zebra-source-onboarding actions begin`을 실행하세요.
+            2. `{skill_path}` 스킬을 읽고 그대로 따르세요.
+            3. 입력 범위는 `{manifest_path}`에 기록된 artifact로만 제한하세요.
+            4. 후보를 최대 5개 제안하고, 사용자가 번호를 승인하기 전에는 `tasks/*.md`를 만들지 마세요.
+            5. 완료 또는 건너뛰기 결과를 반드시 `zebra-source-onboarding actions report`로 보고하세요.
+
+            태스크 검토가 completed 또는 skipped가 될 때까지 Source Onboarding을 완료했다고 말하지 마세요.
+            ''').strip()
+        if language == "ja":
+            return textwrap.dedent(f'''
+            ```text
+            {completion_block}
+            ```
+
+            次に、今回取り込んだ資料から実行項目を見つけてください。
+
+            1. `zebra-source-onboarding actions begin` を実行してください。
+            2. `{skill_path}` のスキルを読み、その契約に従ってください。
+            3. `{manifest_path}` に記載された artifact だけを対象にしてください。
+            4. 候補は最大5件とし、ユーザーが番号を承認するまで `tasks/*.md` を作成しないでください。
+            5. 完了またはスキップ結果を `zebra-source-onboarding actions report` で必ず報告してください。
+
+            タスクレビューが completed または skipped になるまで Source Onboarding 完了とは伝えないでください。
+            ''').strip()
+        return textwrap.dedent(f'''
+        ```text
+        {completion_block}
+        ```
+
+        Now find actionable work in the sources that were just ingested.
+
+        1. Run `zebra-source-onboarding actions begin`.
+        2. Read and follow the skill at `{skill_path}`.
+        3. Limit input to the artifacts listed in `{manifest_path}`.
+        4. Propose at most five candidates. Do not create `tasks/*.md` until the user approves candidate numbers.
+        5. Report completion or skip through `zebra-source-onboarding actions report`.
+
+        Do not say Source Onboarding is complete until task review is completed or skipped.
         ''').strip()
 
     def agent_memory_unit_summary(units):
@@ -8772,6 +9399,8 @@ struct ZebraSourceOnboardingHelper {
                     "status": "pending_source_confirmation",
                     "askedAt": timestamp,
                 },
+                "actionReview": None,
+                "dailyPlan": None,
             },
             "updatedAt": timestamp,
         }
@@ -8864,6 +9493,8 @@ struct ZebraSourceOnboardingHelper {
                 "importableUnitCount": agent_memory.get("importableUnitCount", 0),
                 "agents": agent_memory.get("agents", []),
             },
+            "actionReview": progress.get("actionReview") if isinstance(progress.get("actionReview"), dict) else None,
+            "dailyPlan": progress.get("dailyPlan") if isinstance(progress.get("dailyPlan"), dict) else None,
         }
 
     def status():
@@ -8924,13 +9555,29 @@ struct ZebraSourceOnboardingHelper {
         next_payload = {}
         if has_unfinished_source:
             _, next_payload = run_start_next_captured()
-        combined_prompt = source_completion_handoff_prompt(
-            source_id,
-            summary_text,
-            detail_lines=detail_lines,
-            has_next_source=has_unfinished_source,
-            next_prompt=next_payload.get("nextPrompt"),
-        )
+        action_review = None
+        daily_plan = None
+        if not has_unfinished_source:
+            state, action_review = prepare_action_review(state)
+            if action_review.get("status") == "skipped":
+                state, daily_plan = prepare_daily_plan(state)
+        if daily_plan and daily_plan.get("status") in {"ready", "attention"}:
+            combined_prompt = source_completion_result_block(source_id, summary_text, detail_lines) + "\\n\\n" + daily_plan_handoff_prompt(daily_plan)
+        elif action_review and action_review.get("status") in {"ready", "attention"}:
+            combined_prompt = source_action_review_handoff_prompt(
+                source_id,
+                summary_text,
+                action_review,
+                detail_lines=detail_lines,
+            )
+        else:
+            combined_prompt = source_completion_handoff_prompt(
+                source_id,
+                summary_text,
+                detail_lines=detail_lines,
+                has_next_source=has_unfinished_source,
+                next_prompt=next_payload.get("nextPrompt"),
+            )
         path = write_source_next_prompt_file("report-" + source_id, "completed", combined_prompt)
 
         payload_state = load_or_create_state() if has_unfinished_source else state
@@ -8940,6 +9587,10 @@ struct ZebraSourceOnboardingHelper {
         payload["completedSourceSummary"] = summary_text
         payload["completedSourceDisposition"] = completion.get("disposition")
         payload["completedSourceResultBlock"] = source_completion_result_block(source_id, summary_text, detail_lines)
+        if action_review:
+            payload["actionReview"] = action_review
+        if daily_plan:
+            payload["dailyPlan"] = daily_plan
         if has_unfinished_source:
             for key in [
                 "nextSourceID",
@@ -9261,6 +9912,10 @@ struct ZebraSourceOnboardingHelper {
         sys.exit(agent_memory_command())
     elif command == "fallback":
         sys.exit(fallback_report())
+    elif command == "actions":
+        sys.exit(action_review_command())
+    elif command == "planner":
+        sys.exit(daily_plan_command())
     elif command == "status":
         status()
     else:

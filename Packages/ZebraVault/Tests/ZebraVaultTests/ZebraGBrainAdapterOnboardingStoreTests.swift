@@ -79,6 +79,8 @@ final class ZebraGBrainAdapterOnboardingStoreTests: XCTestCase {
             .appendingPathComponent("gbrain-adapter", isDirectory: true)
         XCTAssertTrue(FileManager.default.fileExists(atPath: expectedAdapterRepo.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: vault.appendingPathComponent(".gbrain-adapter/skills/router/SKILL.md").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: vault.appendingPathComponent(".gbrain-adapter/skills/source-to-tasks/SKILL.md").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: vault.appendingPathComponent(".gbrain-adapter/skills/zebra-daily-planner/SKILL.md").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: vault.appendingPathComponent("goals/README.md").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: vault.appendingPathComponent("tasks/README.md").path))
 
@@ -262,6 +264,8 @@ final class ZebraGBrainAdapterOnboardingStoreTests: XCTestCase {
                     "adapterSkillRouter": true,
                     "adapterSkillDailyTaskManager": true,
                     "adapterSkillDailyTaskPrep": true,
+                    "adapterSkillSourceToTasks": true,
+                    "adapterSkillZebraDailyPlanner": true,
                     "goalsReadme": true,
                     "tasksReadme": true,
                     "resolverBlock": true,
@@ -283,6 +287,8 @@ final class ZebraGBrainAdapterOnboardingStoreTests: XCTestCase {
             "skills/router",
             "skills/daily-task-manager",
             "skills/daily-task-prep",
+            "skills/source-to-tasks",
+            "skills/zebra-daily-planner",
             "templates/blocks",
             "templates/goals",
             "templates/tasks",
@@ -319,10 +325,12 @@ final class ZebraGBrainAdapterOnboardingStoreTests: XCTestCase {
         if [ "$DRY_RUN" = "1" ]; then
           exit 0
         fi
-        mkdir -p "$BRAIN/.gbrain-adapter/skills/router" "$BRAIN/.gbrain-adapter/skills/daily-task-manager" "$BRAIN/.gbrain-adapter/skills/daily-task-prep" "$BRAIN/goals" "$BRAIN/tasks"
+        mkdir -p "$BRAIN/.gbrain-adapter/skills/router" "$BRAIN/.gbrain-adapter/skills/daily-task-manager" "$BRAIN/.gbrain-adapter/skills/daily-task-prep" "$BRAIN/.gbrain-adapter/skills/source-to-tasks" "$BRAIN/.gbrain-adapter/skills/zebra-daily-planner" "$BRAIN/goals" "$BRAIN/tasks"
         printf 'router\\n' > "$BRAIN/.gbrain-adapter/skills/router/SKILL.md"
         printf 'daily-task-manager\\n' > "$BRAIN/.gbrain-adapter/skills/daily-task-manager/SKILL.md"
         printf 'daily-task-prep\\n' > "$BRAIN/.gbrain-adapter/skills/daily-task-prep/SKILL.md"
+        printf 'source-to-tasks\\n' > "$BRAIN/.gbrain-adapter/skills/source-to-tasks/SKILL.md"
+        printf 'zebra-daily-planner\\n' > "$BRAIN/.gbrain-adapter/skills/zebra-daily-planner/SKILL.md"
         printf 'goals\\n' > "$BRAIN/goals/README.md"
         printf 'tasks\\n' > "$BRAIN/tasks/README.md"
         for file in RESOLVER.md schema.md AGENTS.md; do
@@ -340,6 +348,8 @@ final class ZebraGBrainAdapterOnboardingStoreTests: XCTestCase {
         try "router\n".write(to: url.appendingPathComponent("skills/router/SKILL.md"), atomically: true, encoding: .utf8)
         try "daily-task-manager\n".write(to: url.appendingPathComponent("skills/daily-task-manager/SKILL.md"), atomically: true, encoding: .utf8)
         try "daily-task-prep\n".write(to: url.appendingPathComponent("skills/daily-task-prep/SKILL.md"), atomically: true, encoding: .utf8)
+        try "source-to-tasks\n".write(to: url.appendingPathComponent("skills/source-to-tasks/SKILL.md"), atomically: true, encoding: .utf8)
+        try "zebra-daily-planner\n".write(to: url.appendingPathComponent("skills/zebra-daily-planner/SKILL.md"), atomically: true, encoding: .utf8)
         try "<!-- gbrain-adapter:begin goals-tasks -->\nresolver\n<!-- gbrain-adapter:end goals-tasks -->\n".write(
             to: url.appendingPathComponent("templates/blocks/RESOLVER.goals-tasks.md"),
             atomically: true,
@@ -375,11 +385,21 @@ final class ZebraGBrainAdapterOnboardingStoreTests: XCTestCase {
             at: vault.appendingPathComponent(".gbrain-adapter/skills/daily-task-prep", isDirectory: true),
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".gbrain-adapter/skills/source-to-tasks", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".gbrain-adapter/skills/zebra-daily-planner", isDirectory: true),
+            withIntermediateDirectories: true
+        )
         try FileManager.default.createDirectory(at: vault.appendingPathComponent("goals", isDirectory: true), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: vault.appendingPathComponent("tasks", isDirectory: true), withIntermediateDirectories: true)
         try "router\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/router/SKILL.md"), atomically: true, encoding: .utf8)
         try "manager\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/daily-task-manager/SKILL.md"), atomically: true, encoding: .utf8)
         try "prep\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/daily-task-prep/SKILL.md"), atomically: true, encoding: .utf8)
+        try "source-to-tasks\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/source-to-tasks/SKILL.md"), atomically: true, encoding: .utf8)
+        try "zebra-daily-planner\n".write(to: vault.appendingPathComponent(".gbrain-adapter/skills/zebra-daily-planner/SKILL.md"), atomically: true, encoding: .utf8)
         try "goals\n".write(to: vault.appendingPathComponent("goals/README.md"), atomically: true, encoding: .utf8)
         try "tasks\n".write(to: vault.appendingPathComponent("tasks/README.md"), atomically: true, encoding: .utf8)
         for file in ["RESOLVER.md", "schema.md", "AGENTS.md"] {
