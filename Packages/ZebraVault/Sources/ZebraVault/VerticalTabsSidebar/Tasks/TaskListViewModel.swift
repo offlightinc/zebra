@@ -23,6 +23,8 @@ enum TaskGroupBy: String, CaseIterable, Hashable, Sendable {
 
 enum TaskSort: String, CaseIterable, Hashable, Sendable {
     case title
+    case priority
+    case status
     case due
     case created
     case updated
@@ -30,6 +32,8 @@ enum TaskSort: String, CaseIterable, Hashable, Sendable {
     var label: String {
         switch self {
         case .title:   return String(localized: "task.sort.title", defaultValue: "Title")
+        case .priority: return String(localized: "task.sort.priority", defaultValue: "Priority")
+        case .status:   return String(localized: "task.sort.status", defaultValue: "Status")
         case .due:     return String(localized: "task.sort.due", defaultValue: "Due")
         case .created: return String(localized: "task.sort.created", defaultValue: "Created")
         case .updated: return String(localized: "task.sort.updated", defaultValue: "Updated")
@@ -38,7 +42,7 @@ enum TaskSort: String, CaseIterable, Hashable, Sendable {
 
     var defaultDirection: TaskSortDirection {
         switch self {
-        case .title, .due:
+        case .title, .priority, .status, .due:
             return .ascending
         case .created, .updated:
             return .descending
@@ -233,6 +237,27 @@ final class TaskListViewModel: ObservableObject {
             switch sort {
             case .title:
                 return compareTitle(lhs, rhs, direction: direction)
+            case .priority:
+                if let result = compareRank(
+                    lhs.priority.map { priorityOrder($0.rawValue) },
+                    rhs.priority.map { priorityOrder($0.rawValue) },
+                    direction: direction
+                ) {
+                    return result
+                }
+                if let result = compareDate(lhs.dueDate, rhs.dueDate, direction: .ascending) {
+                    return result
+                }
+                return compareTitle(lhs, rhs, direction: .ascending)
+            case .status:
+                if let result = compareRank(
+                    lhs.status.map { statusOrder($0.rawValue) },
+                    rhs.status.map { statusOrder($0.rawValue) },
+                    direction: direction
+                ) {
+                    return result
+                }
+                return compareTitle(lhs, rhs, direction: .ascending)
             case .due:
                 if let result = compareDate(lhs.dueDate, rhs.dueDate, direction: direction) {
                     return result
@@ -249,6 +274,24 @@ final class TaskListViewModel: ObservableObject {
                 }
                 return compareTitle(lhs, rhs, direction: .ascending)
             }
+        }
+    }
+
+    private static func compareRank(
+        _ lhs: Int?,
+        _ rhs: Int?,
+        direction: TaskSortDirection
+    ) -> Bool? {
+        switch (lhs, rhs) {
+        case let (l?, r?):
+            if l == r { return nil }
+            return direction == .ascending ? l < r : l > r
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        case (nil, nil):
+            return nil
         }
     }
 
@@ -381,15 +424,14 @@ final class TaskListViewModel: ObservableObject {
     }
 
     private static func statusOrder(_ raw: String) -> Int {
-        // HTML group order: inprogress → todo → blocked → backlog → done.
-        // waiting/canceled는 보존 호환 — done 다음에 둔다.
+        // Actionable states first; terminal and unknown states stay at the end.
         switch raw {
         case BrainTaskStatus.inprogress.rawValue: return 0
         case BrainTaskStatus.todo.rawValue: return 1
         case BrainTaskStatus.blocked.rawValue: return 2
-        case BrainTaskStatus.backlog.rawValue: return 3
-        case BrainTaskStatus.done.rawValue: return 4
-        case BrainTaskStatus.waiting.rawValue: return 5
+        case BrainTaskStatus.waiting.rawValue: return 3
+        case BrainTaskStatus.backlog.rawValue: return 4
+        case BrainTaskStatus.done.rawValue: return 5
         case BrainTaskStatus.canceled.rawValue: return 6
         case "__unrecognized__": return 7
         default: return 8

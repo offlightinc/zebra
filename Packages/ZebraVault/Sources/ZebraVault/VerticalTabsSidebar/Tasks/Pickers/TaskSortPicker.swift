@@ -34,6 +34,14 @@ struct TaskSortPicker: View {
             Image(systemName: "textformat")
                 .font(.system(size: 11))
                 .foregroundColor(BVColor.fgMute)
+        case .priority:
+            Image(systemName: "flag")
+                .font(.system(size: 11))
+                .foregroundColor(BVColor.fgMute)
+        case .status:
+            Image(systemName: "circle.dotted")
+                .font(.system(size: 11))
+                .foregroundColor(BVColor.fgMute)
         case .due:
             Image(systemName: "calendar")
                 .font(.system(size: 11))

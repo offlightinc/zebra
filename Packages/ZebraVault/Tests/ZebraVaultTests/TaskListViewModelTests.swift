@@ -28,6 +28,85 @@ final class TaskListViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSortsByPriorityHighestFirstWithMissingPriorityLast() {
+        let tasks = [
+            task(path: "/tmp/none.md", title: "None"),
+            task(path: "/tmp/low.md", title: "Low", priority: .low),
+            task(path: "/tmp/urgent.md", title: "Urgent", priority: .urgent),
+            task(path: "/tmp/high.md", title: "High", priority: .high),
+            task(path: "/tmp/medium.md", title: "Medium", priority: .medium),
+        ]
+
+        let sorted = TaskListViewModel.sortTasks(tasks, by: .priority, direction: .ascending)
+
+        XCTAssertEqual(
+            sorted.map(\.absolutePath),
+            ["/tmp/urgent.md", "/tmp/high.md", "/tmp/medium.md", "/tmp/low.md", "/tmp/none.md"]
+        )
+    }
+
+    @MainActor
+    func testPrioritySortUsesSoonestDueDateThenTitleForTies() {
+        let tasks = [
+            task(path: "/tmp/no-due.md", title: "No due", priority: .high),
+            task(path: "/tmp/later.md", title: "Later", priority: .high, due: "2026-06-05"),
+            task(path: "/tmp/b-soon.md", title: "Beta", priority: .high, due: "2026-06-01"),
+            task(path: "/tmp/a-soon.md", title: "Alpha", priority: .high, due: "2026-06-01"),
+        ]
+
+        let sorted = TaskListViewModel.sortTasks(tasks, by: .priority, direction: .ascending)
+
+        XCTAssertEqual(
+            sorted.map(\.absolutePath),
+            ["/tmp/a-soon.md", "/tmp/b-soon.md", "/tmp/later.md", "/tmp/no-due.md"]
+        )
+    }
+
+    @MainActor
+    func testSortsByStatusActionOrderWithMissingStatusLast() {
+        let tasks = [
+            task(path: "/tmp/none.md", title: "None", status: nil),
+            task(path: "/tmp/canceled.md", title: "Canceled", status: .canceled),
+            task(path: "/tmp/done.md", title: "Done", status: .done),
+            task(path: "/tmp/backlog.md", title: "Backlog", status: .backlog),
+            task(path: "/tmp/waiting.md", title: "Waiting", status: .waiting),
+            task(path: "/tmp/blocked.md", title: "Blocked", status: .blocked),
+            task(path: "/tmp/todo.md", title: "Todo", status: .todo),
+            task(path: "/tmp/inprogress.md", title: "In progress", status: .inprogress),
+        ]
+
+        let sorted = TaskListViewModel.sortTasks(tasks, by: .status, direction: .ascending)
+
+        XCTAssertEqual(
+            sorted.map(\.absolutePath),
+            [
+                "/tmp/inprogress.md", "/tmp/todo.md", "/tmp/blocked.md", "/tmp/waiting.md",
+                "/tmp/backlog.md", "/tmp/done.md", "/tmp/canceled.md", "/tmp/none.md",
+            ]
+        )
+    }
+
+    @MainActor
+    func testDescendingStatusAndPrioritySortsStillKeepMissingValuesLast() {
+        let statusTasks = [
+            task(path: "/tmp/no-status.md", title: "No status", status: nil),
+            task(path: "/tmp/todo.md", title: "Todo", status: .todo),
+            task(path: "/tmp/done.md", title: "Done", status: .done),
+        ]
+        let priorityTasks = [
+            task(path: "/tmp/no-priority.md", title: "No priority"),
+            task(path: "/tmp/urgent.md", title: "Urgent", priority: .urgent),
+            task(path: "/tmp/low.md", title: "Low", priority: .low),
+        ]
+
+        let sortedStatuses = TaskListViewModel.sortTasks(statusTasks, by: .status, direction: .descending)
+        let sortedPriorities = TaskListViewModel.sortTasks(priorityTasks, by: .priority, direction: .descending)
+
+        XCTAssertEqual(sortedStatuses.map(\.absolutePath), ["/tmp/done.md", "/tmp/todo.md", "/tmp/no-status.md"])
+        XCTAssertEqual(sortedPriorities.map(\.absolutePath), ["/tmp/low.md", "/tmp/urgent.md", "/tmp/no-priority.md"])
+    }
+
+    @MainActor
     func testSortsByDueSoonestFirstWithMissingDatesLast() {
         let tasks = [
             task(path: "/tmp/no-due.md", title: "No due"),
@@ -121,6 +200,7 @@ final class TaskListViewModelTests: XCTestCase {
         path: String,
         title: String,
         status: BrainTaskStatus? = .todo,
+        priority: BrainPriority? = nil,
         due: String? = nil,
         created: String? = nil,
         updated: String? = nil
@@ -131,7 +211,7 @@ final class TaskListViewModelTests: XCTestCase {
             title: title,
             status: status,
             unrecognizedStatusRaw: nil,
-            priority: nil,
+            priority: priority,
             ownerSlug: nil,
             dueDate: due.flatMap { BrainDateOnlyCodec.date(fromStorageString: $0) },
             createdDate: created.flatMap { BrainDateOnlyCodec.date(fromStorageString: $0) },
