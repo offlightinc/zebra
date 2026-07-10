@@ -131,6 +131,47 @@ public enum BrainStatusMutator {
         return Outcome(newSource: working, didChange: working != source)
     }
 
+    /// Writes the planned start/end pair as one transaction. A half-written
+    /// interval must never become observable because the Today projection
+    /// deliberately treats a single boundary as invalid metadata.
+    public static func applyPlannedIntervalChange(
+        in source: String,
+        newStartRaw: String?,
+        newEndRaw: String?,
+        today: Date = Date()
+    ) -> Outcome {
+        let isClear = newStartRaw == nil && newEndRaw == nil
+        guard isClear || BrainPlannedDateTimeCodec.validatedInterval(
+            startRaw: newStartRaw,
+            endRaw: newEndRaw
+        ) != nil else {
+            return Outcome(newSource: source, didChange: false)
+        }
+        guard hasFrontmatterBlock(source) else {
+            return Outcome(newSource: source, didChange: false)
+        }
+
+        let oldStart = BrainFrontmatterWriter.scalarValue(for: "planned_start_at", in: source)
+        let oldEnd = BrainFrontmatterWriter.scalarValue(for: "planned_end_at", in: source)
+        if oldStart == newStartRaw, oldEnd == newEndRaw {
+            return Outcome(newSource: source, didChange: false)
+        }
+
+        let todayString = isoDate(today)
+        var working = source
+        working = BrainFrontmatterWriter.setScalar("planned_start_at", to: newStartRaw, in: working)
+        working = BrainFrontmatterWriter.setScalar("planned_end_at", to: newEndRaw, in: working)
+        working = BrainFrontmatterWriter.setScalar("updated", to: todayString, in: working)
+        working = appendTimelineEntry(
+            in: working,
+            todayString: todayString,
+            field: "planned_time",
+            oldValue: intervalDisplay(start: oldStart, end: oldEnd),
+            newValue: intervalDisplay(start: newStartRaw, end: newEndRaw)
+        )
+        return Outcome(newSource: working, didChange: working != source)
+    }
+
     public static func applyPropertyChange(
         at filePath: String,
         field: String,
@@ -146,6 +187,26 @@ public enum BrainStatusMutator {
             field: field,
             oldValue: oldValue,
             newValue: newValue,
+            today: today
+        )
+        guard outcome.didChange,
+              let newData = outcome.newSource.data(using: .utf8) else { return }
+        try? newData.write(to: url, options: .atomic)
+    }
+
+    public static func applyPlannedIntervalChange(
+        at filePath: String,
+        newStartRaw: String?,
+        newEndRaw: String?,
+        today: Date = Date()
+    ) {
+        let url = URL(fileURLWithPath: filePath)
+        guard let data = try? Data(contentsOf: url),
+              let source = String(data: data, encoding: .utf8) else { return }
+        let outcome = applyPlannedIntervalChange(
+            in: source,
+            newStartRaw: newStartRaw,
+            newEndRaw: newEndRaw,
             today: today
         )
         guard outcome.didChange,
@@ -185,6 +246,11 @@ public enum BrainStatusMutator {
         f.dateFormat = "yyyy-MM-dd"
         f.timeZone = TimeZone.current
         return f.string(from: date)
+    }
+
+    private static func intervalDisplay(start: String?, end: String?) -> String? {
+        guard let start, let end else { return nil }
+        return "\(start) .. \(end)"
     }
 
     private static func detectNewline(in source: String) -> String {

@@ -1,6 +1,13 @@
 import Foundation
 
 enum BrainPlannedDateTimeCodec {
+    static func storageString(from date: Date, timeZone: TimeZone = .current) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = timeZone
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
+    }
+
     static func date(fromStorageString raw: String) -> Date? {
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty, hasExplicitTimeZone(value) else { return nil }

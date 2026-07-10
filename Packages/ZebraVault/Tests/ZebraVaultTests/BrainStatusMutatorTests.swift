@@ -514,6 +514,71 @@ final class BrainStatusMutatorTests: XCTestCase {
         XCTAssertEqual(mtimeBefore, mtimeAfter, "no-op 호출이 파일을 다시 쓰면 안 됨")
     }
 
+    func testApplyPlannedIntervalChangeWritesBothBoundariesAndOneTimelineEntry() {
+        let source = wrap(frontmatter: """
+            type: task
+            status: todo
+            updated: 2026-05-18
+            """, body: "")
+
+        let outcome = BrainStatusMutator.applyPlannedIntervalChange(
+            in: source,
+            newStartRaw: "2026-07-10T14:00:00+09:00",
+            newEndRaw: "2026-07-10T15:00:00+09:00",
+            today: Self.day
+        )
+
+        XCTAssertTrue(outcome.didChange)
+        let frontmatter = frontmatterBlock(of: outcome.newSource)
+        XCTAssertTrue(frontmatter.contains("planned_start_at: 2026-07-10T14:00:00+09:00"))
+        XCTAssertTrue(frontmatter.contains("planned_end_at: 2026-07-10T15:00:00+09:00"))
+        XCTAssertTrue(frontmatter.contains("updated: 2026-05-21"))
+        XCTAssertEqual(outcome.newSource.components(separatedBy: "| planned_time:").count - 1, 1)
+    }
+
+    func testApplyPlannedIntervalChangeRejectsPartialOrReversedPair() {
+        let source = wrap(frontmatter: """
+            type: task
+            status: todo
+            """, body: "")
+
+        let partial = BrainStatusMutator.applyPlannedIntervalChange(
+            in: source,
+            newStartRaw: "2026-07-10T14:00:00+09:00",
+            newEndRaw: nil
+        )
+        let reversed = BrainStatusMutator.applyPlannedIntervalChange(
+            in: source,
+            newStartRaw: "2026-07-10T15:00:00+09:00",
+            newEndRaw: "2026-07-10T14:00:00+09:00"
+        )
+
+        XCTAssertFalse(partial.didChange)
+        XCTAssertFalse(reversed.didChange)
+        XCTAssertEqual(partial.newSource, source)
+        XCTAssertEqual(reversed.newSource, source)
+    }
+
+    func testApplyPlannedIntervalChangeClearsBothBoundariesTogether() {
+        let source = wrap(frontmatter: """
+            type: task
+            planned_start_at: 2026-07-10T14:00:00+09:00
+            planned_end_at: 2026-07-10T15:00:00+09:00
+            """, body: "")
+
+        let outcome = BrainStatusMutator.applyPlannedIntervalChange(
+            in: source,
+            newStartRaw: nil,
+            newEndRaw: nil,
+            today: Self.day
+        )
+
+        let frontmatter = frontmatterBlock(of: outcome.newSource)
+        XCTAssertTrue(outcome.didChange)
+        XCTAssertFalse(frontmatter.contains("planned_start_at"))
+        XCTAssertFalse(frontmatter.contains("planned_end_at"))
+    }
+
     // MARK: - Helpers
 
     private func wrap(frontmatter: String, body: String) -> String {

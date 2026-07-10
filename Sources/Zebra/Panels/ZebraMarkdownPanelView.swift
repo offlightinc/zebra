@@ -158,6 +158,21 @@ struct ZebraMarkdownPanelView<
                 onChangeProperty: { field, oldValue, newValue in
                     panel.applyPropertyChange(field: field, oldValue: oldValue, newValue: newValue)
                     markdownFileListStore.refreshVaultIndex(reason: "markdownPanel.propertyChange")
+                },
+                onChangePlannedInterval: { startRaw, endRaw in
+                    BrainStatusMutator.applyPlannedIntervalChange(
+                        at: panel.filePath,
+                        newStartRaw: startRaw,
+                        newEndRaw: endRaw
+                    )
+                    ZebraTelemetry.trackVaultDocumentChanged(
+                        action: .update,
+                        objectType: .task,
+                        changeOrigin: .interactive,
+                        changeSource: .markdownPanel,
+                        path: panel.filePath
+                    )
+                    markdownFileListStore.refreshVaultIndex(reason: "markdownPanel.plannedIntervalChange")
                 }
             )
             .frame(width: CGFloat(resolvedInspectorWidth))

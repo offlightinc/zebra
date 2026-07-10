@@ -15,4 +15,14 @@ final class BrainPlannedDateTimeCodecTests: XCTestCase {
             endRaw: "2026-07-10T09:00:00+09:00"
         ))
     }
+
+    func testStorageStringRoundTripsWithExplicitLocalOffset() throws {
+        let zone = try XCTUnwrap(TimeZone(secondsFromGMT: 9 * 3600))
+        let date = try XCTUnwrap(BrainPlannedDateTimeCodec.date(fromStorageString: "2026-07-10T09:30:00+09:00"))
+
+        let stored = BrainPlannedDateTimeCodec.storageString(from: date, timeZone: zone)
+
+        XCTAssertEqual(stored, "2026-07-10T09:30:00+09:00")
+        XCTAssertEqual(BrainPlannedDateTimeCodec.date(fromStorageString: stored), date)
+    }
 }

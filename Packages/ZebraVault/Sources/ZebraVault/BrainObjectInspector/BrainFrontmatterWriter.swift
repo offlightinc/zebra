@@ -8,6 +8,31 @@ import Foundation
 /// parse as a brain object (i.e. the frontmatter block exists). If no
 /// frontmatter block is present, the source is returned unchanged.
 public enum BrainFrontmatterWriter {
+    /// Returns a top-level scalar value from the frontmatter block. This is
+    /// intentionally narrow and mirrors the writer's line-level grammar.
+    public static func scalarValue(for key: String, in source: String) -> String? {
+        let newline = detectNewline(in: source)
+        let lines = source.components(separatedBy: newline)
+        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return nil }
+
+        for line in lines.dropFirst() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == "---" { break }
+            guard parseTopLevelKey(in: line) == key,
+                  let colon = line.firstIndex(of: ":") else { continue }
+            let raw = line[line.index(after: colon)...]
+                .trimmingCharacters(in: .whitespaces)
+            guard !raw.isEmpty else { return nil }
+            if raw.count >= 2,
+               (raw.hasPrefix("\"") && raw.hasSuffix("\"")) ||
+               (raw.hasPrefix("'") && raw.hasSuffix("'")) {
+                return String(raw.dropFirst().dropLast())
+            }
+            return raw
+        }
+        return nil
+    }
+
     /// Read the file at `filePath`, apply `setScalar(key, to: value, in:)`,
     /// then atomic-write back. Silent no-op on read/decode/write failure —
     /// callers that need diagnostics should use `setScalar` directly.

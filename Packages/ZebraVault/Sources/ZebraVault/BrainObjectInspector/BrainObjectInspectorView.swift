@@ -19,17 +19,21 @@ public struct BrainObjectInspectorView: View {
     /// review_cadence 등) 편집. `<field>:` 갱신 + `updated:` bump + body
     /// Timeline bullet 까지 한 묶음으로 처리.
     public var onChangeProperty: ((_ field: String, _ oldValue: String?, _ newValue: String?) -> Void)? = nil
+    /// Planned start/end are one semantic value and must be persisted together.
+    public var onChangePlannedInterval: ((_ startRaw: String?, _ endRaw: String?) -> Void)? = nil
 
     public init(
         parse: BrainObjectParse?,
         onActivateRelation: ((BrainObjectRef) -> Void)? = nil,
         onChangeStatus: ((BrainStatusMutator.Kind, String?, String?) -> Void)? = nil,
-        onChangeProperty: ((String, String?, String?) -> Void)? = nil
+        onChangeProperty: ((String, String?, String?) -> Void)? = nil,
+        onChangePlannedInterval: ((String?, String?) -> Void)? = nil
     ) {
         self.parse = parse
         self.onActivateRelation = onActivateRelation
         self.onChangeStatus = onChangeStatus
         self.onChangeProperty = onChangeProperty
+        self.onChangePlannedInterval = onChangePlannedInterval
     }
 
     public var body: some View {
@@ -47,7 +51,7 @@ public struct BrainObjectInspectorView: View {
             LoadingInspectorView()
         case .some(.success(let object)):
             switch object {
-            case .task(let t): TaskInspectorView(task: t, onActivateRelation: onActivateRelation, onChangeStatus: onChangeStatus, onChangeProperty: onChangeProperty)
+            case .task(let t): TaskInspectorView(task: t, onActivateRelation: onActivateRelation, onChangeStatus: onChangeStatus, onChangeProperty: onChangeProperty, onChangePlannedInterval: onChangePlannedInterval)
             case .goal(let g): GoalInspectorView(goal: g, onActivateRelation: onActivateRelation, onChangeStatus: onChangeStatus, onChangeProperty: onChangeProperty)
             case .note(let n): DocInspectorView(note: n, onActivateRelation: onActivateRelation)
             case .unknown(let u): UnknownInspectorView(unknown: u)
@@ -65,6 +69,7 @@ public struct TaskInspectorView: View {
     public var onActivateRelation: ((BrainObjectRef) -> Void)? = nil
     public var onChangeStatus: ((BrainStatusMutator.Kind, String?, String?) -> Void)? = nil
     public var onChangeProperty: ((String, String?, String?) -> Void)? = nil
+    public var onChangePlannedInterval: ((String?, String?) -> Void)? = nil
 
     @EnvironmentObject private var personFileListStore: PersonFileListStore
 
@@ -106,26 +111,18 @@ public struct TaskInspectorView: View {
                             onChangeProperty?("due", oldSerialized, newSerialized)
                         }
                     }
-                    if let start = task.plannedStartAt, let end = task.plannedEndAt {
-                        PropertyRow(
-                            label: String(localized: "brain.row.plannedTime", defaultValue: "Planned"),
-                            icon: "calendar.badge.clock"
-                        ) {
-                            Text(Self.plannedTimeText(start: start, end: end))
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundColor(BVColor.fgMute)
-                        }
-                    } else if task.hasInvalidPlannedInterval {
-                        PropertyRow(
-                            label: String(localized: "brain.row.plannedTime", defaultValue: "Planned"),
-                            icon: "exclamationmark.triangle"
-                        ) {
-                            Text(String(
-                                localized: "task.plan.invalid",
-                                defaultValue: "Invalid planned time"
-                            ))
-                            .font(.system(size: 11))
-                            .foregroundColor(BVColor.priorityHigh)
+                    PropertyRow(
+                        label: String(localized: "brain.row.plannedTime", defaultValue: "Planned"),
+                        icon: "calendar.badge.clock"
+                    ) {
+                        EditablePlannedTimeBadge(
+                            start: task.plannedStartAt,
+                            end: task.plannedEndAt,
+                            hasInvalidInterval: task.hasInvalidPlannedInterval
+                        ) { newStart, newEnd in
+                            let startRaw = newStart.map { BrainPlannedDateTimeCodec.storageString(from: $0) }
+                            let endRaw = newEnd.map { BrainPlannedDateTimeCodec.storageString(from: $0) }
+                            onChangePlannedInterval?(startRaw, endRaw)
                         }
                     }
                     PropertyRow(label: String(localized: "brain.row.tags", defaultValue: "Tags"), icon: "number") {
@@ -200,15 +197,6 @@ public struct TaskInspectorView: View {
         }
     }
 
-    private static func plannedTimeText(start: Date, end: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.setLocalizedDateFormatFromTemplate("MMM d jmm")
-        let endFormatter = DateFormatter()
-        endFormatter.locale = .current
-        endFormatter.setLocalizedDateFormatFromTemplate("jmm")
-        return "\(formatter.string(from: start))–\(endFormatter.string(from: end))"
-    }
 }
 
 // MARK: - Goal
