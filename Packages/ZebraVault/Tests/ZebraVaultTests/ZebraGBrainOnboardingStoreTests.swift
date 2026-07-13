@@ -1573,9 +1573,9 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             wasStartedBefore: true
         )
         let prepare = try XCTUnwrap(snapshots.first { $0.title == "Check and clone GBrain repo" })
-        let install = try XCTUnwrap(snapshots.first { $0.title == "Step 1: Install GBrain" })
-        let credentials = try XCTUnwrap(snapshots.first { $0.title == "Step 2: API Keys" })
-        let future = try XCTUnwrap(snapshots.first { $0.title == "Step 4: Import and Index" })
+        let install = try XCTUnwrap(snapshots.first { $0.title == "Install GBrain" })
+        let credentials = try XCTUnwrap(snapshots.first { $0.title == "API Keys" })
+        let future = try XCTUnwrap(snapshots.first { $0.title == "Import and Index" })
 
         XCTAssertEqual(snapshots.first?.title, "Check and clone GBrain repo")
         XCTAssertTrue(prepare.isCompleted)
@@ -1620,8 +1620,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             wasStartedBefore: false
         )
         let prepare = try XCTUnwrap(snapshots.first { $0.title == "Check and clone GBrain repo" })
-        let waiting = try XCTUnwrap(snapshots.first { $0.title == "Step 3: Create the Brain" })
-        let next = try XCTUnwrap(snapshots.first { $0.title == "Step 4: Import and Index" })
+        let waiting = try XCTUnwrap(snapshots.first { $0.title == "Create the Brain" })
+        let next = try XCTUnwrap(snapshots.first { $0.title == "Import and Index" })
 
         XCTAssertTrue(prepare.isCompleted)
         XCTAssertFalse(prepare.isActive)
@@ -1631,6 +1631,100 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertFalse(waiting.showsStart)
         XCTAssertFalse(next.isActive)
         XCTAssertFalse(next.isRunning)
+    }
+
+    func testFreshOnboardingSkipsIntegrationsInChecklistAndHelperPrompt() throws {
+        let root = try makeTemporaryDirectory()
+        let repo = root.appendingPathComponent("gbrain-docs-source", isDirectory: true)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        try """
+        # Install
+
+        ## Step 1: Install GBrain
+
+        Install.
+
+        ## Step 8: Integrations
+
+        Connect Gmail and Notion here.
+
+        ## Step 9: Verify
+
+        Verify.
+        """.write(
+            to: repo.appendingPathComponent("INSTALL_FOR_AGENTS.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "# GBrain\n".write(
+            to: repo.appendingPathComponent("README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try #"{"name":"gbrain","bin":{"gbrain":"bin/gbrain"}}"#.write(
+            to: repo.appendingPathComponent("package.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let skills = repo.appendingPathComponent("skills", isDirectory: true)
+        try FileManager.default.createDirectory(at: skills, withIntermediateDirectories: true)
+        try #"{"skills":[]}"#.write(
+            to: skills.appendingPathComponent("manifest.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let stateURL = root.appendingPathComponent("state.json")
+        let bin = try installFakeGBrain(
+            root: root,
+            sourceId: "brain",
+            localPath: root.appendingPathComponent("brain").path
+        )
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            gbrainDocsRepoURL: repo,
+            environment: ["PATH": bin.path],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+        _ = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        let prepare = try runHelper(
+            stateURL: stateURL,
+            path: root.path,
+            arguments: ["prepare-source-repo", "--path", repo.path, "--fresh-install"]
+        )
+        XCTAssertEqual(prepare.exitCode, 0, "stdout:\n\(prepare.stdout)\nstderr:\n\(prepare.stderr)")
+
+        let snapshots = store.sectionSnapshotsFromCachedState(
+            isParentRunning: false,
+            showsStartForActiveSection: true,
+            wasStartedBefore: true
+        )
+        XCTAssertEqual(snapshots.map(\.title), [
+            "Check and clone GBrain repo",
+            "Install GBrain",
+            "Verify",
+        ])
+
+        let result = try runHelper(
+            stateURL: stateURL,
+            path: bin.path,
+            arguments: [
+                "report",
+                "--status", "completed",
+                "--section", "Step 1: Install GBrain",
+            ]
+        )
+        let payload = try helperPayload(result.stdout)
+        let prompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+        let promptPath = try XCTUnwrap(payload["nextPromptPath"] as? String)
+        let promptFile = try String(contentsOfFile: promptPath, encoding: .utf8)
+
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(payload["nextSection"] as? String, "Step 9: Verify")
+        XCTAssertFalse(prompt.contains("Step 8: Integrations"), prompt)
+        XCTAssertFalse(prompt.contains("Connect Gmail and Notion here."), prompt)
+        XCTAssertFalse(promptFile.contains("Step 8: Integrations"), promptFile)
     }
 
     func testSectionSnapshotsAreEmptyWithoutDocsManifest() throws {
@@ -1791,8 +1885,8 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
             ).map(\.title),
             [
                 "Check and clone GBrain repo",
-                "Step 1: Install GBrain",
-                "Step 2: API Keys",
+                "Install GBrain",
+                "API Keys",
             ]
         )
     }

@@ -5900,17 +5900,17 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
 
         let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
         let prepare = try XCTUnwrap(gbrain.substeps.first { $0.title == "Check and clone GBrain repo" })
-        let install = try XCTUnwrap(gbrain.substeps.first { $0.title == "Step 1: Install GBrain" })
-        let credentials = try XCTUnwrap(gbrain.substeps.first { $0.title == "Step 2: API Keys" })
-        let future = try XCTUnwrap(gbrain.substeps.first { $0.title == "Step 3: Create the Brain" })
+        let install = try XCTUnwrap(gbrain.substeps.first { $0.title == "Install GBrain" })
+        let credentials = try XCTUnwrap(gbrain.substeps.first { $0.title == "API Keys" })
+        let future = try XCTUnwrap(gbrain.substeps.first { $0.title == "Create the Brain" })
 
         XCTAssertTrue(gbrain.isActive)
         XCTAssertTrue(gbrain.showsStart)
         XCTAssertEqual(gbrain.substeps.map(\.title), [
             "Check and clone GBrain repo",
-            "Step 1: Install GBrain",
-            "Step 2: API Keys",
-            "Step 3: Create the Brain",
+            "Install GBrain",
+            "API Keys",
+            "Create the Brain",
         ])
         XCTAssertTrue(prepare.isCompleted)
         XCTAssertFalse(prepare.showsStart)
@@ -5972,9 +5972,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let gbrain = try XCTUnwrap(store.snapshots.first { $0.id == .gbrain })
         XCTAssertEqual(gbrain.substeps.map(\.title), [
             "Check and clone GBrain repo",
-            "Step 1: Install GBrain",
-            "Step 2: API Keys",
-            "Step 3: Create the Brain",
+            "Install GBrain",
+            "API Keys",
+            "Create the Brain",
         ])
         XCTAssertFalse(store.completedStepIDs.contains(.gbrain))
         cancellable.cancel()
