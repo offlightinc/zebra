@@ -3859,9 +3859,6 @@ public struct ZebraGBrainOnboardingStore {
             raise RuntimeError("runtime_executable_missing")
         state = load_state()
         source_repo = existing_active_source_repo_path()
-        existing_mode = existing_install_verification_mode(state)
-        if not source_repo and not existing_mode:
-            raise RuntimeError("active_source_repo_missing")
         prompt = bootstrap_prompt()
         path = launcher_script_path(run_id)
         prompt_path = launcher_prompt_path(run_id)

@@ -2444,6 +2444,75 @@ final class ZebraGBrainOnboardingStoreTests: XCTestCase {
         XCTAssertEqual(syntaxCheck.exitCode, 0, "stdout:\n\(syntaxCheck.stdout)\nstderr:\n\(syntaxCheck.stderr)\nscript:\n\(script)")
     }
 
+    func testFreshInstallModeRuntimeLaunchersStartWithoutActiveSourceRepo() throws {
+        let root = try makeTemporaryDirectory()
+        let stateURL = root.appendingPathComponent("state.json")
+        let store = ZebraGBrainOnboardingStore(
+            stateURL: stateURL,
+            homeDirectoryPath: root.path,
+            environment: ["ZEBRA_GBRAIN_DOCS_REMOTE_DISABLED": "1"],
+            appPreferredLocalizations: ["en"],
+            preferredLanguages: ["en"]
+        )
+        let launch = try XCTUnwrap(store.prepareLaunch(selectedVaultPath: nil, selectedAgent: .codex))
+        try writeGBrainSetupMode(
+            stateURL,
+            mode: "fresh_install",
+            freshInstallConfirmedAt: "2026-07-13T00:00:00Z"
+        )
+
+        for (runtime, executable) in [("hermes", "/tmp/hermes"), ("openclaw", "/tmp/openclaw")] {
+            let launcherResult = try runHelper(
+                stateURL: stateURL,
+                path: root.path,
+                languageCode: "en",
+                arguments: [
+                    "write-runtime-launcher",
+                    "--runtime", runtime,
+                    "--executable", executable,
+                    "--run-id", "\(launch.runId)-\(runtime)",
+                    "--agent-id", "zebra-gbrain-setup-test",
+                    "--session", "agent:zebra-gbrain-setup-test:\(launch.runId)",
+                ]
+            )
+
+            XCTAssertEqual(
+                launcherResult.exitCode,
+                0,
+                "runtime: \(runtime) stdout:\n\(launcherResult.stdout)\nstderr:\n\(launcherResult.stderr)"
+            )
+            let prefix = "export ZEBRA_GBRAIN_RUNTIME_LAUNCHER='"
+            XCTAssertTrue(launcherResult.stdout.hasPrefix(prefix), launcherResult.stdout)
+            let launcherPath = String(
+                launcherResult.stdout
+                    .dropFirst(prefix.count)
+                    .split(separator: "'", maxSplits: 1)
+                    .first ?? ""
+            )
+            let script = try String(contentsOfFile: launcherPath, encoding: .utf8)
+            let syntaxCheck = try runExecutable(
+                URL(fileURLWithPath: "/bin/sh"),
+                environment: [:],
+                arguments: ["-n", launcherPath]
+            )
+
+            XCTAssertFalse(script.contains("active-source-env"), script)
+            XCTAssertFalse(script.contains("prepare-openclaw-agent"), script)
+            XCTAssertFalse(script.contains("cd \"$ZEBRA_GBRAIN_SOURCE_REPO\""), script)
+            XCTAssertTrue(script.contains("cd '\(launch.launchDirectory)'"), script)
+            if runtime == "hermes" {
+                XCTAssertTrue(script.contains("exec '/tmp/hermes' chat --tui"), script)
+            } else {
+                XCTAssertTrue(script.contains("exec '/tmp/openclaw' tui --local"), script)
+            }
+            XCTAssertEqual(
+                syntaxCheck.exitCode,
+                0,
+                "runtime: \(runtime) stdout:\n\(syntaxCheck.stdout)\nstderr:\n\(syntaxCheck.stderr)\nscript:\n\(script)"
+            )
+        }
+    }
+
     func testHelperInstallDoesNotCreateGBrainWrapper() throws {
         let root = try makeTemporaryDirectory()
         let stateURL = root.appendingPathComponent("state.json")

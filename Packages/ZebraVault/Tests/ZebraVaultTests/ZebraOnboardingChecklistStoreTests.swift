@@ -686,9 +686,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(line.contains("&& \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""), line)
     }
 
-    func testGBrainStartupLineExecutesSelectedHermesRuntimeAfterSourceRepoSelection() throws {
+    func testFreshInstallGBrainStartupLineExecutesSelectedHermesRuntimeFirst() throws {
         let root = try makeTemporaryDirectory()
-        let sourceRepo = try writeFakeGBrainSourceRepo(root: root)
         let runtimeLog = root.appendingPathComponent("hermes.log", isDirectory: false)
         let executable = try installFakeRuntimeLogger(root: root, name: "hermes", log: runtimeLog)
         let stateURL = root
@@ -733,12 +732,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             arguments: ["-lc", command],
             environment: [
                 "HOME": root.path,
-                "ZEBRA_GBRAIN_SOURCE_REPO": sourceRepo.path,
             ]
         )
 
         XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
-        XCTAssertTrue(result.stdout.contains("Preparing the GBrain source repo..."), result.stdout)
+        XCTAssertFalse(result.stdout.contains("Preparing the GBrain source repo..."), result.stdout)
         XCTAssertTrue(result.stdout.contains("Preparing the selected runtime launcher..."), result.stdout)
         XCTAssertTrue(result.stdout.contains("Starting Hermes for Zebra GBrain setup..."), result.stdout)
         let log = try String(contentsOf: runtimeLog, encoding: .utf8)
@@ -780,12 +778,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(line.contains("agents add"), line)
         XCTAssertFalse(line.contains("--session zebra-gbrain-setup"), line)
         XCTAssertFalse(line.contains(" codex"), line)
-        let prepareRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-source-repo"))
-        let envRange = try XCTUnwrap(line.range(of: "eval \"$(zebra-gbrain-onboarding active-source-env)\""))
+        XCTAssertFalse(line.contains("zebra-gbrain-onboarding prepare-source-repo"), line)
+        XCTAssertFalse(line.contains("eval \"$(zebra-gbrain-onboarding active-source-env)\""), line)
         let launcherRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-runtime-launcher"))
         let launchRange = try XCTUnwrap(line.range(of: "\"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""))
-        XCTAssertLessThan(prepareRange.lowerBound, envRange.lowerBound)
-        XCTAssertLessThan(envRange.lowerBound, launcherRange.lowerBound)
         XCTAssertLessThan(launcherRange.lowerBound, launchRange.lowerBound)
     }
 
