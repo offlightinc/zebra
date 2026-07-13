@@ -626,7 +626,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
     }
 
-    func testGBrainStartupLinePreparesSourceRepoBeforeRuntimeLaunch() throws {
+    func testFreshInstallGBrainStartupLineLaunchesRuntimeWithoutPreparingSourceRepo() throws {
         let launch = ZebraGBrainOnboardingStore.LaunchContext(
             launchDirectory: "/tmp/zebra-gbrain-work",
             startupPrompt: "setup prompt",
@@ -645,8 +645,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             runtime: runtime
         )
 
-        XCTAssertTrue(line.contains("zebra-gbrain-onboarding prepare-source-repo"), line)
-        XCTAssertTrue(line.contains("eval \"$(zebra-gbrain-onboarding active-source-env)\""), line)
+        XCTAssertFalse(line.contains("zebra-gbrain-onboarding prepare-source-repo"), line)
+        XCTAssertFalse(line.contains("eval \"$(zebra-gbrain-onboarding active-source-env)\""), line)
         XCTAssertTrue(line.contains("zebra-gbrain-onboarding write-runtime-launcher --runtime 'hermes'"), line)
         XCTAssertTrue(line.contains("--executable '/tmp/hermes'"), line)
         XCTAssertTrue(line.contains("&& \"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""), line)
@@ -654,12 +654,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(line.contains("--query 'setup prompt'"), line)
         XCTAssertFalse(line.contains("setup prompt"), line)
         XCTAssertFalse(line.contains(" codex"), line)
-        let prepareRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding prepare-source-repo"))
-        let envRange = try XCTUnwrap(line.range(of: "eval \"$(zebra-gbrain-onboarding active-source-env)\""))
         let launcherRange = try XCTUnwrap(line.range(of: "zebra-gbrain-onboarding write-runtime-launcher"))
         let launchRange = try XCTUnwrap(line.range(of: "\"$ZEBRA_GBRAIN_RUNTIME_LAUNCHER\""))
-        XCTAssertLessThan(prepareRange.lowerBound, envRange.lowerBound)
-        XCTAssertLessThan(envRange.lowerBound, launcherRange.lowerBound)
         XCTAssertLessThan(launcherRange.lowerBound, launchRange.lowerBound)
     }
 
