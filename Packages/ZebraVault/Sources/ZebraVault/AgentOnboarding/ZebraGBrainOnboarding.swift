@@ -486,7 +486,7 @@ public struct ZebraGBrainOnboardingStore {
 
             return ZebraOnboardingChecklistSubstepSnapshot(
                 id: section.hash.isEmpty ? section.title : section.hash,
-                title: section.title,
+                title: Self.displayInstallForAgentsSectionTitle(section.title),
                 isCompleted: isCompleted,
                 isActive: isActive,
                 isWaitingForUser: isWaitingForUser,
@@ -509,7 +509,7 @@ public struct ZebraGBrainOnboardingStore {
         guard let markdown = try? String(contentsOf: installForAgentsURL, encoding: .utf8) else {
             return []
         }
-        return Self.installForAgentsSections(from: markdown)
+        return Self.enabledInstallForAgentsSections(Self.installForAgentsSections(from: markdown))
     }
 
     private func sourceRepoPathForPendingSourcePrepareProjection(state: State) -> String? {
@@ -1213,7 +1213,23 @@ public struct ZebraGBrainOnboardingStore {
     }
 
     private static func enabledInstallForAgentsSections(_ sections: [DocsSection]) -> [DocsSection] {
-        sections
+        sections.filter { !isSourceIntegrationsSectionTitle($0.title) }
+    }
+
+    private static func isSourceIntegrationsSectionTitle(_ title: String) -> Bool {
+        let normalized = normalizedSectionTitle(title)
+        guard normalized.hasPrefix("step 8 ") else { return false }
+        return normalized.split(separator: " ").contains { word in
+            word == "integration" || word == "integrations"
+        }
+    }
+
+    private static func displayInstallForAgentsSectionTitle(_ title: String) -> String {
+        title.replacingOccurrences(
+            of: #"^Step\s+\d+(?:\.\d+)?\s*:\s*"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
     }
 
     private func nextSection(in state: State, completedSections: [String]? = nil) -> String {
@@ -3070,7 +3086,7 @@ public struct ZebraGBrainOnboardingStore {
         return f"GBrain docs snapshot:\\npath: {snapshot_path}\\ncommit: {state.get('docsCommit') or 'unknown'}\\nfiles:\\n{file_lines or '- none'}"
 
     def section_prompt_context(state):
-        sections = ((state.get("docsManifest") or {}).get("installForAgentsSections") or [])
+        sections = enabled_manifest_install_sections(state)
         if not sections:
             return "INSTALL_FOR_AGENTS.md section manifest:\\nunavailable. Read local INSTALL_FOR_AGENTS.md from activeGBrainBinding.sourceRepoPath."
         lines = "\\n".join(
@@ -3128,11 +3144,24 @@ public struct ZebraGBrainOnboardingStore {
             })
         return out
 
+    def is_source_integrations_section_title(title):
+        normalized = normalize_title(title)
+        words = normalized.split()
+        return len(words) >= 3 and words[0:2] == ["step", "8"] and any(
+            word in ("integration", "integrations") for word in words[2:]
+        )
+
+    def enabled_manifest_install_sections(state):
+        return [
+            section for section in manifest_install_sections(state)
+            if not is_source_integrations_section_title(section.get("title") or "")
+        ]
+
     def next_section_title(state):
         progress = state.get("progress") or {}
         completed = set(progress.get("completedSections") or [])
         completed_normalized = {normalize_title(title) for title in completed}
-        for section in manifest_install_sections(state):
+        for section in enabled_manifest_install_sections(state):
             title = section.get("title") or ""
             if title in completed or normalize_title(title) in completed_normalized:
                 continue
@@ -3830,9 +3859,6 @@ public struct ZebraGBrainOnboardingStore {
             raise RuntimeError("runtime_executable_missing")
         state = load_state()
         source_repo = existing_active_source_repo_path()
-        existing_mode = existing_install_verification_mode(state)
-        if not source_repo and not existing_mode:
-            raise RuntimeError("active_source_repo_missing")
         prompt = bootstrap_prompt()
         path = launcher_script_path(run_id)
         prompt_path = launcher_prompt_path(run_id)
