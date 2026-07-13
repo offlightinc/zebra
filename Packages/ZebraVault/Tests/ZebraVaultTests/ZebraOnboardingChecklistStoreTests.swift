@@ -785,6 +785,25 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertLessThan(launcherRange.lowerBound, launchRange.lowerBound)
     }
 
+    func testGBrainRuntimePrimaryCodexLaunchUsesGPT56Sol() {
+        let launch = ZebraGBrainRuntimeOnboardingStore.LaunchContext(
+            launchDirectory: "/tmp/zebra-gbrain-work",
+            startupLine: "",
+            startupPrompt: "Set up the selected GBrain runtime.",
+            helperPath: "/tmp/zebra-gbrain-runtime-onboarding",
+            documentPath: "/tmp/gbrain-runtime-onboarding.md",
+            shellEnvironmentPrefix: ""
+        )
+
+        let line = ZebraOnboardingChecklistCommand.gbrainRuntimeStartupLine(
+            launch: launch,
+            agent: .codex,
+            shouldPrepareCodexGBrainSetupConfig: false
+        )
+
+        XCTAssertTrue(line.contains("--model 'gpt-5.6-sol'"), line)
+    }
+
     func testGBrainStartupLineDoesNotInjectRuntimePromptIntoTerminal() throws {
         let launch = ZebraGBrainOnboardingStore.LaunchContext(
             launchDirectory: "/tmp/zebra-gbrain-work",
@@ -7385,10 +7404,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(logText.contains("login --provider openai-codex"))
         XCTAssertFalse(logText.contains("auth add openai-codex"))
         XCTAssertTrue(logText.contains("config set model.provider openai-codex"))
-        XCTAssertTrue(logText.contains("config set model.default gpt-5.5"))
+        XCTAssertTrue(logText.contains("config set model.default gpt-5.6-sol"))
         XCTAssertTrue(logText.contains("config set model.base_url https://chatgpt.com/backend-api/codex"))
         XCTAssertTrue(logText.contains("config set model.api_mode codex_responses"))
-        XCTAssertTrue(logText.contains("chat -q Reply with OK. Do not use tools. --provider openai-codex --model gpt-5.5"))
+        XCTAssertTrue(logText.contains("chat -q Reply with OK. Do not use tools. --provider openai-codex --model gpt-5.6-sol"))
 
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
@@ -7396,7 +7415,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai-codex")
-        XCTAssertEqual(receipt["runtimeModel"] as? String, "gpt-5.5")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "gpt-5.6-sol")
         XCTAssertEqual(receipt["keySource"] as? String, "agent-cli:codex-auth-status")
         XCTAssertEqual(receipt["keyEnvName"] as? String, "")
         XCTAssertEqual(receipt["keyPersistedEnvName"] as? String, "")
@@ -7461,7 +7480,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
-        XCTAssertTrue(logText.contains("models set openai/gpt-5.5"))
+        XCTAssertTrue(logText.contains("models set openai/gpt-5.6-sol"))
         XCTAssertFalse(logText.contains("onboard --non-interactive"))
         XCTAssertFalse(logText.contains("--auth-choice openai-codex"))
 
@@ -7471,7 +7490,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai")
-        XCTAssertEqual(receipt["runtimeModel"] as? String, "openai/gpt-5.5")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "openai/gpt-5.6-sol")
         XCTAssertEqual(receipt["keySource"] as? String, "openai-codex:oauth")
     }
 
@@ -7513,7 +7532,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models status --json --probe-provider openai"))
-        XCTAssertTrue(logText.contains("models set openai/gpt-5.5"))
+        XCTAssertTrue(logText.contains("models set openai/gpt-5.6-sol"))
         XCTAssertFalse(logText.contains("models auth login --provider openai"))
 
         let state = try XCTUnwrap(
@@ -7522,7 +7541,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai")
-        XCTAssertEqual(receipt["runtimeModel"] as? String, "openai/gpt-5.5")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "openai/gpt-5.6-sol")
         XCTAssertEqual(receipt["keySource"] as? String, "openai-codex:oauth")
     }
 
@@ -7568,7 +7587,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
         XCTAssertTrue(logText.contains("models status --json --probe-provider openai"))
-        XCTAssertTrue(logText.contains("models set openai/gpt-5.5"))
+        XCTAssertTrue(logText.contains("models set openai/gpt-5.6-sol"))
 
         let state = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
@@ -7576,7 +7595,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let receipt = try XCTUnwrap(state["receipt"] as? [String: Any])
         XCTAssertEqual(receipt["provider"] as? String, "openai-codex")
         XCTAssertEqual(receipt["runtimeProvider"] as? String, "openai")
-        XCTAssertEqual(receipt["runtimeModel"] as? String, "openai/gpt-5.5")
+        XCTAssertEqual(receipt["runtimeModel"] as? String, "openai/gpt-5.6-sol")
         XCTAssertEqual(receipt["keySource"] as? String, "openai-codex:oauth")
     }
 
@@ -7621,7 +7640,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         let logText = try String(contentsOf: log, encoding: .utf8)
         XCTAssertTrue(logText.contains("models auth login --provider openai --method oauth --set-default"))
-        XCTAssertTrue(logText.contains("models set openai/gpt-5.5"))
+        XCTAssertTrue(logText.contains("models set openai/gpt-5.6-sol"))
         XCTAssertFalse(logText.contains("env OPENAI_API_KEY"))
         XCTAssertFalse(logText.contains("env CODEX_API_KEY"))
     }

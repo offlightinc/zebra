@@ -1469,7 +1469,7 @@ public enum ZebraOnboardingChecklistCommand {
     private static func gbrainRuntimePrimaryAgentModel(_ agent: MarkdownPillAgent) -> String? {
         switch agent {
         case .codex:
-            return "gpt-5.5"
+            return "gpt-5.6-sol"
         case .claude:
             return "opus"
         case .antigravity:
