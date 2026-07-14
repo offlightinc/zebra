@@ -40,6 +40,8 @@ Apple Notes ingest requires the memo CLI. Install it now with Homebrew? (yes/no)
 
 Do not install anything unless the user explicitly answers yes.
 
+If Homebrew itself is missing, obtain separate Homebrew install consent and run `zebra-source-onboarding apple-notes check-cli --homebrew-install-answer yes`. Follow the helper's exact Hermes PTY-backed terminal tool instructions. Use `no` if the user declines. Do not open a separate Zebra terminal.
+
 Continue only from the returned `nextPrompt`.
 
 ## Step: check_notes_automation

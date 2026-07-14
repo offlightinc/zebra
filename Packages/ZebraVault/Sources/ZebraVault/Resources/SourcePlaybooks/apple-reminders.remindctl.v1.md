@@ -22,6 +22,8 @@ Run `zebra-source-onboarding apple-reminders check-cli`.
 
 If `remindctl` is missing, use the helper's install-consent flow. Homebrew install consent and remindctl install consent are separate user choices. Do not install Homebrew or remindctl unless the user explicitly answers yes for that specific install.
 
+When Homebrew consent is accepted in Hermes, follow the helper's exact PTY-backed terminal tool instructions. The Homebrew installer must run with `background=true, pty=true, notify_on_complete=true`; do not open a separate Zebra terminal.
+
 Primary remindctl install command:
 
 ```bash
