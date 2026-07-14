@@ -3372,6 +3372,8 @@ struct ZebraSourceOnboardingHelper {
 
             사용자가 명시적으로 yes라고 답하기 전에는 아무것도 설치하지 마세요.
 
+            Homebrew 자체가 없으면 Homebrew 설치 동의를 별도로 받은 뒤 `zebra-source-onboarding apple-notes check-cli --homebrew-install-answer yes`를 실행하세요. helper가 반환하는 Hermes PTY-backed terminal tool 지시를 그대로 따르세요. 거절하면 같은 명령을 `no`로 실행하세요.
+
             이후에는 helper stdout의 `nextPrompt`에서만 계속 진행하세요.
             ''').strip()
         if language == "ja":
@@ -3398,6 +3400,8 @@ struct ZebraSourceOnboardingHelper {
 
             ユーザーが明示的に yes と答えるまで、何もインストールしないでください。
 
+            Homebrew 自体がない場合は別に同意を取り、`zebra-source-onboarding apple-notes check-cli --homebrew-install-answer yes` を実行してください。helper が返す Hermes PTY-backed terminal tool の手順に従ってください。拒否時は `no` を使います。
+
             以後は helper stdout の `nextPrompt` だけに従って続行してください。
             ''').strip()
         return textwrap.dedent('''
@@ -3422,6 +3426,8 @@ struct ZebraSourceOnboardingHelper {
         ```
 
         Do not install anything unless the user explicitly answers yes.
+
+        If Homebrew itself is missing, obtain separate Homebrew install consent and run `zebra-source-onboarding apple-notes check-cli --homebrew-install-answer yes`. Follow the helper's exact Hermes PTY-backed terminal tool instructions. Use `no` if the user declines.
 
         Continue only from the returned `nextPrompt`.
         ''').strip()
@@ -8124,6 +8130,115 @@ struct ZebraSourceOnboardingHelper {
             return "no"
         return ""
 
+    def homebrew_install_pty_prompt(source_id):
+        language = onboarding_language()
+        resume_command = f"zebra-source-onboarding {source_id} check-cli"
+        install_command = f"zebra-source-onboarding install-homebrew --source {source_id}"
+        if language == "ko":
+            return textwrap.dedent(f'''
+            Homebrew 설치 동의가 확인됐습니다. 이 설치는 Hermes의 PTY-backed terminal tool에서만 실행하세요. 별도 Zebra terminal을 열지 마세요.
+
+            1. 먼저 Hermes의 secure sudo prompt를 사용해 다음 tool call을 실행하세요:
+               `terminal(command="sudo -v", timeout=120)`
+            2. 성공하면 Homebrew installer를 실제 PTY로 실행하세요:
+               `terminal(command="{install_command}", background=true, pty=true, notify_on_complete=true)`
+            3. 반환된 `session_id`로 `process(action="wait", session_id=<session_id>, timeout=180)`를 실행하고, 아직 실행 중이면 종료될 때까지 같은 wait를 반복하세요.
+            4. 성공한 뒤 `{resume_command}`를 실행해 `brew`를 재검증하고 현재 source step부터 계속하세요.
+
+            비밀번호를 채팅, 명령 인자, 로그, Source Onboarding state에 기록하지 마세요. foreground `pty=true`는 현재 Hermes에서 실제 PTY를 만들지 않으므로 Homebrew installer에는 반드시 `background=true, pty=true`를 함께 사용하세요.
+            ''').strip()
+        if language == "ja":
+            return textwrap.dedent(f'''
+            Homebrew のインストール同意を確認しました。このインストールは Hermes の PTY-backed terminal tool だけで実行し、別の Zebra terminal は開かないでください。
+
+            1. Hermes の secure sudo prompt で `terminal(command="sudo -v", timeout=120)` を実行します。
+            2. 成功後、`terminal(command="{install_command}", background=true, pty=true, notify_on_complete=true)` を実行します。
+            3. 返された `session_id` で `process(action="wait", session_id=<session_id>, timeout=180)` を実行し、まだ実行中なら終了まで wait を繰り返します。
+            4. 成功後に `{resume_command}` を実行して `brew` を再確認し、現在の source step から続行します。
+
+            パスワードを chat、command arguments、logs、Source Onboarding state に保存しないでください。Homebrew installer には `background=true, pty=true` を必ず一緒に指定してください。
+            ''').strip()
+        return textwrap.dedent(f'''
+        Homebrew install consent is confirmed. Run this install only through Hermes's PTY-backed terminal tool. Do not open a separate Zebra terminal.
+
+        1. Use Hermes's secure sudo prompt first: `terminal(command="sudo -v", timeout=120)`.
+        2. After it succeeds, run the installer with a real PTY: `terminal(command="{install_command}", background=true, pty=true, notify_on_complete=true)`.
+        3. Use the returned `session_id` with `process(action="wait", session_id=<session_id>, timeout=180)` and repeat the wait while it is still running.
+        4. After success, run `{resume_command}` to recheck `brew` and resume the current source step.
+
+        Never put the password in chat, command arguments, logs, or Source Onboarding state. Foreground `pty=true` does not create a PTY in the current Hermes implementation, so the Homebrew installer must use `background=true, pty=true` together.
+        ''').strip()
+
+    def record_homebrew_pty_required(state, run_state, source_id, step):
+        run_state.update({
+            "homebrewInstallAsked": True,
+            "homebrewInstallAnswer": "yes",
+            "homebrewInstallResult": {"status": "pty_required"},
+            "installCommandRun": False,
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state(source_id, run_state)
+        if source_id == "apple-reminders":
+            state = set_apple_reminders_row_state(
+                state, "attention", "preflight", step,
+                attention_reason="homebrew_install_pty_required",
+                run_state_path=run_path,
+            )
+        else:
+            state = set_apple_notes_row_state(
+                state, "attention", "preflight", step,
+                attention_reason="homebrew_install_pty_required",
+                run_state_path=run_path,
+            )
+        save_json(state)
+        print(json.dumps({
+            "ok": False,
+            "reason": "homebrew_install_pty_required",
+            "nextPrompt": homebrew_install_pty_prompt(source_id),
+        }, ensure_ascii=False, sort_keys=True))
+        return 1
+
+    def install_homebrew_command():
+        source_id = single_flag_value("--source").strip()
+        if source_id not in {"apple-notes", "apple-reminders"}:
+            print(json.dumps({"ok": False, "reason": "homebrew_install_source_invalid"}, sort_keys=True))
+            return 2
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            print(json.dumps({"ok": False, "reason": "homebrew_install_tty_required"}, sort_keys=True))
+            return 2
+        existing = apple_reminders_brew_path() or next(
+            (path for path in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew") if Path(path).is_file()),
+            "",
+        )
+        if existing:
+            print(json.dumps({"ok": True, "reason": "homebrew_already_installed", "brewPath": existing}, sort_keys=True))
+            return 0
+        installer = '/bin/bash -c "$(/usr/bin/curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+        try:
+            result = subprocess.run(["/bin/bash", "-c", installer], timeout=1800)
+        except subprocess.TimeoutExpired:
+            print(json.dumps({"ok": False, "reason": "homebrew_install_timeout"}, sort_keys=True))
+            return 124
+        except KeyboardInterrupt:
+            print(json.dumps({"ok": False, "reason": "homebrew_install_cancelled"}, sort_keys=True))
+            return 130
+        except Exception:
+            print(json.dumps({"ok": False, "reason": "homebrew_installer_failed"}, sort_keys=True))
+            return 1
+        brew_path = apple_reminders_brew_path() or next(
+            (path for path in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew") if Path(path).is_file()),
+            "",
+        )
+        if result.returncode != 0 or not brew_path:
+            print(json.dumps({
+                "ok": False,
+                "reason": "homebrew_installer_failed",
+                "returncode": result.returncode,
+            }, sort_keys=True))
+            return result.returncode or 1
+        print(json.dumps({"ok": True, "reason": "homebrew_install_succeeded", "brewPath": brew_path}, sort_keys=True))
+        return 0
+
     def apple_reminders_record_attention(run_state, state, reason, step="check_remindctl_cli"):
         run_state.update({
             "cliStatus": "missing",
@@ -8174,32 +8289,9 @@ struct ZebraSourceOnboardingHelper {
                     "installCommandRun": False,
                 })
                 return apple_reminders_record_attention(run_state, state, "homebrew_install_consent_required")
-            run_state["homebrewInstallAnswer"] = "yes"
-            run_state["installCommandRun"] = True
-            homebrew_command = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-            result = apple_reminders_command_result(["/bin/bash", "-c", homebrew_command], timeout=1800)
-            run_state["homebrewInstallResult"] = {
-                "status": "succeeded" if result.get("ok") else "failed",
-                "returncode": result.get("returncode"),
-                "stderrPreview": result.get("stderr"),
-            }
-            run_path = save_source_run_state("apple-reminders", run_state)
-            brew_path = apple_reminders_brew_path()
-            if not brew_path:
-                state = set_apple_reminders_row_state(
-                    state,
-                    "attention",
-                    "preflight",
-                    "check_remindctl_cli",
-                    attention_reason="homebrew_install_failed",
-                    run_state_path=run_path,
-                )
-                save_json(state)
-                payload = {"ok": False, "reason": "homebrew_install_failed", "homebrewInstallResult": run_state.get("homebrewInstallResult")}
-                payload.update(source_next_prompt_payload(state, "apple-reminders", "check_remindctl_cli"))
-                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-                return 1
-            run_state["homebrewPath"] = brew_path
+            return record_homebrew_pty_required(
+                state, run_state, "apple-reminders", "check_remindctl_cli"
+            )
 
         run_state["remindctlInstallAsked"] = True
         if remindctl_answer == "no":
@@ -8916,6 +9008,33 @@ struct ZebraSourceOnboardingHelper {
         return directory / "apple-notes-memo-cli.md"
 
     def apple_notes_check_cli():
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-notes")
+        if not required_cli_command_path("apple-notes", run_state) and not apple_reminders_brew_path():
+            answer = apple_reminders_install_answer("--homebrew-install-answer")
+            if answer == "yes":
+                return record_homebrew_pty_required(
+                    state, run_state, "apple-notes", "check_memo_cli"
+                )
+            if answer == "no":
+                run_state.update({
+                    "homebrewInstallAsked": True,
+                    "homebrewInstallAnswer": "no",
+                    "homebrewInstallResult": {"status": "user_declined"},
+                    "installCommandRun": False,
+                    "updatedAt": now(),
+                })
+                run_path = save_source_run_state("apple-notes", run_state)
+                state = set_apple_notes_row_state(
+                    state, "attention", "preflight", "check_memo_cli",
+                    attention_reason="homebrew_install_declined",
+                    run_state_path=run_path,
+                )
+                save_json(state)
+                payload = {"ok": False, "reason": "homebrew_install_declined"}
+                payload.update(source_next_prompt_payload(state, "apple-notes", "check_memo_cli"))
+                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                return 1
         return check_required_cli("apple-notes")
 
     def apple_notes_check_access():
@@ -10011,6 +10130,8 @@ struct ZebraSourceOnboardingHelper {
         sys.exit(apple_notes_command())
     elif command == "apple-reminders":
         sys.exit(apple_reminders_command())
+    elif command == "install-homebrew":
+        sys.exit(install_homebrew_command())
     elif command == "agent-memory":
         sys.exit(agent_memory_command())
     elif command == "fallback":
