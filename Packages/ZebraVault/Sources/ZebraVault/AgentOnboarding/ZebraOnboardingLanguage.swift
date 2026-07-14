@@ -170,4 +170,15 @@ enum ZebraOnboardingLanguage: String, Equatable {
             return "Zebra는 Clawvisor를 통해 Gmail, Calendar, Contacts 접근 권한을 안전하게 연결합니다. 연동이 끝나면 Zebra가 이메일을 불러오고, 필요한 메일 내용을 읽고, 사용자가 승인한 작업을 Clawvisor task 권한 안에서 실행할 수 있습니다. 아래 순서대로 진행하세요."
         }
     }
+
+    var clawvisorGBrainVisibilityQuestion: String {
+        switch self {
+        case .en:
+            return "Is the GBrain connection item missing from the Clawvisor Agents page?"
+        case .ja:
+            return "ClawvisorのAgentsページにGBrain接続項目が表示されていませんか？"
+        case .ko:
+            return "Clawvisor Agents 페이지에 GBrain 연결 항목이 보이지 않나요?"
+        }
+    }
 }

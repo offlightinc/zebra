@@ -2302,6 +2302,10 @@ struct ZebraSourceOnboardingHelper {
             3. Google service authorization과 task approval을 이어서 진행하세요.
             4. 마지막 Env vars step에 도달하면 세 줄의 export env lines를 이 터미널에 그대로 붙여넣으세요.
 
+            위 안내의 마지막에는 반드시 “Clawvisor Agents 페이지에 GBrain 연결 항목이 보이지 않나요?”라고 물으세요. No이면 기존 GBrain wizard를 계속하고 fallback을 언급하지 마세요. Yes이면 그 응답에서는 짧게 확인만 하고, 다음 turn에서만 Clawvisor에 로그인한 상태로 `Agents → Other agent`를 열어 자신의 `user_id`가 이미 포함된 setup prompt 전체를 복사해 현재 Zebra terminal agent에 붙여넣으라고 안내하세요. `user_id`를 추측하거나 별도 입력으로 요구하지 마세요.
+
+            Other agent setup prompt 수행 뒤에는 Clawvisor catalog에서 Gmail, Google Calendar, Google Contacts 연결 상태를 확인하세요. 미연결 서비스는 Accounts 화면에서 OAuth 연결하도록 안내하고 완료 후 catalog를 다시 조회하세요. catalog가 반환한 활성 service identifier를 그대로 사용해 `lifetime: standing` GBrain task를 만들고 사용자 승인을 기다려 task ID를 확보하세요. account alias, curl, JSON 수정을 사용자에게 요구하지 마세요. 이후 canonical 3-key를 env에 저장하고 두 verifier가 성공한 뒤에만 완료 처리하세요. `user_id`, agent token, task ID를 Source Onboarding state나 로그에 기록하지 마세요.
+
             Those three canonical env vars are:
 
                 export CLAWVISOR_URL="https://app.clawvisor.com"
@@ -6075,15 +6079,15 @@ struct ZebraSourceOnboardingHelper {
         task_url = base_url + "/api/tasks/" + urllib.parse.quote(task_id, safe="")
         status, task = request_json("GET", task_url, token)
         if status == 0:
-            reason = "task_request_failed:" + str(task.get("error") if isinstance(task, dict) else "request_failed")
+            reason = "task_request_failed:redacted"
             state = update_gmail_readiness(
                 "attention",
                 env_path,
-                connection_path="clawvisor_task:" + task_id,
+                connection_path="clawvisor_task_lookup",
                 repair_kind="task_request_failed",
                 reasons=[reason],
             )
-            payload = {"ok": False, "stage": "task", "status": status, "response": task}
+            payload = {"ok": False, "stage": "task", "status": status, "reason": reason}
             if should_update_gmail_runner(state):
                 state = set_gmail_row_state(
                     state,
@@ -6100,11 +6104,11 @@ struct ZebraSourceOnboardingHelper {
             state = update_gmail_readiness(
                 "attention",
                 env_path,
-                connection_path="clawvisor_task:" + task_id,
+                connection_path="clawvisor_task_lookup",
                 repair_kind="task_lookup_failed",
                 reasons=["task_http_status:" + str(status)],
             )
-            payload = {"ok": False, "stage": "task", "status": status, "response": task}
+            payload = {"ok": False, "stage": "task", "status": status, "reason": "task_lookup_failed"}
             if should_update_gmail_runner(state):
                 state = set_gmail_row_state(
                     state,
@@ -6122,7 +6126,7 @@ struct ZebraSourceOnboardingHelper {
             state = update_gmail_readiness(
                 "attention",
                 env_path,
-                connection_path="clawvisor_task:" + task_id,
+                connection_path="clawvisor_task_lookup",
                 repair_kind="gmail_service_missing",
                 reasons=["no_authorized_google_gmail_service"],
             )
@@ -6150,15 +6154,15 @@ struct ZebraSourceOnboardingHelper {
         gateway_url = base_url + "/api/gateway/request?wait=true"
         status, gateway = request_json("POST", gateway_url, token, gateway_body)
         if status == 0:
-            reason = "gateway_request_failed:" + str(gateway.get("error") if isinstance(gateway, dict) else "request_failed")
+            reason = "gateway_request_failed"
             state = update_gmail_readiness(
                 "attention",
                 env_path,
-                connection_path="clawvisor_task:" + task_id + "#" + service,
+                connection_path="clawvisor_service:" + service,
                 repair_kind="gateway_request_failed",
                 reasons=[reason],
             )
-            payload = {"ok": False, "stage": "gateway", "status": status, "service": service, "response": gateway}
+            payload = {"ok": False, "stage": "gateway", "status": status, "service": service, "reason": reason}
             if should_update_gmail_runner(state):
                 state = set_gmail_row_state(
                     state,
@@ -6175,11 +6179,11 @@ struct ZebraSourceOnboardingHelper {
             state = update_gmail_readiness(
                 "attention",
                 env_path,
-                connection_path="clawvisor_task:" + task_id + "#" + service,
+                connection_path="clawvisor_service:" + service,
                 repair_kind="gateway_failed",
                 reasons=["gateway_http_status:" + str(status)],
             )
-            payload = {"ok": False, "stage": "gateway", "status": status, "service": service, "response": gateway}
+            payload = {"ok": False, "stage": "gateway", "status": status, "service": service, "reason": "gateway_failed"}
             if should_update_gmail_runner(state):
                 state = set_gmail_row_state(
                     state,
@@ -6197,11 +6201,11 @@ struct ZebraSourceOnboardingHelper {
             state = update_gmail_readiness(
                 "attention",
                 env_path,
-                connection_path="clawvisor_task:" + task_id + "#" + service,
+                connection_path="clawvisor_service:" + service,
                 repair_kind="gateway_pending_or_rejected",
                 reasons=["gateway_status:" + str(gateway_status)],
             )
-            payload = {"ok": False, "stage": "gateway", "status": gateway_status, "service": service, "response": gateway}
+            payload = {"ok": False, "stage": "gateway", "status": gateway_status, "service": service, "reason": "gateway_pending_or_rejected"}
             if should_update_gmail_runner(state):
                 state = set_gmail_row_state(
                     state,
@@ -6217,10 +6221,10 @@ struct ZebraSourceOnboardingHelper {
         state = update_gmail_readiness(
             "ready",
             env_path,
-            connection_path="clawvisor_task:" + task_id + "#" + service,
+            connection_path="clawvisor_service:" + service,
             reasons=[],
         )
-        payload = {"ok": True, "service": service, "taskId": task_id}
+        payload = {"ok": True, "service": service}
         if should_update_gmail_runner(state):
             state = mark_source_completion_pending(
                 state,
