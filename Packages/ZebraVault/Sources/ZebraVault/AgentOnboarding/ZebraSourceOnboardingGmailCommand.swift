@@ -480,6 +480,40 @@ Immediately after that paragraph, show this numbered list:
 
 \(language.clawvisorEmailConnectionSteps)
 
+At the very end of that same first response, ask exactly:
+
+\(language.clawvisorGBrainVisibilityQuestion)
+
+This visibility question is only a branch selector:
+
+  * If the user answers No, continue the existing GBrain wizard path. Do not
+    mention or start the fallback.
+  * If the user answers Yes, acknowledge the answer briefly without giving
+    fallback steps in that response. Only on your next turn, instruct the user
+    to stay signed in to Clawvisor, open `Agents → Other agent`, copy the setup
+    prompt that already contains their own `user_id`, and paste that entire
+    prompt into this current Zebra terminal agent session.
+
+Never infer, guess, extract for persistence, or separately ask the user to type
+their `user_id`. The logged-in Clawvisor page is the authority for the
+account-specific Other agent prompt.
+
+After the user pastes and you complete Clawvisor's Other agent setup prompt,
+continue with these Zebra-owned responsibilities:
+
+  1. Query the Clawvisor catalog and check the connection state of Gmail,
+     Google Calendar, and Google Contacts. If any are disconnected, direct the
+     user to Clawvisor Accounts to complete OAuth, wait for confirmation, and
+     query the catalog again.
+  2. Create one GBrain task with `lifetime: standing`. Use the catalog response's active service identifiers exactly as returned. Wait for the
+     user to approve the task and retain the returned task ID only for the env
+     write. Do not ask the user for an account alias, curl command, or JSON edit.
+  3. Upsert the canonical three keys below into `~/.gbrain/.env`, preserve all
+     unrelated lines, and restrict the file permissions. Never put `user_id`,
+     the agent token, or the task ID into Source Onboarding state or logs.
+  4. Run both Zebra verifiers below. Do not report Gmail onboarding complete
+     until both succeed.
+
 Those three canonical env vars are:
 
     export CLAWVISOR_URL="https://app.clawvisor.com"

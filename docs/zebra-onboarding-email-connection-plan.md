@@ -1,7 +1,7 @@
 ---
 title: "Zebra 온보딩 이메일 연동 플랜"
-status: draft
-last_verified: 2026-06-09
+status: implemented
+last_verified: 2026-07-14
 related:
   - /Users/han/brain-offlight/tasks/zebra-onboarding-email-connection.md
   - /Users/han/brain-offlight/tasks/zebra-clawvisor-agent-onboarding-flow.md
@@ -9,6 +9,32 @@ related:
 ---
 
 # Zebra 온보딩 이메일 연동 플랜
+
+## 2026-07-14 구현 상태
+
+Gmail 연결의 canonical 완료 계약은 `CLAWVISOR_URL`,
+`CLAWVISOR_AGENT_TOKEN`, `CLAWVISOR_TASK_ID` 세 key와
+`zebra-source-onboarding gmail verify-env`, `verify-connection`의 연속 성공이다.
+아래 2026-06-09 초안에 남아 있는 네 key/agent별 integration flow 설명보다 이 절의
+현재 구현을 우선한다.
+
+첫 안내는 모든 사용자에게 기존 `Clawvisor 로그인 → Agents → GBrain` wizard를
+보여준다. 안내 마지막에만 GBrain 항목이 보이지 않는지 묻고, No이면 기존 흐름을
+그대로 계속한다. Yes이면 그 응답에서는 분기만 확인하고 다음 turn에서만
+`Agents → Other agent`의 로그인 계정 전용 setup prompt 전체를 현재 Zebra terminal
+agent에 붙여넣도록 안내한다. Zebra는 `user_id`를 추측하거나 별도로 요구하지 않는다.
+
+Other agent fallback 뒤 Zebra-owned setup packet은 Clawvisor catalog에서 Gmail,
+Google Calendar, Google Contacts를 확인하고, 미연결 서비스의 Accounts OAuth 완료 뒤
+catalog를 재조회한다. catalog가 반환한 활성 service identifier를 그대로 사용해
+GBrain용 standing task를 만들고 승인된 task ID를 확보한다. 이어 canonical 세 key를
+`~/.gbrain/.env`에 unrelated line 보존 방식으로 upsert하고 권한을 제한한다. 사용자에게
+account alias, curl, JSON 수정, env 직접 편집, chmod를 요구하지 않는다.
+
+Source Onboarding state와 helper stdout에는 `user_id`, agent token, task ID를 저장하거나
+출력하지 않는다. Gmail 완료 상태는 env 검증과 실제 Clawvisor task/Gmail gateway
+검증이 모두 성공한 뒤에만 기록된다. 구현은 기존 setup packet/state/helper 경로인
+`ZebraSourceOnboardingGmailCommand`와 `ZebraSourceOnboardingHelper`를 재사용한다.
 
 ## 최신 handoff 메모
 
