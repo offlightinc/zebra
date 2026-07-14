@@ -5565,7 +5565,6 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.status, "running")
         XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.phase, "smoke")
         XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.playbookStepID, "verify_connection")
-
         let resumed = try runProcess(
             executableURL: helperURL,
             arguments: ["next"],
@@ -5776,6 +5775,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.status, "attention")
         XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.phase, "smoke")
         XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.playbookStepID, "verify_connection")
+        let persistedState = try String(contentsOf: stateURL, encoding: .utf8)
+        XCTAssertFalse(persistedState.contains("cvis_test"))
+        XCTAssertFalse(persistedState.contains("task_test"))
+        XCTAssertFalse(result.stdout.contains("cvis_test"))
+        XCTAssertFalse(result.stdout.contains("task_test"))
     }
 
     @MainActor
