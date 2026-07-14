@@ -473,6 +473,17 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(korean.contains("2. Clawvisor에서 왼쪽 sidebar의 Agents를 열고 GBrain을 선택한 뒤 Create GBrain agent를 클릭하세요."))
         XCTAssertTrue(korean.contains("3. Google service authorization과 task approval을 이어서 진행하세요."))
         XCTAssertTrue(korean.contains("4. 마지막 Env vars step에 도달하면 세 줄의 export env lines를 이 터미널에 그대로 붙여넣으세요."))
+        XCTAssertTrue(korean.contains("Clawvisor Agents 페이지에 GBrain 연결 항목이 보이지 않나요?"))
+        XCTAssertTrue(korean.contains("If the user answers No"))
+        XCTAssertTrue(korean.contains("If the user answers Yes"))
+        XCTAssertTrue(korean.contains("on your next turn"))
+        XCTAssertTrue(korean.contains("Agents → Other agent"))
+        XCTAssertTrue(korean.contains("user_id"))
+        XCTAssertTrue(korean.contains("Google Calendar"))
+        XCTAssertTrue(korean.contains("Google Contacts"))
+        XCTAssertTrue(korean.contains("lifetime: standing"))
+        XCTAssertTrue(korean.contains("catalog response's active service identifiers exactly"))
+        XCTAssertTrue(korean.contains("Do not ask the user for an account alias"))
         XCTAssertLessThan(
             korean.range(of: "Zebra는 Clawvisor를 통해")!.lowerBound,
             korean.range(of: "1. https://app.clawvisor.com/register")!.lowerBound
@@ -494,6 +505,7 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         XCTAssertTrue(english.contains("2. In Clawvisor, use the left sidebar to open Agents, choose GBrain, and click Create GBrain agent."))
         XCTAssertTrue(english.contains("3. Continue through Google service authorization and task approval."))
         XCTAssertTrue(english.contains("4. When Clawvisor reaches the final Env vars step, paste the three exported env lines into this terminal."))
+        XCTAssertTrue(english.contains("Is the GBrain connection item missing from the Clawvisor Agents page?"))
         XCTAssertTrue(english.contains("use concise English prose"))
         XCTAssertFalse(english.contains("read the setup packet"))
         XCTAssertFalse(english.contains("authoritative setup packet"))
