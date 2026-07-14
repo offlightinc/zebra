@@ -2678,6 +2678,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(missingCLIPrompt.contains("Apple Notes ingest requires the memo CLI. Install it now with Homebrew? (yes/no)"), missingCLIPrompt)
         XCTAssertTrue(missingCLIPrompt.contains("Do not install anything unless the user explicitly answers yes."), missingCLIPrompt)
 
+        let approvedHomebrew = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-notes", "check-cli", "--homebrew-install-answer", "yes"],
+            environment: baseEnvironment
+        )
+        XCTAssertEqual(approvedHomebrew.status, 1, "stdout:\n\(approvedHomebrew.stdout)\nstderr:\n\(approvedHomebrew.stderr)")
+        let approvedHomebrewPayload = try jsonObject(from: approvedHomebrew.stdout)
+        XCTAssertEqual(approvedHomebrewPayload["reason"] as? String, "homebrew_install_pty_required")
+        let approvedHomebrewPrompt = try XCTUnwrap(approvedHomebrewPayload["nextPrompt"] as? String)
+        XCTAssertTrue(approvedHomebrewPrompt.contains("terminal(command=\"sudo -v\""), approvedHomebrewPrompt)
+        XCTAssertTrue(approvedHomebrewPrompt.contains("background=true"), approvedHomebrewPrompt)
+        XCTAssertTrue(approvedHomebrewPrompt.contains("pty=true"), approvedHomebrewPrompt)
+        XCTAssertTrue(approvedHomebrewPrompt.contains("notify_on_complete=true"), approvedHomebrewPrompt)
+        XCTAssertTrue(approvedHomebrewPrompt.contains("zebra-source-onboarding install-homebrew --source apple-notes"), approvedHomebrewPrompt)
+
         let koreanMissingCLI = try runProcess(
             executableURL: helperURL,
             arguments: ["apple-notes", "check-cli"],
@@ -2963,6 +2978,41 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         var runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
         XCTAssertEqual(runState["homebrewInstallAsked"] as? Bool, true)
         XCTAssertEqual(runState["installCommandRun"] as? Bool, false)
+
+        let legacyInstallerMarker = root.appendingPathComponent("legacy-homebrew-installer-ran", isDirectory: false)
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "curl",
+            content: """
+            #!/bin/sh
+            /usr/bin/touch '\(shellSingleQuoted(legacyInstallerMarker.path))'
+            printf 'exit 1\\n'
+            """
+        )
+
+        let approvedBrew = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-reminders", "check-cli", "--homebrew-install-answer", "yes"],
+            environment: baseEnvironment
+        )
+        XCTAssertEqual(approvedBrew.status, 1, "stdout:\n\(approvedBrew.stdout)\nstderr:\n\(approvedBrew.stderr)")
+        let approvedBrewPayload = try jsonObject(from: approvedBrew.stdout)
+        XCTAssertEqual(approvedBrewPayload["reason"] as? String, "homebrew_install_pty_required")
+        let approvedBrewPrompt = try XCTUnwrap(approvedBrewPayload["nextPrompt"] as? String)
+        XCTAssertTrue(approvedBrewPrompt.contains("terminal(command=\"sudo -v\""), approvedBrewPrompt)
+        XCTAssertTrue(approvedBrewPrompt.contains("background=true"), approvedBrewPrompt)
+        XCTAssertTrue(approvedBrewPrompt.contains("pty=true"), approvedBrewPrompt)
+        XCTAssertTrue(approvedBrewPrompt.contains("notify_on_complete=true"), approvedBrewPrompt)
+        XCTAssertTrue(approvedBrewPrompt.contains("zebra-source-onboarding install-homebrew --source apple-reminders"), approvedBrewPrompt)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyInstallerMarker.path))
+
+        let nonTTYInstaller = try runProcess(
+            executableURL: helperURL,
+            arguments: ["install-homebrew", "--source", "apple-reminders"],
+            environment: baseEnvironment
+        )
+        XCTAssertEqual(nonTTYInstaller.status, 2, "stdout:\n\(nonTTYInstaller.stdout)\nstderr:\n\(nonTTYInstaller.stderr)")
+        XCTAssertEqual(try jsonObject(from: nonTTYInstaller.stdout)["reason"] as? String, "homebrew_install_tty_required")
 
         let declinedBrew = try runProcess(
             executableURL: helperURL,
