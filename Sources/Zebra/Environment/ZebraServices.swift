@@ -53,6 +53,7 @@ struct ZebraServices {
         MinimalModeSidebarTitlebarControlsMetrics.extraLeadingInset =
             VerticalTabsSidebarModeRail.fixedWidth
         ZebraTelemetry.sink = ZebraTelemetryPostHogBridge.shared
+        SlackCapturedPollingScheduler.shared.start()
         let vault = VerticalTabsSidebarVaultState()
         let brainSync = BrainSyncSelectionService()
         brainSync.attachVaultSource(vault)
