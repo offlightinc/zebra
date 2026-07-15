@@ -116,6 +116,57 @@ final class ZebraAgentInstallScannerTests: XCTestCase {
         XCTAssertEqual(antigravity.recommendedAction, .repairInstall)
     }
 
+    func testExecutableWhoseVersionCommandFailsIsNotInstalled() throws {
+        let codexPath = "/Users/test/.local/bin/codex"
+        let scanner = ZebraAgentInstallScanner(
+            environment: makeEnvironment(
+                executablePaths: [codexPath],
+                versions: [
+                    codexPath: ZebraVersionCommandResult(
+                        exitCode: 1,
+                        stdout: "",
+                        stderr: "runtime dependency missing"
+                    ),
+                ]
+            )
+        )
+
+        let codex = try XCTUnwrap(scanner.scan().first { $0.id == .codex })
+
+        guard case .broken(let reason) = codex.installState else {
+            return XCTFail("Expected a CLI that cannot run to require repair")
+        }
+        XCTAssertTrue(reason.contains("--version"), reason)
+        XCTAssertFalse(codex.terminalLaunchable)
+        XCTAssertNil(codex.executablePath)
+    }
+
+    func testExecutableWhoseVersionCommandTimesOutIsNotInstalled() throws {
+        let claudePath = "/Users/test/.local/bin/claude"
+        let scanner = ZebraAgentInstallScanner(
+            environment: makeEnvironment(
+                executablePaths: [claudePath],
+                versions: [
+                    claudePath: ZebraVersionCommandResult(
+                        exitCode: nil,
+                        stdout: "",
+                        stderr: "",
+                        timedOut: true
+                    ),
+                ]
+            )
+        )
+
+        let claude = try XCTUnwrap(scanner.scan().first { $0.id == .claude })
+
+        guard case .broken(let reason) = claude.installState else {
+            return XCTFail("Expected a timed-out CLI to require repair")
+        }
+        XCTAssertTrue(reason.contains("timed out"), reason)
+        XCTAssertFalse(claude.terminalLaunchable)
+        XCTAssertNil(claude.executablePath)
+    }
+
     private func makeEnvironment(
         homeDirectoryPath: String = "/Users/test",
         searchPath: String = "/opt/homebrew/bin:/usr/local/bin:/Users/test/.local/bin",
