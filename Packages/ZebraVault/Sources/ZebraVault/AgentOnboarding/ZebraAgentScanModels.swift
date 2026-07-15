@@ -11,6 +11,8 @@ public struct ZebraAgentInstallCandidate: Identifiable, Equatable, Sendable {
     public let authState: ZebraAgentAuthState
     public let terminalLaunchable: Bool
     public let recommendedAction: ZebraAgentOnboardingAction
+    public let discoverySource: ZebraAgentDiscoverySource?
+    public let diagnostic: String?
 
     public init(
         id: ZebraAgentKind,
@@ -22,7 +24,9 @@ public struct ZebraAgentInstallCandidate: Identifiable, Equatable, Sendable {
         installState: ZebraAgentInstallState,
         authState: ZebraAgentAuthState,
         terminalLaunchable: Bool,
-        recommendedAction: ZebraAgentOnboardingAction
+        recommendedAction: ZebraAgentOnboardingAction,
+        discoverySource: ZebraAgentDiscoverySource? = nil,
+        diagnostic: String? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -34,7 +38,15 @@ public struct ZebraAgentInstallCandidate: Identifiable, Equatable, Sendable {
         self.authState = authState
         self.terminalLaunchable = terminalLaunchable
         self.recommendedAction = recommendedAction
+        self.discoverySource = discoverySource
+        self.diagnostic = diagnostic
     }
+}
+
+public enum ZebraAgentDiscoverySource: String, Codable, Equatable, Sendable {
+    case loginShell
+    case knownPath
+    case savedVerifiedPath
 }
 
 public enum ZebraAgentInstallState: Equatable, Sendable {
@@ -43,13 +55,13 @@ public enum ZebraAgentInstallState: Equatable, Sendable {
     case broken(reason: String)
 }
 
-public enum ZebraAgentAuthState: String, Equatable, Sendable {
+public enum ZebraAgentAuthState: String, Codable, Equatable, Sendable {
     case unknown
     case configPresent
     case probablySignedOut
 }
 
-public enum ZebraAgentOnboardingAction: String, Equatable, Sendable {
+public enum ZebraAgentOnboardingAction: String, Codable, Equatable, Sendable {
     case launch
     case install
     case repairInstall

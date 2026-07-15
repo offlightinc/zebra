@@ -26,7 +26,8 @@ public enum ZebraAgentOnboardingScriptCommand {
             cwd: cwd,
             agent: agent,
             languageCode: languageCode,
-            continueWithCommandFile: continueWithCommandFile
+            continueWithCommandFile: continueWithCommandFile,
+            resolverPath: ZebraAgentResolverResource.executablePath
         )
     }
 
@@ -36,7 +37,8 @@ public enum ZebraAgentOnboardingScriptCommand {
         cwd: String,
         agent: ZebraAgentKind? = nil,
         languageCode: String? = nil,
-        continueWithCommandFile: String? = nil
+        continueWithCommandFile: String? = nil,
+        resolverPath: String? = nil
     ) -> String {
         var arguments = [
             scriptPath,
@@ -53,10 +55,20 @@ public enum ZebraAgentOnboardingScriptCommand {
             .flatMap(ZebraOnboardingLanguage.resolve(_:))?
             .code ?? ZebraOnboardingLanguage.current().code
         arguments += ["--language", resolvedLanguageCode]
+        if let resolverPath,
+           !resolverPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            arguments += ["--resolver-path", resolverPath]
+        }
         if let continueWithCommandFile,
            !continueWithCommandFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             arguments += ["--continue-with-command-file", continueWithCommandFile]
         }
         return arguments.map(ZebraAgentLaunchCommand.shellQuote).joined(separator: " ") + "\r"
+    }
+}
+
+enum ZebraAgentResolverResource {
+    static var executablePath: String? {
+        Bundle.module.url(forResource: "zebra-agent-resolver", withExtension: nil)?.path
     }
 }

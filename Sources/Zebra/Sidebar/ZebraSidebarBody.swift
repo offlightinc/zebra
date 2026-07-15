@@ -206,6 +206,34 @@ struct ZebraSidebarBody: View {
     ) {
         guard let workspace = tabManager.selectedWorkspace else { return }
         guard let vaultPath = vaultState.selectedVaultPath, !vaultPath.isEmpty else { return }
+        Task {
+            let candidates = await Task.detached(priority: .userInitiated) {
+                ZebraAgentInstallScanner().scan()
+            }.value
+            let resolution = try? ZebraAgentLaunchResolver().resolvePrimary(candidates: candidates)
+            guard case .launch(let resolvedAgent, let executablePath, _) = resolution else {
+                startDefaultAgentManager(in: workspace, requestedAgent: agent.agentKind)
+                return
+            }
+            launchBrainSaveFailureAgent(
+                agent: MarkdownPillAgent(agentKind: resolvedAgent),
+                executablePath: executablePath,
+                vaultPath: vaultPath,
+                failedAt: failedAt,
+                failure: failure,
+                workspace: workspace
+            )
+        }
+    }
+
+    private func launchBrainSaveFailureAgent(
+        agent: MarkdownPillAgent,
+        executablePath: String,
+        vaultPath: String,
+        failedAt: Date?,
+        failure: BrainSaveFailure,
+        workspace: Workspace
+    ) {
         _ = MarkdownChatPillCommand.prepareLaunchEnvironmentForBrainSaveFailure(
             agent: agent,
             vaultPath: vaultPath
@@ -214,7 +242,8 @@ struct ZebraSidebarBody: View {
             agent: agent,
             vaultPath: vaultPath,
             failure: failure,
-            failedAt: failedAt
+            failedAt: failedAt,
+            executablePath: executablePath
         )
         guard let agentTerminals = zebra?.agentTerminals else { return }
         workspace.openZebraAgentTerminal(
@@ -241,6 +270,34 @@ struct ZebraSidebarBody: View {
     ) {
         guard let workspace = tabManager.selectedWorkspace else { return }
         guard let vaultPath = vaultState.selectedVaultPath, !vaultPath.isEmpty else { return }
+        Task {
+            let candidates = await Task.detached(priority: .userInitiated) {
+                ZebraAgentInstallScanner().scan()
+            }.value
+            let resolution = try? ZebraAgentLaunchResolver().resolvePrimary(candidates: candidates)
+            guard case .launch(let resolvedAgent, let executablePath, _) = resolution else {
+                startDefaultAgentManager(in: workspace, requestedAgent: agent.agentKind)
+                return
+            }
+            launchBrainSyncFailureAgent(
+                agent: MarkdownPillAgent(agentKind: resolvedAgent),
+                executablePath: executablePath,
+                vaultPath: vaultPath,
+                failedAt: failedAt,
+                failure: failure,
+                workspace: workspace
+            )
+        }
+    }
+
+    private func launchBrainSyncFailureAgent(
+        agent: MarkdownPillAgent,
+        executablePath: String,
+        vaultPath: String,
+        failedAt: Date,
+        failure: BrainSyncService.Failure,
+        workspace: Workspace
+    ) {
         // Claude 의 .claude.json trust 처리는 prep 단계에서 (codex/agy 는 no-op).
         _ = MarkdownChatPillCommand.prepareLaunchEnvironmentForBrainSyncFailure(
             agent: agent,
@@ -252,13 +309,30 @@ struct ZebraSidebarBody: View {
             reason: failure.reason,
             rawReasonId: failure.rawReasonId,
             detail: failure.detail,
-            failedAt: failedAt
+            failedAt: failedAt,
+            executablePath: executablePath
         )
         guard let agentTerminals = zebra?.agentTerminals else { return }
         workspace.openZebraAgentTerminal(
             startupLine: startupLine,
             source: .brainSyncFailure,
             agent: agent,
+            anchor: .focusAnchored,
+            markedBy: agentTerminals
+        )
+    }
+
+    private func startDefaultAgentManager(in workspace: Workspace, requestedAgent: ZebraAgentKind?) {
+        guard let startupLine = ZebraAgentOnboardingScriptCommand.shellStartupLine(
+            command: .choosePrimary,
+            cwd: vaultState.selectedVaultPath ?? NSHomeDirectory(),
+            agent: requestedAgent
+        ), let agentTerminals = zebra?.agentTerminals else { return }
+        let displayAgent = requestedAgent.map(MarkdownPillAgent.init(agentKind:)) ?? .codex
+        workspace.openZebraAgentTerminal(
+            startupLine: startupLine,
+            source: .brainSyncFailure,
+            agent: displayAgent,
             anchor: .focusAnchored,
             markedBy: agentTerminals
         )

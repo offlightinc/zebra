@@ -1,0 +1,243 @@
+#!/bin/bash
+
+set -u
+
+AGENTS=(claude codex antigravity)
+HOME_DIR="${ZEBRA_AGENT_RESOLVER_HOME:-$HOME}"
+SEARCH_PATH="${ZEBRA_AGENT_RESOLVER_PATH:-${PATH:-}}"
+CODEX_INSTALL_DIR="${ZEBRA_AGENT_RESOLVER_CODEX_INSTALL_DIR:-${CODEX_INSTALL_DIR:-$HOME_DIR/.local/bin}}"
+LOGIN_SHELL="${ZEBRA_AGENT_RESOLVER_LOGIN_SHELL:-${SHELL:-/bin/zsh}}"
+TIMEOUT_SECONDS="${ZEBRA_AGENT_RESOLVER_TIMEOUT_SECONDS:-5}"
+SKIP_LOGIN_SHELL="${ZEBRA_AGENT_RESOLVER_SKIP_LOGIN_SHELL:-0}"
+
+json_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '"%s"' "$value"
+}
+
+binary_name() {
+  case "$1" in
+    claude) printf 'claude' ;;
+    codex) printf 'codex' ;;
+    antigravity) printf 'agy' ;;
+    *) return 1 ;;
+  esac
+}
+
+display_name() {
+  case "$1" in
+    claude) printf 'Claude Code' ;;
+    codex) printf 'Codex' ;;
+    antigravity) printf 'Antigravity' ;;
+  esac
+}
+
+is_transient_path() {
+  local lower
+  lower="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    *'/deriveddata/'*|*'/build/products/'*|*'.app/contents/'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_cmux_claude_wrapper() {
+  [[ -f "$1" ]] || return 1
+  head -c 512 "$1" 2>/dev/null | grep -Fq 'cmux claude wrapper - injects hooks and session tracking'
+}
+
+standardize_path() {
+  local path="$1" directory basename
+  directory="$(dirname "$path")"
+  basename="$(basename "$path")"
+  if [[ -d "$directory" ]]; then
+    (cd "$directory" 2>/dev/null && printf '%s/%s' "$PWD" "$basename")
+  else
+    printf '%s' "$path"
+  fi
+}
+
+run_timed() {
+  local stdout_file="$1" stderr_file="$2"
+  shift 2
+  local pid killer status timed_out_file
+  timed_out_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.timeout.XXXXXX")"
+  : > "$timed_out_file"
+  "$@" </dev/null >"$stdout_file" 2>"$stderr_file" &
+  pid="$!"
+  (
+    sleep "$TIMEOUT_SECONDS"
+    if kill -0 "$pid" 2>/dev/null; then
+      printf '1' > "$timed_out_file"
+      kill "$pid" 2>/dev/null || true
+      sleep 0.2
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  ) &
+  killer="$!"
+  if wait "$pid"; then status=0; else status="$?"; fi
+  kill "$killer" 2>/dev/null || true
+  wait "$killer" 2>/dev/null || true
+  if [[ -s "$timed_out_file" ]]; then
+    status=124
+  fi
+  rm -f "$timed_out_file"
+  return "$status"
+}
+
+shell_probe() {
+  local binary="$1" stdout_file stderr_file path_output path
+  [[ "$SKIP_LOGIN_SHELL" != "1" ]] || return 1
+  [[ -x "$LOGIN_SHELL" ]] || return 1
+  stdout_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.shell.stdout.XXXXXX")"
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.shell.stderr.XXXXXX")"
+  if ! run_timed "$stdout_file" "$stderr_file" env HOME="$HOME_DIR" PATH="$SEARCH_PATH" "$LOGIN_SHELL" -lic "$binary --version"; then
+    rm -f "$stdout_file" "$stderr_file"
+    return 1
+  fi
+  if ! run_timed "$stdout_file" "$stderr_file" env HOME="$HOME_DIR" PATH="$SEARCH_PATH" "$LOGIN_SHELL" -lic "command -v $binary"; then
+    rm -f "$stdout_file" "$stderr_file"
+    return 1
+  fi
+  path_output="$(cat "$stdout_file")"
+  rm -f "$stdout_file" "$stderr_file"
+  while IFS= read -r path; do
+    [[ "$path" == /* ]] || continue
+    path="$(standardize_path "$path")"
+    [[ -f "$path" && -x "$path" ]] || continue
+    is_transient_path "$path" && continue
+    if [[ "$binary" == "claude" ]] && is_cmux_claude_wrapper "$path"; then continue; fi
+    SHELL_RESOLVED_PATH="$path"
+    return 0
+  done <<< "$path_output"
+  return 1
+}
+
+candidate_paths() {
+  local agent="$1" binary="$2" entry
+  if [[ "$agent" == "codex" ]]; then printf '%s\n' "$CODEX_INSTALL_DIR/$binary"; fi
+  printf '%s\n' "$HOME_DIR/.local/bin/$binary"
+  printf '%s\n' "/opt/homebrew/bin/$binary" "/usr/local/bin/$binary"
+  local old_ifs="$IFS"
+  IFS=:
+  for entry in $SEARCH_PATH; do
+    [[ -n "$entry" ]] && printf '%s\n' "$entry/$binary"
+  done
+  IFS="$old_ifs"
+}
+
+direct_probe() {
+  local agent="$1" binary="$2" path stdout_file stderr_file status seen=':' first_broken=''
+  while IFS= read -r path; do
+    path="$(standardize_path "$path")"
+    [[ "$seen" != *":$path:"* ]] || continue
+    seen+="$path:"
+    if [[ -f "$path" && -x "$path" ]]; then
+      is_transient_path "$path" && continue
+      if [[ "$agent" == "claude" ]] && is_cmux_claude_wrapper "$path"; then continue; fi
+      stdout_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.direct.stdout.XXXXXX")"
+      stderr_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.direct.stderr.XXXXXX")"
+      if run_timed "$stdout_file" "$stderr_file" "$path" --version; then
+        rm -f "$stdout_file" "$stderr_file"
+        DIRECT_RESOLVED_PATH="$path"
+        return 0
+      else
+        status="$?"
+      fi
+      if [[ "$status" -eq 124 ]]; then first_broken="$path --version timed out"; else first_broken="$path --version failed"; fi
+      rm -f "$stdout_file" "$stderr_file"
+    elif [[ -e "$path" && -z "$first_broken" ]]; then
+      first_broken="$path is not executable"
+    fi
+  done < <(candidate_paths "$agent" "$binary")
+  RESOLVE_BROKEN_REASON="$first_broken"
+  return 1
+}
+
+auth_state() {
+  case "$1" in
+    claude) [[ -e "$HOME_DIR/.claude" || -e "$HOME_DIR/.claude.json" ]] && printf 'configPresent' || printf 'unknown' ;;
+    codex) [[ -e "$HOME_DIR/.codex" ]] && printf 'configPresent' || printf 'unknown' ;;
+    antigravity) [[ -e "$HOME_DIR/.config/antigravity" || -e "$HOME_DIR/.local/share/antigravity" ]] && printf 'configPresent' || printf 'unknown' ;;
+  esac
+}
+
+resolve_agent() {
+  local agent="$1" binary stdout_file stderr_file
+  binary="$(binary_name "$agent")"
+  RESOLVED_PATH=''
+  RESOLVED_VERSION=''
+  RESOLVE_BROKEN_REASON=''
+  DISCOVERY_SOURCE=''
+  SHELL_RESOLVED_PATH=''
+  DIRECT_RESOLVED_PATH=''
+  if shell_probe "$binary"; then
+    RESOLVED_PATH="$SHELL_RESOLVED_PATH"
+    DISCOVERY_SOURCE='loginShell'
+    stdout_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.version.stdout.XXXXXX")"
+    stderr_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.version.stderr.XXXXXX")"
+    if run_timed "$stdout_file" "$stderr_file" "$RESOLVED_PATH" --version; then
+      RESOLVED_VERSION="$(sed -n '1{s/[[:space:]]*$//;p;q;}' "$stdout_file")"
+      [[ -n "$RESOLVED_VERSION" ]] || RESOLVED_VERSION="$(sed -n '1{s/[[:space:]]*$//;p;q;}' "$stderr_file")"
+    fi
+    rm -f "$stdout_file" "$stderr_file"
+    return 0
+  fi
+  if direct_probe "$agent" "$binary"; then
+    RESOLVED_PATH="$DIRECT_RESOLVED_PATH"
+    DISCOVERY_SOURCE='knownPath'
+    stdout_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.version.stdout.XXXXXX")"
+    stderr_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.version.stderr.XXXXXX")"
+    if run_timed "$stdout_file" "$stderr_file" "$RESOLVED_PATH" --version; then
+      RESOLVED_VERSION="$(sed -n '1{s/[[:space:]]*$//;p;q;}' "$stdout_file")"
+      [[ -n "$RESOLVED_VERSION" ]] || RESOLVED_VERSION="$(sed -n '1{s/[[:space:]]*$//;p;q;}' "$stderr_file")"
+    fi
+    rm -f "$stdout_file" "$stderr_file"
+    return 0
+  fi
+  return 1
+}
+
+print_candidate() {
+  local agent="$1" binary state action launchable diagnostic auth
+  binary="$(binary_name "$agent")"
+  auth="$(auth_state "$agent")"
+  if resolve_agent "$agent"; then
+    state='installed'; action='launch'; launchable=true; diagnostic=''
+  elif [[ -n "$RESOLVE_BROKEN_REASON" ]]; then
+    state='broken'; action='repairInstall'; launchable=false; diagnostic="$RESOLVE_BROKEN_REASON"
+  else
+    state='missing'; action='install'; launchable=false; diagnostic=''
+  fi
+  printf '{"id":'; json_string "$agent"
+  printf ',"displayName":'; json_string "$(display_name "$agent")"
+  printf ',"binaryName":'; json_string "$binary"
+  printf ',"executablePath":'; if [[ -n "$RESOLVED_PATH" ]]; then json_string "$RESOLVED_PATH"; else printf 'null'; fi
+  printf ',"version":'; if [[ -n "$RESOLVED_VERSION" ]]; then json_string "$RESOLVED_VERSION"; else printf 'null'; fi
+  printf ',"installState":'; json_string "$state"
+  printf ',"authState":'; json_string "$auth"
+  printf ',"terminalLaunchable":%s' "$launchable"
+  printf ',"recommendedAction":'; json_string "$action"
+  printf ',"discoverySource":'; if [[ -n "$DISCOVERY_SOURCE" ]]; then json_string "$DISCOVERY_SOURCE"; else printf 'null'; fi
+  printf ',"diagnostic":'; if [[ -n "$diagnostic" ]]; then json_string "$diagnostic"; else printf 'null'; fi
+  printf '}'
+}
+
+main() {
+  [[ "${1:-scan}" == "scan" ]] || { printf 'usage: zebra-agent-resolver scan\n' >&2; return 64; }
+  local first=1 agent
+  printf '{"schemaVersion":1,"candidates":['
+  for agent in "${AGENTS[@]}"; do
+    [[ "$first" -eq 1 ]] || printf ','
+    first=0
+    print_candidate "$agent"
+  done
+  printf ']}\n'
+}
+
+main "$@"

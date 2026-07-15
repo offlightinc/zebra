@@ -566,6 +566,22 @@ struct ZebraMarkdownPanelView<
     }
 
     fileprivate func handlePillSubmit(text: String, agent: MarkdownPillAgent) {
+        Task {
+            let candidates = await Task.detached(priority: .userInitiated) {
+                ZebraAgentInstallScanner().scan()
+            }.value
+            guard let executablePath = ZebraAgentLaunchResolver().executablePath(
+                for: agent.agentKind,
+                candidates: candidates
+            ) else {
+                startDefaultAgentManager(agent: agent.agentKind)
+                return
+            }
+            launchPillSubmit(text: text, agent: agent, executablePath: executablePath)
+        }
+    }
+
+    private func launchPillSubmit(text: String, agent: MarkdownPillAgent, executablePath: String) {
         // surface 결정 책임은 호출 사이트가 가진다 — markdown panel 이므로 frontmatter
         // detect 로 .task / .goal / .fallback 중 하나. email panel 측에서 ChatPill 마운트가
         // 추가되면 그쪽 호출 사이트는 `.email` 을 직접 주입한다.
@@ -577,6 +593,7 @@ struct ZebraMarkdownPanelView<
             fallbackDirectory: markdownFileListStore.rootPath,
             surface: surface,
             userPrompt: text,
+            executablePath: executablePath,
             chooseDirectory: { requestedPath, suggestedPath in
                 chooseWorktreeDirectory(requestedPath: requestedPath, suggestedPath: suggestedPath)
             }

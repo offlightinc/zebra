@@ -52,6 +52,7 @@ public enum MarkdownChatPillCommand {
         fallbackDirectory: String?,
         surface: MarkdownChatPillContextSurface,
         userPrompt: String,
+        executablePath: String? = nil,
         chooseDirectory: ((_ requestedPath: String, _ suggestedPath: String?) -> String?)? = nil
     ) -> LaunchPlan {
         let requestedWorktree = worktreeFrontmatterPath(markdownContent)
@@ -80,7 +81,8 @@ public enum MarkdownChatPillCommand {
             markdownFilePath: markdownFilePath,
             surface: surface,
             userPrompt: userPrompt,
-            launchDirectory: launchDirectory
+            launchDirectory: launchDirectory,
+            executablePath: executablePath
         )
         return LaunchPlan(
             requestedWorktree: requestedWorktree,
@@ -167,7 +169,8 @@ public enum MarkdownChatPillCommand {
         rawReasonId: String?,
         detail: String,
         failedAt: Date?,
-        userPrompt: String = ""
+        userPrompt: String = "",
+        executablePath: String? = nil
     ) -> String {
         let failurePrefix = BrainSyncFailureContextPrefix.build(
             vaultPath: vaultPath,
@@ -176,7 +179,7 @@ public enum MarkdownChatPillCommand {
             detail: detail,
             failedAt: failedAt
         )
-        return "\(invocation(agent: agent, cwd: vaultPath, trustEligible: true, contextPrefix: failurePrefix, prompt: userPrompt))\r"
+        return "\(invocation(agent: agent, cwd: vaultPath, trustEligible: true, contextPrefix: failurePrefix, prompt: userPrompt, executableShellExpression: executablePath.map(shellQuote)))\r"
     }
 
     public static func shellStartupLineForBrainSaveFailure(
@@ -184,14 +187,15 @@ public enum MarkdownChatPillCommand {
         vaultPath: String,
         failure: BrainSaveFailure,
         failedAt: Date?,
-        userPrompt: String = ""
+        userPrompt: String = "",
+        executablePath: String? = nil
     ) -> String {
         let failurePrefix = BrainSaveFailureContextPrefix.build(
             vaultPath: vaultPath,
             failure: failure,
             failedAt: failedAt
         )
-        return "\(invocation(agent: agent, cwd: vaultPath, trustEligible: true, contextPrefix: failurePrefix, prompt: userPrompt))\r"
+        return "\(invocation(agent: agent, cwd: vaultPath, trustEligible: true, contextPrefix: failurePrefix, prompt: userPrompt, executableShellExpression: executablePath.map(shellQuote)))\r"
     }
 
     public static func shellStartupLineForBrainSyncConflict(
@@ -215,7 +219,8 @@ public enum MarkdownChatPillCommand {
         markdownFilePath: String?,
         surface: MarkdownChatPillContextSurface,
         userPrompt: String,
-        launchDirectory: String? = nil
+        launchDirectory: String? = nil,
+        executablePath: String? = nil
     ) -> String {
         // Zebra ChatPill 호출부는 frontmatter `worktree:` 또는 selected Vault
         // 기준으로 resolve 한 cwd 를 launchDirectory 로 넘긴다. 없으면 markdown
@@ -237,7 +242,7 @@ public enum MarkdownChatPillCommand {
             markdownFilePath: markdownFilePath,
             surface: surface
         )
-        return "\(invocation(agent: agent, cwd: cwd, trustEligible: trustEligible, contextPrefix: contextPrefix, prompt: userPrompt))\r"
+        return "\(invocation(agent: agent, cwd: cwd, trustEligible: trustEligible, contextPrefix: contextPrefix, prompt: userPrompt, executableShellExpression: executablePath.map(shellQuote)))\r"
     }
 
     public static func shellStartupLineForGBrainSetup(

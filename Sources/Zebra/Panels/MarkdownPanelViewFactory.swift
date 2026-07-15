@@ -250,6 +250,32 @@ private struct ZebraEmailPanelHost: View {
     /// A split is created only when this content pane has no reusable
     /// terminal companion yet.
     private func handlePillSubmit(text: String, agent: MarkdownPillAgent, workspace: Workspace) {
+        Task {
+            let candidates = await Task.detached(priority: .userInitiated) {
+                ZebraAgentInstallScanner().scan()
+            }.value
+            guard let executablePath = ZebraAgentLaunchResolver().executablePath(
+                for: agent.agentKind,
+                candidates: candidates
+            ) else {
+                startDefaultAgentManager(workspace: workspace, agent: agent.agentKind)
+                return
+            }
+            launchPillSubmit(
+                text: text,
+                agent: agent,
+                executablePath: executablePath,
+                workspace: workspace
+            )
+        }
+    }
+
+    private func launchPillSubmit(
+        text: String,
+        agent: MarkdownPillAgent,
+        executablePath: String,
+        workspace: Workspace
+    ) {
         guard let detail = detailStore.detail(threadId: panel.threadId) else { return }
         let surface = MarkdownChatPillContextSurface.email(
             detail: detail,
@@ -262,7 +288,8 @@ private struct ZebraEmailPanelHost: View {
             markdownFilePath: nil,
             fallbackDirectory: vaultState.selectedVaultPath,
             surface: surface,
-            userPrompt: text
+            userPrompt: text,
+            executablePath: executablePath
         )
         guard let startupLine = launchPlan.startupLine else { return }
         ZebraTelemetry.trackChatPillPromptSubmitted(

@@ -98,10 +98,14 @@ public struct ZebraAgentPreferenceStore {
         try data.write(to: fileURL, options: .atomic)
     }
 
-    public func setPrimaryAgent(_ agent: ZebraAgentKind?, updatedBy: String) throws {
+    public func setPrimaryAgent(
+        _ agent: ZebraAgentKind?,
+        executablePath: String? = nil,
+        updatedBy: String
+    ) throws {
         var preferences = load()
         preferences.primaryAgent = agent
-        preferences.primaryAgentExecutablePath = nil
+        preferences.primaryAgentExecutablePath = executablePath
         preferences.updatedAt = now()
         preferences.updatedBy = updatedBy
         try save(preferences)

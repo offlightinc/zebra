@@ -2,6 +2,30 @@ import XCTest
 @testable import ZebraVault
 
 final class ZebraAgentLaunchCommandTests: XCTestCase {
+    func testChatPillLaunchUsesShellQuotedAbsoluteExecutablePath() {
+        let line = MarkdownChatPillCommand.shellStartupLine(
+            agent: .codex,
+            markdownFilePath: nil,
+            surface: .fallback(typeLabel: "test"),
+            userPrompt: "hello",
+            executablePath: "/Users/han/Agent Tools/it' s/codex"
+        )
+
+        XCTAssertTrue(line.contains("'/Users/han/Agent Tools/it'\\'' s/codex'"), line)
+        XCTAssertFalse(line.contains("&& codex"), line)
+    }
+
+    func testBareAgentLaunchCanUseResolvedAbsoluteExecutablePath() {
+        let line = ZebraAgentLaunchCommand.shellStartupLine(
+            agent: .claude,
+            cwd: "/tmp/work",
+            systemPrompt: "",
+            userPrompt: "",
+            executablePath: "/Users/han/Agent Tools/claude"
+        )
+
+        XCTAssertEqual(line, "cd '/tmp/work' && '/Users/han/Agent Tools/claude'\r")
+    }
     func testCodexOnboardingLaunchStartsInteractiveCliWithoutPrompt() {
         let line = ZebraAgentLaunchCommand.shellStartupLine(
             agent: .codex,

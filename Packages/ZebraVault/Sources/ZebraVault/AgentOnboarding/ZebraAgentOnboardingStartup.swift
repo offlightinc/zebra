@@ -18,18 +18,24 @@ public enum ZebraAgentOnboardingStartup {
         ) else {
             return nil
         }
-        return shellStartupLine(scriptPath: scriptURL.path, cwd: cwd, languageCode: languageCode)
+        return shellStartupLine(
+            scriptPath: scriptURL.path,
+            cwd: cwd,
+            languageCode: languageCode,
+            resolverPath: ZebraAgentResolverResource.executablePath
+        )
     }
 
     public static func shellStartupLine(
         scriptPath: String,
         cwd: String,
-        languageCode: String? = nil
+        languageCode: String? = nil,
+        resolverPath: String? = nil
     ) -> String {
         let resolvedLanguageCode = languageCode
             .flatMap(ZebraOnboardingLanguage.resolve(_:))?
             .code ?? ZebraOnboardingLanguage.current().code
-        return [
+        var arguments = [
             scriptPath,
             "run",
             "--cwd",
@@ -37,6 +43,11 @@ public enum ZebraAgentOnboardingStartup {
             "--language",
             resolvedLanguageCode
         ]
+        if let resolverPath,
+           !resolverPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            arguments += ["--resolver-path", resolverPath]
+        }
+        return arguments
         .map(shellQuote)
         .joined(separator: " ") + "\n"
     }

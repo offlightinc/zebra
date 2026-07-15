@@ -1,50 +1,26 @@
 import Foundation
 
 public struct ZebraAgentScanEnvironment: Sendable {
-    public let homeDirectoryPath: String
-    public let searchPath: String?
-    public let codexInstallDirectoryPath: String?
-    public let fileExistsAtPath: @Sendable (String) -> Bool
-    public let isExecutableFileAtPath: @Sendable (String) -> Bool
-    public let applicationPathForName: @Sendable (String) -> String?
-    public let filePrefixAtPath: @Sendable (String, Int) -> String?
-    public let runVersionCommand: @Sendable (String, [String], TimeInterval) -> ZebraVersionCommandResult
+    public let resolverExecutablePath: String?
+    public let runResolver: @Sendable (String, TimeInterval) -> ZebraVersionCommandResult
 
     public init(
-        homeDirectoryPath: String,
-        searchPath: String?,
-        codexInstallDirectoryPath: String? = nil,
-        fileExistsAtPath: @escaping @Sendable (String) -> Bool,
-        isExecutableFileAtPath: @escaping @Sendable (String) -> Bool,
-        applicationPathForName: @escaping @Sendable (String) -> String?,
-        filePrefixAtPath: @escaping @Sendable (String, Int) -> String?,
-        runVersionCommand: @escaping @Sendable (String, [String], TimeInterval) -> ZebraVersionCommandResult
+        resolverExecutablePath: String?,
+        runResolver: @escaping @Sendable (String, TimeInterval) -> ZebraVersionCommandResult
     ) {
-        self.homeDirectoryPath = homeDirectoryPath
-        self.searchPath = searchPath
-        self.codexInstallDirectoryPath = codexInstallDirectoryPath
-        self.fileExistsAtPath = fileExistsAtPath
-        self.isExecutableFileAtPath = isExecutableFileAtPath
-        self.applicationPathForName = applicationPathForName
-        self.filePrefixAtPath = filePrefixAtPath
-        self.runVersionCommand = runVersionCommand
+        self.resolverExecutablePath = resolverExecutablePath
+        self.runResolver = runResolver
     }
 
     public static let live = ZebraAgentScanEnvironment(
-        homeDirectoryPath: FileManager.default.homeDirectoryForCurrentUser.path,
-        searchPath: ProcessInfo.processInfo.environment["PATH"],
-        codexInstallDirectoryPath: ProcessInfo.processInfo.environment["CODEX_INSTALL_DIR"],
-        fileExistsAtPath: { FileManager.default.fileExists(atPath: $0) },
-        isExecutableFileAtPath: { FileManager.default.isExecutableFile(atPath: $0) },
-        applicationPathForName: { _ in nil },
-        filePrefixAtPath: { path, byteLimit in
-            guard let data = FileManager.default.contents(atPath: path) else { return nil }
-            return String(data: data.prefix(byteLimit), encoding: .utf8)
-        },
-        runVersionCommand: { executablePath, arguments, timeout in
-            ZebraAgentInstallScanner.runVersionCommand(
+        resolverExecutablePath: Bundle.module.url(
+            forResource: "zebra-agent-resolver",
+            withExtension: nil
+        )?.path,
+        runResolver: { executablePath, timeout in
+            ZebraAgentInstallScanner.runCommand(
                 executablePath: executablePath,
-                arguments: arguments,
+                arguments: ["scan"],
                 timeout: timeout
             )
         }
@@ -53,160 +29,62 @@ public struct ZebraAgentScanEnvironment: Sendable {
 
 public struct ZebraAgentInstallScanner {
     private let environment: ZebraAgentScanEnvironment
-    private let versionTimeout: TimeInterval
+    private let resolverTimeout: TimeInterval
 
-    public init(environment: ZebraAgentScanEnvironment = .live, versionTimeout: TimeInterval = 2) {
+    public init(environment: ZebraAgentScanEnvironment = .live, resolverTimeout: TimeInterval = 20) {
         self.environment = environment
-        self.versionTimeout = versionTimeout
+        self.resolverTimeout = resolverTimeout
     }
 
     public func scan() -> [ZebraAgentInstallCandidate] {
-        ZebraAgentKind.allCases.map(candidate(for:))
-    }
-
-    private func candidate(for kind: ZebraAgentKind) -> ZebraAgentInstallCandidate {
-        let resolution = resolveExecutable(for: kind)
-        let appBundlePath = kind.applicationSearchNames.lazy.compactMap(environment.applicationPathForName).first
-        let authState = authState(for: kind)
-
-        switch resolution {
-        case .installed(let executablePath):
-            return ZebraAgentInstallCandidate(
-                id: kind,
-                displayName: kind.displayName,
-                binaryName: kind.binaryName,
-                executablePath: executablePath,
-                appBundlePath: appBundlePath,
-                version: versionString(for: kind, executablePath: executablePath),
-                installState: .installed,
-                authState: authState,
-                terminalLaunchable: true,
-                recommendedAction: .launch
-            )
-        case .missing:
-            return ZebraAgentInstallCandidate(
-                id: kind,
-                displayName: kind.displayName,
-                binaryName: kind.binaryName,
-                executablePath: nil,
-                appBundlePath: appBundlePath,
-                version: nil,
-                installState: .missing,
-                authState: authState,
-                terminalLaunchable: false,
-                recommendedAction: .install
-            )
-        case .broken(let reason):
-            return ZebraAgentInstallCandidate(
-                id: kind,
-                displayName: kind.displayName,
-                binaryName: kind.binaryName,
-                executablePath: nil,
-                appBundlePath: appBundlePath,
-                version: nil,
-                installState: .broken(reason: reason),
-                authState: authState,
-                terminalLaunchable: false,
-                recommendedAction: .repairInstall
-            )
+        guard let resolverPath = environment.resolverExecutablePath else {
+            return failedCandidates(reason: "agent resolver helper is missing")
         }
-    }
+        let result = environment.runResolver(resolverPath, resolverTimeout)
+        guard !result.timedOut else {
+            return failedCandidates(reason: "agent resolver helper timed out")
+        }
+        guard result.exitCode == 0 else {
+            let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return failedCandidates(reason: detail.isEmpty ? "agent resolver helper failed" : detail)
+        }
+        guard let data = result.stdout.data(using: .utf8),
+              let response = try? JSONDecoder().decode(ResolverResponse.self, from: data),
+              response.schemaVersion == 1 else {
+            return failedCandidates(reason: "agent resolver helper returned invalid JSON")
+        }
 
-    private func resolveExecutable(for kind: ZebraAgentKind) -> ExecutableResolution {
-        var firstBrokenReason: String?
-
-        for path in executableCandidates(for: kind) {
-            if environment.isExecutableFileAtPath(path) {
-                guard !shouldSkipExecutable(path, kind: kind) else { continue }
-                return .installed(path)
+        let byID = Dictionary(uniqueKeysWithValues: response.candidates.map { ($0.id, $0) })
+        return ZebraAgentKind.allCases.map { kind in
+            guard let resolved = byID[kind] else {
+                return failedCandidate(kind: kind, reason: "agent resolver omitted \(kind.rawValue)")
             }
-            if environment.fileExistsAtPath(path), firstBrokenReason == nil {
-                firstBrokenReason = "\(path) is not executable"
-            }
+            return resolved.candidate
         }
-
-        if let firstBrokenReason {
-            return .broken(reason: firstBrokenReason)
-        }
-        return .missing
     }
 
-    private func executableCandidates(for kind: ZebraAgentKind) -> [String] {
-        var candidates = kind.executablePathCandidates(homeDirectoryPath: environment.homeDirectoryPath)
-        if kind == .codex,
-           let codexInstallDirectoryPath = nonEmpty(environment.codexInstallDirectoryPath) {
-            candidates.insert(
-                URL(fileURLWithPath: codexInstallDirectoryPath, isDirectory: true)
-                    .appendingPathComponent(kind.binaryName)
-                    .path,
-                at: 0
-            )
-        }
-
-        let pathEntries = environment.searchPath?
-            .split(separator: ":")
-            .map(String.init) ?? []
-        for entry in pathEntries where !entry.isEmpty {
-            candidates.append(URL(fileURLWithPath: entry, isDirectory: true).appendingPathComponent(kind.binaryName).path)
-        }
-
-        return orderedUnique(candidates.map(standardizedPath))
+    private func failedCandidates(reason: String) -> [ZebraAgentInstallCandidate] {
+        ZebraAgentKind.allCases.map { failedCandidate(kind: $0, reason: reason) }
     }
 
-    private func shouldSkipExecutable(_ path: String, kind: ZebraAgentKind) -> Bool {
-        guard !isTransientBuildPath(path) else { return true }
-        guard kind == .claude else { return false }
-        return isCmuxClaudeWrapper(at: path)
+    private func failedCandidate(kind: ZebraAgentKind, reason: String) -> ZebraAgentInstallCandidate {
+        ZebraAgentInstallCandidate(
+            id: kind,
+            displayName: kind.displayName,
+            binaryName: kind.binaryName,
+            executablePath: nil,
+            appBundlePath: nil,
+            version: nil,
+            installState: .broken(reason: reason),
+            authState: .unknown,
+            terminalLaunchable: false,
+            recommendedAction: .repairInstall,
+            discoverySource: nil,
+            diagnostic: reason
+        )
     }
 
-    private func isTransientBuildPath(_ path: String) -> Bool {
-        let lowercased = path.lowercased()
-        return lowercased.contains("/deriveddata/")
-            || lowercased.contains("/build/products/")
-            || lowercased.contains(".app/contents/")
-    }
-
-    private func isCmuxClaudeWrapper(at path: String) -> Bool {
-        environment.filePrefixAtPath(path, 512)?
-            .contains("cmux claude wrapper - injects hooks and session tracking") == true
-    }
-
-    private func authState(for kind: ZebraAgentKind) -> ZebraAgentAuthState {
-        kind.configHintPaths(homeDirectoryPath: environment.homeDirectoryPath).contains(where: environment.fileExistsAtPath)
-            ? .configPresent
-            : .unknown
-    }
-
-    private func versionString(for kind: ZebraAgentKind, executablePath: String) -> String? {
-        let result = environment.runVersionCommand(executablePath, kind.versionArguments, versionTimeout)
-        guard result.exitCode == 0, !result.timedOut else { return nil }
-        let output = result.stdout.isEmpty ? result.stderr : result.stdout
-        return output
-            .split(whereSeparator: \.isNewline)
-            .first
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .flatMap { $0.isEmpty ? nil : $0 }
-    }
-
-    private func orderedUnique(_ paths: [String]) -> [String] {
-        var seen: Set<String> = []
-        var result: [String] = []
-        for path in paths where seen.insert(path).inserted {
-            result.append(path)
-        }
-        return result
-    }
-
-    private func standardizedPath(_ path: String) -> String {
-        (path as NSString).standardizingPath
-    }
-
-    private func nonEmpty(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    public static func runVersionCommand(
+    static func runCommand(
         executablePath: String,
         arguments: [String],
         timeout: TimeInterval
@@ -214,7 +92,6 @@ public struct ZebraAgentInstallScanner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
-
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
@@ -223,26 +100,22 @@ public struct ZebraAgentInstallScanner {
         let group = DispatchGroup()
         group.enter()
         process.terminationHandler = { _ in group.leave() }
-
         do {
             try process.run()
         } catch {
-            return ZebraVersionCommandResult(
-                exitCode: nil,
-                stdout: "",
-                stderr: error.localizedDescription
-            )
+            return ZebraVersionCommandResult(exitCode: nil, stdout: "", stderr: error.localizedDescription)
         }
 
-        let deadline = DispatchTime.now() + .milliseconds(Int(timeout * 1000))
-        if group.wait(timeout: deadline) == .timedOut {
+        if group.wait(timeout: .now() + timeout) == .timedOut {
             process.terminate()
-            _ = group.wait(timeout: .now() + .milliseconds(200))
-            let isStillRunning = process.isRunning
+            if group.wait(timeout: .now() + 0.25) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                _ = group.wait(timeout: .now() + 0.25)
+            }
             return ZebraVersionCommandResult(
-                exitCode: isStillRunning ? nil : process.terminationStatus,
-                stdout: isStillRunning ? "" : String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
-                stderr: isStillRunning ? "" : String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+                exitCode: process.isRunning ? nil : process.terminationStatus,
+                stdout: String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+                stderr: String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
                 timedOut: true
             )
         }
@@ -255,8 +128,44 @@ public struct ZebraAgentInstallScanner {
     }
 }
 
-private enum ExecutableResolution: Equatable {
-    case installed(String)
-    case missing
-    case broken(reason: String)
+private struct ResolverResponse: Decodable {
+    let schemaVersion: Int
+    let candidates: [ResolverCandidate]
+}
+
+private struct ResolverCandidate: Decodable {
+    let id: ZebraAgentKind
+    let displayName: String
+    let binaryName: String
+    let executablePath: String?
+    let version: String?
+    let installState: String
+    let authState: ZebraAgentAuthState
+    let terminalLaunchable: Bool
+    let recommendedAction: ZebraAgentOnboardingAction
+    let discoverySource: ZebraAgentDiscoverySource?
+    let diagnostic: String?
+
+    var candidate: ZebraAgentInstallCandidate {
+        let state: ZebraAgentInstallState
+        switch installState {
+        case "installed": state = .installed
+        case "missing": state = .missing
+        default: state = .broken(reason: diagnostic ?? "agent resolver reported a broken install")
+        }
+        return ZebraAgentInstallCandidate(
+            id: id,
+            displayName: displayName,
+            binaryName: binaryName,
+            executablePath: executablePath,
+            appBundlePath: nil,
+            version: version,
+            installState: state,
+            authState: authState,
+            terminalLaunchable: terminalLaunchable,
+            recommendedAction: recommendedAction,
+            discoverySource: discoverySource,
+            diagnostic: diagnostic
+        )
+    }
 }

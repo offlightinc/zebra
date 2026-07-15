@@ -66,6 +66,7 @@ SAVED_PRIMARY=""
 SELECTED_AGENT=""
 REQUESTED_AGENT=""
 CONTINUE_COMMAND_FILE=""
+RESOLVER_PATH="${ZEBRA_AGENT_RESOLVER_HELPER:-}"
 ONBOARDING_CWD="$PWD"
 SELF_PATH=""
 STATE_ERROR_CODE=""
@@ -106,7 +107,7 @@ RESUME_FLOW_HANDLED=0
 
 usage() {
   cat <<'USAGE'
-zebra-agent-onboarding [run|choose-primary] [--cwd <path>] [--agent <agent>] [--language <en|ja|ko>] [--continue-with-command-file <path>]
+zebra-agent-onboarding [run|choose-primary] [--cwd <path>] [--agent <agent>] [--language <en|ja|ko>] [--resolver-path <path>] [--continue-with-command-file <path>]
 zebra-agent-onboarding mark-ready --agent <agent> --run-id <runId> [--language <en|ja|ko>]
 
 Commands:
@@ -1581,7 +1582,7 @@ auth_state_for() {
 }
 
 scan_agents() {
-  local agent path version install_state recommended_action auth_state
+  local resolver_json i agent path version install_state recommended_action auth_state diagnostic
   CANDIDATE_IDS=()
   CANDIDATE_DISPLAY_NAMES=()
   CANDIDATE_BINARY_NAMES=()
@@ -1594,31 +1595,35 @@ scan_agents() {
   MISSING_AGENTS=()
   BROKEN_AGENTS=()
 
-  for agent in "${AGENTS[@]}"; do
-    resolve_executable "$agent"
-    path="$RESOLVE_PATH"
-    version=""
-    case "$RESOLVE_STATUS" in
-      installed)
-        install_state=installed
-        recommended_action=launch
-        version="$(version_for "$path")"
-        INSTALLED_AGENTS+=("$agent")
-        ;;
-      broken)
-        install_state=broken
-        recommended_action=repairInstall
-        path=""
-        BROKEN_AGENTS+=("$agent")
-        ;;
-      *)
-        install_state=missing
-        recommended_action=install
-        path=""
-        MISSING_AGENTS+=("$agent")
-        ;;
+  if [[ -z "$RESOLVER_PATH" ]]; then
+    RESOLVER_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/../Packages/ZebraVault/Sources/ZebraVault/Resources" 2>/dev/null && printf '%s/zebra-agent-resolver' "$PWD" || true)"
+  fi
+  [[ -f "$RESOLVER_PATH" ]] || {
+    printf 'Zebra agent resolver helper is missing: %s\n' "$RESOLVER_PATH" >&2
+    return 1
+  }
+  resolver_json="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.XXXXXX.json")"
+  if ! /bin/bash "$RESOLVER_PATH" scan > "$resolver_json"; then
+    rm -f "$resolver_json"
+    printf 'Zebra agent resolver helper failed.\n' >&2
+    return 1
+  fi
+
+  for i in 0 1 2; do
+    agent="$(plutil -extract "candidates.$i.id" raw -o - "$resolver_json")"
+    path="$(plutil -extract "candidates.$i.executablePath" raw -o - "$resolver_json" 2>/dev/null || true)"
+    [[ "$path" != "null" ]] || path=""
+    version="$(plutil -extract "candidates.$i.version" raw -o - "$resolver_json" 2>/dev/null || true)"
+    [[ "$version" != "null" ]] || version=""
+    install_state="$(plutil -extract "candidates.$i.installState" raw -o - "$resolver_json")"
+    auth_state="$(plutil -extract "candidates.$i.authState" raw -o - "$resolver_json")"
+    recommended_action="$(plutil -extract "candidates.$i.recommendedAction" raw -o - "$resolver_json")"
+    diagnostic="$(plutil -extract "candidates.$i.diagnostic" raw -o - "$resolver_json" 2>/dev/null || true)"
+    case "$install_state" in
+      installed) INSTALLED_AGENTS+=("$agent") ;;
+      broken) BROKEN_AGENTS+=("$agent") ;;
+      *) MISSING_AGENTS+=("$agent") ;;
     esac
-    auth_state="$(auth_state_for "$agent")"
     CANDIDATE_IDS+=("$agent")
     CANDIDATE_DISPLAY_NAMES+=("$(display_name "$agent")")
     CANDIDATE_BINARY_NAMES+=("$(binary_name "$agent")")
@@ -1628,6 +1633,7 @@ scan_agents() {
     CANDIDATE_AUTH_STATES+=("$auth_state")
     CANDIDATE_RECOMMENDED_ACTIONS+=("$recommended_action")
   done
+  rm -f "$resolver_json"
 }
 
 append_scan_completed_event() {
@@ -2957,6 +2963,10 @@ main() {
             ;;
           --continue-with-command-file)
             CONTINUE_COMMAND_FILE="${2:-}"
+            shift 2
+            ;;
+          --resolver-path)
+            RESOLVER_PATH="${2:-}"
             shift 2
             ;;
           --language)
