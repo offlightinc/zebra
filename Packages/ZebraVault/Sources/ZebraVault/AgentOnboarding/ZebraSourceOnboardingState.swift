@@ -67,7 +67,25 @@ extension ZebraSourceOnboardingState {
 
     struct SourceReadiness: Codable, Equatable, Sendable {
         var gmail: GmailReadiness
+        var slack: SlackReadiness? = nil
         var agentMemory: AgentMemoryReadiness? = nil
+    }
+
+    struct SlackReadiness: Codable, Equatable, Sendable {
+        var status: SlackStatus
+        var workspaceID: String?
+        var authorizedUserID: String?
+        var startDate: Date?
+        var checkpointExists: Bool
+        var reason: String?
+    }
+
+    enum SlackStatus: String, Codable, Equatable, Sendable {
+        case credentialMissing = "credential_missing"
+        case readyToPoll = "ready_to_poll"
+        case polling
+        case attention
+        case checked
     }
 
     struct GmailReadiness: Codable, Equatable, Sendable {

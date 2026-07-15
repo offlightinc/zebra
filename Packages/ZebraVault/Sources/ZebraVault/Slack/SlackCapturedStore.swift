@@ -43,7 +43,7 @@ final class SlackCapturedStore: @unchecked Sendable {
     }
 
     var rawDirectory: URL { root.appending(path: "raw", directoryHint: .isDirectory) }
-    var threadDirectory: URL { root.appending(path: "threads/by-created-date", directoryHint: .isDirectory) }
+    var threadDirectory: URL { root.appending(path: "threads", directoryHint: .isDirectory) }
     var stateDirectory: URL { root.appending(path: "state", directoryHint: .isDirectory) }
 
     @discardableResult

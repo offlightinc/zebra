@@ -573,6 +573,11 @@ struct ZebraSourceOnboardingHelper {
             "type": "email",
             "aliases": ["gmail", "지메일", "이메일", "email", "메일"],
         },
+        "slack": {
+            "displayName": "Slack",
+            "type": "messages",
+            "aliases": ["slack", "슬랙"],
+        },
         "obsidian": {
             "displayName": "Obsidian",
             "type": "vault",
@@ -962,6 +967,14 @@ struct ZebraSourceOnboardingHelper {
     def source_readiness():
         return {
             "gmail": gmail_readiness(),
+            "slack": {
+                "status": "credential_missing",
+                "workspaceID": None,
+                "authorizedUserID": None,
+                "startDate": None,
+                "checkpointExists": False,
+                "reason": "credential_missing",
+            },
             "agentMemory": agent_memory_readiness(),
         }
 
@@ -1014,6 +1027,7 @@ struct ZebraSourceOnboardingHelper {
         readiness = state.get("sourceReadiness") if isinstance(state.get("sourceReadiness"), dict) else {}
         readiness["agentMemory"] = agent_memory_readiness()
         readiness.setdefault("gmail", gmail_readiness())
+        readiness.setdefault("slack", source_readiness()["slack"])
         state["sourceReadiness"] = readiness
         state.setdefault("progress", {
             "rawSourceInput": None,
@@ -1307,7 +1321,7 @@ struct ZebraSourceOnboardingHelper {
 
     def source_row_for(source_id, timestamp):
         definition = supported.get(source_id) or {}
-        return {
+        row = {
             "id": source_id,
             "displayName": definition.get("displayName") or source_id,
             "type": definition.get("type"),
@@ -1316,6 +1330,10 @@ struct ZebraSourceOnboardingHelper {
             "selectionState": "confirmed",
             "updatedAt": timestamp,
         }
+        if source_id == "slack":
+            row["playbookID"] = "slack.captured-polling"
+            row["playbookVersion"] = "v1"
+        return row
 
     def uncataloged_record_for(progress, source_id):
         records = progress.get("uncatalogedSources")
@@ -3956,7 +3974,85 @@ struct ZebraSourceOnboardingHelper {
         progress = ensure_progress(state)
         rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
         row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else {}
-        if source_id == "gmail":
+        if source_id == "slack":
+            playbook = {"id": "slack.captured-polling", "version": "v1"}
+            language = onboarding_language()
+            manifest_json = json.dumps({
+                "display_information": {
+                    "name": "Zebra Personal Capture",
+                    "description": "Personal Slack capture for Zebra",
+                },
+                "oauth_config": {
+                    "scopes": {
+                        "user": [
+                            "search:read", "reactions:read", "channels:read", "groups:read",
+                            "im:read", "mpim:read", "channels:history", "groups:history",
+                            "im:history", "mpim:history",
+                        ],
+                    },
+                },
+                "settings": {
+                    "org_deploy_enabled": False,
+                    "socket_mode_enabled": False,
+                    "token_rotation_enabled": False,
+                    "is_mcp_enabled": False,
+                },
+            }, ensure_ascii=False, indent=2)
+            if language == "ko":
+                prompt = textwrap.dedent(f'''
+                사용자에게 아래 순서로 개인 Slack App 설정을 안내하세요. token과 날짜만 갑자기 요구하지 마세요.
+
+                1. 브라우저에서 https://api.slack.com/apps 를 열고 **Create New App** → **From scratch**를 선택합니다.
+                2. App 이름(예: Zebra Personal Capture)을 정하고 수집할 Slack workspace를 선택해 App을 만듭니다.
+                3. 생성된 App 설정의 왼쪽 메뉴에서 **App Manifest**를 열고 **JSON** 탭을 선택합니다.
+                4. 편집기의 기존 JSON 전체를 선택해 지운 뒤 아래 JSON을 그대로 붙여넣고 **Save Changes**를 누릅니다. JSON 코드 블록 바깥의 안내 문구나 공백은 함께 복사하지 마세요.
+
+                ```json
+                __SLACK_MANIFEST_JSON__
+                ```
+
+                5. **Save Changes**가 완료되면 왼쪽 메뉴에서 **OAuth & Permissions**를 클릭합니다. 페이지 위쪽 **OAuth Tokens for Your Workspace** 영역의 **Install to Workspace** 버튼을 누른 뒤 Slack 권한 승인 화면에서 **Allow**를 누릅니다. 이미 설치한 뒤 manifest scope를 변경했다면 같은 위치의 **Reinstall to Workspace**를 눌러 새 권한을 다시 승인합니다.
+                6. 승인이 끝나면 다시 **OAuth & Permissions** 페이지로 돌아옵니다. **OAuth Tokens for Your Workspace** 영역에 새로 표시된 **User OAuth Token**을 복사합니다. 반드시 `xoxp-`로 시작해야 하며 `xoxb-` Bot User OAuth Token은 사용할 수 없습니다.
+                7. 사용자에게 최초 수집 시작일을 `YYYY-MM-DD`로 물어봅니다. 선택한 날짜 당일부터 포함해 수집한다고 명시하세요.
+                8. token과 시작일을 받으면 `zebra-source-onboarding slack connect --slack-token '<xoxp-token>' --start-date 'YYYY-MM-DD'`를 실행하세요. Sanitized helper stdout만 따라 진행하고 token을 다시 출력하지 마세요.
+                ''').strip().replace("__SLACK_MANIFEST_JSON__", manifest_json)
+            elif language == "ja":
+                prompt = textwrap.dedent(f'''
+                次の順序で個人用 Slack App の設定を案内してください。token と日付だけを突然要求しないでください。
+
+                1. ブラウザで https://api.slack.com/apps を開き、**Create New App** → **From scratch** を選択します。
+                2. App 名（例: Zebra Personal Capture）と収集対象の Slack workspace を選び、App を作成します。
+                3. 作成したAppの左メニューから **App Manifest**を開き、**JSON**タブを選択します。
+                4. エディタ内の既存JSONをすべて削除し、次のJSONをそのまま貼り付けて **Save Changes**を押します。JSONコードブロック外の案内文や空白は一緒にコピーしないでください。
+
+                ```json
+                __SLACK_MANIFEST_JSON__
+                ```
+
+                5. **Save Changes**が完了したら、左メニューの **OAuth & Permissions**をクリックします。ページ上部の **OAuth Tokens for Your Workspace**にある **Install to Workspace**を押し、Slackの権限承認画面で **Allow**を押します。インストール後にmanifestのscopeを変更した場合は、同じ場所の **Reinstall to Workspace**で新しい権限を再承認します。
+                6. 承認後は **OAuth & Permissions**ページに戻ります。**OAuth Tokens for Your Workspace**に新しく表示された **User OAuth Token**をコピーします。必ず`xoxp-`で始まる必要があり、`xoxb-`のBot User OAuth Tokenは使用できません。
+                7. 最初の収集開始日を`YYYY-MM-DD`形式で確認し、選択した日を含めて収集すると明記します。
+                8. tokenと開始日を受け取ったら、`zebra-source-onboarding slack connect --slack-token '<xoxp-token>' --start-date 'YYYY-MM-DD'`を実行します。Sanitized helper stdoutのみを使用し、tokenを再表示しないでください。
+                ''').strip().replace("__SLACK_MANIFEST_JSON__", manifest_json)
+            else:
+                prompt = textwrap.dedent(f'''
+                Guide the user through this personal Slack App setup in order. Do not abruptly ask only for a token and date.
+
+                1. Open https://api.slack.com/apps and choose **Create New App** → **From scratch**.
+                2. Choose an app name (for example, Zebra Personal Capture), select the Slack workspace to capture, and create the app.
+                3. Open **App Manifest** in the created app's sidebar and select the **JSON** tab.
+                4. Select and delete all existing JSON in the editor, paste the following JSON exactly, and click **Save Changes**. Do not include prose or whitespace outside the JSON code block when copying.
+
+                ```json
+                __SLACK_MANIFEST_JSON__
+                ```
+
+                5. After **Save Changes** completes, click **OAuth & Permissions** in the sidebar. Near the top of the page, find **OAuth Tokens for Your Workspace**, click **Install to Workspace**, and click **Allow** on Slack's authorization screen. If the app was already installed before its manifest scopes changed, use **Reinstall to Workspace** in the same section to grant the new scopes.
+                6. After authorization, return to **OAuth & Permissions**. Under **OAuth Tokens for Your Workspace**, copy the newly displayed **User OAuth Token**. It must begin with `xoxp-`; an `xoxb-` Bot User OAuth Token is not supported.
+                7. Ask for the first capture date in `YYYY-MM-DD` format and state that capture includes the selected date itself.
+                8. After receiving both values, run `zebra-source-onboarding slack connect --slack-token '<xoxp-token>' --start-date 'YYYY-MM-DD'`. Continue only from sanitized helper stdout and do not echo the token back.
+                ''').strip().replace("__SLACK_MANIFEST_JSON__", manifest_json)
+        elif source_id == "gmail":
             playbook = gmail_playbook
             prompt = gmail_step_prompt(step_id, state, row)
         elif source_id == "obsidian":
@@ -5762,6 +5858,28 @@ struct ZebraSourceOnboardingHelper {
             return start_apple_reminders_from_next(state)
         if source_id == "agent-memory":
             return start_agent_memory_from_next(state)
+        if source_id == "slack":
+            rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+            row = rows.get("slack") if isinstance(rows.get("slack"), dict) else source_row_for("slack", now())
+            row.update({
+                "phase": "credential",
+                "status": "unchecked",
+                "selectionState": "confirmed",
+                "playbookID": "slack.captured-polling",
+                "playbookVersion": "v1",
+                "playbookStepID": "native_setup",
+                "updatedAt": now(),
+            })
+            rows["slack"] = row
+            progress["sourceRows"] = rows
+            progress["activeSourceID"] = "slack"
+            state["status"] = "ready"
+            state["updatedAt"] = now()
+            save_json(state)
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, "slack", "native_setup"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
         rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
         row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else {}
         if is_fallback_source_row(row):
@@ -9583,6 +9701,9 @@ struct ZebraSourceOnboardingHelper {
                     "selectionState": "pending_confirmation",
                     "updatedAt": timestamp,
                 }
+                if source_id == "slack":
+                    rows[source_id]["playbookID"] = "slack.captured-polling"
+                    rows[source_id]["playbookVersion"] = "v1"
             else:
                 record = next((item for item in uncataloged_sources if isinstance(item, dict) and item.get("normalizedValue") == source_id), {})
                 rows[source_id] = {
@@ -9694,6 +9815,104 @@ struct ZebraSourceOnboardingHelper {
         state["updatedAt"] = timestamp
         save_json(state)
         print(json.dumps(summary(state), ensure_ascii=False, sort_keys=True))
+
+    def slack_connect():
+        token = ""
+        start_date_raw = ""
+        index = 1
+        while index < len(args):
+            argument = args[index]
+            if argument == "--slack-token" and index + 1 < len(args):
+                token = args[index + 1]
+                index += 2
+            elif argument == "--start-date" and index + 1 < len(args):
+                start_date_raw = args[index + 1]
+                index += 2
+            else:
+                print("unknown or incomplete Slack argument", file=sys.stderr)
+                return 2
+        if not token.startswith("xoxp-"):
+            print(json.dumps({"ok": False, "reason": "user_oauth_token_required"}, sort_keys=True))
+            return 1
+        try:
+            start_date = datetime.strptime(start_date_raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            print(json.dumps({"ok": False, "reason": "invalid_start_date"}, sort_keys=True))
+            return 1
+
+        state = load_or_create_state()
+        progress = ensure_progress(state)
+        confirmation = progress.get("sourceConfirmation") if isinstance(progress.get("sourceConfirmation"), dict) else {}
+        if confirmation.get("status") != "confirmed" or progress.get("activeSourceID") != "slack":
+            print(json.dumps({"ok": False, "reason": "slack_source_not_active"}, sort_keys=True))
+            return 1
+
+        auth_test_url = os.environ.get("ZEBRA_SLACK_AUTH_TEST_URL") or "https://slack.com/api/auth.test"
+        request = urllib.request.Request(auth_test_url)
+        request.add_header("Authorization", "Bearer " + token)
+        request.add_header("Accept", "application/json; charset=utf-8")
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                identity = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            print(json.dumps({"ok": False, "reason": "slack_auth_failed"}, sort_keys=True))
+            return 1
+        if not identity.get("ok"):
+            code = identity.get("error")
+            reason = "token_revoked" if code in {"invalid_auth", "token_revoked", "account_inactive", "token_expired"} else "slack_auth_failed"
+            print(json.dumps({"ok": False, "reason": reason}, sort_keys=True))
+            return 1
+        workspace_id = str(identity.get("team_id") or "")
+        user_id = str(identity.get("user_id") or "")
+        if identity.get("bot_id") or not workspace_id or not user_id:
+            print(json.dumps({"ok": False, "reason": "user_oauth_token_required"}, sort_keys=True))
+            return 1
+
+        security_binary = os.environ.get("ZEBRA_SLACK_SECURITY_BIN") or "/usr/bin/security"
+        keychain = subprocess.run(
+            [security_binary, "add-generic-password", "-U", "-s", "com.offlight.zebra.slack.user-token", "-a", workspace_id + ":" + user_id, "-w", token],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+        )
+        if keychain.returncode != 0:
+            print(json.dumps({"ok": False, "reason": "keychain_write_failed"}, sort_keys=True))
+            return 1
+
+        timestamp = now()
+        readiness = state.get("sourceReadiness") if isinstance(state.get("sourceReadiness"), dict) else {}
+        readiness["slack"] = {
+            "status": "ready_to_poll",
+            "workspaceID": workspace_id,
+            "authorizedUserID": user_id,
+            "startDate": start_date.isoformat().replace("+00:00", "Z"),
+            "checkpointExists": False,
+            "reason": None,
+        }
+        state["sourceReadiness"] = readiness
+        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
+        row = rows.get("slack") if isinstance(rows.get("slack"), dict) else source_row_for("slack", timestamp)
+        row.update({"phase": "poll", "status": "unchecked", "playbookStepID": "poll", "attentionReason": None, "updatedAt": timestamp})
+        rows["slack"] = row
+        progress["sourceRows"] = rows
+        state["status"] = "ready"
+        state["updatedAt"] = timestamp
+        save_json(state)
+        print(json.dumps({
+            "ok": True,
+            "sourceID": "slack",
+            "workspaceID": workspace_id,
+            "authorizedUserID": user_id,
+            "startDate": start_date_raw,
+            "nextStep": "polling_in_zebra",
+        }, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    def slack_command():
+        if not args or args[0] != "connect":
+            print("slack requires: connect --slack-token <token> --start-date YYYY-MM-DD", file=sys.stderr)
+            return 2
+        return slack_connect()
 
     def summary(state, prompt=None):
         progress = state.get("progress") if isinstance(state.get("progress"), dict) else {}
@@ -10120,6 +10339,8 @@ struct ZebraSourceOnboardingHelper {
         sys.exit(report())
     elif command == "gmail":
         sys.exit(gmail_command())
+    elif command == "slack":
+        sys.exit(slack_command())
     elif command == "obsidian":
         sys.exit(obsidian_command())
     elif command == "notion":

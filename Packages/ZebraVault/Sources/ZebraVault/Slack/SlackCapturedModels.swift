@@ -13,6 +13,7 @@ enum SlackCapturedError: Error, Equatable {
     case tokenRevoked
     case partialScope(required: String)
     case workspaceMismatch
+    case invalidUserToken
 }
 
 /// A lossless JSON value. Objects preserve every Slack field; canonical encoding

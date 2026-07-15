@@ -30,6 +30,12 @@ enum ZebraSourceOnboardingCatalog {
             aliases: ["gmail", "지메일", "이메일", "email", "메일"]
         ),
         SourceDefinition(
+            id: "slack",
+            displayName: "Slack",
+            type: "messages",
+            aliases: ["slack", "슬랙"]
+        ),
+        SourceDefinition(
             id: "obsidian",
             displayName: "Obsidian",
             type: "vault",
@@ -125,6 +131,8 @@ enum ZebraSourceOnboardingCatalog {
                             phase: "intake",
                             status: "unchecked",
                             selectionState: "pending_confirmation",
+                            playbookID: definition.id == "slack" ? "slack.captured-polling" : nil,
+                            playbookVersion: definition.id == "slack" ? "v1" : nil,
                             updatedAt: nil
                         )
                     )

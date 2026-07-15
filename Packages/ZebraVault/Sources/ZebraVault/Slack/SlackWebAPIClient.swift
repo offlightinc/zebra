@@ -16,6 +16,10 @@ struct SlackURLSessionTransport: SlackHTTPTransport {
 }
 
 struct SlackWebAPIClient: Sendable {
+    struct Identity: Equatable, Sendable {
+        let workspaceID: String
+        let userID: String
+    }
     private let token: String
     private let transport: any SlackHTTPTransport
     private let baseURL: URL
@@ -50,14 +54,28 @@ struct SlackWebAPIClient: Sendable {
     }
 
     func validateIdentity(workspaceID: String, userID: String) async throws {
-        let result = try await call("auth.test")
-        guard result["team_id"]?.stringValue == workspaceID, result["user_id"]?.stringValue == userID else {
+        let identity = try await authenticatedIdentity()
+        guard identity.workspaceID == workspaceID, identity.userID == userID else {
             throw SlackCapturedError.workspaceMismatch
         }
     }
 
+    func authenticatedIdentity() async throws -> Identity {
+        guard token.hasPrefix("xoxp-") else { throw SlackCapturedError.invalidUserToken }
+        let result = try await call("auth.test")
+        guard result["bot_id"] == nil,
+              let workspaceID = result["team_id"]?.stringValue, !workspaceID.isEmpty,
+              let userID = result["user_id"]?.stringValue, !userID.isEmpty else {
+            throw SlackCapturedError.invalidUserToken
+        }
+        return Identity(workspaceID: workspaceID, userID: userID)
+    }
+
     func discoverSeeds(authorizedUserID: String, startDate: Date) async throws -> [SlackSeedCandidate] {
-        let day = Self.day(startDate)
+        // Slack's `after:` modifier is exclusive. Search from the previous UTC
+        // calendar day, then let SlackSeedClassifier's >= boundary enforce the
+        // exact user-selected instant so the selected day itself is included.
+        let day = Self.day(startDate.addingTimeInterval(-24 * 60 * 60))
         async let authored = search(query: "from:<@\(authorizedUserID)> after:\(day)", reacted: false)
         async let mentioned = search(query: "<@\(authorizedUserID)> after:\(day)", reacted: false)
         async let reacted = reactionSeeds(userID: authorizedUserID, startDate: startDate)
