@@ -298,6 +298,22 @@ final class ZebraAgentLaunchCommandTests: XCTestCase {
         )
     }
 
+    func testAgentOnboardingScriptCommandCarriesExplicitInstallApproval() {
+        let line = ZebraAgentOnboardingScriptCommand.shellStartupLine(
+            scriptPath: "/tmp/zebra-agent-onboarding",
+            command: .choosePrimary,
+            cwd: "/Users/han/project",
+            agent: .antigravity,
+            installApproved: true,
+            languageCode: "ko"
+        )
+
+        XCTAssertEqual(
+            line,
+            "'/tmp/zebra-agent-onboarding' 'choose-primary' '--cwd' '/Users/han/project' '--agent' 'antigravity' '--install-approved' '--language' 'ko'\r"
+        )
+    }
+
     func testAgentPreferencesRoundTripPrimaryExecutablePath() throws {
         let preferencesURL = try makeTemporaryDirectory()
             .appendingPathComponent("preferences.json", isDirectory: false)
