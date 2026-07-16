@@ -68,6 +68,20 @@ final class MarkdownSidebarOpeningTests: XCTestCase {
 
     @MainActor
     func testChatPillCompanionReuseRequiresRegistryMarkedTerminalPane() throws {
+        let defaults = UserDefaults.standard
+        let previousPlacement = defaults.object(forKey: ZebraChatPillPanePlacementSettings.key)
+        defaults.set(
+            ZebraChatPillPanePlacement.right.rawValue,
+            forKey: ZebraChatPillPanePlacementSettings.key
+        )
+        defer {
+            if let previousPlacement {
+                defaults.set(previousPlacement, forKey: ZebraChatPillPanePlacementSettings.key)
+            } else {
+                defaults.removeObject(forKey: ZebraChatPillPanePlacementSettings.key)
+            }
+        }
+
         let root = try makeMarkdownFixtureDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -102,6 +116,64 @@ final class MarkdownSidebarOpeningTests: XCTestCase {
                 markedBy: registry
             )
         )
+    }
+
+    @MainActor
+    func testChatPillAgentLaunchUsesConfiguredSplitPlacement() throws {
+        let defaults = UserDefaults.standard
+        let previousPlacement = defaults.object(forKey: ZebraChatPillPanePlacementSettings.key)
+        defer {
+            if let previousPlacement {
+                defaults.set(previousPlacement, forKey: ZebraChatPillPanePlacementSettings.key)
+            } else {
+                defaults.removeObject(forKey: ZebraChatPillPanePlacementSettings.key)
+            }
+        }
+
+        for (placement, expectedOrientation) in [
+            (ZebraChatPillPanePlacement.below, "vertical"),
+            (ZebraChatPillPanePlacement.right, "horizontal"),
+        ] {
+            defaults.set(placement.rawValue, forKey: ZebraChatPillPanePlacementSettings.key)
+            let root = try makeMarkdownFixtureDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let fileURL = root.appendingPathComponent("source.md")
+            try "# source\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+            let workspace = Workspace()
+            let contentPaneId = try XCTUnwrap(workspace.bonsplitController.allPaneIds.first)
+            let markdownPanel = try XCTUnwrap(
+                workspace.openMarkdownFromSidebar(inPane: contentPaneId, filePath: fileURL.path)
+            )
+            let registry = ZebraAgentTerminalRegistry()
+
+            let agentPanel = try XCTUnwrap(
+                workspace.openZebraAgentTerminal(
+                    startupLine: "printf test\r",
+                    source: .markdownFile(fileURL.path),
+                    agent: .codex,
+                    anchor: .contentAnchored(
+                        contentPanelId: markdownPanel.id,
+                        contentPaneId: contentPaneId
+                    ),
+                    markedBy: registry
+                )
+            )
+            let agentPaneId = try XCTUnwrap(workspace.paneId(forPanelId: agentPanel.id))
+
+            guard case .split(let rootSplit) = workspace.bonsplitController.treeSnapshot() else {
+                return XCTFail("Expected the chat pill to create a companion split")
+            }
+            XCTAssertEqual(rootSplit.orientation, expectedOrientation)
+            XCTAssertNotEqual(agentPaneId, contentPaneId)
+            XCTAssertEqual(
+                workspace.reusableAgentCompanionPane(
+                    forContentPane: contentPaneId,
+                    markedBy: registry
+                ),
+                agentPaneId
+            )
+        }
     }
 
     @MainActor

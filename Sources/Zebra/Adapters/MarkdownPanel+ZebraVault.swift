@@ -258,7 +258,11 @@ extension Workspace: ZebraMarkdownWorkspace {
         forContentPane paneId: PaneID,
         markedBy registry: ZebraAgentTerminalRegistry
     ) -> PaneID? {
-        nearestRightAgentTerminalPane(fromContentPane: paneId, markedBy: registry)
+        nearestAgentTerminalPane(
+            fromContentPane: paneId,
+            placement: ZebraChatPillPanePlacementSettings.resolvedPlacement(),
+            markedBy: registry
+        )
     }
 
     func activeAgentTerminalAgent(
@@ -448,15 +452,17 @@ extension Workspace {
 
         switch anchor {
         case .contentAnchored(let contentPanelId, let contentPaneId):
-            if let companionPaneId = nearestRightAgentTerminalPane(
+            let placement = ZebraChatPillPanePlacementSettings.resolvedPlacement()
+            if let companionPaneId = nearestAgentTerminalPane(
                 fromContentPane: contentPaneId,
+                placement: placement,
                 markedBy: registry
             ) {
                 panel = newTerminalSurface(inPane: companionPaneId, focus: true)
             } else {
                 panel = newTerminalSplit(
                     from: contentPanelId,
-                    orientation: .horizontal,
+                    orientation: placement == .below ? .vertical : .horizontal,
                     focus: true
                 )
             }
@@ -480,8 +486,9 @@ extension Workspace {
         }
 
         if let focusedPaneId,
-           let companionPaneId = nearestRightAgentTerminalPane(
+           let companionPaneId = nearestAgentTerminalPane(
                fromContentPane: focusedPaneId,
+               placement: .right,
                markedBy: registry
            ) {
             return newTerminalSurface(inPane: companionPaneId, focus: true)
@@ -910,8 +917,9 @@ private extension Workspace {
         return nil
     }
 
-    func nearestRightAgentTerminalPane(
+    func nearestAgentTerminalPane(
         fromContentPane contentPaneId: PaneID,
+        placement: ZebraChatPillPanePlacement,
         markedBy registry: ZebraAgentTerminalRegistry
     ) -> PaneID? {
         let targetPaneId = contentPaneId.id.uuidString
@@ -925,23 +933,43 @@ private extension Workspace {
         let contentFrame = bonsplitController.layoutSnapshot().panes
             .first(where: { $0.paneId == targetPaneId })?
             .frame
+        let contentCenterX = contentFrame.map { $0.x + ($0.width * 0.5) } ?? 0
         let contentCenterY = contentFrame.map { $0.y + ($0.height * 0.5) } ?? 0
-        let contentRightX = contentFrame.map { $0.x + $0.width } ?? 0
+        let contentTrailingX = contentFrame.map { $0.x + $0.width } ?? 0
+        let contentBottomY = contentFrame.map { $0.y + $0.height } ?? 0
+        let requiredOrientation = placement == .below ? "vertical" : "horizontal"
 
         for crumb in path {
-            guard crumb.split.orientation == "horizontal", crumb.branch == .first else { continue }
+            guard crumb.split.orientation == requiredOrientation,
+                  crumb.branch == .first else { continue }
             var candidateNodes: [ExternalPaneNode] = []
             zebraCollectPaneNodes(node: crumb.split.second, into: &candidateNodes)
             let sorted = candidateNodes.sorted { lhs, rhs in
-                let lhsDy = abs((lhs.frame.y + (lhs.frame.height * 0.5)) - contentCenterY)
-                let rhsDy = abs((rhs.frame.y + (rhs.frame.height * 0.5)) - contentCenterY)
-                if lhsDy != rhsDy { return lhsDy < rhsDy }
-
-                let lhsDx = abs(lhs.frame.x - contentRightX)
-                let rhsDx = abs(rhs.frame.x - contentRightX)
-                if lhsDx != rhsDx { return lhsDx < rhsDx }
+                let lhsCrossAxisDistance: Double
+                let rhsCrossAxisDistance: Double
+                let lhsMainAxisDistance: Double
+                let rhsMainAxisDistance: Double
+                switch placement {
+                case .below:
+                    lhsCrossAxisDistance = abs((lhs.frame.x + (lhs.frame.width * 0.5)) - contentCenterX)
+                    rhsCrossAxisDistance = abs((rhs.frame.x + (rhs.frame.width * 0.5)) - contentCenterX)
+                    lhsMainAxisDistance = abs(lhs.frame.y - contentBottomY)
+                    rhsMainAxisDistance = abs(rhs.frame.y - contentBottomY)
+                case .right:
+                    lhsCrossAxisDistance = abs((lhs.frame.y + (lhs.frame.height * 0.5)) - contentCenterY)
+                    rhsCrossAxisDistance = abs((rhs.frame.y + (rhs.frame.height * 0.5)) - contentCenterY)
+                    lhsMainAxisDistance = abs(lhs.frame.x - contentTrailingX)
+                    rhsMainAxisDistance = abs(rhs.frame.x - contentTrailingX)
+                }
+                if lhsCrossAxisDistance != rhsCrossAxisDistance {
+                    return lhsCrossAxisDistance < rhsCrossAxisDistance
+                }
+                if lhsMainAxisDistance != rhsMainAxisDistance {
+                    return lhsMainAxisDistance < rhsMainAxisDistance
+                }
 
                 if lhs.frame.x != rhs.frame.x { return lhs.frame.x < rhs.frame.x }
+                if lhs.frame.y != rhs.frame.y { return lhs.frame.y < rhs.frame.y }
                 return lhs.id < rhs.id
             }
 

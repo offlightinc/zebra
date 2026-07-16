@@ -1694,3 +1694,93 @@ private extension String {
         isEmpty ? nil : self
     }
 }
+
+@MainActor
+enum ZebraSettingsAppExtension {
+    static func install() {
+        SettingsAppSectionExtensionSlot.makeContent = {
+            AnyView(ZebraChatPillPanePlacementSettingsRow())
+        }
+    }
+}
+
+private struct ZebraChatPillPanePlacementSettingsRow: View {
+    @AppStorage(ZebraChatPillPanePlacementSettings.key)
+    private var rawPlacement = ZebraChatPillPanePlacementSettings.defaultPlacement.rawValue
+
+    private var placement: ZebraChatPillPanePlacement {
+        ZebraChatPillPanePlacementSettings.placement(for: rawPlacement)
+    }
+
+    private var placementBinding: Binding<String> {
+        Binding(
+            get: { placement.rawValue },
+            set: { rawPlacement = ZebraChatPillPanePlacementSettings.placement(for: $0).rawValue }
+        )
+    }
+
+    private var subtitle: String {
+        switch placement {
+        case .below:
+            return String(
+                localized: "settings.zebra.chatPillPanePlacement.subtitleBelow",
+                defaultValue: "New agent chats open in a split below the current mail or task pane."
+            )
+        case .right:
+            return String(
+                localized: "settings.zebra.chatPillPanePlacement.subtitleRight",
+                defaultValue: "New agent chats open in a split to the right of the current mail or task pane."
+            )
+        }
+    }
+
+    var body: some View {
+        SettingsCardDivider()
+
+        SettingsCardRow(
+            configurationReview: .settingsOnly,
+            String(
+                localized: "settings.zebra.chatPillPanePlacement.title",
+                defaultValue: "Chat Pill Agent Pane"
+            ),
+            subtitle: subtitle,
+            controlWidth: 196,
+            searchAnchorID: SettingsSearchIndex.settingID(
+                for: .app,
+                idSuffix: "zebra-chat-pill-pane-placement"
+            )
+        ) {
+            Picker("", selection: placementBinding) {
+                ForEach(ZebraChatPillPanePlacement.allCases) { option in
+                    Text(option.displayName).tag(option.rawValue)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("SettingsZebraChatPillPanePlacementPicker")
+            .accessibilityLabel(
+                String(
+                    localized: "settings.zebra.chatPillPanePlacement.title",
+                    defaultValue: "Chat Pill Agent Pane"
+                )
+            )
+        }
+    }
+}
+
+private extension ZebraChatPillPanePlacement {
+    var displayName: String {
+        switch self {
+        case .below:
+            return String(
+                localized: "settings.zebra.chatPillPanePlacement.below",
+                defaultValue: "Below Current Pane"
+            )
+        case .right:
+            return String(
+                localized: "settings.zebra.chatPillPanePlacement.right",
+                defaultValue: "Right of Current Pane"
+            )
+        }
+    }
+}

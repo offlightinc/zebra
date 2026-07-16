@@ -25,6 +25,7 @@ struct cmuxApp: App {
     init() {
         UITestLaunchManifest.applyIfPresent()
         let zebraAppearanceLaunchSeed = ZebraAppearanceDefaults.prepareLaunchSeed()
+        ZebraSettingsAppExtension.install()
 
         if SocketControlSettings.shouldBlockUntaggedDebugLaunch() {
             Self.terminateForMissingLaunchTag()
@@ -4982,6 +4983,14 @@ func openCmuxSettingsFileInEditor() {
     PreferredEditorSettings.open(url)
 }
 
+/// Upstream-neutral slot for Zebra-owned rows in the App settings card.
+/// Zebra installs the closure during app startup; upstream-only builds render
+/// an empty view.
+@MainActor
+enum SettingsAppSectionExtensionSlot {
+    static var makeContent: () -> AnyView = { AnyView(EmptyView()) }
+}
+
 struct SettingsView: View {
     private let pickerColumnWidth: CGFloat = 196
     private let notificationSoundControlWidth: CGFloat = 280
@@ -6218,6 +6227,7 @@ struct SettingsView: View {
                                 )
                         }
 
+                        SettingsAppSectionExtensionSlot.makeContent()
                     }
 
                     SettingsSectionHeader(title: String(localized: "settings.section.terminal", defaultValue: "Terminal"))
