@@ -42,6 +42,7 @@ cmuxTests/FileDropOverlayViewTests.swift
 cmuxTests/MarkdownPanelTests.swift
 cmuxTests/SessionPersistenceTests.swift
 cmuxTests/GhosttyConfigTests.swift
+cmuxTests/ZebraEmailArchiveTabCloseTests.swift # Zebra email archive tab-close behavior over cmux Workspace/Bonsplit
 cmux.xcodeproj/project.pbxproj
 
 # Docs
