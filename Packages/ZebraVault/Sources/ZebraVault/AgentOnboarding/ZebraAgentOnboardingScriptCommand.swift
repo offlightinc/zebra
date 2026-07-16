@@ -10,6 +10,7 @@ public enum ZebraAgentOnboardingScriptCommand {
         command: Command,
         cwd: String,
         agent: ZebraAgentKind? = nil,
+        installApproved: Bool = false,
         languageCode: String? = nil,
         continueWithCommandFile: String? = nil
     ) -> String? {
@@ -25,6 +26,7 @@ public enum ZebraAgentOnboardingScriptCommand {
             command: command,
             cwd: cwd,
             agent: agent,
+            installApproved: installApproved,
             languageCode: languageCode,
             continueWithCommandFile: continueWithCommandFile,
             resolverPath: ZebraAgentResolverResource.executablePath
@@ -36,6 +38,7 @@ public enum ZebraAgentOnboardingScriptCommand {
         command: Command,
         cwd: String,
         agent: ZebraAgentKind? = nil,
+        installApproved: Bool = false,
         languageCode: String? = nil,
         continueWithCommandFile: String? = nil,
         resolverPath: String? = nil
@@ -50,6 +53,9 @@ public enum ZebraAgentOnboardingScriptCommand {
         }
         if let agent {
             arguments += ["--agent", agent.rawValue]
+        }
+        if installApproved {
+            arguments.append("--install-approved")
         }
         let resolvedLanguageCode = languageCode
             .flatMap(ZebraOnboardingLanguage.resolve(_:))?

@@ -95,6 +95,7 @@ RESOLVE_PATH=""
 RESOLVE_BROKEN_REASON=""
 INSTALL_RESULT=""
 INSTALL_FAILURE_ACTION=""
+INSTALL_APPROVED=0
 CLI_PROBE_STDOUT=""
 CLI_PROBE_STDERR=""
 CLI_PROBE_STATUS=0
@@ -107,7 +108,7 @@ RESUME_FLOW_HANDLED=0
 
 usage() {
   cat <<'USAGE'
-zebra-agent-onboarding [run|choose-primary] [--cwd <path>] [--agent <agent>] [--language <en|ja|ko>] [--resolver-path <path>] [--continue-with-command-file <path>]
+zebra-agent-onboarding [run|choose-primary] [--cwd <path>] [--agent <agent>] [--install-approved] [--language <en|ja|ko>] [--resolver-path <path>] [--continue-with-command-file <path>]
 zebra-agent-onboarding mark-ready --agent <agent> --run-id <runId> [--language <en|ja|ko>]
 
 Commands:
@@ -2061,7 +2062,9 @@ run_installer() {
   else
     msg install_official_prompt "$(display_name "$agent")" "$command_label"
   fi
-  if can_use_tty_selector; then
+  if [[ "$INSTALL_APPROVED" -eq 1 ]]; then
+    :
+  elif can_use_tty_selector; then
     prompt_choice_tty \
       "$(msg run_installer_title)" \
       "$(msg run_installer_yes)" \
@@ -2960,6 +2963,10 @@ main() {
               exit 2
             }
             shift 2
+            ;;
+          --install-approved)
+            INSTALL_APPROVED=1
+            shift
             ;;
           --continue-with-command-file)
             CONTINUE_COMMAND_FILE="${2:-}"

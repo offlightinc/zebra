@@ -222,8 +222,12 @@ private struct ZebraEmailPanelHost: View {
                         onSubmit: { text, agent in
                             handlePillSubmit(text: text, agent: agent, workspace: workspace)
                         },
-                        onManageDefaultAgent: { agent in
-                            startDefaultAgentManager(workspace: workspace, agent: agent)
+                        onManageDefaultAgent: { agent, installApproved in
+                            startDefaultAgentManager(
+                                workspace: workspace,
+                                agent: agent,
+                                installApproved: installApproved
+                            )
                         },
                         onHeightChange: handleChatPillHeightChange
                     )
@@ -314,12 +318,17 @@ private struct ZebraEmailPanelHost: View {
         )
     }
 
-    private func startDefaultAgentManager(workspace: Workspace, agent: ZebraAgentKind?) {
+    private func startDefaultAgentManager(
+        workspace: Workspace,
+        agent: ZebraAgentKind?,
+        installApproved: Bool = false
+    ) {
         let cwd = defaultAgentManagerCWD()
         guard let startupLine = ZebraAgentOnboardingScriptCommand.shellStartupLine(
             command: .choosePrimary,
             cwd: cwd,
-            agent: agent
+            agent: agent,
+            installApproved: installApproved
         ) else {
             #if DEBUG
             cmuxDebugLog("email.chatPill.defaultAgent.scriptMissing")

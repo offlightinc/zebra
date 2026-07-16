@@ -253,8 +253,8 @@ struct ZebraMarkdownPanelView<
                     onSubmit: { text, agent in
                         handlePillSubmit(text: text, agent: agent)
                     },
-                    onManageDefaultAgent: { agent in
-                        startDefaultAgentManager(agent: agent)
+                    onManageDefaultAgent: { agent, installApproved in
+                        startDefaultAgentManager(agent: agent, installApproved: installApproved)
                     },
                     onHeightChange: handleChatPillHeightChange
                 )
@@ -659,12 +659,16 @@ struct ZebraMarkdownPanelView<
         return nil
     }
 
-    private func startDefaultAgentManager(agent: ZebraAgentKind?) {
+    private func startDefaultAgentManager(
+        agent: ZebraAgentKind?,
+        installApproved: Bool = false
+    ) {
         let cwd = defaultAgentManagerCWD()
         guard let startupLine = ZebraAgentOnboardingScriptCommand.shellStartupLine(
             command: .choosePrimary,
             cwd: cwd,
-            agent: agent
+            agent: agent,
+            installApproved: installApproved
         ) else {
             #if DEBUG
             cmuxDebugLog("markdown.chatPill.defaultAgent.scriptMissing")

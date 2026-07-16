@@ -1003,7 +1003,50 @@ private extension Workspace {
             "bytes=\(startupLine.utf8.count)"
         )
         #endif
-        terminalPanel.zebraSendStartupLineWhenReady(startupLine)
+        sendStartupSequenceWhenShellIsReady(
+            startupLine,
+            to: terminalPanel,
+            remainingUnknownRetries: 40
+        )
+    }
+
+    private func sendStartupSequenceWhenShellIsReady(
+        _ startupLine: String,
+        to terminalPanel: TerminalPanel,
+        remainingUnknownRetries: Int
+    ) {
+        guard panels[terminalPanel.id] === terminalPanel else { return }
+
+        switch panelShellActivityStates[terminalPanel.id] ?? .unknown {
+        case .promptIdle:
+            terminalPanel.zebraSendStartupLineWhenReady(startupLine)
+        case .unknown where remainingUnknownRetries > 0:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak terminalPanel] in
+                guard let self, let terminalPanel else { return }
+                self.sendStartupSequenceWhenShellIsReady(
+                    startupLine,
+                    to: terminalPanel,
+                    remainingUnknownRetries: remainingUnknownRetries - 1
+                )
+            }
+        case .unknown:
+            // Shell integrations are not guaranteed for every user shell. Keep
+            // the existing surface-readiness fallback after giving the prompt
+            // enough time to become the foreground process group.
+            terminalPanel.zebraSendStartupLineWhenReady(startupLine)
+        case .commandRunning:
+            // A newly-created terminal can briefly report shell startup as a
+            // running command. Wait for the first prompt instead of injecting
+            // an interactive onboarding command into shell initialization.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak terminalPanel] in
+                guard let self, let terminalPanel else { return }
+                self.sendStartupSequenceWhenShellIsReady(
+                    startupLine,
+                    to: terminalPanel,
+                    remainingUnknownRetries: remainingUnknownRetries
+                )
+            }
+        }
     }
 }
 

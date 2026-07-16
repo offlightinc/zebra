@@ -132,6 +132,11 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
         candidate != nil && !(isPrimary && isInstalled)
     }
 
+    private var showsInstallAction: Bool {
+        guard let candidate else { return false }
+        return candidate.installState == .missing
+    }
+
     private var rowFill: Color {
         if active {
             return MarkdownPillPalette.agentChooserActiveFill
@@ -215,29 +220,44 @@ fileprivate struct MarkdownPillAgentMenuRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(!isInstalled)
             .help(String(localized: "markdownChat.pill.agent.useOnce.help", defaultValue: "Use this agent once"))
 
-            Button {
-                if actionEnabled {
-                    onPrimaryAction()
+            if showsInstallAction {
+                Button(action: onPrimaryAction) {
+                    Text(String(localized: "markdownChat.pill.agent.action.install", defaultValue: "Install"))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(BVColor.fgOnAccent)
+                        .padding(.horizontal, 10)
+                        .frame(height: 26)
+                        .background(MarkdownPillPalette.selectionTint)
+                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
-            } label: {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(defaultStarButtonFill)
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(defaultStarButtonBorder, lineWidth: 1)
-                    Image(systemName: isPrimary ? "star.fill" : "star")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(defaultStarColor)
+                .buttonStyle(.plain)
+                .help(String(localized: "markdownChat.pill.agent.action.install", defaultValue: "Install"))
+            } else {
+                Button {
+                    if actionEnabled {
+                        onPrimaryAction()
+                    }
+                } label: {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(defaultStarButtonFill)
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(defaultStarButtonBorder, lineWidth: 1)
+                        Image(systemName: isPrimary ? "star.fill" : "star")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundColor(defaultStarColor)
+                    }
+                    .frame(width: 26, height: 26)
                 }
-                .frame(width: 26, height: 26)
+                .buttonStyle(.plain)
+                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .onHover { defaultStarHovered = $0 }
+                .animation(.easeInOut(duration: 0.12), value: defaultStarHovered)
+                .help(String(localized: "markdownChat.pill.agent.setDefault.help", defaultValue: "Set this agent as the default"))
             }
-            .buttonStyle(.plain)
-            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .onHover { defaultStarHovered = $0 }
-            .animation(.easeInOut(duration: 0.12), value: defaultStarHovered)
-            .help(String(localized: "markdownChat.pill.agent.setDefault.help", defaultValue: "Set this agent as the default"))
         }
         .padding(.horizontal, 8)
         .frame(height: 48)
@@ -452,7 +472,7 @@ public struct MarkdownChatPill: View {
     /// Parent handles the actual split/tab creation and terminal input.
     /// The pill just emits the user's intent.
     let onSubmit: (_ text: String, _ agent: MarkdownPillAgent) -> Void
-    let onManageDefaultAgent: ((_ agent: ZebraAgentKind?) -> Void)?
+    let onManageDefaultAgent: ((_ agent: ZebraAgentKind?, _ installApproved: Bool) -> Void)?
     let onHeightChange: ((CGFloat) -> Void)?
 
     public init(
@@ -461,7 +481,7 @@ public struct MarkdownChatPill: View {
         availableContentHeight: CGFloat? = nil,
         activeAgent: MarkdownPillAgent?,
         onSubmit: @escaping (_ text: String, _ agent: MarkdownPillAgent) -> Void,
-        onManageDefaultAgent: ((_ agent: ZebraAgentKind?) -> Void)? = nil,
+        onManageDefaultAgent: ((_ agent: ZebraAgentKind?, _ installApproved: Bool) -> Void)? = nil,
         onHeightChange: ((CGFloat) -> Void)? = nil
     ) {
         self._isExpanded = isExpanded
@@ -1145,7 +1165,11 @@ public struct MarkdownChatPill: View {
                         agentMenuOpen = false
                     },
                     onPrimaryAction: {
-                        selectPrimaryAgent(option)
+                        if agentCandidate(for: option.agentKind)?.installState == .missing {
+                            openDefaultAgentFallback(option.agentKind, installApproved: true)
+                        } else {
+                            selectPrimaryAgent(option)
+                        }
                     }
                 )
             }
@@ -1227,9 +1251,12 @@ public struct MarkdownChatPill: View {
         }
     }
 
-    private func openDefaultAgentFallback(_ agent: ZebraAgentKind?) {
+    private func openDefaultAgentFallback(
+        _ agent: ZebraAgentKind?,
+        installApproved: Bool = false
+    ) {
         agentMenuOpen = false
-        onManageDefaultAgent?(agent)
+        onManageDefaultAgent?(agent, installApproved)
     }
 
     private var skillsButton: some View {

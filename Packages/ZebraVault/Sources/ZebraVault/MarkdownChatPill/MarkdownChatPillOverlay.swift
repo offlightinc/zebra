@@ -12,7 +12,7 @@ public struct MarkdownChatPillOverlay: View {
     private let availableContentHeight: CGFloat?
     private let activeAgent: MarkdownPillAgent?
     private let onSubmit: (_ text: String, _ agent: MarkdownPillAgent) -> Void
-    private let onManageDefaultAgent: ((_ agent: ZebraAgentKind?) -> Void)?
+    private let onManageDefaultAgent: ((_ agent: ZebraAgentKind?, _ installApproved: Bool) -> Void)?
     private let onHeightChange: ((CGFloat) -> Void)?
 
     public init(
@@ -21,7 +21,7 @@ public struct MarkdownChatPillOverlay: View {
         availableContentHeight: CGFloat? = nil,
         activeAgent: MarkdownPillAgent?,
         onSubmit: @escaping (_ text: String, _ agent: MarkdownPillAgent) -> Void,
-        onManageDefaultAgent: ((_ agent: ZebraAgentKind?) -> Void)? = nil,
+        onManageDefaultAgent: ((_ agent: ZebraAgentKind?, _ installApproved: Bool) -> Void)? = nil,
         onHeightChange: ((CGFloat) -> Void)? = nil
     ) {
         self._isExpanded = isExpanded
