@@ -111,16 +111,13 @@ enum SlackThreadExpansionFailureDisposition: Equatable, Sendable {
 }
 
 struct SlackThreadExpansionFailureClassifier: Sendable {
-    private let sourceUnavailableCodes: Set<String> = [
-        "access_denied", "channel_not_found", "method_not_supported_for_channel_type",
-        "no_permission", "not_in_channel", "thread_not_found",
-    ]
+    private let accessFailureClassifier = SlackSourceAccessFailureClassifier()
 
     func classify(errorCode: String, seeds: [SlackSeedCandidate] = []) -> SlackThreadExpansionFailureDisposition {
         if errorCode == "thread_not_found", seeds.contains(where: Self.isKnownUnthreadable) {
             return .captureSeedsWithoutExpansion
         }
-        if sourceUnavailableCodes.contains(errorCode) {
+        if errorCode == "thread_not_found" || accessFailureClassifier.isSourceLocal(errorCode) {
             return .sourceMissingOrInaccessible
         }
         return .abortPoll
@@ -159,8 +156,9 @@ struct SlackCapturedPoller: Sendable {
         do {
         let discoveryStartDate = discoveryStartDate(checkpoint: checkpoint)
         let classifier = SlackSeedClassifier(authorizedUserID: authorizedUserID, startDate: discoveryStartDate)
-        let discovered = try await api.discoverSeeds(authorizedUserID: authorizedUserID, startDate: discoveryStartDate)
-        let seeds = try discovered.compactMap { candidate -> (SlackSeedCandidate, [SlackFootprintRole])? in
+        let discovery = try await api.discoverSeeds(authorizedUserID: authorizedUserID, startDate: discoveryStartDate)
+        var skippedSources = discovery.skippedSources
+        let seeds = try discovery.candidates.compactMap { candidate -> (SlackSeedCandidate, [SlackFootprintRole])? in
             let roles = try classifier.roles(for: candidate)
             return roles.isEmpty ? nil : (candidate, roles)
         }
@@ -176,9 +174,11 @@ struct SlackCapturedPoller: Sendable {
                 switch expansionFailureClassifier.classify(errorCode: code, seeds: group.seeds.map(\.0)) {
                 case .captureSeedsWithoutExpansion:
                     collectDiscoveredSeeds(group, into: &collected)
+                    skippedSources.append(.init(stage: "thread_expansion", errorCode: code))
                     continue
                 case .sourceMissingOrInaccessible:
                     collectDiscoveredSeeds(group, into: &collected)
+                    skippedSources.append(.init(stage: "thread_expansion", errorCode: code))
                     try store.recordMissingOrInaccessible(
                         sourceID: "\(group.conversationID):\(group.threadTS)",
                         at: observedAt,
@@ -221,6 +221,7 @@ struct SlackCapturedPoller: Sendable {
                 switch expansionFailureClassifier.classify(errorCode: code) {
                 case .sourceMissingOrInaccessible:
                     try store.recordMissingOrInaccessible(sourceID: sourceID, at: observedAt, errorCode: code)
+                    skippedSources.append(.init(stage: "tracked_thread_reconcile", errorCode: code))
                 case .captureSeedsWithoutExpansion, .abortPoll:
                     throw SlackCapturedError.api(code)
                 }
@@ -235,7 +236,8 @@ struct SlackCapturedPoller: Sendable {
                 try store.writeTrackedThreads(Array(trackedByID.values))
             }
         try store.writePollManifest(.init(pollRunID: pollRunID, kind: kind, startedAt: observedAt,
-                                          requestedOldest: checkpoint?.committedThrough ?? String(startDate.timeIntervalSince1970), completedAt: now()))
+                                          requestedOldest: checkpoint?.committedThrough ?? String(startDate.timeIntervalSince1970),
+                                          completedAt: now(), skippedSources: skippedSources))
         } catch {
             let diagnostic: (stage: String, code: String)
             switch error {

@@ -16,6 +16,27 @@ enum SlackCapturedError: Error, Equatable {
     case invalidUserToken
 }
 
+struct SlackSourceAccessFailureClassifier: Sendable {
+    private let localCodes: Set<String> = [
+        "access_denied", "channel_not_found", "method_not_supported_for_channel_type",
+        "no_permission", "not_in_channel",
+    ]
+
+    func isSourceLocal(_ errorCode: String) -> Bool {
+        localCodes.contains(errorCode)
+    }
+}
+
+struct SlackSkippedSource: Equatable, Sendable {
+    let stage: String
+    let errorCode: String
+}
+
+struct SlackSeedDiscoveryResult: Sendable {
+    let candidates: [SlackSeedCandidate]
+    let skippedSources: [SlackSkippedSource]
+}
+
 /// A lossless JSON value. Objects preserve every Slack field; canonical encoding
 /// sorts object keys while retaining array order.
 enum SlackJSONValue: Codable, Equatable, Sendable {

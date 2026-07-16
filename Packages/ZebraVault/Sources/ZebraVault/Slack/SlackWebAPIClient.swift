@@ -71,7 +71,7 @@ struct SlackWebAPIClient: Sendable {
         return Identity(workspaceID: workspaceID, userID: userID)
     }
 
-    func discoverSeeds(authorizedUserID: String, startDate: Date) async throws -> [SlackSeedCandidate] {
+    func discoverSeeds(authorizedUserID: String, startDate: Date) async throws -> SlackSeedDiscoveryResult {
         // Slack's `after:` modifier is exclusive. Search from the previous UTC
         // calendar day, then let SlackSeedClassifier's >= boundary enforce the
         // exact user-selected instant so the selected day itself is included.
@@ -80,7 +80,8 @@ struct SlackWebAPIClient: Sendable {
         async let mentioned = search(query: "<@\(authorizedUserID)> after:\(day)", reacted: false)
         async let reacted = reactionSeeds(userID: authorizedUserID, startDate: startDate)
         async let directMessages = directMessageSeeds(startDate: startDate)
-        let combined = try await authored + mentioned + reacted + directMessages
+        let directMessageResult = try await directMessages
+        let combined = try await authored + mentioned + reacted + directMessageResult.candidates
         var unique: [String: SlackSeedCandidate] = [:]
         for candidate in combined {
             guard let ts = candidate.payload["ts"]?.stringValue else { continue }
@@ -91,7 +92,7 @@ struct SlackWebAPIClient: Sendable {
                                     discoveredByReaction: old.discoveredByReaction || candidate.discoveredByReaction)
             } else { unique[key] = candidate }
         }
-        return Array(unique.values)
+        return .init(candidates: Array(unique.values), skippedSources: directMessageResult.skippedSources)
     }
 
     func replies(conversationID: String, threadTS: String, oldest: String? = nil) async throws -> [SlackJSONValue] {
@@ -130,17 +131,25 @@ struct SlackWebAPIClient: Sendable {
         }
     }
 
-    private func directMessageSeeds(startDate: Date) async throws -> [SlackSeedCandidate] {
+    private func directMessageSeeds(startDate: Date) async throws -> SlackSeedDiscoveryResult {
         let channels = try await cursorPages(method: "users.conversations", query: [URLQueryItem(name: "types", value: "im"),
             URLQueryItem(name: "limit", value: "200")], arrayPath: ["channels"])
         var result: [SlackSeedCandidate] = []
+        var skippedSources: [SlackSkippedSource] = []
+        let accessFailureClassifier = SlackSourceAccessFailureClassifier()
         for channel in channels {
             guard let id = channel["id"]?.stringValue else { continue }
-            let messages = try await cursorPages(method: "conversations.history", query: [URLQueryItem(name: "channel", value: id),
-                URLQueryItem(name: "oldest", value: String(startDate.timeIntervalSince1970)), URLQueryItem(name: "limit", value: "200")], arrayPath: ["messages"])
+            let messages: [SlackJSONValue]
+            do {
+                messages = try await cursorPages(method: "conversations.history", query: [URLQueryItem(name: "channel", value: id),
+                    URLQueryItem(name: "oldest", value: String(startDate.timeIntervalSince1970)), URLQueryItem(name: "limit", value: "200")], arrayPath: ["messages"])
+            } catch SlackCapturedError.api(let code) where accessFailureClassifier.isSourceLocal(code) {
+                skippedSources.append(.init(stage: "direct_message_history", errorCode: code))
+                continue
+            }
             result += messages.map { .init(conversationID: id, payload: $0, isDirectMessage: true, discoveredByReaction: false) }
         }
-        return result
+        return .init(candidates: result, skippedSources: skippedSources)
     }
 
     private func cursorPages(method: String, query base: [URLQueryItem], arrayPath: [String]) async throws -> [SlackJSONValue] {

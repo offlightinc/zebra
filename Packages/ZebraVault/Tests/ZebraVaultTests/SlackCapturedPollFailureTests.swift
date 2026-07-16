@@ -11,15 +11,17 @@ struct SlackCapturedPollFailureTests {
             baseURL: URL(string: "https://fixture.invalid/api/")!
         )
 
-        let seeds = try await client.discoverSeeds(
+        let discovery = try await client.discoverSeeds(
             authorizedUserID: "U1",
             startDate: Date(timeIntervalSince1970: 100)
         )
 
+        let seeds = discovery.candidates
         #expect(seeds.count == 1)
         #expect(seeds[0].conversationID == "DGOOD")
         #expect(seeds[0].payload["ts"]?.stringValue == "200.0")
         #expect(seeds[0].isDirectMessage)
+        #expect(discovery.skippedSources == [.init(stage: "direct_message_history", errorCode: "channel_not_found")])
     }
 
     @Test func unthreadableSeedDoesNotAbortPollAndDiscoveredPayloadIsCommitted() async throws {
@@ -49,6 +51,16 @@ struct SlackCapturedPollFailureTests {
         #expect(captures.first { $0.payload["ts"]?.stringValue == "200.0" }?.payload["subtype"]?.stringValue == "channel_join")
         #expect(try store.readCheckpoint()?.committedThrough == "211.0")
         #expect(!String(decoding: try JSONEncoder.slackCaptured.encode(captures), as: UTF8.self).contains("xoxp-test-secret"))
+        let manifestURL = try #require(
+            FileManager.default.contentsOfDirectory(
+                at: store.stateDirectory.appending(path: "poll-runs", directoryHint: .isDirectory),
+                includingPropertiesForKeys: nil
+            ).first
+        )
+        let manifest = try JSONDecoder.slackCaptured.decode(SlackPollRunManifest.self, from: Data(contentsOf: manifestURL))
+        #expect(manifest.skippedSourceCount == 1)
+        #expect(manifest.skippedStages == ["thread_expansion"])
+        #expect(manifest.skippedErrorCodes == ["thread_not_found"])
     }
 
     @Test func transientThreadExpansionFailureAbortsWithoutCheckpointAndWritesSanitizedDiagnostic() async throws {

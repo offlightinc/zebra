@@ -222,9 +222,13 @@ struct SlackPollRunManifest: Codable, Equatable, Sendable {
     let completedAt: Date?
     let failureStage: String?
     let failureCode: String?
+    let skippedSourceCount: Int?
+    let skippedStages: [String]?
+    let skippedErrorCodes: [String]?
 
     init(pollRunID: String, kind: Kind, startedAt: Date, requestedOldest: String,
-         completedAt: Date?, failureStage: String? = nil, failureCode: String? = nil) {
+         completedAt: Date?, failureStage: String? = nil, failureCode: String? = nil,
+         skippedSources: [SlackSkippedSource] = []) {
         self.pollRunID = pollRunID
         self.kind = kind
         self.startedAt = startedAt
@@ -232,12 +236,17 @@ struct SlackPollRunManifest: Codable, Equatable, Sendable {
         self.completedAt = completedAt
         self.failureStage = sanitizeSlackError(failureStage)
         self.failureCode = sanitizeSlackError(failureCode)
+        self.skippedSourceCount = skippedSources.count
+        self.skippedStages = Array(Set(skippedSources.compactMap { sanitizeSlackError($0.stage) })).sorted()
+        self.skippedErrorCodes = Array(Set(skippedSources.compactMap { sanitizeSlackError($0.errorCode) })).sorted()
     }
 
     enum CodingKeys: String, CodingKey {
         case pollRunID = "poll_run_id", kind, startedAt = "started_at"
         case requestedOldest = "requested_oldest", completedAt = "completed_at"
         case failureStage = "failure_stage", failureCode = "failure_code"
+        case skippedSourceCount = "skipped_source_count", skippedStages = "skipped_stages"
+        case skippedErrorCodes = "skipped_error_codes"
     }
 }
 
