@@ -2672,15 +2672,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         XCTAssertEqual(missingCLI.status, 1, "stdout:\n\(missingCLI.stdout)\nstderr:\n\(missingCLI.stderr)")
         let missingCLIPayload = try jsonObject(from: missingCLI.stdout)
-        XCTAssertEqual(missingCLIPayload["reason"] as? String, "memo_cli_missing")
+        XCTAssertEqual(missingCLIPayload["reason"] as? String, "apple_notes_install_consent_required")
+        let combinedPlan = try XCTUnwrap(missingCLIPayload["installPlan"] as? [String: Any])
+        XCTAssertEqual(combinedPlan["homebrewRequired"] as? Bool, true)
+        XCTAssertEqual(combinedPlan["memoRequired"] as? Bool, true)
+        XCTAssertEqual(combinedPlan["status"] as? String, "awaiting_consent")
         let missingCLIPrompt = try XCTUnwrap(missingCLIPayload["nextPrompt"] as? String)
-        XCTAssertTrue(missingCLIPrompt.contains("brew tap antoniorodr/memo && brew install antoniorodr/memo/memo"), missingCLIPrompt)
-        XCTAssertTrue(missingCLIPrompt.contains("Apple Notes ingest requires the memo CLI. Install it now with Homebrew? (yes/no)"), missingCLIPrompt)
-        XCTAssertTrue(missingCLIPrompt.contains("Do not install anything unless the user explicitly answers yes."), missingCLIPrompt)
+        XCTAssertEqual(missingCLIPrompt.components(separatedBy: "(yes/no)").count - 1, 1, missingCLIPrompt)
+        XCTAssertTrue(missingCLIPrompt.contains("Install Homebrew and the memo CLI now? (yes/no)"), missingCLIPrompt)
 
         let approvedHomebrew = try runProcess(
             executableURL: helperURL,
-            arguments: ["apple-notes", "check-cli", "--homebrew-install-answer", "yes"],
+            arguments: ["apple-notes", "check-cli", "--install-answer", "yes"],
             environment: baseEnvironment
         )
         XCTAssertEqual(approvedHomebrew.status, 1, "stdout:\n\(approvedHomebrew.stdout)\nstderr:\n\(approvedHomebrew.stderr)")
@@ -2693,6 +2696,20 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(approvedHomebrewPrompt.contains("notify_on_complete=true"), approvedHomebrewPrompt)
         XCTAssertTrue(approvedHomebrewPrompt.contains("zebra-source-onboarding install-homebrew --source apple-notes"), approvedHomebrewPrompt)
 
+        let declinedInstall = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-notes", "check-cli", "--install-answer", "no"],
+            environment: baseEnvironment
+        )
+        XCTAssertEqual(declinedInstall.status, 1, "stdout:\n\(declinedInstall.stdout)\nstderr:\n\(declinedInstall.stderr)")
+        XCTAssertEqual(try jsonObject(from: declinedInstall.stdout)["reason"] as? String, "apple_notes_install_declined")
+        let declinedState = try readSourceOnboardingState(at: stateURL)
+        let declinedRow = try XCTUnwrap(declinedState.progress.sourceRows["apple-notes"])
+        let declinedRunState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(declinedRow.runStatePath)))
+        let declinedPlan = try XCTUnwrap(declinedRunState["installPlan"] as? [String: Any])
+        XCTAssertEqual(declinedPlan["answer"] as? String, "no")
+        XCTAssertEqual(declinedPlan["status"] as? String, "declined")
+
         let koreanMissingCLI = try runProcess(
             executableURL: helperURL,
             arguments: ["apple-notes", "check-cli"],
@@ -2700,8 +2717,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         XCTAssertEqual(koreanMissingCLI.status, 1, "stdout:\n\(koreanMissingCLI.stdout)\nstderr:\n\(koreanMissingCLI.stderr)")
         let koreanMissingCLIPrompt = try XCTUnwrap(jsonObject(from: koreanMissingCLI.stdout)["nextPrompt"] as? String)
-        XCTAssertTrue(koreanMissingCLIPrompt.contains("Apple Notes ingest에는 memo CLI가 필요합니다. Homebrew로 지금 설치할까요? (yes/no)"), koreanMissingCLIPrompt)
-        XCTAssertTrue(koreanMissingCLIPrompt.contains("사용자가 명시적으로 yes라고 답하기 전에는 아무것도 설치하지 마세요."), koreanMissingCLIPrompt)
+        XCTAssertTrue(koreanMissingCLIPrompt.contains("Homebrew와 memo CLI를 지금 모두 설치할까요? (yes/no)"), koreanMissingCLIPrompt)
+        XCTAssertEqual(koreanMissingCLIPrompt.components(separatedBy: "(yes/no)").count - 1, 1, koreanMissingCLIPrompt)
         XCTAssertFalse(koreanMissingCLIPrompt.contains("Install it now with Homebrew?"), koreanMissingCLIPrompt)
 
         let japaneseMissingCLI = try runProcess(
@@ -2711,8 +2728,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         XCTAssertEqual(japaneseMissingCLI.status, 1, "stdout:\n\(japaneseMissingCLI.stdout)\nstderr:\n\(japaneseMissingCLI.stderr)")
         let japaneseMissingCLIPrompt = try XCTUnwrap(jsonObject(from: japaneseMissingCLI.stdout)["nextPrompt"] as? String)
-        XCTAssertTrue(japaneseMissingCLIPrompt.contains("Apple Notes ingest には memo CLI が必要です。Homebrew で今インストールしますか？ (yes/no)"), japaneseMissingCLIPrompt)
-        XCTAssertTrue(japaneseMissingCLIPrompt.contains("ユーザーが明示的に yes と答えるまで、何もインストールしないでください。"), japaneseMissingCLIPrompt)
+        XCTAssertTrue(japaneseMissingCLIPrompt.contains("Homebrew と memo CLI を今すぐ両方インストールしますか？ (yes/no)"), japaneseMissingCLIPrompt)
+        XCTAssertEqual(japaneseMissingCLIPrompt.components(separatedBy: "(yes/no)").count - 1, 1, japaneseMissingCLIPrompt)
         XCTAssertFalse(japaneseMissingCLIPrompt.contains("Install it now with Homebrew?"), japaneseMissingCLIPrompt)
 
         _ = try installFakeMemoCLI(fakeBin: fakeBin, logURL: memoLog)
