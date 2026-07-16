@@ -26,21 +26,9 @@ Run:
 zebra-source-onboarding apple-notes check-cli
 ```
 
-If `memo` is missing, report the helper's compact attention reason and tell the user Apple Notes ingest requires the `memo` CLI. Show this Homebrew install command:
+The helper checks both `memo` and Homebrew before asking anything. Follow its returned single install-plan question exactly: if Homebrew exists it asks to install only `memo`; if both are missing it asks once to install Homebrew and `memo` together. Run the exact `--install-answer` command from helper stdout after the user answers. Never create a second install-consent question, and do not install anything unless the user explicitly answers yes.
 
-```bash
-brew tap antoniorodr/memo && brew install antoniorodr/memo/memo
-```
-
-Then ask an explicit yes/no question before installing:
-
-```text
-Apple Notes ingest requires the memo CLI. Install it now with Homebrew? (yes/no)
-```
-
-Do not install anything unless the user explicitly answers yes.
-
-If Homebrew itself is missing, obtain separate Homebrew install consent and run `zebra-source-onboarding apple-notes check-cli --homebrew-install-answer yes`. Follow the helper's exact Hermes PTY-backed terminal tool instructions. Use `no` if the user declines. Do not open a separate Zebra terminal.
+If the approved plan needs Homebrew, follow the helper's exact Hermes PTY-backed terminal tool instructions. Do not open a separate Zebra terminal.
 
 Continue only from the returned `nextPrompt`.
 

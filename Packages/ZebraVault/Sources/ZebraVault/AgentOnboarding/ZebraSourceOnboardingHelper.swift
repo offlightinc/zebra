@@ -526,7 +526,10 @@ struct ZebraSourceOnboardingHelper {
       exit 1
     fi
 
-    "$PYTHON_BIN" - "$STATE" "$COMMAND" "$@" <<'PY'
+    PYTHON_PAYLOAD="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/zebra-source-onboarding.XXXXXX")"
+    trap '/bin/rm -f "$PYTHON_PAYLOAD"' EXIT HUP INT TERM
+    /bin/chmod 600 "$PYTHON_PAYLOAD"
+    /bin/cat > "$PYTHON_PAYLOAD" <<'PY'
     import contextlib
     import io
     import json
@@ -3358,21 +3361,7 @@ struct ZebraSourceOnboardingHelper {
             zebra-source-onboarding apple-notes check-cli
             ```
 
-            `memo`가 없으면 helper가 반환한 compact attention reason `memo_cli_missing`을 보고하고, Apple Notes ingest에는 `memo` CLI가 필요하다고 설명하세요. Homebrew 설치 명령은 아래입니다:
-
-            ```bash
-            brew tap antoniorodr/memo && brew install antoniorodr/memo/memo
-            ```
-
-            설치하기 전에 사용자에게 아래 yes/no 질문을 명시적으로 하세요:
-
-            ```text
-            Apple Notes ingest에는 memo CLI가 필요합니다. Homebrew로 지금 설치할까요? (yes/no)
-            ```
-
-            사용자가 명시적으로 yes라고 답하기 전에는 아무것도 설치하지 마세요.
-
-            Homebrew 자체가 없으면 Homebrew 설치 동의를 별도로 받은 뒤 `zebra-source-onboarding apple-notes check-cli --homebrew-install-answer yes`를 실행하세요. helper가 반환하는 Hermes PTY-backed terminal tool 지시를 그대로 따르세요. 거절하면 같은 명령을 `no`로 실행하세요.
+            helper가 `memo`와 Homebrew를 모두 확인한 뒤 반환하는 단일 install-plan 질문만 그대로 물으세요. Homebrew가 있으면 memo만, 둘 다 없으면 Homebrew와 memo를 함께 설치하는 질문을 한 번만 합니다. 사용자 답변 뒤 helper stdout의 정확한 `--install-answer` 명령을 실행하고 별도 설치 동의를 만들지 마세요.
 
             이후에는 helper stdout의 `nextPrompt`에서만 계속 진행하세요.
             ''').strip()
@@ -3386,21 +3375,7 @@ struct ZebraSourceOnboardingHelper {
             zebra-source-onboarding apple-notes check-cli
             ```
 
-            `memo` が見つからない場合は、helper が返した compact attention reason `memo_cli_missing` を報告し、Apple Notes ingest には `memo` CLI が必要だと説明してください。Homebrew のインストールコマンドは次のとおりです:
-
-            ```bash
-            brew tap antoniorodr/memo && brew install antoniorodr/memo/memo
-            ```
-
-            インストール前に、ユーザーへ次の yes/no 質問を明示的にしてください:
-
-            ```text
-            Apple Notes ingest には memo CLI が必要です。Homebrew で今インストールしますか？ (yes/no)
-            ```
-
-            ユーザーが明示的に yes と答えるまで、何もインストールしないでください。
-
-            Homebrew 自体がない場合は別に同意を取り、`zebra-source-onboarding apple-notes check-cli --homebrew-install-answer yes` を実行してください。helper が返す Hermes PTY-backed terminal tool の手順に従ってください。拒否時は `no` を使います。
+            helper が `memo` と Homebrew の両方を確認して返す単一の install-plan 質問だけをそのまま尋ねます。Homebrew があれば memo のみ、両方なければ Homebrew と memo を一緒にインストールする質問を一度だけ行います。回答後は helper stdout の正確な `--install-answer` コマンドを実行し、別の同意質問を作らないでください。
 
             以後は helper stdout の `nextPrompt` だけに従って続行してください。
             ''').strip()
@@ -3413,21 +3388,7 @@ struct ZebraSourceOnboardingHelper {
         zebra-source-onboarding apple-notes check-cli
         ```
 
-        If `memo` is missing, report the helper's compact attention reason `memo_cli_missing` and tell the user Apple Notes ingest requires the `memo` CLI. Show this Homebrew install command:
-
-        ```bash
-        brew tap antoniorodr/memo && brew install antoniorodr/memo/memo
-        ```
-
-        Then ask an explicit yes/no question before installing:
-
-        ```text
-        Apple Notes ingest requires the memo CLI. Install it now with Homebrew? (yes/no)
-        ```
-
-        Do not install anything unless the user explicitly answers yes.
-
-        If Homebrew itself is missing, obtain separate Homebrew install consent and run `zebra-source-onboarding apple-notes check-cli --homebrew-install-answer yes`. Follow the helper's exact Hermes PTY-backed terminal tool instructions. Use `no` if the user declines.
+        Ask only the single install-plan question returned after the helper checks both `memo` and Homebrew. If Homebrew exists it asks for `memo` only; if both are missing it asks once for Homebrew and `memo` together. After the answer, run the exact `--install-answer` command from helper stdout and do not create a separate install-consent question.
 
         Continue only from the returned `nextPrompt`.
         ''').strip()
@@ -8096,6 +8057,11 @@ struct ZebraSourceOnboardingHelper {
         return run_state, command_path
 
     def apple_reminders_brew_path():
+        if "ZEBRA_SOURCE_ONBOARDING_BREW_PATH" in os.environ:
+            override = os.environ.get("ZEBRA_SOURCE_ONBOARDING_BREW_PATH", "").strip()
+            if override and Path(override).is_file() and os.access(override, os.X_OK):
+                return override
+            return ""
         return shutil.which("brew") or ""
 
     def apple_reminders_command_result(command, timeout=120):
@@ -8198,6 +8164,41 @@ struct ZebraSourceOnboardingHelper {
         }, ensure_ascii=False, sort_keys=True))
         return 1
 
+    def record_homebrew_install_failure(source_id, reason, returncode):
+        if source_id != "apple-notes":
+            print(json.dumps({"ok": False, "reason": reason, "returncode": returncode}, sort_keys=True))
+            return returncode or 1
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-notes")
+        plan = run_state.get("installPlan") if isinstance(run_state.get("installPlan"), dict) else {
+            "homebrewRequired": True,
+            "memoRequired": True,
+            "resumeSource": "apple-notes",
+            "resumeStep": "check_memo_cli",
+        }
+        plan.update({
+            "answer": "yes",
+            "status": "failed",
+            "failedStage": "homebrew_install",
+            "result": {"reason": reason, "returncode": returncode},
+            "updatedAt": now(),
+        })
+        run_state["installPlan"] = plan
+        run_path = save_source_run_state("apple-notes", run_state)
+        state = set_apple_notes_row_state(
+            state, "attention", "preflight", "check_memo_cli",
+            attention_reason=reason,
+            run_state_path=run_path,
+        )
+        save_json(state)
+        print(json.dumps({
+            "ok": False,
+            "reason": reason,
+            "returncode": returncode,
+            "installPlan": plan,
+        }, ensure_ascii=False, sort_keys=True))
+        return returncode or 1
+
     def install_homebrew_command():
         source_id = single_flag_value("--source").strip()
         if source_id not in {"apple-notes", "apple-reminders"}:
@@ -8206,36 +8207,33 @@ struct ZebraSourceOnboardingHelper {
         if not sys.stdin.isatty() or not sys.stdout.isatty():
             print(json.dumps({"ok": False, "reason": "homebrew_install_tty_required"}, sort_keys=True))
             return 2
-        existing = apple_reminders_brew_path() or next(
-            (path for path in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew") if Path(path).is_file()),
-            "",
-        )
+        existing = apple_reminders_brew_path()
         if existing:
+            if source_id == "apple-notes":
+                return apple_notes_install_memo(existing, resumed_after_homebrew=True)
             print(json.dumps({"ok": True, "reason": "homebrew_already_installed", "brewPath": existing}, sort_keys=True))
             return 0
-        installer = '/bin/bash -c "$(/usr/bin/curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+        installer = os.environ.get("ZEBRA_SOURCE_ONBOARDING_HOMEBREW_INSTALLER", "").strip()
+        if not installer:
+            installer = '/bin/bash -c "$(/usr/bin/curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
         try:
             result = subprocess.run(["/bin/bash", "-c", installer], timeout=1800)
         except subprocess.TimeoutExpired:
-            print(json.dumps({"ok": False, "reason": "homebrew_install_timeout"}, sort_keys=True))
-            return 124
+            return record_homebrew_install_failure(source_id, "homebrew_install_timeout", 124)
         except KeyboardInterrupt:
-            print(json.dumps({"ok": False, "reason": "homebrew_install_cancelled"}, sort_keys=True))
-            return 130
+            return record_homebrew_install_failure(source_id, "homebrew_install_cancelled", 130)
         except Exception:
-            print(json.dumps({"ok": False, "reason": "homebrew_installer_failed"}, sort_keys=True))
-            return 1
-        brew_path = apple_reminders_brew_path() or next(
-            (path for path in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew") if Path(path).is_file()),
-            "",
-        )
+            return record_homebrew_install_failure(source_id, "homebrew_installer_failed", 1)
+        brew_path = apple_reminders_brew_path()
         if result.returncode != 0 or not brew_path:
-            print(json.dumps({
-                "ok": False,
-                "reason": "homebrew_installer_failed",
-                "returncode": result.returncode,
-            }, sort_keys=True))
-            return result.returncode or 1
+            reason = {
+                124: "homebrew_install_timeout",
+                130: "homebrew_install_cancelled",
+                77: "homebrew_authentication_failed",
+            }.get(result.returncode, "homebrew_installer_failed")
+            return record_homebrew_install_failure(source_id, reason, result.returncode or 1)
+        if source_id == "apple-notes":
+            return apple_notes_install_memo(brew_path, resumed_after_homebrew=True)
         print(json.dumps({"ok": True, "reason": "homebrew_install_succeeded", "brewPath": brew_path}, sort_keys=True))
         return 0
 
@@ -9007,34 +9005,137 @@ struct ZebraSourceOnboardingHelper {
         directory.mkdir(parents=True, exist_ok=True)
         return directory / "apple-notes-memo-cli.md"
 
+    def apple_notes_install_consent_prompt(homebrew_required):
+        language = onboarding_language()
+        if homebrew_required:
+            if language == "ko":
+                question = "Apple Notes ingest에 필요한 Homebrew와 memo CLI를 지금 모두 설치할까요? (yes/no)"
+            elif language == "ja":
+                question = "Apple Notes ingest に必要な Homebrew と memo CLI を今すぐ両方インストールしますか？ (yes/no)"
+            else:
+                question = "Apple Notes ingest requires Homebrew and the memo CLI. Install Homebrew and the memo CLI now? (yes/no)"
+        else:
+            if language == "ko":
+                question = "Apple Notes ingest에 필요한 memo CLI를 Homebrew로 지금 설치할까요? (yes/no)"
+            elif language == "ja":
+                question = "Apple Notes ingest に必要な memo CLI を Homebrew で今すぐインストールしますか？ (yes/no)"
+            else:
+                question = "Apple Notes ingest requires the memo CLI. Install only the memo CLI with Homebrew now? (yes/no)"
+        command = "zebra-source-onboarding apple-notes check-cli --install-answer yes"
+        decline = "zebra-source-onboarding apple-notes check-cli --install-answer no"
+        return question + "\\n\\nIf yes, run `" + command + "`. If no, run `" + decline + "`."
+
+    def apple_notes_install_plan(homebrew_required, status="awaiting_consent", answer=None):
+        plan = {
+            "homebrewRequired": bool(homebrew_required),
+            "memoRequired": True,
+            "status": status,
+            "resumeSource": "apple-notes",
+            "resumeStep": "check_memo_cli",
+            "updatedAt": now(),
+        }
+        if answer:
+            plan["answer"] = answer
+        return plan
+
+    def apple_notes_record_install_attention(state, run_state, reason, plan):
+        run_state.update({
+            "cliStatus": "missing",
+            "phase": "preflight",
+            "step": "check_memo_cli",
+            "installPlan": plan,
+            "updatedAt": now(),
+        })
+        run_path = save_source_run_state("apple-notes", run_state)
+        state = set_apple_notes_row_state(
+            state, "attention", "preflight", "check_memo_cli",
+            attention_reason=reason,
+            run_state_path=run_path,
+        )
+        save_json(state)
+        return run_path
+
+    def apple_notes_install_memo(brew_path, resumed_after_homebrew=False):
+        state = load_or_create_state()
+        run_state = load_source_run_state("apple-notes")
+        plan = run_state.get("installPlan") if isinstance(run_state.get("installPlan"), dict) else apple_notes_install_plan(False)
+        plan.update({
+            "answer": "yes",
+            "status": "installing_memo",
+            "homebrewPath": brew_path,
+            "homebrewStatus": "succeeded" if resumed_after_homebrew else "already_installed",
+            "updatedAt": now(),
+        })
+        run_state["installPlan"] = plan
+        save_source_run_state("apple-notes", run_state)
+
+        tap_result = apple_reminders_command_result([brew_path, "tap", "antoniorodr/memo"], timeout=300)
+        if not tap_result.get("ok"):
+            plan.update({"status": "failed", "failedStage": "memo_tap", "result": tap_result, "updatedAt": now()})
+            apple_notes_record_install_attention(state, run_state, "memo_install_failed", plan)
+            print(json.dumps({"ok": False, "reason": "memo_install_failed", "failedStage": "memo_tap", "installPlan": plan}, ensure_ascii=False, sort_keys=True))
+            return 1
+
+        install_result = apple_reminders_command_result([brew_path, "install", "antoniorodr/memo/memo"], timeout=1800)
+        if not install_result.get("ok"):
+            plan.update({"status": "failed", "failedStage": "memo_install", "result": install_result, "updatedAt": now()})
+            apple_notes_record_install_attention(state, run_state, "memo_install_failed", plan)
+            print(json.dumps({"ok": False, "reason": "memo_install_failed", "failedStage": "memo_install", "installPlan": plan}, ensure_ascii=False, sort_keys=True))
+            return 1
+
+        memo_path = required_cli_command_path("apple-notes", run_state)
+        if not memo_path:
+            plan.update({"status": "failed", "failedStage": "memo_verify", "updatedAt": now()})
+            apple_notes_record_install_attention(state, run_state, "memo_install_verify_failed", plan)
+            print(json.dumps({"ok": False, "reason": "memo_install_verify_failed", "failedStage": "memo_verify", "installPlan": plan}, ensure_ascii=False, sort_keys=True))
+            return 1
+        version_result = apple_reminders_command_result([memo_path, "--version"], timeout=10)
+        if not version_result.get("ok"):
+            plan.update({"status": "failed", "failedStage": "memo_verify", "result": version_result, "updatedAt": now()})
+            apple_notes_record_install_attention(state, run_state, "memo_install_verify_failed", plan)
+            print(json.dumps({"ok": False, "reason": "memo_install_verify_failed", "failedStage": "memo_verify", "installPlan": plan}, ensure_ascii=False, sort_keys=True))
+            return 1
+
+        plan.update({
+            "status": "succeeded",
+            "memoPath": memo_path,
+            "memoVersion": (version_result.get("stdout") or version_result.get("stderr") or "").strip(),
+            "updatedAt": now(),
+        })
+        run_state["installPlan"] = plan
+        save_source_run_state("apple-notes", run_state)
+        return check_required_cli("apple-notes")
+
     def apple_notes_check_cli():
         state = load_or_create_state()
         run_state = load_source_run_state("apple-notes")
-        if not required_cli_command_path("apple-notes", run_state) and not apple_reminders_brew_path():
-            answer = apple_reminders_install_answer("--homebrew-install-answer")
+        if not required_cli_command_path("apple-notes", run_state):
+            brew_path = apple_reminders_brew_path()
+            homebrew_required = not bool(brew_path)
+            answer = apple_reminders_install_answer("--install-answer")
+            if not answer:
+                # Backward compatibility for a prompt already emitted by Zebra.
+                answer = apple_reminders_install_answer("--homebrew-install-answer")
             if answer == "yes":
-                return record_homebrew_pty_required(
-                    state, run_state, "apple-notes", "check_memo_cli"
-                )
+                plan = apple_notes_install_plan(homebrew_required, status="approved", answer="yes")
+                apple_notes_record_install_attention(state, run_state, "homebrew_install_pty_required" if homebrew_required else "memo_install_approved", plan)
+                if homebrew_required:
+                    return record_homebrew_pty_required(state, run_state, "apple-notes", "check_memo_cli")
+                return apple_notes_install_memo(brew_path)
             if answer == "no":
-                run_state.update({
-                    "homebrewInstallAsked": True,
-                    "homebrewInstallAnswer": "no",
-                    "homebrewInstallResult": {"status": "user_declined"},
-                    "installCommandRun": False,
-                    "updatedAt": now(),
-                })
-                run_path = save_source_run_state("apple-notes", run_state)
-                state = set_apple_notes_row_state(
-                    state, "attention", "preflight", "check_memo_cli",
-                    attention_reason="homebrew_install_declined",
-                    run_state_path=run_path,
-                )
-                save_json(state)
-                payload = {"ok": False, "reason": "homebrew_install_declined"}
-                payload.update(source_next_prompt_payload(state, "apple-notes", "check_memo_cli"))
-                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                plan = apple_notes_install_plan(homebrew_required, status="declined", answer="no")
+                apple_notes_record_install_attention(state, run_state, "apple_notes_install_declined", plan)
+                print(json.dumps({"ok": False, "reason": "apple_notes_install_declined", "installPlan": plan}, ensure_ascii=False, sort_keys=True))
                 return 1
+            plan = apple_notes_install_plan(homebrew_required)
+            apple_notes_record_install_attention(state, run_state, "apple_notes_install_consent_required", plan)
+            print(json.dumps({
+                "ok": False,
+                "reason": "apple_notes_install_consent_required",
+                "installPlan": plan,
+                "nextPrompt": apple_notes_install_consent_prompt(homebrew_required),
+            }, ensure_ascii=False, sort_keys=True))
+            return 1
         return check_required_cli("apple-notes")
 
     def apple_notes_check_access():
@@ -10146,5 +10247,6 @@ struct ZebraSourceOnboardingHelper {
         print("unknown command: " + command, file=sys.stderr)
         sys.exit(2)
     PY
+    "$PYTHON_BIN" "$PYTHON_PAYLOAD" "$STATE" "$COMMAND" "$@"
     """
 }

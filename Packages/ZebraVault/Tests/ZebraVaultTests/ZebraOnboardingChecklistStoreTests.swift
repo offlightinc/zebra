@@ -2732,6 +2732,63 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(japaneseMissingCLIPrompt.components(separatedBy: "(yes/no)").count - 1, 1, japaneseMissingCLIPrompt)
         XCTAssertFalse(japaneseMissingCLIPrompt.contains("Install it now with Homebrew?"), japaneseMissingCLIPrompt)
 
+        let brewLog = root.appendingPathComponent("brew.log", isDirectory: false)
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "brew",
+            content: """
+            #!/bin/sh
+            printf '%s\n' "$*" >> '\(shellSingleQuoted(brewLog.path))'
+            if [ "$1" = "tap" ] && [ "$2" = "antoniorodr/memo" ]; then
+              exit 0
+            fi
+            if [ "$1" = "install" ] && [ "$2" = "antoniorodr/memo/memo" ]; then
+              /bin/cat > '\(shellSingleQuoted(fakeBin.appendingPathComponent("memo", isDirectory: false).path))' <<'EOS'
+            #!/bin/sh
+            if [ "$1" = "--version" ]; then
+              echo "memo 1.0.0-test"
+              exit 0
+            fi
+            exit 0
+            EOS
+              /bin/chmod +x '\(shellSingleQuoted(fakeBin.appendingPathComponent("memo", isDirectory: false).path))'
+              exit 0
+            fi
+            exit 1
+            """
+        )
+        let brewEnvironment = baseEnvironment.merging([
+            "PATH": "\(fakeBin.path):/usr/bin:/bin",
+        ]) { _, new in new }
+        let memoOnlyConsent = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-notes", "check-cli"],
+            environment: brewEnvironment
+        )
+        XCTAssertEqual(memoOnlyConsent.status, 1, "stdout:\n\(memoOnlyConsent.stdout)\nstderr:\n\(memoOnlyConsent.stderr)")
+        let memoOnlyPayload = try jsonObject(from: memoOnlyConsent.stdout)
+        let memoOnlyPlan = try XCTUnwrap(memoOnlyPayload["installPlan"] as? [String: Any])
+        XCTAssertEqual(memoOnlyPlan["homebrewRequired"] as? Bool, false)
+        XCTAssertEqual(memoOnlyPlan["memoRequired"] as? Bool, true)
+        let memoOnlyPrompt = try XCTUnwrap(memoOnlyPayload["nextPrompt"] as? String)
+        XCTAssertEqual(memoOnlyPrompt.components(separatedBy: "(yes/no)").count - 1, 1, memoOnlyPrompt)
+        XCTAssertTrue(memoOnlyPrompt.contains("Install only the memo CLI with Homebrew now? (yes/no)"), memoOnlyPrompt)
+
+        let installedMemo = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-notes", "check-cli", "--install-answer", "yes"],
+            environment: brewEnvironment
+        )
+        XCTAssertEqual(installedMemo.status, 0, "stdout:\n\(installedMemo.stdout)\nstderr:\n\(installedMemo.stderr)")
+        XCTAssertEqual(try jsonObject(from: installedMemo.stdout)["nextPlaybookStepID"] as? String, "check_notes_automation")
+        XCTAssertTrue(try String(contentsOf: brewLog, encoding: .utf8).contains("install antoniorodr/memo/memo"))
+        let installedState = try readSourceOnboardingState(at: stateURL)
+        let installedRow = try XCTUnwrap(installedState.progress.sourceRows["apple-notes"])
+        let installedRunState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(installedRow.runStatePath)))
+        XCTAssertEqual(installedRunState["cliStatus"] as? String, "passed")
+        XCTAssertEqual(installedRunState["step"] as? String, "check_notes_automation")
+        XCTAssertEqual((installedRunState["installPlan"] as? [String: Any])?["status"] as? String, "succeeded")
+
         _ = try installFakeMemoCLI(fakeBin: fakeBin, logURL: memoLog)
         let environment = baseEnvironment.merging([
             "PATH": "\(fakeBin.path):/usr/bin:/bin",
@@ -2925,6 +2982,104 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(payload["normalizedSourceList"] as? [String], ["apple-reminders", "gmail", "notion"])
         XCTAssertEqual(payload["uncatalogedSources"] as? [String], [])
         XCTAssertEqual(payload["confirmationPrompt"] as? String, "Apple Reminders, Gmail, Notion로 이해했습니다. 맞나요?")
+    }
+
+    @MainActor
+    func testSourceOnboardingHomebrewInstallerAndMemoChildrenInheritPTY() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to verify the Homebrew PTY process tree")
+        }
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root.appendingPathComponent("gbrain-state.json", isDirectory: false)
+        let adapterStateURL = root.appendingPathComponent("adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let brewURL = fakeBin.appendingPathComponent("brew", isDirectory: false)
+        let memoURL = fakeBin.appendingPathComponent("memo", isDirectory: false)
+        let installerReceipt = root.appendingPathComponent("installer-pty.txt", isDirectory: false)
+        let brewReceipt = root.appendingPathComponent("brew-pty.txt", isDirectory: false)
+        let installerURL = root.appendingPathComponent("fake-homebrew-installer.sh", isDirectory: false)
+        try installFakeCommand(
+            directory: root,
+            name: installerURL.lastPathComponent,
+            content: """
+            #!/bin/sh
+            if [ -t 0 ]; then stdin_tty=true; else stdin_tty=false; fi
+            if [ -t 1 ]; then stdout_tty=true; else stdout_tty=false; fi
+            if [ -t 2 ]; then stderr_tty=true; else stderr_tty=false; fi
+            printf 'stdin=%s stdout=%s stderr=%s\n' "$stdin_tty" "$stdout_tty" "$stderr_tty" > '\(shellSingleQuoted(installerReceipt.path))'
+            /usr/bin/python3 -c 'import os; print("pgid=%s tcpgid=%s" % (os.getpgrp(), os.tcgetpgrp(0)))' >> '\(shellSingleQuoted(installerReceipt.path))'
+            /bin/cat > '\(shellSingleQuoted(brewURL.path))' <<'EOS'
+            #!/bin/sh
+            if [ -t 0 ]; then stdin_tty=true; else stdin_tty=false; fi
+            if [ -t 1 ]; then stdout_tty=true; else stdout_tty=false; fi
+            if [ -t 2 ]; then stderr_tty=true; else stderr_tty=false; fi
+            printf 'stdin=%s stdout=%s stderr=%s\n' "$stdin_tty" "$stdout_tty" "$stderr_tty" >> '\(shellSingleQuoted(brewReceipt.path))'
+            /usr/bin/python3 -c 'import os; print("pgid=%s tcpgid=%s" % (os.getpgrp(), os.tcgetpgrp(0)))' >> '\(shellSingleQuoted(brewReceipt.path))'
+            if [ "$1" = "tap" ]; then exit 0; fi
+            if [ "$1" = "install" ]; then
+              /bin/cat > '\(shellSingleQuoted(memoURL.path))' <<'MEMO'
+            #!/bin/sh
+            if [ "$1" = "--version" ]; then echo "memo 1.0.0-pty-test"; exit 0; fi
+            exit 0
+            MEMO
+              /bin/chmod +x '\(shellSingleQuoted(memoURL.path))'
+              exit 0
+            fi
+            exit 1
+            EOS
+            /bin/chmod +x '\(shellSingleQuoted(brewURL.path))'
+            exit 0
+            """
+        )
+
+        let expectURL = root.appendingPathComponent("homebrew-pty.expect", isDirectory: false)
+        try """
+        set timeout 20
+        spawn env PATH=$env(TEST_PATH) ZEBRA_SOURCE_ONBOARDING_STATE=$env(TEST_STATE) ZEBRA_SOURCE_ONBOARDING_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en ZEBRA_SOURCE_ONBOARDING_BREW_PATH=$env(TEST_BREW) ZEBRA_SOURCE_ONBOARDING_HOMEBREW_INSTALLER=$env(TEST_INSTALLER) $env(TEST_HELPER) install-homebrew --source apple-notes
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """.write(to: expectURL, atomically: true, encoding: .utf8)
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectURL.path],
+            environment: [
+                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_BREW": brewURL.path,
+                "TEST_INSTALLER": installerURL.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+
+        let installerPTY = try String(contentsOf: installerReceipt, encoding: .utf8)
+        XCTAssertTrue(installerPTY.contains("stdin=true stdout=true stderr=true"), installerPTY)
+        let processLine = try XCTUnwrap(installerPTY.split(whereSeparator: \.isNewline).first { $0.hasPrefix("pgid=") })
+        let values = processLine.split(separator: " ").compactMap { field -> Int? in
+            Int(field.split(separator: "=").last ?? "")
+        }
+        XCTAssertEqual(values.count, 2, installerPTY)
+        XCTAssertEqual(values.first, values.last, installerPTY)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: brewReceipt.path))
+        let loaded = try readSourceOnboardingState(at: stateURL)
+        let row = try XCTUnwrap(loaded.progress.sourceRows["apple-notes"])
+        XCTAssertEqual(row.playbookStepID, "check_notes_automation")
+        let runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual(runState["cliStatus"] as? String, "passed")
+        XCTAssertEqual((runState["installPlan"] as? [String: Any])?["status"] as? String, "succeeded")
     }
 
     @MainActor
