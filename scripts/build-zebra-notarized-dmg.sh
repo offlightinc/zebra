@@ -20,6 +20,7 @@ SKIP_SIGN=0
 SKIP_NOTARIZE=0
 REQUIRE_POSTHOG_KEY=0
 DISABLE_POSTHOG=0
+CLEAN_BUILD=0
 
 usage() {
   cat <<'EOF'
@@ -31,6 +32,7 @@ Builds a Developer ID signed Zebra.app and creates a DMG. Notarization runs when
 Options:
   --notary-profile <name>  Keychain profile created by xcrun notarytool store-credentials.
   --skip-build             Reuse the existing build-zebra-release app.
+  --clean-build            Delete derived data before building. The default preserves build caches.
   --skip-sign              Skip app and DMG signing for local packaging tests.
   --skip-notarize          Create a signed DMG without notarizing it.
   --require-posthog-key    Fail when ZEBRA_POSTHOG_API_KEY is not set.
@@ -60,6 +62,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-build)
       SKIP_BUILD=1
+      shift
+      ;;
+    --clean-build)
+      CLEAN_BUILD=1
       shift
       ;;
     --skip-sign)
@@ -133,6 +139,80 @@ ${version:-$help}
 EOF
     exit 1
   fi
+}
+
+required_zig_version="0.15.2"
+
+zig_version() {
+  "$1" version 2>/dev/null || true
+}
+
+find_compatible_zig() {
+  local candidates=()
+  local candidate
+
+  if [[ -n "${CMUX_ZIG:-}" ]]; then
+    candidates+=("$CMUX_ZIG")
+  fi
+  candidates+=(
+    "/opt/homebrew/opt/zig@0.15/bin/zig"
+    "/usr/local/opt/zig@0.15/bin/zig"
+    "$PWD/.tools/zig/$required_zig_version/zig"
+  )
+  candidate="$(command -v zig 2>/dev/null || true)"
+  if [[ -n "$candidate" ]]; then
+    candidates+=("$candidate")
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" && "$(zig_version "$candidate")" == "$required_zig_version" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+preflight_build_environment() {
+  local zig_path
+
+  if ! zig_path="$(find_compatible_zig)"; then
+    cat >&2 <<EOF
+error: Zig $required_zig_version is required before starting the Zebra Release build.
+Install the Xcode 26-compatible Homebrew formula with:
+  brew install zig@0.15
+Alternatively install repo-local Zig at .tools/zig/$required_zig_version/zig or set CMUX_ZIG.
+EOF
+    exit 1
+  fi
+  echo "==> preflight: Zig $required_zig_version at $zig_path"
+
+  if ! xcodebuild -showComponent MetalToolchain -json 2>/dev/null \
+    | grep -Fq '"status" : "installed"'; then
+    cat >&2 <<'EOF'
+error: the Xcode Metal Toolchain is required before starting the Zebra Release build.
+Install it with:
+  xcodebuild -downloadComponent MetalToolchain
+EOF
+    exit 1
+  fi
+  echo "==> preflight: Metal Toolchain available"
+}
+
+preflight_signing_identity() {
+  if [[ "$SKIP_SIGN" -eq 1 || "$SIGNING_IDENTITY" == "-" ]]; then
+    return
+  fi
+
+  if ! security find-identity -v -p codesigning 2>/dev/null | grep -Fq "$SIGNING_IDENTITY"; then
+    cat >&2 <<EOF
+error: signing identity not found: $SIGNING_IDENTITY
+For an ad-hoc local test build, run:
+  APPLE_SIGNING_IDENTITY=- ./scripts/build-zebra-notarized-dmg.sh --skip-notarize
+EOF
+    exit 1
+  fi
+  echo "==> preflight: signing identity available"
 }
 
 sign_path() {
@@ -230,6 +310,11 @@ require_tool xcrun
 require_tool create-dmg
 require_tool hdiutil
 require_create_dmg
+preflight_signing_identity
+
+if [[ "$SKIP_BUILD" -eq 0 ]]; then
+  preflight_build_environment
+fi
 
 if [[ ! -f "$APP_ENTITLEMENTS" ]]; then
   echo "error: app entitlements not found: $APP_ENTITLEMENTS" >&2
@@ -245,7 +330,12 @@ APP_PATH="${DERIVED_DATA}/Build/Products/Release/${APP_NAME}.app"
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> building upstream cmux.app for ${APP_NAME}"
-  rm -rf "$DERIVED_DATA"
+  if [[ "$CLEAN_BUILD" -eq 1 ]]; then
+    echo "==> removing derived data for clean build"
+    rm -rf "$DERIVED_DATA"
+  else
+    echo "==> preserving derived data for incremental build"
+  fi
   xcodebuild \
     -project cmux.xcodeproj \
     -scheme cmux \

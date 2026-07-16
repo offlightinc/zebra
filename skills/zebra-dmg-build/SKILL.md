@@ -26,6 +26,19 @@ This builds the existing Xcode `cmux` scheme as an intermediate, then copies and
 
 Run from the Zebra checkout root.
 
+The build script performs preflight checks before starting the expensive
+universal Release build. If preflight reports a missing dependency, install it
+and rerun the same command:
+
+```bash
+brew install zig@0.15
+xcodebuild -downloadComponent MetalToolchain
+brew install create-dmg
+```
+
+Do not substitute a different Zig version. The Ghostty CLI helper requires Zig
+0.15.2, and the build prefers Homebrew `zig@0.15` for Xcode 26 compatibility.
+
 Preferred local test build when Developer ID exists:
 
 ```bash
@@ -54,6 +67,15 @@ If `create-dmg` is missing:
 
 ```bash
 brew install create-dmg
+```
+
+The script preserves `build-zebra-release` by default so a retry can reuse
+Xcode build caches. Use `--clean-build` only when a clean rebuild is explicitly
+needed:
+
+```bash
+APPLE_SIGNING_IDENTITY=- \
+./scripts/build-zebra-notarized-dmg.sh --clean-build --skip-notarize
 ```
 
 PostHog-enabled local telemetry smoke build:
@@ -91,8 +113,8 @@ ls -lh dist/Zebra.dmg
   -c 'Print :CFBundleName' \
   -c 'Print :CFBundleDisplayName' \
   -c 'Print :CFBundleIdentifier' \
-  -c 'Print :ZebraPostHogProjectToken' \
   build-zebra-release/Build/Products/Release/Zebra.app/Contents/Info.plist
+lipo -archs build-zebra-release/Build/Products/Release/Zebra.app/Contents/MacOS/cmux
 codesign --verify --deep --strict --verbose=2 build-zebra-release/Build/Products/Release/Zebra.app
 codesign --verify --strict --verbose=2 dist/Zebra.dmg
 shasum -a 256 dist/Zebra.dmg
@@ -104,12 +126,14 @@ Expected plist values:
 Zebra
 Zebra
 com.offlight.zebra
-phc_...
+x86_64 arm64
 ```
 
-For PostHog builds, also verify that `ZebraPostHogProjectToken` is present and
-is not `REPLACE_WITH_ZEBRA_POSTHOG_PROJECT_TOKEN`. Do not print full secrets in
-CI logs unless the value is already intentionally public.
+For PostHog builds only, verify `ZebraPostHogProjectToken` separately and ensure
+it is present, begins with `phc_`, and is not
+`REPLACE_WITH_ZEBRA_POSTHOG_PROJECT_TOKEN`. Do not print full secrets in CI logs
+unless the value is already intentionally public. For ordinary builds, the
+placeholder is expected and telemetry is disabled.
 
 ## PostHog Event Smoke Test
 
@@ -163,4 +187,5 @@ By default, `skills.sh` installs into `${CODEX_HOME:-$HOME/.codex}/skills`. Use 
 - Ad-hoc signed or non-notarized DMGs may be blocked by Gatekeeper on another Mac. For testing, use right-click/Open; for natural external installs, use Developer ID plus notarization.
 - A warning like `cargo not found; skipping optional libcmux_command_palette_nucleo_ffi.dylib build` does not necessarily fail the app build, but report it because the optional command-palette FFI dylib is absent.
 - Existing Swift/macOS deprecation warnings are common and do not by themselves mean packaging failed.
+- If a build fails after compilation starts, fix the reported dependency and rerun without `--clean-build`; the default incremental build reuses DerivedData.
 - If the user wants a clickable app path, link the DMG or app path with an absolute local markdown file link in the final answer.
