@@ -66,7 +66,7 @@ struct SlackCapturedPollFailureTests {
             threadID: "T1:CGOOD:210.0"
         )
         let mentionedReply = try #require(replay.first { $0.payload["ts"]?.stringValue == "211.0" })
-        #expect(Set(mentionedReply.footprintRoles) == [.mentioned, .threadContext])
+        #expect(Set(mentionedReply.footprintRoles) == [.authored, .mentioned, .reacted, .threadContext])
     }
 
     @Test func transientThreadExpansionFailureAbortsWithoutCheckpointAndWritesSanitizedDiagnostic() async throws {
@@ -164,7 +164,7 @@ private actor MixedThreadExpansionTransport: SlackHTTPTransport {
             if channel == "CBAD" {
                 value = #"{"ok":false,"error":"\#(badErrorCode)"}"#
             } else {
-                value = #"{"ok":true,"messages":[{"type":"message","ts":"210.0","user":"U1","text":"normal"},{"type":"message","ts":"211.0","thread_ts":"210.0","user":"U2","text":"hello <@U1>"}],"response_metadata":{"next_cursor":""}}"#
+                value = #"{"ok":true,"messages":[{"type":"message","ts":"210.0","user":"U1","text":"normal"},{"type":"message","ts":"211.0","thread_ts":"210.0","user":"U1","text":"hello <@U1>","reactions":[{"name":"eyes","users":["U1"]}]}],"response_metadata":{"next_cursor":""}}"#
             }
         default:
             value = #"{"ok":false,"error":"unexpected_method"}"#

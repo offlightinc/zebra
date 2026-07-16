@@ -155,11 +155,12 @@ struct SlackCapturedPoller: Sendable {
 
         do {
         let discoveryStartDate = discoveryStartDate(checkpoint: checkpoint)
-        let classifier = SlackSeedClassifier(authorizedUserID: authorizedUserID, startDate: discoveryStartDate)
+        let discoveryClassifier = SlackSeedClassifier(authorizedUserID: authorizedUserID, startDate: discoveryStartDate)
+        let capturedRoleClassifier = SlackSeedClassifier(authorizedUserID: authorizedUserID, startDate: startDate)
         let discovery = try await api.discoverSeeds(authorizedUserID: authorizedUserID, startDate: discoveryStartDate)
         var skippedSources = discovery.skippedSources
         let seeds = try discovery.candidates.compactMap { candidate -> (SlackSeedCandidate, [SlackFootprintRole])? in
-            let roles = try classifier.roles(for: candidate)
+            let roles = try discoveryClassifier.roles(for: candidate)
             return roles.isEmpty ? nil : (candidate, roles)
         }
         var trackedByID = Dictionary(uniqueKeysWithValues: try store.readTrackedThreads().map { ("\($0.conversationID):\($0.threadTS)", $0) })
@@ -195,7 +196,13 @@ struct SlackCapturedPoller: Sendable {
             let seedRolesByMessage = group.rolesByMessage
             for (payload, contextRoles) in try SlackThreadSelection(startDate: startDate).select(root: root, replies: replies) {
                 guard let ts = payload["ts"]?.stringValue else { continue }
-                let roles = Set(contextRoles).union(seedRolesByMessage[ts] ?? [])
+                let intrinsicRoles = try capturedRoleClassifier.roles(for: .init(
+                    conversationID: group.conversationID,
+                    payload: payload,
+                    isDirectMessage: group.isDirectMessage,
+                    discoveredByReaction: false
+                ))
+                let roles = Set(contextRoles).union(intrinsicRoles).union(seedRolesByMessage[ts] ?? [])
                 mergeCollected(&collected, conversationID: group.conversationID, payload: payload, roles: roles)
             }
             let lastReply = ([group.threadTS] + replies.compactMap { $0["ts"]?.stringValue }).max() ?? group.threadTS
@@ -211,7 +218,18 @@ struct SlackCapturedPoller: Sendable {
                 var lastReply = thread.lastReplyTS
                 for payload in updates {
                     guard let ts = payload["ts"]?.stringValue, ts != thread.threadTS else { continue }
-                    mergeCollected(&collected, conversationID: thread.conversationID, payload: payload, roles: [.threadContext])
+                    let intrinsicRoles = try capturedRoleClassifier.roles(for: .init(
+                        conversationID: thread.conversationID,
+                        payload: payload,
+                        isDirectMessage: thread.conversationID.hasPrefix("D"),
+                        discoveredByReaction: false
+                    ))
+                    mergeCollected(
+                        &collected,
+                        conversationID: thread.conversationID,
+                        payload: payload,
+                        roles: Set(intrinsicRoles).union([.threadContext])
+                    )
                     lastReply = max(lastReply, ts)
                 }
                 trackedByID[sourceID] = .init(conversationID: thread.conversationID, threadTS: thread.threadTS,
@@ -309,6 +327,10 @@ struct SlackThreadSeedGroup: Sendable {
     let conversationID: String
     let threadTS: String
     var seeds: [(SlackSeedCandidate, [SlackFootprintRole])]
+
+    var isDirectMessage: Bool {
+        seeds.contains { $0.0.isDirectMessage } || conversationID.hasPrefix("D")
+    }
 
     var rolesByMessage: [String: Set<SlackFootprintRole>] {
         seeds.reduce(into: [:]) { result, seed in
