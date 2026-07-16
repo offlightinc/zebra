@@ -9059,6 +9059,7 @@ struct ZebraSourceOnboardingHelper {
         state = load_or_create_state()
         run_state = load_source_run_state("apple-notes")
         plan = run_state.get("installPlan") if isinstance(run_state.get("installPlan"), dict) else apple_notes_install_plan(False)
+        completed_stages = plan.get("completedStages") if isinstance(plan.get("completedStages"), list) else []
         plan.update({
             "answer": "yes",
             "status": "installing_memo",
@@ -9069,12 +9070,19 @@ struct ZebraSourceOnboardingHelper {
         run_state["installPlan"] = plan
         save_source_run_state("apple-notes", run_state)
 
-        tap_result = apple_reminders_command_result([brew_path, "tap", "antoniorodr/memo"], timeout=300)
-        if not tap_result.get("ok"):
-            plan.update({"status": "failed", "failedStage": "memo_tap", "result": tap_result, "updatedAt": now()})
-            apple_notes_record_install_attention(state, run_state, "memo_install_failed", plan)
-            print(json.dumps({"ok": False, "reason": "memo_install_failed", "failedStage": "memo_tap", "installPlan": plan}, ensure_ascii=False, sort_keys=True))
-            return 1
+        if "memo_tap" not in completed_stages:
+            tap_result = apple_reminders_command_result([brew_path, "tap", "antoniorodr/memo"], timeout=300)
+            if not tap_result.get("ok"):
+                plan.update({"status": "failed", "failedStage": "memo_tap", "result": tap_result, "updatedAt": now()})
+                apple_notes_record_install_attention(state, run_state, "memo_install_failed", plan)
+                print(json.dumps({"ok": False, "reason": "memo_install_failed", "failedStage": "memo_tap", "installPlan": plan}, ensure_ascii=False, sort_keys=True))
+                return 1
+            completed_stages.append("memo_tap")
+            plan["completedStages"] = completed_stages
+            plan.pop("failedStage", None)
+            plan.pop("result", None)
+            run_state["installPlan"] = plan
+            save_source_run_state("apple-notes", run_state)
 
         install_result = apple_reminders_command_result([brew_path, "install", "antoniorodr/memo/memo"], timeout=1800)
         if not install_result.get("ok"):
@@ -9082,6 +9090,9 @@ struct ZebraSourceOnboardingHelper {
             apple_notes_record_install_attention(state, run_state, "memo_install_failed", plan)
             print(json.dumps({"ok": False, "reason": "memo_install_failed", "failedStage": "memo_install", "installPlan": plan}, ensure_ascii=False, sort_keys=True))
             return 1
+        if "memo_install" not in completed_stages:
+            completed_stages.append("memo_install")
+        plan["completedStages"] = completed_stages
 
         memo_path = required_cli_command_path("apple-notes", run_state)
         if not memo_path:
@@ -9116,6 +9127,12 @@ struct ZebraSourceOnboardingHelper {
             if not answer:
                 # Backward compatibility for a prompt already emitted by Zebra.
                 answer = apple_reminders_install_answer("--homebrew-install-answer")
+            existing_plan = run_state.get("installPlan") if isinstance(run_state.get("installPlan"), dict) else None
+            if not answer and existing_plan and existing_plan.get("answer") == "yes":
+                if homebrew_required:
+                    apple_notes_record_install_attention(state, run_state, "homebrew_install_pty_required", existing_plan)
+                    return record_homebrew_pty_required(state, run_state, "apple-notes", "check_memo_cli")
+                return apple_notes_install_memo(brew_path, resumed_after_homebrew=bool(existing_plan.get("homebrewRequired")))
             if answer == "yes":
                 plan = apple_notes_install_plan(homebrew_required, status="approved", answer="yes")
                 apple_notes_record_install_attention(state, run_state, "homebrew_install_pty_required" if homebrew_required else "memo_install_approved", plan)

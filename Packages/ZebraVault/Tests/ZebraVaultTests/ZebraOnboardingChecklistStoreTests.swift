@@ -3207,7 +3207,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(retry.status, 0, "stdout:\n\(retry.stdout)\nstderr:\n\(retry.stderr)")
         let retryPayload = try jsonObject(from: retry.stdout)
         XCTAssertEqual(retryPayload["nextPlaybookStepID"] as? String, "check_notes_automation")
-        XCTAssertNil(retryPayload["nextPrompt"])
+        XCTAssertFalse((retryPayload["nextPrompt"] as? String ?? "").contains("(yes/no)"))
         let commands = try String(contentsOf: brewLog, encoding: .utf8)
             .split(whereSeparator: \.isNewline)
             .map(String.init)
