@@ -3144,6 +3144,78 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testAppleNotesApprovedInstallPlanRetriesMemoWithoutReconsentOrRepeatingTap() throws {
+        let root = try makeTemporaryDirectory()
+        let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: root.appendingPathComponent("gbrain.json"),
+                gbrainAdapterOnboardingStateURL: root.appendingPathComponent("adapter.json"),
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let brewLog = root.appendingPathComponent("brew.log")
+        let firstInstallMarker = root.appendingPathComponent("first-install-failed")
+        let memoURL = fakeBin.appendingPathComponent("memo")
+        try installFakeCommand(
+            directory: fakeBin,
+            name: "brew",
+            content: """
+            #!/bin/sh
+            printf '%s\n' "$*" >> '\(shellSingleQuoted(brewLog.path))'
+            if [ "$1" = "tap" ]; then exit 0; fi
+            if [ "$1" = "install" ]; then
+              if [ ! -f '\(shellSingleQuoted(firstInstallMarker.path))' ]; then
+                /usr/bin/touch '\(shellSingleQuoted(firstInstallMarker.path))'
+                exit 1
+              fi
+              /bin/cat > '\(shellSingleQuoted(memoURL.path))' <<'MEMO'
+            #!/bin/sh
+            if [ "$1" = "--version" ]; then echo "memo retry-test"; exit 0; fi
+            exit 0
+            MEMO
+              /bin/chmod +x '\(shellSingleQuoted(memoURL.path))'
+              exit 0
+            fi
+            exit 1
+            """
+        )
+        let environment = [
+            "PATH": "\(fakeBin.path):/usr/bin:/bin",
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        let approvedFailure = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-notes", "check-cli", "--install-answer", "yes"],
+            environment: environment
+        )
+        XCTAssertEqual(approvedFailure.status, 1, "stdout:\n\(approvedFailure.stdout)\nstderr:\n\(approvedFailure.stderr)")
+        XCTAssertEqual(try jsonObject(from: approvedFailure.stdout)["failedStage"] as? String, "memo_install")
+
+        let retry = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-notes", "check-cli"],
+            environment: environment
+        )
+        XCTAssertEqual(retry.status, 0, "stdout:\n\(retry.stdout)\nstderr:\n\(retry.stderr)")
+        let retryPayload = try jsonObject(from: retry.stdout)
+        XCTAssertEqual(retryPayload["nextPlaybookStepID"] as? String, "check_notes_automation")
+        XCTAssertNil(retryPayload["nextPrompt"])
+        let commands = try String(contentsOf: brewLog, encoding: .utf8)
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        XCTAssertEqual(commands.filter { $0 == "tap antoniorodr/memo" }.count, 1, commands.joined(separator: "\n"))
+        XCTAssertEqual(commands.filter { $0 == "install antoniorodr/memo/memo" }.count, 2, commands.joined(separator: "\n"))
+    }
+
+    @MainActor
     func testSourceOnboardingAppleRemindersInstallConsentAndPermissionAttention() throws {
         let root = try makeTemporaryDirectory()
         let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
