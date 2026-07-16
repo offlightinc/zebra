@@ -125,6 +125,27 @@ struct SlackCapturedPollingSchedulerTests {
         #expect(runner.workspaceIDs == ["T1", "T1"])
     }
 
+    @Test func failedPollKeepsWorkspaceEnrolledForNextInterval() async {
+        let clock = SchedulerTestClock(now: Date(timeIntervalSince1970: 5_000))
+        let runner = SchedulerTestRunner(clock: clock)
+        let timers = SchedulerTestTimers()
+        let scheduler = SlackCapturedPollingScheduler(
+            interval: 3_600,
+            now: { clock.now },
+            workspaceProvider: { [.init(workspaceID: "T1", lastSuccessfulPollAt: nil)] },
+            poll: { workspace in await runner.poll(workspace) },
+            timers: timers
+        )
+
+        scheduler.start()
+        await runner.waitForPollCount(1)
+        clock.now = Date(timeIntervalSince1970: 5_020)
+        runner.completeNextWithFailure(reason: "rate_limited")
+        await scheduler.waitUntilIdleForTesting()
+
+        #expect(timers.scheduledDates["T1"] == Date(timeIntervalSince1970: 8_620))
+    }
+
     @Test func processWideStartIsIdempotent() async {
         let clock = SchedulerTestClock(now: Date(timeIntervalSince1970: 1_000))
         let runner = SchedulerTestRunner(clock: clock)
@@ -205,6 +226,10 @@ private final class SchedulerTestRunner {
 
     func completeNextSuccessfully() {
         continuations.removeFirst().resume(returning: .success(completedAt: clock.now))
+    }
+
+    func completeNextWithFailure(reason: String) {
+        continuations.removeFirst().resume(returning: .failure(.init(reason: reason)))
     }
 
     func waitForPollCount(_ count: Int) async {
