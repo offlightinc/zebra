@@ -3051,6 +3051,23 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         set result [wait]
         exit [lindex $result 3]
         """.write(to: expectURL, atomically: true, encoding: .utf8)
+        let processEnvironment = [
+            "PATH": "\(fakeBin.path):/usr/bin:/bin",
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+            "ZEBRA_SOURCE_ONBOARDING_BREW_PATH": brewURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOMEBREW_INSTALLER": installerURL.path,
+        ]
+        let nonTTY = try runProcess(
+            executableURL: helperURL,
+            arguments: ["install-homebrew", "--source", "apple-notes"],
+            environment: processEnvironment
+        )
+        XCTAssertEqual(nonTTY.status, 2, "stdout:\n\(nonTTY.stdout)\nstderr:\n\(nonTTY.stderr)")
+        XCTAssertEqual(try jsonObject(from: nonTTY.stdout)["reason"] as? String, "homebrew_install_tty_required")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: installerReceipt.path))
+
         let result = try runProcess(
             executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
             arguments: [expectURL.path],
@@ -3080,6 +3097,50 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
         XCTAssertEqual(runState["cliStatus"] as? String, "passed")
         XCTAssertEqual((runState["installPlan"] as? [String: Any])?["status"] as? String, "succeeded")
+
+        let failureCases: [(code: Int, reason: String)] = [
+            (77, "homebrew_authentication_failed"),
+            (124, "homebrew_install_timeout"),
+            (130, "homebrew_install_cancelled"),
+            (1, "homebrew_installer_failed"),
+        ]
+        for failure in failureCases {
+            if FileManager.default.fileExists(atPath: brewURL.path) {
+                try FileManager.default.removeItem(at: brewURL)
+            }
+            if FileManager.default.fileExists(atPath: memoURL.path) {
+                try FileManager.default.removeItem(at: memoURL)
+            }
+            try installFakeCommand(
+                directory: root,
+                name: installerURL.lastPathComponent,
+                content: "#!/bin/sh\nexit \(failure.code)\n"
+            )
+            let failed = try runProcess(
+                executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+                arguments: [expectURL.path],
+                environment: [
+                    "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                    "TEST_STATE": stateURL.path,
+                    "TEST_HOME": root.path,
+                    "TEST_BREW": brewURL.path,
+                    "TEST_INSTALLER": installerURL.path,
+                    "TEST_HELPER": helperURL.path,
+                ]
+            )
+            XCTAssertEqual(failed.status, Int32(failure.code), "stdout:\n\(failed.stdout)\nstderr:\n\(failed.stderr)")
+            let failedState = try readSourceOnboardingState(at: stateURL)
+            let failedRow = try XCTUnwrap(failedState.progress.sourceRows["apple-notes"])
+            XCTAssertEqual(failedRow.attentionReason, failure.reason)
+            XCTAssertEqual(failedRow.playbookStepID, "check_memo_cli")
+            let failedRunState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(failedRow.runStatePath)))
+            let failedPlan = try XCTUnwrap(failedRunState["installPlan"] as? [String: Any])
+            XCTAssertEqual(failedPlan["status"] as? String, "failed")
+            XCTAssertEqual(failedPlan["failedStage"] as? String, "homebrew_install")
+            XCTAssertEqual(failedPlan["resumeSource"] as? String, "apple-notes")
+            XCTAssertEqual(failedPlan["resumeStep"] as? String, "check_memo_cli")
+            XCTAssertEqual((failedPlan["result"] as? [String: Any])?["reason"] as? String, failure.reason)
+        }
     }
 
     @MainActor
