@@ -5,6 +5,51 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct SlackCapturedPollingSchedulerTests {
+    @Test func onboardingCompletionRefreshEnrollsWorkspaceWithoutDuplicatePoll() async {
+        let clock = SchedulerTestClock(now: Date(timeIntervalSince1970: 1_000))
+        let runner = SchedulerTestRunner(clock: clock)
+        let timers = SchedulerTestTimers()
+        var workspaces: [SlackScheduledWorkspace] = []
+        let scheduler = SlackCapturedPollingScheduler(
+            interval: 3_600,
+            now: { clock.now },
+            workspaceProvider: { workspaces },
+            poll: { workspace in await runner.poll(workspace) },
+            timers: timers
+        )
+
+        scheduler.start()
+        workspaces = [.init(workspaceID: "T1", lastSuccessfulPollAt: Date(timeIntervalSince1970: 900))]
+        postSlackPollingWorkspaceRefreshNotification()
+        postSlackPollingWorkspaceRefreshNotification()
+        await Task.yield()
+
+        #expect(runner.workspaceIDs.isEmpty)
+        #expect(timers.scheduledDates["T1"] == Date(timeIntervalSince1970: 4_500))
+        #expect(timers.scheduleCounts["T1"] == 1)
+    }
+
+    @Test func onboardingCompletionRefreshCatchesUpWhenCheckpointIsAlreadyDue() async {
+        let clock = SchedulerTestClock(now: Date(timeIntervalSince1970: 5_000))
+        let runner = SchedulerTestRunner(clock: clock)
+        runner.automaticallyComplete = true
+        var workspaces: [SlackScheduledWorkspace] = []
+        let scheduler = SlackCapturedPollingScheduler(
+            interval: 3_600,
+            now: { clock.now },
+            workspaceProvider: { workspaces },
+            poll: { workspace in await runner.poll(workspace) },
+            timers: SchedulerTestTimers()
+        )
+
+        scheduler.start()
+        workspaces = [.init(workspaceID: "T1", lastSuccessfulPollAt: Date(timeIntervalSince1970: 1_000))]
+        postSlackPollingWorkspaceRefreshNotification()
+        await runner.waitForPollCount(1)
+
+        #expect(runner.workspaceIDs == ["T1"])
+    }
+
     @Test func launchPollsImmediatelyAndSchedulesOneHourFromSuccessfulCompletion() async {
         let clock = SchedulerTestClock(now: Date(timeIntervalSince1970: 1_000))
         let runner = SchedulerTestRunner(clock: clock)
@@ -100,6 +145,16 @@ struct SlackCapturedPollingSchedulerTests {
         #expect(runner.workspaceIDs == ["T1"])
         #expect(timers.scheduleCounts["T1"] == 1)
     }
+}
+
+private func postSlackPollingWorkspaceRefreshNotification() {
+    CFNotificationCenterPostNotification(
+        CFNotificationCenterGetDarwinNotifyCenter(),
+        CFNotificationName("com.offlight.zebra.slack-polling-workspaces-changed" as CFString),
+        nil,
+        nil,
+        true
+    )
 }
 
 @MainActor
