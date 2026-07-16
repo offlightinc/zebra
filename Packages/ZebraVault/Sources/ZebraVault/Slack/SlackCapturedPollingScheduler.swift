@@ -223,6 +223,8 @@ public final class SlackCapturedPollingScheduler {
             schedule(workspace: workspace, at: completedAt.addingTimeInterval(interval))
         case .failure(let failure):
             failurePolicy(workspace, failure)
+            schedule(workspace: refreshedWorkspace(fallback: workspace),
+                     at: now().addingTimeInterval(interval))
         }
     }
 

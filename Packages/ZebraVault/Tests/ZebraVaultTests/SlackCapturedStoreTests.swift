@@ -97,6 +97,19 @@ struct SlackCapturedStoreTests {
         #expect(try !fixture.store.appendRaw(changed))
     }
 
+    @Test func threadAppendUsesInitializationIndexInsteadOfRescanningArchive() throws {
+        let fixture = try Fixture(); let projector = SlackThreadProjector(store: fixture.store)
+        let first = try capture(text: "first")
+        #expect(try projector.project(first, roles: [.authored], threadRootTS: "1789494400.1"))
+        let archive = fixture.store.threadDirectory.appending(path: "2026-09-15.jsonl")
+        let handle = try FileHandle(forWritingTo: archive)
+        try handle.seekToEnd(); try handle.write(contentsOf: Data("not-json\n".utf8)); try handle.close()
+
+        let changed = try capture(text: "changed")
+        #expect(try projector.project(changed, roles: [.authored], threadRootTS: "1789494400.1"))
+        #expect(try !projector.project(changed, roles: [.authored], threadRootTS: "1789494400.1"))
+    }
+
     @Test func mockHTTPPreservesFullPayloadAndNeverPersistsCredential() async throws {
         let response = #"{"ok":true,"messages":[{"type":"message","ts":"1789494400.1","text":"secretless","blocks":[{"type":"rich_text","elements":[1,2]}],"files":[{"id":"F1","mode":"hosted"}],"reactions":[{"name":"eyes","count":3,"users":["U1"]}]}]}"#
         let transport = MockTransport(body: Data(response.utf8))

@@ -7,6 +7,7 @@ final class SlackCapturedStore: @unchecked Sendable {
     private var lockFD: Int32 = -1
     private let mutex = NSLock()
     private var rawCaptureIDs: Set<String> = []
+    private var threadCaptureIDs: Set<String> = []
 
     init(applicationSupport: URL, workspaceID: String, fileManager: FileManager = .default) throws {
         self.fileManager = fileManager
@@ -22,6 +23,7 @@ final class SlackCapturedStore: @unchecked Sendable {
         }
         try recoverAllIncompleteTails()
         rawCaptureIDs = try loadRawCaptureIDs()
+        threadCaptureIDs = try loadThreadCaptureIDs()
     }
 
     deinit {
@@ -61,9 +63,9 @@ final class SlackCapturedStore: @unchecked Sendable {
     func appendThread(_ line: SlackCapturedThreadLine) throws -> Bool {
         try mutex.withLock {
             let url = threadURL(for: line.threadCreatedAt)
-            let existing = try readLines(SlackCapturedThreadLine.self, from: url)
-            guard !existing.contains(where: { $0.sourceCaptureID == line.sourceCaptureID }) else { return false }
+            guard !threadCaptureIDs.contains(line.sourceCaptureID) else { return false }
             try appendJSONLine(line, to: url)
+            threadCaptureIDs.insert(line.sourceCaptureID)
             return true
         }
     }
@@ -187,6 +189,15 @@ final class SlackCapturedStore: @unchecked Sendable {
         for url in try fileManager.contentsOfDirectory(at: rawDirectory, includingPropertiesForKeys: nil)
         where url.pathExtension == "jsonl" {
             result.formUnion(try readLines(SlackRawCapture.self, from: url).map(\.captureID))
+        }
+        return result
+    }
+
+    private func loadThreadCaptureIDs() throws -> Set<String> {
+        var result: Set<String> = []
+        for url in try fileManager.contentsOfDirectory(at: threadDirectory, includingPropertiesForKeys: nil)
+        where url.pathExtension == "jsonl" {
+            result.formUnion(try readLines(SlackCapturedThreadLine.self, from: url).map(\.sourceCaptureID))
         }
         return result
     }
