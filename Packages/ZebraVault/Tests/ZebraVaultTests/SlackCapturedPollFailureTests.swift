@@ -4,6 +4,24 @@ import Testing
 
 @Suite(.serialized)
 struct SlackCapturedPollFailureTests {
+    @Test func inaccessibleDirectMessageDoesNotAbortDiscoveryAndOtherDMIsReturned() async throws {
+        let client = SlackWebAPIClient(
+            token: "xoxp-dm-secret",
+            transport: MixedDirectMessageHistoryTransport(),
+            baseURL: URL(string: "https://fixture.invalid/api/")!
+        )
+
+        let seeds = try await client.discoverSeeds(
+            authorizedUserID: "U1",
+            startDate: Date(timeIntervalSince1970: 100)
+        )
+
+        #expect(seeds.count == 1)
+        #expect(seeds[0].conversationID == "DGOOD")
+        #expect(seeds[0].payload["ts"]?.stringValue == "200.0")
+        #expect(seeds[0].isDirectMessage)
+    }
+
     @Test func unthreadableSeedDoesNotAbortPollAndDiscoveredPayloadIsCommitted() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -67,6 +85,31 @@ struct SlackCapturedPollFailureTests {
         #expect(manifest.failureStage == "web_api")
         #expect(manifest.failureCode == "service_unavailable")
         #expect(!String(decoding: try Data(contentsOf: manifestURL), as: UTF8.self).contains("xoxp-diagnostic-secret"))
+    }
+}
+
+private actor MixedDirectMessageHistoryTransport: SlackHTTPTransport {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let method = request.url?.lastPathComponent
+        let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let value: String
+        switch method {
+        case "search.messages":
+            value = #"{"ok":true,"messages":{"matches":[],"paging":{"pages":1}}}"#
+        case "reactions.list":
+            value = #"{"ok":true,"items":[],"response_metadata":{"next_cursor":""}}"#
+        case "users.conversations":
+            value = #"{"ok":true,"channels":[{"id":"DBAD"},{"id":"DGOOD"}],"response_metadata":{"next_cursor":""}}"#
+        case "conversations.history":
+            if query.first(where: { $0.name == "channel" })?.value == "DBAD" {
+                value = #"{"ok":false,"error":"channel_not_found"}"#
+            } else {
+                value = #"{"ok":true,"messages":[{"type":"message","ts":"200.0","user":"U2","text":"dm"}],"response_metadata":{"next_cursor":""}}"#
+            }
+        default:
+            value = #"{"ok":false,"error":"unexpected_method"}"#
+        }
+        return (Data(value.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     }
 }
 
