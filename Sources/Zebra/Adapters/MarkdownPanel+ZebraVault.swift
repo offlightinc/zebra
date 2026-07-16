@@ -833,6 +833,23 @@ extension Workspace {
         }
         return emailPanel
     }
+
+    /// Closes every open email tab showing `threadId`. Normally at most one
+    /// exists (`openOrFocusEmailThreadSurface` dedups per workspace), but
+    /// split flows can leave more. Used after a thread is archived so its
+    /// stale tab doesn't linger.
+    func closeEmailThreadPanels(threadId: String) {
+        let panelIds = panels.compactMap { panelId, panel -> UUID? in
+            guard let emailPanel = panel as? ZebraEmailThreadPanel,
+                  emailPanel.threadId == threadId else {
+                return nil
+            }
+            return panelId
+        }
+        for panelId in panelIds {
+            closePanel(panelId, force: true)
+        }
+    }
 }
 
 private extension Workspace {

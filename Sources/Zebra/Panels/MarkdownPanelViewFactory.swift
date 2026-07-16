@@ -159,6 +159,7 @@ private struct ZebraEmailPanelHost: View {
                     Task {
                         if await detailStore.archiveThread(threadId: panel.threadId) {
                             listStore.removeLocalThread(threadId: panel.threadId)
+                            workspace?.closeEmailThreadPanels(threadId: panel.threadId)
                         }
                     }
                 },
