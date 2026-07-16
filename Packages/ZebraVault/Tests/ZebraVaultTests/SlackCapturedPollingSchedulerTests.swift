@@ -15,14 +15,16 @@ struct SlackCapturedPollingSchedulerTests {
             now: { clock.now },
             workspaceProvider: { workspaces },
             poll: { workspace in await runner.poll(workspace) },
-            timers: timers
+            timers: timers,
+            observesWorkspaceRefresh: true
         )
+        defer { scheduler.stop() }
 
         scheduler.start()
         workspaces = [.init(workspaceID: "T1", lastSuccessfulPollAt: Date(timeIntervalSince1970: 900))]
         postSlackPollingWorkspaceRefreshNotification()
         postSlackPollingWorkspaceRefreshNotification()
-        await Task.yield()
+        await timers.waitUntilScheduled(workspaceID: "T1")
 
         #expect(runner.workspaceIDs.isEmpty)
         #expect(timers.scheduledDates["T1"] == Date(timeIntervalSince1970: 4_500))
@@ -39,8 +41,10 @@ struct SlackCapturedPollingSchedulerTests {
             now: { clock.now },
             workspaceProvider: { workspaces },
             poll: { workspace in await runner.poll(workspace) },
-            timers: SchedulerTestTimers()
+            timers: SchedulerTestTimers(),
+            observesWorkspaceRefresh: true
         )
+        defer { scheduler.stop() }
 
         scheduler.start()
         workspaces = [.init(workspaceID: "T1", lastSuccessfulPollAt: Date(timeIntervalSince1970: 1_000))]
@@ -50,7 +54,7 @@ struct SlackCapturedPollingSchedulerTests {
         #expect(runner.workspaceIDs == ["T1"])
     }
 
-    @Test func launchPollsImmediatelyAndSchedulesOneHourFromSuccessfulCompletion() async {
+    @Test func launchSchedulesFromRecentSuccessfulCheckpointWithoutDuplicatePoll() async {
         let clock = SchedulerTestClock(now: Date(timeIntervalSince1970: 1_000))
         let runner = SchedulerTestRunner(clock: clock)
         let timers = SchedulerTestTimers()
@@ -63,13 +67,9 @@ struct SlackCapturedPollingSchedulerTests {
         )
 
         scheduler.start()
-        await runner.waitForPollCount(1)
-        clock.now = Date(timeIntervalSince1970: 1_020)
-        runner.completeNextSuccessfully()
-        await scheduler.waitUntilIdleForTesting()
 
-        #expect(runner.workspaceIDs == ["T1"])
-        #expect(timers.scheduledDates["T1"] == Date(timeIntervalSince1970: 4_620))
+        #expect(runner.workspaceIDs.isEmpty)
+        #expect(timers.scheduledDates["T1"] == Date(timeIntervalSince1970: 4_500))
     }
 
     @Test func wakePollsWhenDueAndOtherwiseKeepsOnlyTheRemainingInterval() async {
@@ -173,6 +173,10 @@ private final class SchedulerTestTimers: SlackPollingTimerScheduling {
     }
     func cancel(workspaceID: String) { scheduledDates[workspaceID] = nil }
     func cancelAll() { scheduledDates.removeAll() }
+
+    func waitUntilScheduled(workspaceID: String) async {
+        for _ in 0..<200 where scheduledDates[workspaceID] == nil { await Task.yield() }
+    }
 }
 
 @MainActor

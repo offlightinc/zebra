@@ -1,4 +1,5 @@
 import AppKit
+import CoreFoundation
 import Foundation
 
 struct SlackScheduledWorkspace: Equatable, Sendable {
@@ -67,9 +68,11 @@ public final class SlackCapturedPollingScheduler {
     private let poll: (SlackScheduledWorkspace) async -> SlackScheduledPollResult
     private let timers: any SlackPollingTimerScheduling
     private let failurePolicy: (SlackScheduledWorkspace, SlackScheduledPollFailure) -> Void
+    private let observesWorkspaceRefresh: Bool
     private var running: Set<String> = []
     private var coalesced: Set<String> = []
     private var tasks: [String: Task<Void, Never>] = [:]
+    private var scheduledAt: [String: Date] = [:]
     private var wakeObserver: NSObjectProtocol?
     private var terminationObserver: NSObjectProtocol?
     private var started = false
@@ -82,6 +85,7 @@ public final class SlackCapturedPollingScheduler {
             workspaceProvider: { service.scheduledWorkspaces() },
             poll: { workspace in await service.pollScheduled(workspace) },
             timers: SlackFoundationPollingTimers(),
+            observesWorkspaceRefresh: true,
             failurePolicy: { _, _ in }
         )
     }
@@ -92,6 +96,7 @@ public final class SlackCapturedPollingScheduler {
         workspaceProvider: @escaping () -> [SlackScheduledWorkspace],
         poll: @escaping (SlackScheduledWorkspace) async -> SlackScheduledPollResult,
         timers: any SlackPollingTimerScheduling,
+        observesWorkspaceRefresh: Bool = false,
         failurePolicy: @escaping (SlackScheduledWorkspace, SlackScheduledPollFailure) -> Void = { _, _ in }
     ) {
         self.interval = interval
@@ -99,6 +104,7 @@ public final class SlackCapturedPollingScheduler {
         self.workspaceProvider = workspaceProvider
         self.poll = poll
         self.timers = timers
+        self.observesWorkspaceRefresh = observesWorkspaceRefresh
         self.failurePolicy = failurePolicy
     }
 
@@ -106,13 +112,15 @@ public final class SlackCapturedPollingScheduler {
         guard !started else { return }
         started = true
         installLifecycleObservers()
-        for workspace in workspaceProvider() { trigger(workspace) }
+        reconcileEligibleWorkspaces()
     }
 
     public func stop() {
         guard started else { return }
         started = false
+        removeWorkspaceRefreshObserver()
         timers.cancelAll()
+        scheduledAt.removeAll()
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll()
         running.removeAll()
@@ -124,6 +132,16 @@ public final class SlackCapturedPollingScheduler {
     }
 
     private func installLifecycleObservers() {
+        if observesWorkspaceRefresh {
+            CFNotificationCenterAddObserver(
+                CFNotificationCenterGetDarwinNotifyCenter(),
+                Unmanaged.passUnretained(self).toOpaque(),
+                Self.workspaceRefreshCallback,
+                SlackPollingWorkspaceRefreshSignal.name.rawValue,
+                nil,
+                .deliverImmediately
+            )
+        }
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -136,11 +154,35 @@ public final class SlackCapturedPollingScheduler {
         }
     }
 
-    private func handleWake() {
-        handleWake(workspaces: workspaceProvider())
+    private static let workspaceRefreshCallback: CFNotificationCallback = { _, observer, _, _, _ in
+        guard let observer else { return }
+        let scheduler = Unmanaged<SlackCapturedPollingScheduler>.fromOpaque(observer).takeUnretainedValue()
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { scheduler.reconcileEligibleWorkspaces() }
+        }
     }
 
-    private func handleWake(workspaces: [SlackScheduledWorkspace]) {
+    private func removeWorkspaceRefreshObserver() {
+        guard observesWorkspaceRefresh else { return }
+        CFNotificationCenterRemoveObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            Unmanaged.passUnretained(self).toOpaque(),
+            SlackPollingWorkspaceRefreshSignal.name,
+            nil
+        )
+    }
+
+    private func handleWake() {
+        reconcileEligibleWorkspaces()
+    }
+
+    private func reconcileEligibleWorkspaces(_ workspaces: [SlackScheduledWorkspace]? = nil) {
+        let workspaces = workspaces ?? workspaceProvider()
+        let eligibleIDs = Set(workspaces.map(\.workspaceID))
+        for workspaceID in Array(scheduledAt.keys) where !eligibleIDs.contains(workspaceID) {
+            timers.cancel(workspaceID: workspaceID)
+            scheduledAt[workspaceID] = nil
+        }
         let current = now()
         for workspace in workspaces {
             guard let lastSuccess = workspace.lastSuccessfulPollAt else {
@@ -155,6 +197,7 @@ public final class SlackCapturedPollingScheduler {
 
     private func trigger(_ workspace: SlackScheduledWorkspace) {
         timers.cancel(workspaceID: workspace.workspaceID)
+        scheduledAt[workspace.workspaceID] = nil
         guard !running.contains(workspace.workspaceID) else {
             coalesced.insert(workspace.workspaceID)
             return
@@ -188,8 +231,12 @@ public final class SlackCapturedPollingScheduler {
     }
 
     private func schedule(workspace: SlackScheduledWorkspace, at date: Date) {
+        guard scheduledAt[workspace.workspaceID] != date else { return }
+        scheduledAt[workspace.workspaceID] = date
         timers.schedule(workspaceID: workspace.workspaceID, at: date) { [weak self] in
-            self?.trigger(self?.refreshedWorkspace(fallback: workspace) ?? workspace)
+            guard let self else { return }
+            self.scheduledAt[workspace.workspaceID] = nil
+            self.trigger(self.refreshedWorkspace(fallback: workspace))
         }
     }
 
@@ -205,7 +252,7 @@ public final class SlackCapturedPollingScheduler {
                                     startDate: workspace.startDate,
                                     lastSuccessfulPollAt: lastSuccessfulPollAt[workspace.workspaceID])
         }
-        handleWake(workspaces: workspaces)
+        reconcileEligibleWorkspaces(workspaces)
     }
 
     func waitUntilIdleForTesting() async {

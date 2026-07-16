@@ -78,6 +78,7 @@ struct SlackSourceOnboardingService: @unchecked Sendable {
             try await poll(client: client, identity: identity, startDate: startDate, store: store)
             guard try store.readCheckpoint() != nil else { throw SlackCapturedError.invalidResponse }
             try markChecked(identity: identity, startDate: startDate, state: &state)
+            SlackPollingWorkspaceRefreshSignal.post()
             return result(status: .checked, reason: nil, retryable: false, identity: identity,
                           startDate: startDate, nextActiveSourceID: state.progress.activeSourceID)
         } catch {
