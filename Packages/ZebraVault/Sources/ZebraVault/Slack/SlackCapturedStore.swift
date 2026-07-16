@@ -220,10 +220,24 @@ struct SlackPollRunManifest: Codable, Equatable, Sendable {
     let startedAt: Date
     let requestedOldest: String
     let completedAt: Date?
+    let failureStage: String?
+    let failureCode: String?
+
+    init(pollRunID: String, kind: Kind, startedAt: Date, requestedOldest: String,
+         completedAt: Date?, failureStage: String? = nil, failureCode: String? = nil) {
+        self.pollRunID = pollRunID
+        self.kind = kind
+        self.startedAt = startedAt
+        self.requestedOldest = requestedOldest
+        self.completedAt = completedAt
+        self.failureStage = sanitizeSlackError(failureStage)
+        self.failureCode = sanitizeSlackError(failureCode)
+    }
 
     enum CodingKeys: String, CodingKey {
         case pollRunID = "poll_run_id", kind, startedAt = "started_at"
         case requestedOldest = "requested_oldest", completedAt = "completed_at"
+        case failureStage = "failure_stage", failureCode = "failure_code"
     }
 }
 

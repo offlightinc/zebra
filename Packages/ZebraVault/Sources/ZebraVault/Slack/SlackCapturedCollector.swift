@@ -104,6 +104,34 @@ struct SlackTrackedThreadScheduler: Sendable {
     }
 }
 
+enum SlackThreadExpansionFailureDisposition: Equatable, Sendable {
+    case captureSeedsWithoutExpansion
+    case sourceMissingOrInaccessible
+    case abortPoll
+}
+
+struct SlackThreadExpansionFailureClassifier: Sendable {
+    private let sourceUnavailableCodes: Set<String> = [
+        "access_denied", "channel_not_found", "method_not_supported_for_channel_type",
+        "no_permission", "not_in_channel", "thread_not_found",
+    ]
+
+    func classify(errorCode: String, seeds: [SlackSeedCandidate] = []) -> SlackThreadExpansionFailureDisposition {
+        if errorCode == "thread_not_found", seeds.contains(where: Self.isKnownUnthreadable) {
+            return .captureSeedsWithoutExpansion
+        }
+        if sourceUnavailableCodes.contains(errorCode) {
+            return .sourceMissingOrInaccessible
+        }
+        return .abortPoll
+    }
+
+    private static func isKnownUnthreadable(_ seed: SlackSeedCandidate) -> Bool {
+        guard let subtype = seed.payload["subtype"]?.stringValue else { return false }
+        return subtype == "channel_join" || subtype == "channel_leave"
+    }
+}
+
 struct SlackCapturedPoller: Sendable {
     let workspaceID: String
     let authorizedUserID: String
@@ -128,6 +156,7 @@ struct SlackCapturedPoller: Sendable {
         try store.writePollManifest(.init(pollRunID: pollRunID, kind: kind, startedAt: observedAt,
                                           requestedOldest: checkpoint?.committedThrough ?? String(startDate.timeIntervalSince1970), completedAt: nil))
 
+        do {
         let discoveryStartDate = discoveryStartDate(checkpoint: checkpoint)
         let classifier = SlackSeedClassifier(authorizedUserID: authorizedUserID, startDate: discoveryStartDate)
         let discovered = try await api.discoverSeeds(authorizedUserID: authorizedUserID, startDate: discoveryStartDate)
@@ -138,8 +167,28 @@ struct SlackCapturedPoller: Sendable {
         var trackedByID = Dictionary(uniqueKeysWithValues: try store.readTrackedThreads().map { ("\($0.conversationID):\($0.threadTS)", $0) })
         var collected: [String: (String, SlackJSONValue, [SlackFootprintRole])] = [:]
 
+        let expansionFailureClassifier = SlackThreadExpansionFailureClassifier()
         for group in groupSeedsByThread(seeds) {
-            let messages = try await api.replies(conversationID: group.conversationID, threadTS: group.threadTS)
+            let messages: [SlackJSONValue]
+            do {
+                messages = try await api.replies(conversationID: group.conversationID, threadTS: group.threadTS)
+            } catch SlackCapturedError.api(let code) {
+                switch expansionFailureClassifier.classify(errorCode: code, seeds: group.seeds.map(\.0)) {
+                case .captureSeedsWithoutExpansion:
+                    collectDiscoveredSeeds(group, into: &collected)
+                    continue
+                case .sourceMissingOrInaccessible:
+                    collectDiscoveredSeeds(group, into: &collected)
+                    try store.recordMissingOrInaccessible(
+                        sourceID: "\(group.conversationID):\(group.threadTS)",
+                        at: observedAt,
+                        errorCode: code
+                    )
+                    continue
+                case .abortPoll:
+                    throw SlackCapturedError.api(code)
+                }
+            }
             guard let root = messages.first(where: { $0["ts"]?.stringValue == group.threadTS })
                     ?? group.seeds.first(where: { $0.0.payload["ts"]?.stringValue == group.threadTS })?.0.payload else { continue }
             let replies = messages.filter { $0["ts"]?.stringValue != group.threadTS }
@@ -169,7 +218,12 @@ struct SlackCapturedPoller: Sendable {
                                               lastReplyTS: lastReply, lastCheckedAt: observedAt)
                 try store.recordAvailable(sourceID: sourceID, at: observedAt)
             } catch SlackCapturedError.api(let code) {
-                try store.recordMissingOrInaccessible(sourceID: sourceID, at: observedAt, errorCode: code)
+                switch expansionFailureClassifier.classify(errorCode: code) {
+                case .sourceMissingOrInaccessible:
+                    try store.recordMissingOrInaccessible(sourceID: sourceID, at: observedAt, errorCode: code)
+                case .captureSeedsWithoutExpansion, .abortPoll:
+                    throw SlackCapturedError.api(code)
+                }
             }
         }
 
@@ -182,6 +236,27 @@ struct SlackCapturedPoller: Sendable {
             }
         try store.writePollManifest(.init(pollRunID: pollRunID, kind: kind, startedAt: observedAt,
                                           requestedOldest: checkpoint?.committedThrough ?? String(startDate.timeIntervalSince1970), completedAt: now()))
+        } catch {
+            let diagnostic: (stage: String, code: String)
+            switch error {
+            case SlackCapturedError.api(let code):
+                diagnostic = ("web_api", code)
+            case SlackCapturedError.rateLimited:
+                diagnostic = ("web_api", "rate_limited")
+            default:
+                diagnostic = ("poll", "non_api_failure")
+            }
+            try? store.writePollManifest(.init(
+                pollRunID: pollRunID,
+                kind: kind,
+                startedAt: observedAt,
+                requestedOldest: checkpoint?.committedThrough ?? String(startDate.timeIntervalSince1970),
+                completedAt: nil,
+                failureStage: diagnostic.stage,
+                failureCode: diagnostic.code
+            ))
+            throw error
+        }
     }
 
     func discoveryStartDate(checkpoint: SlackCollectorCheckpoint?) -> Date {
@@ -211,6 +286,20 @@ struct SlackCapturedPoller: Sendable {
         let key = "\(conversationID):\(timestamp)"
         let mergedRoles = Set(collected[key]?.2 ?? []).union(roles)
         collected[key] = (conversationID, payload, Array(mergedRoles))
+    }
+
+    private func collectDiscoveredSeeds(
+        _ group: SlackThreadSeedGroup,
+        into collected: inout [String: (String, SlackJSONValue, [SlackFootprintRole])]
+    ) {
+        for (candidate, roles) in group.seeds {
+            mergeCollected(
+                &collected,
+                conversationID: candidate.conversationID,
+                payload: candidate.payload,
+                roles: Set(roles)
+            )
+        }
     }
 }
 
