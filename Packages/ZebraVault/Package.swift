@@ -12,6 +12,10 @@ let package = Package(
             name: "ZebraVault",
             targets: ["ZebraVault"]
         ),
+        .executable(
+            name: "zebra-slack-source-onboarding",
+            targets: ["ZebraSlackSourceOnboardingCLI"]
+        ),
     ],
     dependencies: [
         .package(path: "../../vendor/bonsplit"),
@@ -36,6 +40,10 @@ let package = Package(
         ),
         .testTarget(
             name: "ZebraVaultTests",
+            dependencies: ["ZebraVault"]
+        ),
+        .executableTarget(
+            name: "ZebraSlackSourceOnboardingCLI",
             dependencies: ["ZebraVault"]
         ),
     ]

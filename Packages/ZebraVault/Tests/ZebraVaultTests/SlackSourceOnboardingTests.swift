@@ -36,6 +36,20 @@ struct SlackSourceOnboardingTests {
         #expect(coordinator.isSlackConfirmedAndActive())
     }
 
+    @Test func serviceGatePreventsAuthCredentialAndPollBeforeConfirmationOrWhileInactive() async throws {
+        for fixture in [try Fixture(sourceIDs: ["slack"]), try Fixture(sourceIDs: ["gmail", "slack"], confirmedActive: true)] {
+            let credentials = MemoryCredentialStore()
+            let service = SlackSourceOnboardingService(
+                stateURL: fixture.stateURL, applicationSupport: fixture.root,
+                credentialStore: credentials, transport: FailingIfCalledTransport()
+            )
+            let result = await service.run(credential: .token("xoxp-never-used"), startDate: Date(timeIntervalSince1970: 100))
+            #expect(result.status == .attention)
+            #expect(result.reason == "slack_source_not_active")
+            #expect(credentials.savedTokens.isEmpty)
+        }
+    }
+
     @MainActor
     @Test func rejectedBotTokenNeverReachesCredentialStore() async throws {
         let credentials = MemoryCredentialStore()
@@ -52,6 +66,25 @@ struct SlackSourceOnboardingTests {
         #expect(credentials.savedTokens.isEmpty)
         let encoded = try Data(contentsOf: fixture.stateURL)
         #expect(!String(decoding: encoded, as: UTF8.self).contains("xoxb-bot-token"))
+    }
+
+    @Test func authTestMapsInvalidRevokedAndBotTokensWithoutSavingCredential() async throws {
+        let cases: [(String, String)] = [
+            (#"{"ok":false,"error":"invalid_auth"}"#, "user_oauth_token_required"),
+            (#"{"ok":false,"error":"token_revoked"}"#, "token_revoked"),
+            (#"{"ok":true,"team_id":"T1","user_id":"U1","bot_id":"B1"}"#, "user_oauth_token_required"),
+        ]
+        for (response, expectedReason) in cases {
+            let fixture = try Fixture(sourceIDs: ["slack"], confirmedActive: true)
+            let credentials = MemoryCredentialStore()
+            let service = SlackSourceOnboardingService(
+                stateURL: fixture.stateURL, applicationSupport: fixture.root,
+                credentialStore: credentials, transport: AuthResponseTransport(body: response)
+            )
+            let result = await service.run(credential: .token("xoxp-auth-secret"), startDate: Date(timeIntervalSince1970: 100))
+            #expect(result.reason == expectedReason)
+            #expect(credentials.savedTokens.isEmpty)
+        }
     }
 
     @MainActor
@@ -102,6 +135,10 @@ struct SlackSourceOnboardingTests {
             payload: .object(["ts": .string("90.0"), "user": .string("U1"), "text": .string("existing")])
         )
         _ = try preexistingStore?.appendRaw(preexistingCapture)
+        try preexistingStore?.writeCheckpoint(.init(
+            committedThrough: "90.0",
+            lastSuccessfulPollAt: Date(timeIntervalSince1970: 90)
+        ))
         let existing = preexistingStore!.rawDirectory.appendingPathComponent("1970-01-01.jsonl")
         preexistingStore = nil
 
@@ -114,6 +151,11 @@ struct SlackSourceOnboardingTests {
         #expect(failing.presentationState == .attention("slack_poll_failed"))
         #expect(FileManager.default.fileExists(atPath: existing.path))
         #expect(credentials.savedTokens == ["xoxp-retry-secret"])
+        var preservedStore: SlackCapturedStore? = try SlackCapturedStore(applicationSupport: fixture.root, workspaceID: "T1")
+        #expect(try preservedStore?.readCheckpoint()?.committedThrough == "90.0")
+        let failedState = try fixture.readState()
+        #expect(failedState.sourceReadiness.slack?.startDate == Date(timeIntervalSince1970: 100))
+        preservedStore = nil
 
         let retry = SlackSourceOnboardingCoordinator(
             stateURL: fixture.stateURL, applicationSupport: fixture.root,
@@ -123,7 +165,17 @@ struct SlackSourceOnboardingTests {
         await waitUntilSettled(retry)
         #expect(retry.presentationState == .checked)
         #expect(FileManager.default.fileExists(atPath: existing.path))
-        #expect(try fixture.readState().progress.sourceRows["slack"]?.status == "checked")
+        let checkedState = try fixture.readState()
+        #expect(checkedState.progress.sourceRows["slack"]?.status == "checked")
+        #expect(checkedState.sourceReadiness.slack?.startDate == Date(timeIntervalSince1970: 100))
+        let manifestsDirectory = fixture.root.appendingPathComponent(
+            "outer-brain/slack/T1/captured/state/poll-runs"
+        )
+        let manifests = try FileManager.default.contentsOfDirectory(
+            at: manifestsDirectory,
+            includingPropertiesForKeys: nil
+        ).map { try JSONDecoder.slackCaptured.decode(SlackPollRunManifest.self, from: Data(contentsOf: $0)) }
+        #expect(manifests.contains { $0.completedAt != nil && $0.requestedOldest == "90.0" })
     }
 
     @Test func helperSlackCLIRejectsBotTokenWithoutPersistingIt() throws {
@@ -141,6 +193,7 @@ struct SlackSourceOnboardingTests {
         var environment = ProcessInfo.processInfo.environment
         environment["ZEBRA_SOURCE_ONBOARDING_STATE"] = fixture.stateURL.path
         environment["ZEBRA_SOURCE_ONBOARDING_HOME"] = fixture.root.path
+        environment["ZEBRA_SLACK_ONBOARDING_EXECUTABLE"] = builtSwiftExecutable().path
         process.environment = environment
         let output = Pipe(); process.standardOutput = output; process.standardError = Pipe()
         try process.run(); process.waitUntilExit()
@@ -203,18 +256,17 @@ struct SlackSourceOnboardingTests {
         #expect((scopes["user"] as? [String])?.count == 10)
     }
 
-    @Test func helperSlackCLIValidatesIdentityAndWritesOnlyKeychainReferenceState() throws {
+    @Test func helperShellRouterExecsDefaultSlackBinaryWithoutPythonRelay() throws {
         let fixture = try Fixture(sourceIDs: ["slack"], confirmedActive: true)
-        let authResponse = fixture.root.appendingPathComponent("auth-test.json")
-        try Data(#"{"ok":true,"team_id":"TCLI","user_id":"UCLI"}"#.utf8).write(to: authResponse)
-        let fakeSecurity = fixture.root.appendingPathComponent("security")
-        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: fakeSecurity)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeSecurity.path)
+        let fakeSwift = fixture.root.appendingPathComponent("zebra-slack-source-onboarding")
+        try Data("#!/bin/sh\nprintf '%s\\n' '{\"ok\":true,\"sourceID\":\"slack\",\"status\":\"checked\"}'\nexit 0\n".utf8).write(to: fakeSwift)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeSwift.path)
         let helper = ZebraSourceOnboardingHelper(
             stateURL: fixture.stateURL,
             gbrainOnboardingStateURL: fixture.root.appendingPathComponent("gbrain.json"),
             gbrainAdapterOnboardingStateURL: fixture.root.appendingPathComponent("adapter.json"),
-            homeDirectoryPath: fixture.root.path
+            homeDirectoryPath: fixture.root.path,
+            slackOnboardingExecutablePath: fakeSwift.path
         )
         let launch = try #require(helper.prepareLaunch(selectedVaultPath: nil))
         let process = Process()
@@ -223,20 +275,68 @@ struct SlackSourceOnboardingTests {
         var environment = ProcessInfo.processInfo.environment
         environment["ZEBRA_SOURCE_ONBOARDING_STATE"] = fixture.stateURL.path
         environment["ZEBRA_SOURCE_ONBOARDING_HOME"] = fixture.root.path
-        environment["ZEBRA_SLACK_AUTH_TEST_URL"] = authResponse.absoluteString
-        environment["ZEBRA_SLACK_SECURITY_BIN"] = fakeSecurity.path
+        environment.removeValue(forKey: "ZEBRA_SLACK_ONBOARDING_EXECUTABLE")
+        environment["PATH"] = "/usr/bin:/bin"
         process.environment = environment
         let output = Pipe(); process.standardOutput = output; process.standardError = Pipe()
         try process.run(); process.waitUntilExit()
         let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         #expect(process.terminationStatus == 0)
-        #expect(text.contains("polling_in_zebra"))
+        #expect(text.contains("\"status\":\"checked\""))
         let state = try fixture.readState()
-        #expect(state.sourceReadiness.slack?.status == .readyToPoll)
-        #expect(state.sourceReadiness.slack?.workspaceID == "TCLI")
-        #expect(state.sourceReadiness.slack?.authorizedUserID == "UCLI")
-        #expect(state.sourceReadiness.slack?.startDate == ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z"))
+        #expect(state.sourceReadiness.slack?.status == .credentialMissing)
         #expect(!String(decoding: try Data(contentsOf: fixture.stateURL), as: UTF8.self).contains("xoxp-cli-secret"))
+    }
+
+    @Test func swiftCLIConnectReturnsCheckedJSONAndZeroAfterDurablePoll() async throws {
+        let fixture = try Fixture(sourceIDs: ["slack"], confirmedActive: true)
+        let service = SlackSourceOnboardingService(
+            stateURL: fixture.stateURL,
+            applicationSupport: fixture.root,
+            credentialStore: MemoryCredentialStore(),
+            transport: SuccessfulPollTransport()
+        )
+        let execution = await SlackSourceOnboardingCLI.run(
+            arguments: ["connect", "--slack-token", "xoxp-cli-secret", "--start-date", "1970-01-01"],
+            service: service
+        )
+        let output = try JSONDecoder().decode(SlackSourceOnboardingResult.self, from: execution.stdout)
+        #expect(execution.exitCode == 0)
+        #expect(output.status == .checked)
+        #expect(try fixture.readState().sourceReadiness.slack?.checkpointExists == true)
+        #expect(!String(decoding: execution.stdout, as: UTF8.self).contains("xoxp-cli-secret"))
+    }
+
+    @Test func swiftCLIAttentionReturnsSanitizedJSONAndExitOne() async throws {
+        let fixture = try Fixture(sourceIDs: ["slack"])
+        let service = SlackSourceOnboardingService(
+            stateURL: fixture.stateURL, applicationSupport: fixture.root,
+            credentialStore: MemoryCredentialStore(), transport: FailingIfCalledTransport()
+        )
+        let execution = await SlackSourceOnboardingCLI.run(
+            arguments: ["connect", "--slack-token", "xoxp-cli-secret", "--start-date", "2026-07-01"],
+            service: service
+        )
+        let output = try JSONDecoder().decode(SlackSourceOnboardingResult.self, from: execution.stdout)
+        #expect(execution.exitCode == 1)
+        #expect(output.status == .attention)
+        #expect(output.reason == "slack_source_not_active")
+        #expect(!String(decoding: execution.stdout, as: UTF8.self).contains("xoxp-cli-secret"))
+    }
+
+    @Test func writerLockMapsToFriendlyAttentionReason() async throws {
+        let fixture = try Fixture(sourceIDs: ["slack"], confirmedActive: true)
+        let lock = try SlackCapturedStore(applicationSupport: fixture.root, workspaceID: "T1")
+        defer { _ = lock }
+        let credentials = MemoryCredentialStore()
+        let service = SlackSourceOnboardingService(
+            stateURL: fixture.stateURL, applicationSupport: fixture.root,
+            credentialStore: credentials, transport: SuccessfulPollTransport()
+        )
+        let result = await service.run(credential: .token("xoxp-lock-secret"), startDate: Date(timeIntervalSince1970: 100))
+        #expect(result.status == .attention)
+        #expect(result.reason == "poll_already_running")
+        #expect(credentials.savedTokens == ["xoxp-lock-secret"])
     }
 
     @MainActor
@@ -244,6 +344,14 @@ struct SlackSourceOnboardingTests {
         for _ in 0..<100 where coordinator.presentationState == .polling {
             try? await Task.sleep(for: .milliseconds(10))
         }
+    }
+
+    private func builtSwiftExecutable() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(".build/debug/zebra-slack-source-onboarding")
     }
 
     private struct Fixture {
@@ -345,5 +453,12 @@ private actor PollFailureTransport: SlackHTTPTransport {
             ? #"{"ok":true,"team_id":"T1","user_id":"U1"}"#
             : #"{"ok":false,"error":"internal_error"}"#
         return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+}
+
+private struct AuthResponseTransport: SlackHTTPTransport {
+    let body: String
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     }
 }

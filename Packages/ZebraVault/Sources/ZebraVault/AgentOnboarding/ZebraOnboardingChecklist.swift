@@ -674,14 +674,6 @@ public final class ZebraOnboardingChecklistStore: ObservableObject {
         return substeps
     }
 
-    func slackReadyToResumeStartDate() -> Date? {
-        guard let state = loadSourceOnboardingState(),
-              state.progress.sourceConfirmation?.status == .confirmed,
-              state.progress.activeSourceID == "slack",
-              state.sourceReadiness.slack?.status == .readyToPoll else { return nil }
-        return state.sourceReadiness.slack?.startDate
-    }
-
     private func sourceActionReviewSubstep(
         _ review: ZebraSourceOnboardingState.ActionReview,
         isParentRunning: Bool
@@ -1521,7 +1513,6 @@ public struct ZebraOnboardingChecklistCard: View {
     private let onCollapse: (() -> Void)?
     @State private var collapsedSubstepStepIDRawValues: [String]
     @State private var observedCompletedStepIDs: Set<ZebraOnboardingChecklistStepID>?
-    @StateObject private var slackCoordinator = SlackSourceOnboardingCoordinator()
 
     public init(
         store: ZebraOnboardingChecklistStore,
@@ -1568,20 +1559,10 @@ public struct ZebraOnboardingChecklistCard: View {
         .onAppear {
             store.prefetchGBrainDocsIfNeeded()
             observedCompletedStepIDs = store.completedStepIDs
-            resumeSlackFromCLIIfReady()
         }
         .onChange(of: store.completedStepIDs) { _, completedStepIDs in
             handleCompletionChange(completedStepIDs)
         }
-        .onChange(of: store.substepSnapshotRevision) { _, _ in
-            resumeSlackFromCLIIfReady()
-        }
-    }
-
-    private func resumeSlackFromCLIIfReady() {
-        guard slackCoordinator.presentationState != .polling,
-              let startDate = store.slackReadyToResumeStartDate() else { return }
-        slackCoordinator.resume(startDate: startDate)
     }
 
     private var collapsedSubstepStepIDs: Set<ZebraOnboardingChecklistStepID> {

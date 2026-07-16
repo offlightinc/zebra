@@ -44,7 +44,8 @@ struct SlackWebAPIClient: Sendable {
               case .bool(true) = envelope["ok"] else {
             if let envelope = try? JSONDecoder().decode(SlackJSONValue.self, from: data),
                let error = envelope["error"]?.stringValue {
-                if ["invalid_auth", "token_revoked", "account_inactive", "token_expired"].contains(error) { throw SlackCapturedError.tokenRevoked }
+                if error == "invalid_auth" { throw SlackCapturedError.invalidUserToken }
+                if ["token_revoked", "account_inactive", "token_expired"].contains(error) { throw SlackCapturedError.tokenRevoked }
                 if error == "missing_scope" { throw SlackCapturedError.partialScope(required: envelope["needed"]?.stringValue ?? "unknown") }
                 throw SlackCapturedError.api(error)
             }

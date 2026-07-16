@@ -122,6 +122,11 @@ def main():
         print("error: no localization tables were changed", file=sys.stderr)
         return 1
 
+    # Both Zebra Debug and release overlays pass through this shared step.
+    # Bundle the Zebra-owned Slack CLI before the caller signs the app.
+    bundler = Path(__file__).resolve().parent / "bundle-zebra-source-onboarding-cli.sh"
+    subprocess.run([str(bundler), str(app_path)], check=True)
+
     return 0
 
 

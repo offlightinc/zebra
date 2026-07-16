@@ -13,19 +13,22 @@ struct ZebraSourceOnboardingHelper {
     private let gbrainAdapterOnboardingStateURL: URL
     private let fileManager: FileManager
     private let homeDirectoryPath: String
+    private let slackOnboardingExecutablePath: String?
 
     init(
         stateURL: URL = ZebraSourceOnboardingState.defaultStateURL(),
         gbrainOnboardingStateURL: URL = ZebraGBrainOnboardingStore.defaultStateURL(),
         gbrainAdapterOnboardingStateURL: URL = ZebraGBrainAdapterOnboardingStore.defaultStateURL(),
         fileManager: FileManager = .default,
-        homeDirectoryPath: String = NSHomeDirectory()
+        homeDirectoryPath: String = NSHomeDirectory(),
+        slackOnboardingExecutablePath: String? = nil
     ) {
         self.stateURL = stateURL
         self.gbrainOnboardingStateURL = gbrainOnboardingStateURL
         self.gbrainAdapterOnboardingStateURL = gbrainAdapterOnboardingStateURL
         self.fileManager = fileManager
         self.homeDirectoryPath = Self.standardizedPath(homeDirectoryPath)
+        self.slackOnboardingExecutablePath = slackOnboardingExecutablePath
     }
 
     func prepareLaunch(selectedVaultPath: String?) -> LaunchContext? {
@@ -92,7 +95,15 @@ struct ZebraSourceOnboardingHelper {
         let url = directory.appendingPathComponent("zebra-source-onboarding", isDirectory: false)
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            try Self.helperScript.write(to: url, atomically: true, encoding: .utf8)
+            let swiftExecutable = slackOnboardingExecutablePath
+                ?? ProcessInfo.processInfo.environment["ZEBRA_SLACK_ONBOARDING_EXECUTABLE"]
+                ?? Bundle.main.url(forAuxiliaryExecutable: "zebra-slack-source-onboarding")?.path
+                ?? Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/bin/zebra-slack-source-onboarding").path
+            let script = Self.helperScript.replacingOccurrences(
+                of: "__ZEBRA_SLACK_ONBOARDING_EXECUTABLE__",
+                with: ZebraAgentLaunchCommand.shellQuote(swiftExecutable)
+            )
+            try script.write(to: url, atomically: true, encoding: .utf8)
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
             return url
         } catch {
@@ -518,6 +529,19 @@ struct ZebraSourceOnboardingHelper {
     COMMAND="${1:-status}"
     if [ $# -gt 0 ]; then
       shift
+    fi
+
+    if [ -n "${ZEBRA_SLACK_ONBOARDING_EXECUTABLE:-}" ]; then
+      SLACK_EXECUTABLE="$ZEBRA_SLACK_ONBOARDING_EXECUTABLE"
+    else
+      SLACK_EXECUTABLE=__ZEBRA_SLACK_ONBOARDING_EXECUTABLE__
+    fi
+    if [ "$COMMAND" = "slack" ]; then
+      if [ ! -x "$SLACK_EXECUTABLE" ]; then
+        printf '%s\n' '{"ok":false,"reason":"slack_swift_cli_unavailable","retryable":true,"sourceID":"slack","startDate":"","status":"attention"}'
+        exit 1
+      fi
+      exec "$SLACK_EXECUTABLE" "$@"
     fi
 
     PYTHON_BIN="$(command -v python3 || true)"
@@ -9816,104 +9840,6 @@ struct ZebraSourceOnboardingHelper {
         save_json(state)
         print(json.dumps(summary(state), ensure_ascii=False, sort_keys=True))
 
-    def slack_connect():
-        token = ""
-        start_date_raw = ""
-        index = 1
-        while index < len(args):
-            argument = args[index]
-            if argument == "--slack-token" and index + 1 < len(args):
-                token = args[index + 1]
-                index += 2
-            elif argument == "--start-date" and index + 1 < len(args):
-                start_date_raw = args[index + 1]
-                index += 2
-            else:
-                print("unknown or incomplete Slack argument", file=sys.stderr)
-                return 2
-        if not token.startswith("xoxp-"):
-            print(json.dumps({"ok": False, "reason": "user_oauth_token_required"}, sort_keys=True))
-            return 1
-        try:
-            start_date = datetime.strptime(start_date_raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        except ValueError:
-            print(json.dumps({"ok": False, "reason": "invalid_start_date"}, sort_keys=True))
-            return 1
-
-        state = load_or_create_state()
-        progress = ensure_progress(state)
-        confirmation = progress.get("sourceConfirmation") if isinstance(progress.get("sourceConfirmation"), dict) else {}
-        if confirmation.get("status") != "confirmed" or progress.get("activeSourceID") != "slack":
-            print(json.dumps({"ok": False, "reason": "slack_source_not_active"}, sort_keys=True))
-            return 1
-
-        auth_test_url = os.environ.get("ZEBRA_SLACK_AUTH_TEST_URL") or "https://slack.com/api/auth.test"
-        request = urllib.request.Request(auth_test_url)
-        request.add_header("Authorization", "Bearer " + token)
-        request.add_header("Accept", "application/json; charset=utf-8")
-        try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                identity = json.loads(response.read().decode("utf-8"))
-        except Exception:
-            print(json.dumps({"ok": False, "reason": "slack_auth_failed"}, sort_keys=True))
-            return 1
-        if not identity.get("ok"):
-            code = identity.get("error")
-            reason = "token_revoked" if code in {"invalid_auth", "token_revoked", "account_inactive", "token_expired"} else "slack_auth_failed"
-            print(json.dumps({"ok": False, "reason": reason}, sort_keys=True))
-            return 1
-        workspace_id = str(identity.get("team_id") or "")
-        user_id = str(identity.get("user_id") or "")
-        if identity.get("bot_id") or not workspace_id or not user_id:
-            print(json.dumps({"ok": False, "reason": "user_oauth_token_required"}, sort_keys=True))
-            return 1
-
-        security_binary = os.environ.get("ZEBRA_SLACK_SECURITY_BIN") or "/usr/bin/security"
-        keychain = subprocess.run(
-            [security_binary, "add-generic-password", "-U", "-s", "com.offlight.zebra.slack.user-token", "-a", workspace_id + ":" + user_id, "-w", token],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=20,
-        )
-        if keychain.returncode != 0:
-            print(json.dumps({"ok": False, "reason": "keychain_write_failed"}, sort_keys=True))
-            return 1
-
-        timestamp = now()
-        readiness = state.get("sourceReadiness") if isinstance(state.get("sourceReadiness"), dict) else {}
-        readiness["slack"] = {
-            "status": "ready_to_poll",
-            "workspaceID": workspace_id,
-            "authorizedUserID": user_id,
-            "startDate": start_date.isoformat().replace("+00:00", "Z"),
-            "checkpointExists": False,
-            "reason": None,
-        }
-        state["sourceReadiness"] = readiness
-        rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
-        row = rows.get("slack") if isinstance(rows.get("slack"), dict) else source_row_for("slack", timestamp)
-        row.update({"phase": "poll", "status": "unchecked", "playbookStepID": "poll", "attentionReason": None, "updatedAt": timestamp})
-        rows["slack"] = row
-        progress["sourceRows"] = rows
-        state["status"] = "ready"
-        state["updatedAt"] = timestamp
-        save_json(state)
-        print(json.dumps({
-            "ok": True,
-            "sourceID": "slack",
-            "workspaceID": workspace_id,
-            "authorizedUserID": user_id,
-            "startDate": start_date_raw,
-            "nextStep": "polling_in_zebra",
-        }, ensure_ascii=False, sort_keys=True))
-        return 0
-
-    def slack_command():
-        if not args or args[0] != "connect":
-            print("slack requires: connect --slack-token <token> --start-date YYYY-MM-DD", file=sys.stderr)
-            return 2
-        return slack_connect()
-
     def summary(state, prompt=None):
         progress = state.get("progress") if isinstance(state.get("progress"), dict) else {}
         uncataloged = progress.get("uncatalogedSources") if isinstance(progress.get("uncatalogedSources"), list) else progress.get("unsupportedInputs") if isinstance(progress.get("unsupportedInputs"), list) else []
@@ -10339,8 +10265,6 @@ struct ZebraSourceOnboardingHelper {
         sys.exit(report())
     elif command == "gmail":
         sys.exit(gmail_command())
-    elif command == "slack":
-        sys.exit(slack_command())
     elif command == "obsidian":
         sys.exit(obsidian_command())
     elif command == "notion":
