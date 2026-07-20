@@ -94,6 +94,10 @@ struct ZebraSourceOnboardingHelper {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             try Self.helperScript.write(to: url, atomically: true, encoding: .utf8)
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            guard ZebraInteractiveTerminalRunner.install(
+                in: directory,
+                fileManager: fileManager
+            ) != nil else { return nil }
             return url
         } catch {
             return nil
@@ -8096,51 +8100,45 @@ struct ZebraSourceOnboardingHelper {
             return "no"
         return ""
 
-    def homebrew_install_pty_prompt(source_id):
+    def homebrew_install_pty_prompt(source_id, run_id):
         language = onboarding_language()
         resume_command = f"zebra-source-onboarding {source_id} check-cli"
-        install_command = f"zebra-source-onboarding install-homebrew --source {source_id}"
+        install_command = (
+            "zebra-interactive-terminal-runner start "
+            f"--task source-onboarding-homebrew-install --source {source_id} --run-id {run_id}"
+        )
         if language == "ko":
             return textwrap.dedent(f'''
-            Homebrew 설치 동의가 확인됐습니다. 이 설치는 Hermes의 PTY-backed terminal tool에서만 실행하세요. 별도 Zebra terminal을 열지 마세요.
+            Homebrew 설치 동의가 확인됐습니다. 다음 Zebra 공통 runner 명령을 현재 Zebra terminal에서 실행하세요:
 
-            1. 먼저 Hermes의 secure sudo prompt를 사용해 다음 tool call을 실행하세요:
-               `terminal(command="sudo -v", timeout=120)`
-            2. 성공하면 Homebrew installer를 실제 PTY로 실행하세요:
-               `terminal(command="{install_command}", background=true, pty=true, notify_on_complete=true)`
-            3. 반환된 `session_id`로 `process(action="wait", session_id=<session_id>, timeout=180)`를 실행하고, 아직 실행 중이면 종료될 때까지 같은 wait를 반복하세요.
-            4. 성공한 뒤 `{resume_command}`를 실행해 `brew`를 재검증하고 현재 source step부터 계속하세요.
+            `{install_command}`
 
-            비밀번호를 채팅, 명령 인자, 로그, Source Onboarding state에 기록하지 마세요. foreground `pty=true`는 현재 Hermes에서 실제 PTY를 만들지 않으므로 Homebrew installer에는 반드시 `background=true, pty=true`를 함께 사용하세요.
+            Zebra가 같은 pane에 별도 terminal을 열고 설치를 시작합니다. 비밀번호는 새 terminal에 직접 입력하세요. 성공하면 terminal이 자동으로 닫힙니다. 그 뒤 `{resume_command}`를 실행해 `brew`를 재검증하고 현재 source step부터 계속하세요. 비밀번호를 채팅, 명령 인자, 로그 또는 state에 기록하지 마세요.
             ''').strip()
         if language == "ja":
             return textwrap.dedent(f'''
-            Homebrew のインストール同意を確認しました。このインストールは Hermes の PTY-backed terminal tool だけで実行し、別の Zebra terminal は開かないでください。
+            Homebrew のインストール同意を確認しました。現在の Zebra terminal で次の共通 runner command を実行してください。
 
-            1. Hermes の secure sudo prompt で `terminal(command="sudo -v", timeout=120)` を実行します。
-            2. 成功後、`terminal(command="{install_command}", background=true, pty=true, notify_on_complete=true)` を実行します。
-            3. 返された `session_id` で `process(action="wait", session_id=<session_id>, timeout=180)` を実行し、まだ実行中なら終了まで wait を繰り返します。
-            4. 成功後に `{resume_command}` を実行して `brew` を再確認し、現在の source step から続行します。
+            `{install_command}`
 
-            パスワードを chat、command arguments、logs、Source Onboarding state に保存しないでください。Homebrew installer には `background=true, pty=true` を必ず一緒に指定してください。
+            Zebra は同じ pane に別 terminal を開きます。パスワードは新しい terminal に直接入力してください。成功すると terminal は自動的に閉じます。その後 `{resume_command}` を実行してください。パスワードを chat、arguments、logs、state に保存しないでください。
             ''').strip()
         return textwrap.dedent(f'''
-        Homebrew install consent is confirmed. Run this install only through Hermes's PTY-backed terminal tool. Do not open a separate Zebra terminal.
+        Homebrew install consent is confirmed. Run this shared Zebra runner command in the current Zebra terminal:
 
-        1. Use Hermes's secure sudo prompt first: `terminal(command="sudo -v", timeout=120)`.
-        2. After it succeeds, run the installer with a real PTY: `terminal(command="{install_command}", background=true, pty=true, notify_on_complete=true)`.
-        3. Use the returned `session_id` with `process(action="wait", session_id=<session_id>, timeout=180)` and repeat the wait while it is still running.
-        4. After success, run `{resume_command}` to recheck `brew` and resume the current source step.
+        `{install_command}`
 
-        Never put the password in chat, command arguments, logs, or Source Onboarding state. Foreground `pty=true` does not create a PTY in the current Hermes implementation, so the Homebrew installer must use `background=true, pty=true` together.
+        Zebra opens a separate terminal in the same pane. Enter the password directly there. On success the terminal closes automatically. Then run `{resume_command}` to recheck `brew` and resume the source step. Never put the password in chat, arguments, logs, or state.
         ''').strip()
 
     def record_homebrew_pty_required(state, run_state, source_id, step):
+        interactive_run_id = run_state.get("interactiveTerminalRunID") or str(uuid.uuid4())
         run_state.update({
             "homebrewInstallAsked": True,
             "homebrewInstallAnswer": "yes",
             "homebrewInstallResult": {"status": "pty_required"},
             "installCommandRun": False,
+            "interactiveTerminalRunID": interactive_run_id,
             "updatedAt": now(),
         })
         run_path = save_source_run_state(source_id, run_state)
@@ -8160,7 +8158,7 @@ struct ZebraSourceOnboardingHelper {
         print(json.dumps({
             "ok": False,
             "reason": "homebrew_install_pty_required",
-            "nextPrompt": homebrew_install_pty_prompt(source_id),
+            "nextPrompt": homebrew_install_pty_prompt(source_id, interactive_run_id),
         }, ensure_ascii=False, sort_keys=True))
         return 1
 

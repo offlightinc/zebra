@@ -2690,11 +2690,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let approvedHomebrewPayload = try jsonObject(from: approvedHomebrew.stdout)
         XCTAssertEqual(approvedHomebrewPayload["reason"] as? String, "homebrew_install_pty_required")
         let approvedHomebrewPrompt = try XCTUnwrap(approvedHomebrewPayload["nextPrompt"] as? String)
-        XCTAssertTrue(approvedHomebrewPrompt.contains("terminal(command=\"sudo -v\""), approvedHomebrewPrompt)
-        XCTAssertTrue(approvedHomebrewPrompt.contains("background=true"), approvedHomebrewPrompt)
-        XCTAssertTrue(approvedHomebrewPrompt.contains("pty=true"), approvedHomebrewPrompt)
-        XCTAssertTrue(approvedHomebrewPrompt.contains("notify_on_complete=true"), approvedHomebrewPrompt)
-        XCTAssertTrue(approvedHomebrewPrompt.contains("zebra-source-onboarding install-homebrew --source apple-notes"), approvedHomebrewPrompt)
+        XCTAssertTrue(approvedHomebrewPrompt.contains("zebra-interactive-terminal-runner start"), approvedHomebrewPrompt)
+        XCTAssertTrue(approvedHomebrewPrompt.contains("--task source-onboarding-homebrew-install"), approvedHomebrewPrompt)
+        XCTAssertTrue(approvedHomebrewPrompt.contains("--source apple-notes"), approvedHomebrewPrompt)
+        XCTAssertTrue(approvedHomebrewPrompt.contains("--run-id "), approvedHomebrewPrompt)
+        XCTAssertFalse(approvedHomebrewPrompt.contains("cmux"), approvedHomebrewPrompt)
 
         let declinedInstall = try runProcess(
             executableURL: helperURL,
@@ -3304,11 +3304,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let approvedBrewPayload = try jsonObject(from: approvedBrew.stdout)
         XCTAssertEqual(approvedBrewPayload["reason"] as? String, "homebrew_install_pty_required")
         let approvedBrewPrompt = try XCTUnwrap(approvedBrewPayload["nextPrompt"] as? String)
-        XCTAssertTrue(approvedBrewPrompt.contains("terminal(command=\"sudo -v\""), approvedBrewPrompt)
-        XCTAssertTrue(approvedBrewPrompt.contains("background=true"), approvedBrewPrompt)
-        XCTAssertTrue(approvedBrewPrompt.contains("pty=true"), approvedBrewPrompt)
-        XCTAssertTrue(approvedBrewPrompt.contains("notify_on_complete=true"), approvedBrewPrompt)
-        XCTAssertTrue(approvedBrewPrompt.contains("zebra-source-onboarding install-homebrew --source apple-reminders"), approvedBrewPrompt)
+        XCTAssertTrue(approvedBrewPrompt.contains("zebra-interactive-terminal-runner start"), approvedBrewPrompt)
+        XCTAssertTrue(approvedBrewPrompt.contains("--task source-onboarding-homebrew-install"), approvedBrewPrompt)
+        XCTAssertTrue(approvedBrewPrompt.contains("--source apple-reminders"), approvedBrewPrompt)
+        XCTAssertTrue(approvedBrewPrompt.contains("--run-id "), approvedBrewPrompt)
+        XCTAssertFalse(approvedBrewPrompt.contains("cmux"), approvedBrewPrompt)
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyInstallerMarker.path))
 
         let nonTTYInstaller = try runProcess(
