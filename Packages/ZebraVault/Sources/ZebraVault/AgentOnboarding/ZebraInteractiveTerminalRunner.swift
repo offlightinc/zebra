@@ -132,6 +132,16 @@ enum ZebraInteractiveTerminalRunner {
         atomic_json(receipt_path(request_id), payload)
         return payload
 
+    def update_receipt(request_id, **extra):
+        path = receipt_path(request_id)
+        payload = load_json(path) if path.exists() else {
+            "schemaVersion": 1, "requestID": request_id, "status": "failed"
+        }
+        payload.update(extra)
+        payload["updatedAt"] = now()
+        atomic_json(path, payload)
+        return payload
+
     def record_launch(request_id, surface_id, workspace_id):
         path = receipt_path(request_id)
         existing = load_json(path) if path.exists() else None
@@ -159,6 +169,24 @@ enum ZebraInteractiveTerminalRunner {
                 return receipt
             time.sleep(0.1)
         return write_receipt(request_id, "failed", error="terminal_task_timeout")
+
+    def restore_origin_focus(request_id, request, cli, socket):
+        workspace = request.get("originWorkspaceID", "")
+        surface = request.get("originSurfaceID", "")
+        if not workspace or not surface:
+            return update_receipt(request_id, originFocusStatus="unavailable")
+        params = {"workspace_id": workspace, "surface_id": surface}
+        environment = os.environ.copy()
+        environment["CMUX_SOCKET_PATH"] = socket
+        completed = subprocess.run(
+            [cli, "rpc", "surface.focus", json.dumps(params, separators=(",", ":"))],
+            text=True,
+            capture_output=True,
+            env=environment,
+        )
+        if completed.returncode == 0:
+            return update_receipt(request_id, originFocusStatus="focused")
+        return update_receipt(request_id, originFocusStatus="failed", originFocusError="surface_focus_failed")
 
     def shell_quote(value):
         return "'" + value.replace("'", "'\\''") + "'"
@@ -198,6 +226,8 @@ enum ZebraInteractiveTerminalRunner {
             "kind": kind,
             "payload": {"source": source} if source else {},
             "originRunID": run_id,
+            "originWorkspaceID": os.environ.get("CMUX_WORKSPACE_ID", "").strip(),
+            "originSurfaceID": os.environ.get("CMUX_SURFACE_ID", "").strip(),
             "requestedAt": now(),
         }
         path = request_path(request_id)
@@ -272,6 +302,8 @@ enum ZebraInteractiveTerminalRunner {
         completed_receipt = wait_for_completion(request_id)
         if completed_receipt is not None:
             receipt = completed_receipt
+        if receipt.get("status") == "succeeded":
+            receipt = restore_origin_focus(request_id, request, cli, socket)
         succeeded = receipt.get("status") not in {"failed", "canceled"}
         print(json.dumps({"ok": succeeded, "duplicate": duplicate, "request": request, "receipt": receipt}, sort_keys=True))
         return 0 if succeeded else 1
@@ -310,6 +342,15 @@ enum ZebraInteractiveTerminalRunner {
         print(json.dumps({"ok": returncode == 0, "receipt": receipt}, sort_keys=True))
         if returncode == 0:
             return 0
+        language = os.environ.get("ZEBRA_ONBOARDING_LANGUAGE", "en").strip().lower()
+        status_command = "zebra-interactive-terminal-runner status --request " + request_id
+        if language == "ko":
+            message = "작업에 실패했습니다. 이 terminal은 확인을 위해 열어 둡니다. 상태 확인: " + status_command + ". 닫으려면 exit를 입력하세요."
+        elif language == "ja":
+            message = "タスクに失敗しました。確認のため、この terminal を開いたままにします。状態確認: " + status_command + "。閉じるには exit を入力してください。"
+        else:
+            message = "Task failed. This terminal remains open for inspection. Check status: " + status_command + ". Type exit to close it."
+        print("\n" + message + "\n", file=sys.stderr, flush=True)
         if os.environ.get("ZEBRA_INTERACTIVE_TERMINAL_RUNNER_KEEP_SHELL", "1") == "0":
             return returncode
         shell = os.environ.get("SHELL", "/bin/zsh")
