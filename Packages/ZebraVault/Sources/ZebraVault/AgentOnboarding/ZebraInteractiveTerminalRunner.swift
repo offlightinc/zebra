@@ -188,6 +188,24 @@ enum ZebraInteractiveTerminalRunner {
             return update_receipt(request_id, originFocusStatus="focused")
         return update_receipt(request_id, originFocusStatus="failed", originFocusError="surface_focus_failed")
 
+    def close_task_surface(request_id, request, receipt, cli, socket):
+        workspace = receipt.get("workspaceID") or request.get("originWorkspaceID", "")
+        surface = receipt.get("surfaceID", "")
+        if not workspace or not surface:
+            return update_receipt(request_id, taskSurfaceCloseStatus="failed", taskSurfaceCloseError="task_surface_unavailable")
+        params = {"workspace_id": workspace, "surface_id": surface}
+        environment = os.environ.copy()
+        environment["CMUX_SOCKET_PATH"] = socket
+        completed = subprocess.run(
+            [cli, "rpc", "surface.close", json.dumps(params, separators=(",", ":"))],
+            text=True,
+            capture_output=True,
+            env=environment,
+        )
+        if completed.returncode == 0:
+            return update_receipt(request_id, taskSurfaceCloseStatus="closed")
+        return update_receipt(request_id, taskSurfaceCloseStatus="failed", taskSurfaceCloseError="surface_close_failed")
+
     def shell_quote(value):
         return "'" + value.replace("'", "'\\''") + "'"
 
@@ -303,8 +321,15 @@ enum ZebraInteractiveTerminalRunner {
         if completed_receipt is not None:
             receipt = completed_receipt
         if receipt.get("status") == "succeeded":
+            receipt = close_task_surface(request_id, request, receipt, cli, socket)
             receipt = restore_origin_focus(request_id, request, cli, socket)
-        succeeded = receipt.get("status") not in {"failed", "canceled"}
+        if receipt.get("status") == "succeeded":
+            succeeded = (
+                receipt.get("taskSurfaceCloseStatus") == "closed"
+                and receipt.get("originFocusStatus") == "focused"
+            )
+        else:
+            succeeded = receipt.get("status") not in {"failed", "canceled"}
         print(json.dumps({"ok": succeeded, "duplicate": duplicate, "request": request, "receipt": receipt}, sort_keys=True))
         return 0 if succeeded else 1
 
