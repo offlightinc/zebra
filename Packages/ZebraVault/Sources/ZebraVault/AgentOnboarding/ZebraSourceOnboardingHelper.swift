@@ -9122,6 +9122,10 @@ struct ZebraSourceOnboardingHelper {
         return run_path
 
     def apple_notes_install_memo(brew_path, resumed_after_homebrew=False):
+        brew_bin = str(Path(brew_path).resolve().parent)
+        path_entries = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
+        if brew_bin not in path_entries:
+            os.environ["PATH"] = os.pathsep.join([brew_bin] + path_entries)
         state = load_or_create_state()
         run_state = load_source_run_state("apple-notes")
         plan = run_state.get("installPlan") if isinstance(run_state.get("installPlan"), dict) else apple_notes_install_plan(False)
