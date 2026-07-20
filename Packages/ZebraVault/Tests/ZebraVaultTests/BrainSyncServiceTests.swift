@@ -65,6 +65,19 @@ final class BrainSyncServiceTests: XCTestCase {
         XCTAssertTrue(failure.detail.contains("brain sync lock exists"))
     }
 
+    func testMultipleRebaseTargetsFailureAllowsAutomaticRetry() {
+        let failure = BrainSyncService.classifyFailure(
+            stderr: "fatal: Cannot rebase onto multiple branches.",
+            stdout: """
+            [zebra-brain-sync] phase: pull --rebase
+            warning: fetch updated the current branch head
+            """
+        )
+
+        XCTAssertTrue(failure.reason.allowsAutomaticRetry)
+        XCTAssertTrue(failure.detail.contains("Cannot rebase onto multiple branches"))
+    }
+
     func testGitDnsFailureWithoutReasonTagClassifiesAsOffline() {
         let failure = BrainSyncService.classifyFailure(
             stderr: "fatal: unable to access 'https://github.com/offlightinc/b-brain-offlight.git/': Could not resolve host: github.com",
