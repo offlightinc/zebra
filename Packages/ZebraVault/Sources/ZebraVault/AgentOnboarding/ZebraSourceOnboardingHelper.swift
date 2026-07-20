@@ -537,6 +537,7 @@ struct ZebraSourceOnboardingHelper {
     /bin/chmod 600 "$PYTHON_PAYLOAD"
     /bin/cat > "$PYTHON_PAYLOAD" <<'PY'
     import contextlib
+    import errno
     import io
     import json
     import os
@@ -2548,6 +2549,41 @@ struct ZebraSourceOnboardingHelper {
                     section = section + "\\n\\nAsk the user to enter the exact Obsidian vault path, then run `zebra-source-onboarding obsidian verify-vault --path \\\"<vault-path>\\\"`. Do not scan iCloud Drive, Documents, CloudStorage, Dropbox, or other home folders automatically."
         if step_id == "choose_ingest_scope":
             section = obsidian_choose_scope_instruction(language)
+        if step_id == "smoke_read" and run_state.get("smokeReadStatus") == "inconclusive":
+            observed = run_state.get("observedReasons") if isinstance(run_state.get("observedReasons"), list) else []
+            observed_text = ", ".join(str(item) for item in observed) or "read_failed"
+            suspected = run_state.get("suspectedCause")
+            if language == "ko":
+                recovery = textwrap.dedent(f'''
+                시험한 최대 5개 Markdown에서는 본문 읽기에 성공하지 못했습니다. 이것만으로 vault 전체를 읽을 수 없다고 판단하지 마세요.
+
+                관찰된 오류: `{observed_text}`
+
+                현재 선택한 vault와 onboarding 진행 상태를 유지하세요. 관찰된 오류에 맞는 조치 후 `zebra-source-onboarding obsidian smoke-read`를 다시 실행하거나, 사용자가 읽을 수 있다고 알고 있는 Markdown 파일을 확인하세요.
+                ''').strip()
+                if suspected == "icloud_not_materialized":
+                    recovery += "\\n\\niCloud 파일이 아직 로컬에 준비되지 않았을 가능성이 있습니다. Finder 또는 Obsidian에서 다운로드 상태를 확인한 뒤 다시 시도하도록 안내하세요. 이를 확정 원인으로 말하지 마세요."
+            elif language == "ja":
+                recovery = textwrap.dedent(f'''
+                試した最大5件のMarkdownでは本文の読み取りに成功しませんでした。これだけでvault全体が読み取れないとは判断しないでください。
+
+                観測したエラー: `{observed_text}`
+
+                選択中のvaultとonboardingの進行状態を維持してください。観測したエラーに応じた対応後に`zebra-source-onboarding obsidian smoke-read`を再実行するか、ユーザーが読み取れると分かっているMarkdownファイルを確認してください。
+                ''').strip()
+                if suspected == "icloud_not_materialized":
+                    recovery += "\\n\\niCloudファイルがまだローカルに用意されていない可能性があります。FinderまたはObsidianでダウンロード状態を確認してから再試行するよう案内し、確定原因として説明しないでください。"
+            else:
+                recovery = textwrap.dedent(f'''
+                The sampled Markdown reads did not prove that the entire vault is unreadable. None of the maximum five attempted samples could be opened.
+
+                Observed errors: `{observed_text}`
+
+                Preserve the selected vault and onboarding cursor. After addressing the observed errors, run `zebra-source-onboarding obsidian smoke-read` again or ask for a Markdown file the user knows is readable.
+                ''').strip()
+                if suspected == "icloud_not_materialized":
+                    recovery += "\\n\\nThe iCloud files may not be available locally yet. Tell the user to check their download state in Finder or Obsidian and retry, without presenting this as a confirmed cause."
+            section = section + "\\n\\n" + recovery
         if step_id == "confirm_ingest_plan":
             section = section + "\\n\\n" + obsidian_ingest_plan_summary(run_state)
         return textwrap.dedent(f'''
@@ -4795,10 +4831,37 @@ struct ZebraSourceOnboardingHelper {
         save_json(state)
         return state, {"sourceID": source_id, "summary": summary_text, "disposition": disposition}, 0
 
-    def markdown_files_for_vault(vault_path, folders=None, limit=None):
+    def obsidian_error_reason(error, missing_reason="sample_file_not_found"):
+        error_number = getattr(error, "errno", None)
+        if isinstance(error, FileNotFoundError) or error_number == errno.ENOENT:
+            return missing_reason
+        if isinstance(error, PermissionError) or error_number in {errno.EPERM, errno.EACCES}:
+            return "access_denied"
+        if error_number == errno.EDEADLK:
+            return "read_temporarily_unavailable"
+        return "read_failed"
+
+    def obsidian_relative_path(vault, path):
+        try:
+            return str(Path(path).relative_to(vault))
+        except Exception:
+            return Path(path).name or "."
+
+    def obsidian_error_diagnostic(vault, path, error, missing_reason="sample_file_not_found"):
+        error_number = getattr(error, "errno", None)
+        message = getattr(error, "strerror", None) or type(error).__name__
+        return {
+            "path": obsidian_relative_path(vault, path),
+            "reason": obsidian_error_reason(error, missing_reason=missing_reason),
+            "errorType": type(error).__name__,
+            "errno": error_number,
+            "message": str(message)[:240],
+        }
+
+    def markdown_scan_for_vault(vault_path, folders=None, limit=None):
         vault = Path(vault_path).expanduser()
         if not vault.is_dir():
-            return []
+            return {"files": [], "traversalDiagnostics": [], "complete": False}
         vault_resolved = vault.resolve(strict=False)
         roots = []
         if folders:
@@ -4813,8 +4876,18 @@ struct ZebraSourceOnboardingHelper {
         if not roots:
             roots = [vault]
         files = []
+        traversal_diagnostics = []
+
+        def record_walk_error(error):
+            if len(traversal_diagnostics) >= 8:
+                return
+            error_path = getattr(error, "filename", None) or vault
+            traversal_diagnostics.append(
+                obsidian_error_diagnostic(vault, error_path, error, missing_reason="vault_not_found")
+            )
+
         for root in roots:
-            for current, dirnames, filenames in os.walk(root):
+            for current, dirnames, filenames in os.walk(root, onerror=record_walk_error):
                 dirnames[:] = [
                     name for name in dirnames
                     if not name.startswith(".") and name not in {".obsidian", "__MACOSX"}
@@ -4832,8 +4905,19 @@ struct ZebraSourceOnboardingHelper {
                         continue
                     files.append(resolved)
                     if limit and len(files) >= limit:
-                        return files
-        return files
+                        return {
+                            "files": files,
+                            "traversalDiagnostics": traversal_diagnostics,
+                            "complete": not traversal_diagnostics,
+                        }
+        return {
+            "files": files,
+            "traversalDiagnostics": traversal_diagnostics,
+            "complete": not traversal_diagnostics,
+        }
+
+    def markdown_files_for_vault(vault_path, folders=None, limit=None):
+        return markdown_scan_for_vault(vault_path, folders=folders, limit=limit)["files"]
 
     def obsidian_file_for_vault(vault_path, value):
         if not value:
@@ -4891,24 +4975,48 @@ struct ZebraSourceOnboardingHelper {
         if not value:
             return {"ok": False, "reason": "vault_path_required", "path": ""}
         path = Path(value).expanduser()
-        if not path.exists():
-            return {"ok": False, "reason": "invalid_vault_path", "path": canonical_path(path)}
+        try:
+            path.stat()
+        except FileNotFoundError:
+            return {"ok": False, "reason": "vault_not_found", "path": canonical_path(path)}
+        except Exception as error:
+            return {
+                "ok": False,
+                "reason": obsidian_error_reason(error, missing_reason="vault_not_found"),
+                "path": canonical_path(path),
+            }
         if not path.is_dir():
             return {"ok": False, "reason": "vault_path_not_directory", "path": canonical_path(path)}
         canonical = canonical_path(path)
         broad_roots = {canonical_path(home), canonical_path(home / "Desktop"), canonical_path(home / "Documents")}
         if canonical in broad_roots:
             return {"ok": False, "reason": "vault_path_too_broad", "path": canonical}
-        markdown_files = markdown_files_for_vault(canonical, limit=1)
+        first_scan = markdown_scan_for_vault(canonical, limit=1)
+        markdown_files = first_scan["files"]
         marker = (Path(canonical) / ".obsidian").is_dir()
-        if not marker and not markdown_files:
+        if not markdown_files and first_scan["traversalDiagnostics"]:
+            observed = list(dict.fromkeys(
+                item.get("reason") for item in first_scan["traversalDiagnostics"] if item.get("reason")
+            ))
+            reason = observed[0] if len(observed) == 1 else "vault_listing_failed"
+            return {
+                "ok": False,
+                "reason": reason,
+                "path": canonical,
+                "observedReasons": observed,
+                "traversalDiagnostics": first_scan["traversalDiagnostics"],
+            }
+        if not markdown_files:
             return {"ok": False, "reason": "no_markdown_files", "path": canonical}
-        count = len(markdown_files_for_vault(canonical))
+        full_scan = markdown_scan_for_vault(canonical)
+        count = len(full_scan["files"])
         return {
             "ok": True,
             "path": canonical,
             "hasObsidianMarker": marker,
             "estimatedFileCount": count,
+            "partialAccess": bool(full_scan["traversalDiagnostics"]),
+            "traversalDiagnostics": full_scan["traversalDiagnostics"],
         }
 
     def discovery_error_record(path, error):
@@ -6252,35 +6360,81 @@ struct ZebraSourceOnboardingHelper {
             payload.update(source_next_prompt_payload(state, "obsidian", "confirm_vault_if_needed"))
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
-        files = markdown_files_for_vault(vault, limit=5)
+        scan = markdown_scan_for_vault(vault, limit=5)
+        files = scan["files"]
         readable = None
+        diagnostics = []
         for path in files:
             try:
                 _ = path.read_text(encoding="utf-8", errors="replace")[:2048]
                 readable = path
                 break
-            except Exception:
+            except Exception as error:
+                diagnostics.append(obsidian_error_diagnostic(Path(vault), path, error))
                 continue
         if not readable:
+            observed_reasons = list(dict.fromkeys(
+                item.get("reason") for item in diagnostics if item.get("reason")
+            ))
+            suspected_cause = None
+            if (
+                "read_temporarily_unavailable" in observed_reasons
+                and "/Library/Mobile Documents/" in str(Path(vault))
+            ):
+                suspected_cause = "icloud_not_materialized"
+            run_state.update({
+                "smokeReadStatus": "inconclusive",
+                "attemptedFileCount": len(diagnostics),
+                "observedReasons": observed_reasons,
+                "sampleDiagnostics": diagnostics,
+                "partialAccess": bool(scan["traversalDiagnostics"]),
+                "traversalDiagnostics": scan["traversalDiagnostics"],
+                "updatedAt": now(),
+            })
+            if suspected_cause:
+                run_state["suspectedCause"] = suspected_cause
+            else:
+                run_state.pop("suspectedCause", None)
             run_path = save_source_run_state("obsidian", run_state)
             state = set_obsidian_row_state(
                 state,
                 "attention",
                 "smoke",
                 "smoke_read",
-                attention_reason="markdown_read_failed",
+                attention_reason="smoke_read_inconclusive",
                 run_state_path=run_path,
             )
             save_json(state)
-            payload = {"ok": False, "reason": "markdown_read_failed"}
+            payload = {
+                "ok": False,
+                "reason": "smoke_read_inconclusive",
+                "attemptedFileCount": len(diagnostics),
+                "observedReasons": observed_reasons,
+                "sampleDiagnostics": diagnostics,
+                "partialAccess": bool(scan["traversalDiagnostics"]),
+                "retryable": True,
+            }
+            if scan["traversalDiagnostics"]:
+                payload["traversalDiagnostics"] = scan["traversalDiagnostics"]
+            if suspected_cause:
+                payload["suspectedCause"] = suspected_cause
             payload.update(source_next_prompt_payload(state, "obsidian", "smoke_read"))
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
         relative = str(readable.relative_to(Path(vault)))
+        observed_reasons = list(dict.fromkeys(
+            item.get("reason") for item in diagnostics if item.get("reason")
+        ))
+        partial_access = bool(diagnostics or scan["traversalDiagnostics"])
         run_state.update({
             "smokeReadStatus": "passed",
             "smokeReadSamplePath": relative,
+            "attemptedFileCount": len(diagnostics) + 1,
             "estimatedFileCount": validation.get("estimatedFileCount"),
+            "partialAccess": partial_access,
+            "sampleWarnings": diagnostics,
+            "observedReasons": observed_reasons,
+            "traversalDiagnostics": scan["traversalDiagnostics"],
             "updatedAt": now(),
         })
         run_path = save_source_run_state("obsidian", run_state)
@@ -6293,7 +6447,17 @@ struct ZebraSourceOnboardingHelper {
             result_summary="Obsidian smoke read passed for " + relative,
         )
         save_json(state)
-        payload = {"ok": True, "samplePath": relative, "estimatedFileCount": validation.get("estimatedFileCount")}
+        payload = {
+            "ok": True,
+            "samplePath": relative,
+            "attemptedFileCount": len(diagnostics) + 1,
+            "estimatedFileCount": validation.get("estimatedFileCount"),
+            "partialAccess": partial_access,
+            "sampleWarnings": diagnostics,
+            "observedReasons": observed_reasons,
+        }
+        if scan["traversalDiagnostics"]:
+            payload["traversalDiagnostics"] = scan["traversalDiagnostics"]
         payload.update(source_next_prompt_payload(state, "obsidian", "choose_ingest_scope"))
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0

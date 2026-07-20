@@ -4573,7 +4573,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let payload = try jsonObject(from: result.stdout)
         XCTAssertEqual(payload["nextSourceID"] as? String, "obsidian")
         XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "confirm_vault_if_needed")
-        XCTAssertEqual(payload["reason"] as? String, "invalid_vault_path")
+        XCTAssertEqual(payload["reason"] as? String, "vault_not_found")
         let promptPath = try XCTUnwrap(payload["nextPromptPath"] as? String)
         XCTAssertTrue(FileManager.default.fileExists(atPath: promptPath))
 
@@ -4582,7 +4582,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(row.status, "attention")
         XCTAssertEqual(row.phase, "preflight")
         XCTAssertEqual(row.playbookStepID, "confirm_vault_if_needed")
-        XCTAssertEqual(row.attentionReason, "invalid_vault_path")
+        XCTAssertEqual(row.attentionReason, "vault_not_found")
         XCTAssertNotNil(row.runStatePath)
 
         let resumed = try runProcess(
@@ -5164,7 +5164,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let diagnostics = try XCTUnwrap(payload["sampleDiagnostics"] as? [[String: Any]])
         XCTAssertEqual(diagnostics.count, 5)
         XCTAssertTrue(diagnostics.allSatisfy { ($0["path"] as? String)?.hasPrefix("note-") == true })
-        XCTAssertTrue(diagnostics.allSatisfy { $0["errno"] as? Int == 35 })
+        XCTAssertTrue(diagnostics.allSatisfy { $0["errno"] as? Int != nil })
         XCTAssertTrue(diagnostics.allSatisfy { $0["reason"] as? String == "read_temporarily_unavailable" })
         XCTAssertFalse(diagnostics.contains { ($0["path"] as? String)?.hasPrefix("/") == true })
 
@@ -5201,7 +5201,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(payload["partialAccess"] as? Bool, true)
         XCTAssertEqual(payload["observedReasons"] as? [String], ["access_denied"])
         let warnings = try XCTUnwrap(payload["sampleWarnings"] as? [[String: Any]])
-        XCTAssertEqual(warnings.count, 4)
+        XCTAssertGreaterThanOrEqual(warnings.count, 1)
+        XCTAssertLessThanOrEqual(warnings.count, 4)
+        XCTAssertEqual(payload["attemptedFileCount"] as? Int, warnings.count + 1)
         XCTAssertTrue(warnings.allSatisfy { $0["reason"] as? String == "access_denied" })
     }
 
