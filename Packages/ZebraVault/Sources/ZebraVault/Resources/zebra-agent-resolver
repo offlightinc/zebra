@@ -7,6 +7,7 @@ HOME_DIR="${ZEBRA_AGENT_RESOLVER_HOME:-$HOME}"
 SEARCH_PATH="${ZEBRA_AGENT_RESOLVER_PATH:-${PATH:-}}"
 CODEX_INSTALL_DIR="${ZEBRA_AGENT_RESOLVER_CODEX_INSTALL_DIR:-${CODEX_INSTALL_DIR:-$HOME_DIR/.local/bin}}"
 LOGIN_SHELL="${ZEBRA_AGENT_RESOLVER_LOGIN_SHELL:-${SHELL:-/bin/zsh}}"
+PTY_RUNNER="${ZEBRA_AGENT_RESOLVER_PTY_RUNNER:-/usr/bin/script}"
 TIMEOUT_SECONDS="${ZEBRA_AGENT_RESOLVER_TIMEOUT_SECONDS:-5}"
 SKIP_LOGIN_SHELL="${ZEBRA_AGENT_RESOLVER_SKIP_LOGIN_SHELL:-0}"
 
@@ -91,31 +92,47 @@ run_timed() {
 }
 
 shell_probe() {
-  local binary="$1" stdout_file stderr_file path_output path
+  local binary="$1" stdout_file stderr_file marker command output status path
   [[ "$SKIP_LOGIN_SHELL" != "1" ]] || return 1
   [[ -x "$LOGIN_SHELL" ]] || return 1
+  if [[ ! -x "$PTY_RUNNER" ]]; then
+    SHELL_PROBE_DIAGNOSTIC='login shell PTY unavailable; limited search used'
+    return 1
+  fi
   stdout_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.shell.stdout.XXXXXX")"
   stderr_file="$(mktemp "${TMPDIR:-/tmp}/zebra-agent-resolver.shell.stderr.XXXXXX")"
-  if ! run_timed "$stdout_file" "$stderr_file" env HOME="$HOME_DIR" PATH="$SEARCH_PATH" "$LOGIN_SHELL" -lic "$binary --version"; then
+  marker="__ZEBRA_AGENT_RESOLVER_${$}_${RANDOM}_"
+  command="resolved=\$(command -v $binary 2>/dev/null || true); case \"\$resolved\" in /*) if [[ -f \"\$resolved\" && -x \"\$resolved\" ]] && \"\$resolved\" --version >/dev/null 2>&1; then result=OK; else result=UNUSABLE; fi ;; *) result=MISSING ;; esac; printf '\\n%s%s:%s\\n' '$marker' \"\$result\" \"\$resolved\""
+  run_timed \
+    "$stdout_file" \
+    "$stderr_file" \
+    "$PTY_RUNNER" -q /dev/null \
+    env HOME="$HOME_DIR" PATH="$SEARCH_PATH" \
+    "$LOGIN_SHELL" -lic "$command"
+  status="$?"
+  if [[ "$status" -ne 0 ]]; then
+    if [[ "$status" -eq 124 ]]; then
+      SHELL_PROBE_DIAGNOSTIC='login shell PTY probe timed out; limited search used'
+    else
+      SHELL_PROBE_DIAGNOSTIC='login shell PTY probe failed; limited search used'
+    fi
     rm -f "$stdout_file" "$stderr_file"
     return 1
   fi
-  if ! run_timed "$stdout_file" "$stderr_file" env HOME="$HOME_DIR" PATH="$SEARCH_PATH" "$LOGIN_SHELL" -lic "command -v $binary"; then
-    rm -f "$stdout_file" "$stderr_file"
-    return 1
-  fi
-  path_output="$(cat "$stdout_file")"
+  output="$(LC_ALL=C tr -d '\r' < "$stdout_file" | sed -n "s/.*$marker//p" | tail -n 1)"
   rm -f "$stdout_file" "$stderr_file"
-  while IFS= read -r path; do
-    [[ "$path" == /* ]] || continue
-    path="$(standardize_path "$path")"
-    [[ -f "$path" && -x "$path" ]] || continue
-    is_transient_path "$path" && continue
-    if [[ "$binary" == "claude" ]] && is_cmux_claude_wrapper "$path"; then continue; fi
-    SHELL_RESOLVED_PATH="$path"
-    return 0
-  done <<< "$path_output"
-  return 1
+  if [[ -z "$output" ]]; then
+    SHELL_PROBE_DIAGNOSTIC='login shell PTY probe returned no completion marker; limited search used'
+    return 1
+  fi
+  [[ "$output" == OK:/* ]] || return 1
+  path="${output#OK:}"
+  path="$(standardize_path "$path")"
+  [[ -f "$path" && -x "$path" ]] || return 1
+  is_transient_path "$path" && return 1
+  if [[ "$binary" == "claude" ]] && is_cmux_claude_wrapper "$path"; then return 1; fi
+  SHELL_RESOLVED_PATH="$path"
+  return 0
 }
 
 candidate_paths() {
@@ -173,6 +190,7 @@ resolve_agent() {
   RESOLVED_PATH=''
   RESOLVED_VERSION=''
   RESOLVE_BROKEN_REASON=''
+  SHELL_PROBE_DIAGNOSTIC=''
   DISCOVERY_SOURCE=''
   SHELL_RESOLVED_PATH=''
   DIRECT_RESOLVED_PATH=''
@@ -208,11 +226,11 @@ print_candidate() {
   binary="$(binary_name "$agent")"
   auth="$(auth_state "$agent")"
   if resolve_agent "$agent"; then
-    state='installed'; action='launch'; launchable=true; diagnostic=''
+    state='installed'; action='launch'; launchable=true; diagnostic="$SHELL_PROBE_DIAGNOSTIC"
   elif [[ -n "$RESOLVE_BROKEN_REASON" ]]; then
     state='broken'; action='repairInstall'; launchable=false; diagnostic="$RESOLVE_BROKEN_REASON"
   else
-    state='missing'; action='install'; launchable=false; diagnostic=''
+    state='missing'; action='install'; launchable=false; diagnostic="$SHELL_PROBE_DIAGNOSTIC"
   fi
   printf '{"id":'; json_string "$agent"
   printf ',"displayName":'; json_string "$(display_name "$agent")"

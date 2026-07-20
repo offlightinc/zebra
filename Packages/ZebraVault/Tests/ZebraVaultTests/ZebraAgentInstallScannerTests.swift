@@ -127,9 +127,90 @@ final class ZebraAgentInstallScannerTests: XCTestCase {
         XCTAssertFalse(codex.terminalLaunchable)
     }
 
+    func testBundledResolverFallsBackToKnownPathsWhenPTYRunnerIsUnavailable() throws {
+        let custom = try makeResolverFixture(binary: "codex", version: "codex fixture 4.2")
+        let knownBin = custom.home.appendingPathComponent("known-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: knownBin, withIntermediateDirectories: true)
+        let claude = knownBin.appendingPathComponent("claude")
+        try "#!/bin/sh\nprintf 'claude fixture 1.0\\n'\n".write(to: claude, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude.path)
+
+        let result = try runBundledResolver(
+            home: custom.home,
+            timeout: 2,
+            searchPath: knownBin.path,
+            ptyRunner: custom.home.appendingPathComponent("missing-script").path
+        )
+        let candidates = ZebraAgentInstallScanner(environment: makeEnvironment(json: result)).scan()
+        let resolvedClaude = try XCTUnwrap(candidates.first { $0.id == .claude })
+        let unresolvedCodex = try XCTUnwrap(candidates.first { $0.id == .codex })
+
+        XCTAssertEqual(resolvedClaude.installState, .installed)
+        XCTAssertEqual(resolvedClaude.discoverySource, .knownPath)
+        XCTAssertEqual(resolvedClaude.executablePath, claude.path)
+        XCTAssertEqual(resolvedClaude.diagnostic, "login shell PTY unavailable; limited search used")
+        XCTAssertEqual(unresolvedCodex.installState, .missing)
+        XCTAssertEqual(unresolvedCodex.diagnostic, "login shell PTY unavailable; limited search used")
+    }
+
+    func testBundledResolverPreservesCallingTerminalForegroundProcessGroup() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to verify the caller terminal process group")
+        }
+        let home = try makeTemporaryDirectory()
+        let wrapper = home.appendingPathComponent("run-resolver-in-tty")
+        let resolver = try XCTUnwrap(ZebraAgentScanEnvironment.live.resolverExecutablePath)
+        try """
+        #!/bin/bash
+        before="$(/usr/bin/python3 -c 'import os; print(os.tcgetpgrp(0))')"
+        /bin/bash \(shellQuote(resolver)) scan >/dev/null
+        status="$?"
+        after="$(/usr/bin/python3 -c 'import os; print(os.tcgetpgrp(0))')"
+        printf 'FOREGROUND:%s:%s:%s\n' "$before" "$after" "$status"
+        """.write(to: wrapper, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/expect")
+        process.arguments = [
+            "-c",
+            "set timeout 10; spawn -noecho $env(PTY_WRAPPER); expect { -re {FOREGROUND:([0-9]+):([0-9]+):([0-9]+)} {} timeout { exit 124 } eof { exit 125 } }; exit 0",
+        ]
+        process.environment = [
+            "HOME": home.path,
+            "PATH": "/usr/bin:/bin",
+            "PTY_WRAPPER": wrapper.path,
+            "ZEBRA_AGENT_RESOLVER_HOME": home.path,
+            "ZEBRA_AGENT_RESOLVER_PATH": "/usr/bin:/bin",
+            "ZEBRA_AGENT_RESOLVER_LOGIN_SHELL": "/bin/zsh",
+            "ZEBRA_AGENT_RESOLVER_TIMEOUT_SECONDS": "1",
+            "ZEBRA_AGENT_RESOLVER_CODEX_INSTALL_DIR": home.appendingPathComponent("none").path,
+        ]
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        let output = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            + String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+
+        XCTAssertEqual(process.terminationStatus, 0, output)
+        XCTAssertFalse(output.contains("suspended"), output)
+        let expression = try NSRegularExpression(pattern: "FOREGROUND:([0-9]+):([0-9]+):([0-9]+)")
+        let range = NSRange(output.startIndex..., in: output)
+        let match = try XCTUnwrap(expression.firstMatch(in: output, range: range), output)
+        let before = String(output[Range(match.range(at: 1), in: output)!])
+        let after = String(output[Range(match.range(at: 2), in: output)!])
+        let status = String(output[Range(match.range(at: 3), in: output)!])
+        XCTAssertEqual(before, after, output)
+        XCTAssertEqual(status, "0", output)
+    }
+
     func testBundledResolverTimesOutShellStartupAndReturns() throws {
         let home = try makeTemporaryDirectory()
-        try "sleep 10\n".write(
+        let pidFile = home.appendingPathComponent("shell-pids")
+        try "print $$ >> \(shellQuote(pidFile.path))\nsleep 10\n".write(
             to: home.appendingPathComponent(".zshrc"),
             atomically: true,
             encoding: .utf8
@@ -141,6 +222,13 @@ final class ZebraAgentInstallScannerTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 5)
         let scanner = ZebraAgentInstallScanner(environment: makeEnvironment(json: result))
         XCTAssertTrue(scanner.scan().allSatisfy { !$0.terminalLaunchable })
+        let pids = try String(contentsOf: pidFile, encoding: .utf8)
+            .split(whereSeparator: \Character.isNewline)
+            .compactMap { Int32($0) }
+        XCTAssertFalse(pids.isEmpty)
+        for pid in pids {
+            XCTAssertNotEqual(kill(pid, 0), 0, "timed-out login shell \(pid) is still running")
+        }
     }
 
     func testBundledResolverIgnoresPollutedShellOutput() throws {
@@ -245,6 +333,7 @@ final class ZebraAgentInstallScannerTests: XCTestCase {
         searchPath: String = "/usr/bin:/bin",
         skipLoginShell: Bool = false,
         loginShell: String = "/bin/zsh",
+        ptyRunner: String = "/usr/bin/script",
         extraEnvironment: [String: String] = [:]
     ) throws -> String {
         let resolver = try XCTUnwrap(ZebraAgentScanEnvironment.live.resolverExecutablePath)
@@ -257,6 +346,7 @@ final class ZebraAgentInstallScannerTests: XCTestCase {
             "ZEBRA_AGENT_RESOLVER_HOME": home.path,
             "ZEBRA_AGENT_RESOLVER_PATH": searchPath,
             "ZEBRA_AGENT_RESOLVER_LOGIN_SHELL": loginShell,
+            "ZEBRA_AGENT_RESOLVER_PTY_RUNNER": ptyRunner,
             "ZEBRA_AGENT_RESOLVER_TIMEOUT_SECONDS": String(timeout),
             "ZEBRA_AGENT_RESOLVER_CODEX_INSTALL_DIR": home.appendingPathComponent("none").path,
             "ZEBRA_AGENT_RESOLVER_SKIP_LOGIN_SHELL": skipLoginShell ? "1" : "0",
