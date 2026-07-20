@@ -8120,7 +8120,15 @@ struct ZebraSourceOnboardingHelper {
         prefix = os.environ.get("HOMEBREW_PREFIX", "").strip()
         if prefix:
             candidates.append(str(Path(prefix) / "bin" / "brew"))
-        candidates.extend(["/opt/homebrew/bin/brew", "/usr/local/bin/brew"])
+        if "ZEBRA_SOURCE_ONBOARDING_BREW_STANDARD_PATHS" in os.environ:
+            standard_paths = [
+                value.strip()
+                for value in os.environ.get("ZEBRA_SOURCE_ONBOARDING_BREW_STANDARD_PATHS", "").split(os.pathsep)
+                if value.strip()
+            ]
+        else:
+            standard_paths = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+        candidates.extend(standard_paths)
         candidates.append(homebrew_login_shell_candidate())
         seen = set()
         for candidate in candidates:
