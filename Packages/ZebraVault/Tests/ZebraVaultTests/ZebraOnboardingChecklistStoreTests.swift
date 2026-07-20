@@ -5142,6 +5142,109 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSourceOnboardingObsidianSmokeReadReportsInconclusiveICloudSamples() throws {
+        let fixture = try makeObsidianSmokeReadFixture(readMode: "temporary-all")
+
+        let smoke = try runProcess(
+            executableURL: fixture.helperURL,
+            arguments: ["obsidian", "smoke-read"],
+            environment: fixture.environment
+        )
+
+        XCTAssertEqual(smoke.status, 1, "stdout:\n\(smoke.stdout)\nstderr:\n\(smoke.stderr)")
+        let payload = try jsonObject(from: smoke.stdout)
+        XCTAssertEqual(payload["reason"] as? String, "smoke_read_inconclusive")
+        XCTAssertEqual(payload["attemptedFileCount"] as? Int, 5)
+        XCTAssertEqual(payload["suspectedCause"] as? String, "icloud_not_materialized")
+        XCTAssertEqual(payload["retryable"] as? Bool, true)
+        XCTAssertEqual(
+            payload["observedReasons"] as? [String],
+            ["read_temporarily_unavailable"]
+        )
+        let diagnostics = try XCTUnwrap(payload["sampleDiagnostics"] as? [[String: Any]])
+        XCTAssertEqual(diagnostics.count, 5)
+        XCTAssertTrue(diagnostics.allSatisfy { ($0["path"] as? String)?.hasPrefix("note-") == true })
+        XCTAssertTrue(diagnostics.allSatisfy { $0["errno"] as? Int == 35 })
+        XCTAssertTrue(diagnostics.allSatisfy { $0["reason"] as? String == "read_temporarily_unavailable" })
+        XCTAssertFalse(diagnostics.contains { ($0["path"] as? String)?.hasPrefix("/") == true })
+
+        let prompt = try XCTUnwrap(payload["nextPrompt"] as? String)
+        XCTAssertTrue(prompt.contains("did not prove that the entire vault is unreadable"), prompt)
+        XCTAssertTrue(prompt.contains("Finder or Obsidian"), prompt)
+        XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "smoke_read")
+
+        let state = try readSourceOnboardingState(at: fixture.stateURL)
+        let row = try XCTUnwrap(state.progress.sourceRows["obsidian"])
+        XCTAssertEqual(row.attentionReason, "smoke_read_inconclusive")
+        XCTAssertEqual(row.playbookStepID, "smoke_read")
+        let runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual(runState["smokeReadStatus"] as? String, "inconclusive")
+        XCTAssertEqual(runState["attemptedFileCount"] as? Int, 5)
+        XCTAssertEqual(runState["observedReasons"] as? [String], ["read_temporarily_unavailable"])
+    }
+
+    @MainActor
+    func testSourceOnboardingObsidianSmokeReadPassesWhenOneSampleIsReadable() throws {
+        let fixture = try makeObsidianSmokeReadFixture(readMode: "four-denied")
+
+        let smoke = try runProcess(
+            executableURL: fixture.helperURL,
+            arguments: ["obsidian", "smoke-read"],
+            environment: fixture.environment
+        )
+
+        XCTAssertEqual(smoke.status, 0, "stdout:\n\(smoke.stdout)\nstderr:\n\(smoke.stderr)")
+        let payload = try jsonObject(from: smoke.stdout)
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(payload["samplePath"] as? String, "note-5.md")
+        XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "choose_ingest_scope")
+        XCTAssertEqual(payload["partialAccess"] as? Bool, true)
+        XCTAssertEqual(payload["observedReasons"] as? [String], ["access_denied"])
+        let warnings = try XCTUnwrap(payload["sampleWarnings"] as? [[String: Any]])
+        XCTAssertEqual(warnings.count, 4)
+        XCTAssertTrue(warnings.allSatisfy { $0["reason"] as? String == "access_denied" })
+    }
+
+    @MainActor
+    func testSourceOnboardingObsidianSmokeReadDistinguishesMissingVaultAndNoMarkdown() throws {
+        do {
+            let fixture = try makeObsidianSmokeReadFixture()
+            try FileManager.default.removeItem(at: fixture.vault)
+
+            let smoke = try runProcess(
+                executableURL: fixture.helperURL,
+                arguments: ["obsidian", "smoke-read"],
+                environment: fixture.environment
+            )
+
+            XCTAssertEqual(smoke.status, 1, "stdout:\n\(smoke.stdout)\nstderr:\n\(smoke.stderr)")
+            let payload = try jsonObject(from: smoke.stdout)
+            XCTAssertEqual(payload["reason"] as? String, "vault_not_found")
+            XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "confirm_vault_if_needed")
+        }
+
+        do {
+            let fixture = try makeObsidianSmokeReadFixture()
+            for index in 1...5 {
+                try FileManager.default.removeItem(
+                    at: fixture.vault.appendingPathComponent("note-\(index).md", isDirectory: false)
+                )
+            }
+
+            let smoke = try runProcess(
+                executableURL: fixture.helperURL,
+                arguments: ["obsidian", "smoke-read"],
+                environment: fixture.environment
+            )
+
+            XCTAssertEqual(smoke.status, 1, "stdout:\n\(smoke.stdout)\nstderr:\n\(smoke.stderr)")
+            let payload = try jsonObject(from: smoke.stdout)
+            XCTAssertEqual(payload["reason"] as? String, "no_markdown_files")
+            XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "confirm_vault_if_needed")
+        }
+    }
+
+    @MainActor
     func testSourceOnboardingObsidianKoreanScopePromptAndSingleFileIngest() throws {
         let root = try makeTemporaryDirectory()
         let vault = root
@@ -8841,6 +8944,108 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(ZebraSourceOnboardingState.self, from: data)
+    }
+
+    private struct ObsidianSmokeReadFixture {
+        let helperURL: URL
+        let stateURL: URL
+        let vault: URL
+        let environment: [String: String]
+    }
+
+    private func makeObsidianSmokeReadFixture(
+        readMode: String? = nil
+    ) throws -> ObsidianSmokeReadFixture {
+        let root = try makeTemporaryDirectory()
+        let vault = root
+            .appendingPathComponent("Library/Mobile Documents/iCloud~md~obsidian/Documents", isDirectory: true)
+            .appendingPathComponent("ObsidianVault", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".obsidian", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        for index in 1...5 {
+            try "# Note \(index)\nBody".write(
+                to: vault.appendingPathComponent("note-\(index).md", isDirectory: false),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root.appendingPathComponent("onboarding/gbrain-setup-state.json", isDirectory: false)
+        let adapterStateURL = root.appendingPathComponent("onboarding/gbrain-adapter-state.json", isDirectory: false)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let hookDirectory = root.appendingPathComponent("python-hooks", isDirectory: true)
+        try FileManager.default.createDirectory(at: hookDirectory, withIntermediateDirectories: true)
+        try """
+        import errno
+        import os
+        from pathlib import Path
+
+        _original_read_text = Path.read_text
+        _target = os.environ.get("ZEBRA_TEST_OBSIDIAN_VAULT", "")
+        _mode = os.environ.get("ZEBRA_TEST_OBSIDIAN_READ_MODE", "")
+
+        def _fixture_read_text(path, *args, **kwargs):
+            raw = str(path)
+            if _target and raw.startswith(_target + os.sep) and raw.endswith(".md"):
+                if _mode == "temporary-all":
+                    raise OSError(errno.EDEADLK, "Resource deadlock avoided", raw)
+                if _mode == "four-denied" and path.name != "note-5.md":
+                    raise PermissionError(errno.EACCES, "Permission denied", raw)
+            return _original_read_text(path, *args, **kwargs)
+
+        Path.read_text = _fixture_read_text
+        """.write(
+            to: hookDirectory.appendingPathComponent("sitecustomize.py", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        var environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+            "ZEBRA_TEST_OBSIDIAN_VAULT": pythonResolvedPath(vault),
+            "PYTHONPATH": hookDirectory.path,
+        ]
+        if let readMode {
+            environment["ZEBRA_TEST_OBSIDIAN_READ_MODE"] = readMode
+        }
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["intake", "--raw", "Obsidian", "--candidate", "obsidian=Obsidian"],
+            environment: environment
+        ).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["confirm", "--answer", "yes"],
+            environment: environment
+        ).status, 0)
+        let next = try runProcess(
+            executableURL: helperURL,
+            arguments: ["next"],
+            environment: environment
+        )
+        XCTAssertEqual(next.status, 0, "stdout:\n\(next.stdout)\nstderr:\n\(next.stderr)")
+        XCTAssertEqual(try jsonObject(from: next.stdout)["nextPlaybookStepID"] as? String, "smoke_read")
+        return ObsidianSmokeReadFixture(
+            helperURL: helperURL,
+            stateURL: stateURL,
+            vault: vault,
+            environment: environment
+        )
     }
 
     private func stateObject(in url: URL) throws -> [String: Any] {
