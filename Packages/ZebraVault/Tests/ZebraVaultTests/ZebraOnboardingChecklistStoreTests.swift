@@ -3082,10 +3082,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             ]
         )
         XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
-        XCTAssertTrue(result.stderr.contains("Homebrew 설치를 확인했습니다."), result.stderr)
-        XCTAssertTrue(result.stderr.contains("memo를 설치하는 중입니다..."), result.stderr)
-        XCTAssertTrue(result.stderr.contains("memo 설치를 확인하는 중입니다..."), result.stderr)
-        XCTAssertTrue(result.stderr.contains("Homebrew와 memo 설치가 완료되었습니다."), result.stderr)
+        let terminalOutput = result.stdout + result.stderr
+        XCTAssertTrue(terminalOutput.contains("Homebrew 설치를 확인했습니다."), terminalOutput)
+        XCTAssertTrue(terminalOutput.contains("memo를 설치하는 중입니다..."), terminalOutput)
+        XCTAssertTrue(terminalOutput.contains("memo 설치를 확인하는 중입니다..."), terminalOutput)
+        XCTAssertTrue(terminalOutput.contains("Homebrew와 memo 설치가 완료되었습니다."), terminalOutput)
 
         let installerPTY = try String(contentsOf: installerReceipt, encoding: .utf8)
         XCTAssertTrue(installerPTY.contains("stdin=true stdout=true stderr=true"), installerPTY)

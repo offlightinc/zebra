@@ -641,6 +641,17 @@ struct ZebraSourceOnboardingHelper {
             or "en"
         )
 
+    def localized_message(en, ko, ja):
+        language = onboarding_language()
+        if language == "ko":
+            return ko
+        if language == "ja":
+            return ja
+        return en
+
+    def print_progress(en, ko, ja):
+        print(localized_message(en, ko, ja), file=sys.stderr, flush=True)
+
     def now():
         return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -9138,6 +9149,11 @@ struct ZebraSourceOnboardingHelper {
         path_entries = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
         if brew_bin not in path_entries:
             os.environ["PATH"] = os.pathsep.join([brew_bin] + path_entries)
+        print_progress(
+            "Homebrew installation verified.",
+            "Homebrew 설치를 확인했습니다.",
+            "Homebrew のインストールを確認しました。",
+        )
         state = load_or_create_state()
         run_state = load_source_run_state("apple-notes")
         plan = run_state.get("installPlan") if isinstance(run_state.get("installPlan"), dict) else apple_notes_install_plan(False)
@@ -9151,6 +9167,12 @@ struct ZebraSourceOnboardingHelper {
         })
         run_state["installPlan"] = plan
         save_source_run_state("apple-notes", run_state)
+
+        print_progress(
+            "Installing memo...",
+            "memo를 설치하는 중입니다...",
+            "memo をインストールしています...",
+        )
 
         if "memo_tap" not in completed_stages:
             tap_result = apple_reminders_command_result([brew_path, "tap", "antoniorodr/memo"], timeout=300)
@@ -9176,6 +9198,11 @@ struct ZebraSourceOnboardingHelper {
             completed_stages.append("memo_install")
         plan["completedStages"] = completed_stages
 
+        print_progress(
+            "Verifying memo installation...",
+            "memo 설치를 확인하는 중입니다...",
+            "memo のインストールを確認しています...",
+        )
         memo_path = required_cli_command_path("apple-notes", run_state)
         if not memo_path:
             plan.update({"status": "failed", "failedStage": "memo_verify", "updatedAt": now()})
@@ -9197,7 +9224,14 @@ struct ZebraSourceOnboardingHelper {
         })
         run_state["installPlan"] = plan
         save_source_run_state("apple-notes", run_state)
-        return check_required_cli("apple-notes")
+        result = check_required_cli("apple-notes")
+        if result == 0:
+            print_progress(
+                "Homebrew and memo installation completed.",
+                "Homebrew와 memo 설치가 완료되었습니다.",
+                "Homebrew と memo のインストールが完了しました。",
+            )
+        return result
 
     def apple_notes_check_cli():
         state = load_or_create_state()
