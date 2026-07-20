@@ -27,16 +27,29 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         let eventStore = FakeRemindersEventStore(
             authorizationStatus: .notDetermined,
             requestedAuthorizationStatus: .authorized,
-            lists: [ZebraRemindersListSnapshot(id: "work", title: "Work")],
+            lists: [
+                ZebraRemindersListSnapshot(id: "work-primary", title: "Work"),
+                ZebraRemindersListSnapshot(id: "work-secondary", title: "Work"),
+            ],
             reminders: [
                 ZebraReminderSnapshot(
                     id: "r1",
                     title: "Investor update",
                     notes: "Send the revised deck",
-                    listID: "work",
+                    listID: "work-primary",
                     listTitle: "Work",
                     isCompleted: false,
                     priority: 1,
+                    dueDate: nil
+                ),
+                ZebraReminderSnapshot(
+                    id: "r2",
+                    title: "Unapproved duplicate-list reminder",
+                    notes: nil,
+                    listID: "work-secondary",
+                    listTitle: "Work",
+                    isCompleted: false,
+                    priority: 0,
                     dueDate: nil
                 )
             ]
@@ -96,12 +109,14 @@ final class ZebraRemindersEventKitTests: XCTestCase {
 
         let smoke = try await runHelper(helperURL, ["apple-reminders", "smoke-list"], environment, broker)
         XCTAssertEqual(smoke.status, 0, smoke.stderr)
-        XCTAssertEqual(try jsonObject(smoke.stdout)["openReminderCount"] as? Int, 1)
+        XCTAssertEqual(try jsonObject(smoke.stdout)["openReminderCount"] as? Int, 2)
+        let smokeLists = try XCTUnwrap(try jsonObject(smoke.stdout)["lists"] as? [[String: String]])
+        XCTAssertEqual(smokeLists.map { $0["id"] }, ["work-primary", "work-secondary"])
         XCTAssertEqual(try runHelper(
             helperURL,
             [
                 "apple-reminders", "choose-scope", "--scope", "custom",
-                "--list", "Work", "--status", "open",
+                "--list-id", "work-primary", "--list", "Work", "--status", "open",
             ],
             environment
         ).status, 0)
@@ -122,6 +137,7 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         XCTAssertTrue(artifact.contains("item_count: 1"), artifact)
         XCTAssertTrue(artifact.contains("Investor update"), artifact)
         XCTAssertTrue(artifact.contains("Send the revised deck"), artifact)
+        XCTAssertFalse(artifact.contains("Unapproved duplicate-list reminder"), artifact)
 
         let readback = try runHelper(helperURL, ["apple-reminders", "verify-readback"], environment)
         XCTAssertEqual(readback.status, 0, readback.stderr)
@@ -424,6 +440,41 @@ final class ZebraRemindersEventKitTests: XCTestCase {
             japanese["NSRemindersFullAccessUsageDescription"] as? String,
             "ZebraはSource Onboardingで承認した範囲のAppleリマインダーを読み取ります。"
         )
+    }
+
+    func testZebraOverlayStillFailsWhenLocalizationTablesAreMissing() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ZebraRemindersOverlayGuardTests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let app = root.appendingPathComponent("Zebra.app", isDirectory: true)
+        let resources = app.appendingPathComponent("Contents/Resources", isDirectory: true)
+        let infoPlist = app.appendingPathComponent("Contents/Info.plist")
+        try FileManager.default.createDirectory(
+            at: resources.appendingPathComponent("en.lproj", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try writePlist(["CFBundleName": "Zebra"], to: infoPlist)
+
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let result = try runHelper(
+            URL(fileURLWithPath: "/usr/bin/python3"),
+            [
+                repositoryRoot.appendingPathComponent("scripts/apply-zebra-localization-overlay.py").path,
+                app.path,
+                "--overlay",
+                repositoryRoot.appendingPathComponent("scripts/zebra-localization-overlay.json").path,
+            ],
+            [:]
+        )
+
+        XCTAssertNotEqual(result.status, 0, result.stdout)
+        XCTAssertTrue(result.stderr.contains("no localization tables were changed"), result.stderr)
     }
 }
 
