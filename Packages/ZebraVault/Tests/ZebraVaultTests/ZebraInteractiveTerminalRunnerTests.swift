@@ -239,7 +239,7 @@ final class ZebraInteractiveTerminalRunnerTests: XCTestCase {
         XCTAssertEqual(receipt["surfaceID"] as? String, "surface-fast")
     }
 
-    func testSuccessfulChildRestoresTheOriginSurface() throws {
+    func testSuccessfulChildClosesTaskSurfaceBeforeRestoringOrigin() throws {
         let root = try temporaryDirectory()
         let runner = try installedRunner(in: root)
         let calls = root.appendingPathComponent("focus-calls.txt")
@@ -272,13 +272,20 @@ final class ZebraInteractiveTerminalRunnerTests: XCTestCase {
 
         XCTAssertEqual(result.status, 0, result.stderr)
         let recorded = try String(contentsOf: calls, encoding: .utf8)
+        XCTAssertTrue(recorded.contains("rpc surface.close"), recorded)
+        XCTAssertTrue(recorded.contains("surface-task"), recorded)
         XCTAssertTrue(recorded.contains("rpc surface.focus"), recorded)
         XCTAssertTrue(recorded.contains("surface-origin"), recorded)
+        let callLines = recorded.split(separator: "\n").map(String.init)
+        let closeIndex = try XCTUnwrap(callLines.firstIndex { $0.contains("rpc surface.close") })
+        let focusIndex = try XCTUnwrap(callLines.firstIndex { $0.contains("rpc surface.focus") })
+        XCTAssertLessThan(closeIndex, focusIndex, recorded)
         let finalLine = try XCTUnwrap(result.stdout.split(separator: "\n").last)
         let payload = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(finalLine.utf8)) as? [String: Any]
         )
         let receipt = try XCTUnwrap(payload["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["taskSurfaceCloseStatus"] as? String, "closed")
         XCTAssertEqual(receipt["originFocusStatus"] as? String, "focused")
     }
 
