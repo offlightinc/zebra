@@ -8060,13 +8060,72 @@ struct ZebraSourceOnboardingHelper {
         command_path = required_cli_command_path("apple-reminders", run_state)
         return run_state, command_path
 
-    def apple_reminders_brew_path():
-        if "ZEBRA_SOURCE_ONBOARDING_BREW_PATH" in os.environ:
-            override = os.environ.get("ZEBRA_SOURCE_ONBOARDING_BREW_PATH", "").strip()
-            if override and Path(override).is_file() and os.access(override, os.X_OK):
-                return override
+    def homebrew_candidate_is_verified(candidate, trusted_override=False):
+        candidate = (candidate or "").strip()
+        if not candidate:
+            return False
+        path = Path(candidate)
+        if not path.is_absolute() or not path.is_file() or not os.access(str(path), os.X_OK):
+            return False
+        resolved = str(path.resolve())
+        if ".app/Contents/" in resolved and not trusted_override:
+            return False
+        try:
+            result = subprocess.run(
+                [resolved, "--version"], text=True, capture_output=True, timeout=10
+            )
+        except Exception:
+            return False
+        output = ((result.stdout or "") + "\\n" + (result.stderr or "")).strip()
+        return result.returncode == 0 and "Homebrew" in output
+
+    def sanitized_shell_environment():
+        environment = os.environ.copy()
+        inherited_zdotdir = environment.get("CMUX_ZSH_ZDOTDIR", "").strip()
+        if inherited_zdotdir and Path(inherited_zdotdir).is_dir():
+            environment["ZDOTDIR"] = inherited_zdotdir
+        else:
+            environment.pop("ZDOTDIR", None)
+        return environment
+
+    def homebrew_login_shell_candidate():
+        shell = os.environ.get("SHELL", "/bin/zsh").strip() or "/bin/zsh"
+        if not Path(shell).is_file() or not os.access(shell, os.X_OK):
             return ""
-        return shutil.which("brew") or ""
+        try:
+            result = subprocess.run(
+                [shell, "-lc", "command -v brew"],
+                text=True,
+                capture_output=True,
+                timeout=10,
+                env=sanitized_shell_environment(),
+            )
+        except Exception:
+            return ""
+        lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+        if result.returncode != 0 or len(lines) != 1:
+            return ""
+        return lines[0]
+
+    def apple_reminders_brew_path():
+        override_present = "ZEBRA_SOURCE_ONBOARDING_BREW_PATH" in os.environ
+        override = os.environ.get("ZEBRA_SOURCE_ONBOARDING_BREW_PATH", "").strip()
+        if override_present:
+            return override if homebrew_candidate_is_verified(override, trusted_override=True) else ""
+        candidates = [shutil.which("brew") or ""]
+        prefix = os.environ.get("HOMEBREW_PREFIX", "").strip()
+        if prefix:
+            candidates.append(str(Path(prefix) / "bin" / "brew"))
+        candidates.extend(["/opt/homebrew/bin/brew", "/usr/local/bin/brew"])
+        candidates.append(homebrew_login_shell_candidate())
+        seen = set()
+        for candidate in candidates:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            if homebrew_candidate_is_verified(candidate):
+                return str(Path(candidate).resolve())
+        return ""
 
     def apple_reminders_command_result(command, timeout=120):
         try:
@@ -8215,7 +8274,11 @@ struct ZebraSourceOnboardingHelper {
         if not installer:
             installer = '/bin/bash -c "$(/usr/bin/curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
         try:
-            result = subprocess.run(["/bin/bash", "-c", installer], timeout=1800)
+            result = subprocess.run(
+                ["/bin/bash", "-c", installer],
+                timeout=1800,
+                env=sanitized_shell_environment(),
+            )
         except subprocess.TimeoutExpired:
             return record_homebrew_install_failure(source_id, "homebrew_install_timeout", 124)
         except KeyboardInterrupt:
@@ -8223,7 +8286,7 @@ struct ZebraSourceOnboardingHelper {
         except Exception:
             return record_homebrew_install_failure(source_id, "homebrew_installer_failed", 1)
         brew_path = apple_reminders_brew_path()
-        if result.returncode != 0 or not brew_path:
+        if not brew_path:
             reason = {
                 124: "homebrew_install_timeout",
                 130: "homebrew_install_cancelled",
@@ -8232,7 +8295,12 @@ struct ZebraSourceOnboardingHelper {
             return record_homebrew_install_failure(source_id, reason, result.returncode or 1)
         if source_id == "apple-notes":
             return apple_notes_install_memo(brew_path, resumed_after_homebrew=True)
-        print(json.dumps({"ok": True, "reason": "homebrew_install_succeeded", "brewPath": brew_path}, sort_keys=True))
+        print(json.dumps({
+            "ok": True,
+            "reason": "homebrew_install_succeeded",
+            "brewPath": brew_path,
+            "installerReturnCode": result.returncode,
+        }, sort_keys=True))
         return 0
 
     def apple_reminders_record_attention(run_state, state, reason, step="check_remindctl_cli"):

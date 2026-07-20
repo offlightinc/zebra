@@ -3021,6 +3021,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             /usr/bin/python3 -c 'import os; print("pgid=%s tcpgid=%s" % (os.getpgrp(), os.tcgetpgrp(0)))' >> '\(shellSingleQuoted(installerReceipt.path))'
             /bin/cat > '\(shellSingleQuoted(brewURL.path))' <<'EOS'
             #!/bin/sh
+            if [ "$1" = "--version" ]; then echo "Homebrew 99.0-pty-test"; exit 0; fi
             if [ -t 0 ]; then stdin_tty=true; else stdin_tty=false; fi
             if [ -t 1 ]; then stdout_tty=true; else stdout_tty=false; fi
             if [ -t 2 ]; then stderr_tty=true; else stderr_tty=false; fi
@@ -3183,7 +3184,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let expectURL = root.appendingPathComponent("postcondition.expect")
         try """
         set timeout 20
-        spawn env PATH=/usr/bin:/bin HOMEBREW_PREFIX=$env(TEST_PREFIX) ZDOTDIR=$env(TEST_BUNDLE_ZDOTDIR) ZEBRA_SOURCE_ONBOARDING_STATE=$env(TEST_STATE) ZEBRA_SOURCE_ONBOARDING_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en ZEBRA_SOURCE_ONBOARDING_HOMEBREW_INSTALLER=$env(TEST_INSTALLER) $env(TEST_HELPER) install-homebrew --source apple-reminders
+        spawn env PATH=/usr/bin:/bin HOMEBREW_PREFIX=$env(TEST_PREFIX) ZEBRA_SOURCE_ONBOARDING_BREW_PATH=$env(TEST_BREW) ZDOTDIR=$env(TEST_BUNDLE_ZDOTDIR) ZEBRA_SOURCE_ONBOARDING_STATE=$env(TEST_STATE) ZEBRA_SOURCE_ONBOARDING_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en ZEBRA_SOURCE_ONBOARDING_HOMEBREW_INSTALLER=$env(TEST_INSTALLER) $env(TEST_HELPER) install-homebrew --source apple-reminders
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -3194,6 +3195,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             arguments: [expectURL.path],
             environment: [
                 "TEST_PREFIX": prefix.path,
+                "TEST_BREW": brewURL.path,
                 "TEST_BUNDLE_ZDOTDIR": "/Volumes/Zebra/Zebra.app/Contents/Resources/shell-integration",
                 "TEST_STATE": stateURL.path,
                 "TEST_HOME": root.path,
