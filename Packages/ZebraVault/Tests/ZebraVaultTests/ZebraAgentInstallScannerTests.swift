@@ -83,6 +83,34 @@ final class ZebraAgentInstallScannerTests: XCTestCase {
         XCTAssertEqual(codex.discoverySource, .loginShell)
     }
 
+    func testBundledResolverRunsInteractiveLoginShellInIsolatedForegroundPTY() throws {
+        let home = try makeTemporaryDirectory()
+        let receipt = home.appendingPathComponent("login-shell-pty.jsonl")
+        let loginShell = home.appendingPathComponent("record-login-shell")
+        try """
+        #!/bin/sh
+        /usr/bin/python3 -c 'import json,os; p=os.environ["PTY_RECEIPT"]; f=open(p,"a"); tty=[os.isatty(i) for i in range(3)]; pg=os.getpgrp(); tp=os.tcgetpgrp(0) if tty[0] else -1; print(json.dumps({"tty":tty,"pgid":pg,"tcpgid":tp}),file=f); f.close()'
+        exit 1
+        """.write(to: loginShell, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: loginShell.path)
+
+        _ = try runBundledResolver(
+            home: home,
+            timeout: 1,
+            loginShell: loginShell.path,
+            extraEnvironment: ["PTY_RECEIPT": receipt.path]
+        )
+
+        let records = try String(contentsOf: receipt, encoding: .utf8)
+            .split(whereSeparator: \Character.isNewline)
+            .map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        XCTAssertFalse(records.isEmpty)
+        for record in records {
+            XCTAssertEqual(record["tty"] as? [Bool], [true, true, true], "\(record)")
+            XCTAssertEqual(record["pgid"] as? Int, record["tcpgid"] as? Int, "\(record)")
+        }
+    }
+
     func testBundledResolverRejectsAliasWithoutAbsoluteExecutablePath() throws {
         let home = try makeTemporaryDirectory()
         try "alias codex='printf codex-fixture'\n".write(
@@ -215,7 +243,9 @@ final class ZebraAgentInstallScannerTests: XCTestCase {
         home: URL,
         timeout: Int,
         searchPath: String = "/usr/bin:/bin",
-        skipLoginShell: Bool = false
+        skipLoginShell: Bool = false,
+        loginShell: String = "/bin/zsh",
+        extraEnvironment: [String: String] = [:]
     ) throws -> String {
         let resolver = try XCTUnwrap(ZebraAgentScanEnvironment.live.resolverExecutablePath)
         let process = Process()
@@ -226,11 +256,11 @@ final class ZebraAgentInstallScannerTests: XCTestCase {
             "PATH": "/usr/bin:/bin",
             "ZEBRA_AGENT_RESOLVER_HOME": home.path,
             "ZEBRA_AGENT_RESOLVER_PATH": searchPath,
-            "ZEBRA_AGENT_RESOLVER_LOGIN_SHELL": "/bin/zsh",
+            "ZEBRA_AGENT_RESOLVER_LOGIN_SHELL": loginShell,
             "ZEBRA_AGENT_RESOLVER_TIMEOUT_SECONDS": String(timeout),
             "ZEBRA_AGENT_RESOLVER_CODEX_INSTALL_DIR": home.appendingPathComponent("none").path,
             "ZEBRA_AGENT_RESOLVER_SKIP_LOGIN_SHELL": skipLoginShell ? "1" : "0",
-        ]
+        ].merging(extraEnvironment) { _, new in new }
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
