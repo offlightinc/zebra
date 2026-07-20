@@ -78,6 +78,16 @@ final class BrainSyncServiceTests: XCTestCase {
         XCTAssertTrue(failure.detail.contains("Cannot rebase onto multiple branches"))
     }
 
+    func testOtherRebaseFailureRemainsUnknownWithoutAutomaticRetry() {
+        let failure = BrainSyncService.classifyFailure(
+            stderr: "fatal: invalid upstream 'origin/main'",
+            stdout: "[zebra-brain-sync] phase: pull --rebase"
+        )
+
+        XCTAssertEqual(failure.reason, .unknown)
+        XCTAssertFalse(failure.reason.allowsAutomaticRetry)
+    }
+
     func testGitDnsFailureWithoutReasonTagClassifiesAsOffline() {
         let failure = BrainSyncService.classifyFailure(
             stderr: "fatal: unable to access 'https://github.com/offlightinc/b-brain-offlight.git/': Could not resolve host: github.com",

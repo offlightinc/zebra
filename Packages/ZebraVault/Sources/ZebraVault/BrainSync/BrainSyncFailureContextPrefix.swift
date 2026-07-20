@@ -76,6 +76,10 @@ public enum BrainSyncFailureContextPrefix {
             return """
             Another sync lock is present. Use the lock detail in the failure message to determine whether the process is still alive or stale. Do not remove a live lock; if stale, explain the cleanup before acting.
             """
+        case .multipleRebaseTargets:
+            return """
+            Git pull found more than one rebase target. Inspect the recent sync log and current branch state, then retry without rewriting repository history.
+            """
         case .unknown:
             let raw = rawReasonId.map { " The script emitted unrecognized reason `\(BrainFailureContextPrefixBuilder.inlineSafe($0))`." } ?? ""
             return """
@@ -103,7 +107,7 @@ public enum BrainSyncFailureContextPrefix {
         case .conflict:
             commands.append("tail -80 ~/Library/Logs/zebra/brainsync.log")
             commands.append("rg -n '^(<<<<<<<|=======|>>>>>>>)' -g '*.md' .")
-        case .alreadyRunning:
+        case .alreadyRunning, .multipleRebaseTargets:
             commands.append("tail -120 ~/Library/Logs/zebra/brainsync.log")
         case .hookFailed, .unknown:
             commands.append("tail -80 ~/Library/Logs/zebra/brainsync.log")

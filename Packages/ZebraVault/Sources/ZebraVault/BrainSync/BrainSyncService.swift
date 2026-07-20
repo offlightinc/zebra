@@ -54,6 +54,7 @@ public final class BrainSyncService: ObservableObject {
         case conflict
         case notGbrainRepo
         case alreadyRunning
+        case multipleRebaseTargets
         case unknown
 
         public var humanLabel: String {
@@ -68,13 +69,14 @@ public final class BrainSyncService: ObservableObject {
             case .conflict: return String(localized: "brainSync.reason.conflict", defaultValue: "동기화 충돌")
             case .notGbrainRepo: return String(localized: "brainSync.reason.notGbrainRepo", defaultValue: "GBrain repo 아님")
             case .alreadyRunning: return String(localized: "brainSync.reason.alreadyRunning", defaultValue: "Sync already running")
+            case .multipleRebaseTargets: return String(localized: "brainSync.reason.multipleRebaseTargets", defaultValue: "Git rebase target changed")
             case .unknown: return String(localized: "brainSync.reason.unknown", defaultValue: "기타 오류")
             }
         }
 
         var allowsAutomaticRetry: Bool {
             switch self {
-            case .offline, .rateLimit, .alreadyRunning:
+            case .offline, .rateLimit, .alreadyRunning, .multipleRebaseTargets:
                 return true
             case .authExpired, .pushRejected, .permissionDenied, .diskFull, .hookFailed, .conflict, .notGbrainRepo, .unknown:
                 return false
@@ -514,6 +516,13 @@ public final class BrainSyncService: ObservableObject {
         // 변경 시 갱신 필요.
         let haystack = (stderr + "\n" + stdout).lowercased()
         let detail = diagnosticDetail(stderr: stderr, stdout: stdout, fallback: taggedFailure?.detail)
+
+        // Dan's stale failure: `git pull --rebase` fetched multiple merge heads.
+        // Keep this exact diagnostic narrow instead of making general unknown
+        // failures retryable.
+        if haystack.contains("cannot rebase onto multiple branches") {
+            return Failure(reason: .multipleRebaseTargets, detail: detail)
+        }
 
         // 1. conflict — 가장 구체. merge/rebase 도중 충돌이 stderr 에 명시.
         if haystack.contains("conflict (content)")
