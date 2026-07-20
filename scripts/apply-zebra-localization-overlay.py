@@ -71,6 +71,34 @@ def apply_table_overlay(resources_dir, table_name, table_overlay, brand_source, 
     return changed, skipped
 
 
+def apply_info_plist_overlay(app_path, resources_dir, overlay):
+    changed = 0
+    info_overlay = overlay.get("infoPlist", {})
+    fixed_values = info_overlay.get("fixedValues", {})
+    info_path = app_path / "Contents" / "Info.plist"
+    if fixed_values:
+        values = read_strings(info_path)
+        before = dict(values)
+        values.update(fixed_values)
+        if values != before:
+            write_strings(info_path, values)
+            changed += 1
+
+    localized_values = info_overlay.get("localizedValues", {})
+    for language, values in localized_values.items():
+        lproj_dir = resources_dir / f"{language}.lproj"
+        if not lproj_dir.is_dir():
+            continue
+        strings_path = lproj_dir / "InfoPlist.strings"
+        existing = read_strings(strings_path) if strings_path.exists() else {}
+        before = dict(existing)
+        existing.update(values)
+        if existing != before:
+            write_strings(strings_path, existing)
+            changed += 1
+    return changed
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Apply Zebra release-only localization overrides to a built app bundle."
@@ -117,6 +145,10 @@ def main():
         total_changed += changed
         total_skipped += skipped
         print(f"overlay {table_name}: changed {changed} locale(s), skipped {skipped}")
+
+    info_changed = apply_info_plist_overlay(app_path, resources_dir, overlay)
+    total_changed += info_changed
+    print(f"overlay InfoPlist: changed {info_changed} artifact(s)")
 
     if total_changed == 0:
         print("error: no localization tables were changed", file=sys.stderr)

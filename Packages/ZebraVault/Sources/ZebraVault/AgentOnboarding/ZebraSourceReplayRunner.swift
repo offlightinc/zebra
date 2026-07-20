@@ -99,39 +99,6 @@ struct ZebraSourceReplayRunner {
           }
         }
         """,
-        "apple-reminders.remindctl.baseline.json": """
-        {
-          "schemaVersion": 1,
-          "kind": "source-replay-scenario",
-          "extends": "common.baseline.v1",
-          "id": "apple-reminders.remindctl.baseline",
-          "source": "apple-reminders",
-          "playbookID": "apple-reminders.remindctl",
-          "playbookVersion": "v1",
-          "fixture": "apple-reminders.remindctl.baseline.v1.json",
-          "defaultBatchID": "apple-reminders-remindctl-baseline",
-          "append": {
-            "preflightCommands": [
-              {
-                "id": "apple-reminders.remindctl-authorize",
-                "argv": ["remindctl", "authorize"],
-                "timeout": 300,
-                "expectedExitCodes": [0],
-                "failureReason": "reminders_permission_required",
-                "prompt": "If macOS asks for Reminders access, approve it and let this command finish before the replay runtime starts."
-              },
-              {
-                "id": "apple-reminders.remindctl-read-access",
-                "argv": ["remindctl", "list", "--json"],
-                "timeout": 120,
-                "expectedExitCodes": [0],
-                "failureReason": "reminders_read_access_required",
-                "prompt": "If macOS asks for Reminders access, approve it and let this read-only check finish before the replay runtime starts."
-              }
-            ]
-          }
-        }
-        """,
     ]
 
     private static let fallbackPolicies = [
@@ -221,39 +188,6 @@ struct ZebraSourceReplayRunner {
               "matcher": {
                 "type": "regex",
                 "pattern": "(?i)(start this ingest plan|confirm.*plan|approved scope|ingest plan|승인|시작)"
-              },
-              "answer": "yes",
-              "approval": "requires_human_approval",
-              "secretPolicy": "forbid_raw_secret"
-            }
-          ]
-        }
-        """,
-        "apple-reminders.remindctl.baseline.v1.json": """
-        {
-          "schemaVersion": 1,
-          "kind": "source-replay-fixture",
-          "source": "apple-reminders",
-          "playbookID": "apple-reminders.remindctl",
-          "playbookVersion": "v1",
-          "purpose": "Apple Reminders Source Onboarding baseline replay using remindctl and all open reminders as the approved ingest scope.",
-          "initialPrompt": "Run Zebra Source Onboarding for Apple Reminders using the installed zebra-source-onboarding helper. Start by running `zebra-source-onboarding intake --raw \\"Apple Reminders\\" --candidate \\"apple-reminders=Apple Reminders\\"`, then `zebra-source-onboarding confirm --answer yes`, then `zebra-source-onboarding next`. After every helper command, continue only from the JSON `nextPrompt` and current `nextPlaybookStepID`. If `nextPrompt` says a source completion report is required, briefly tell the user the source is complete, run `zebra-source-onboarding report --status completed --source <source-id>`, then run `zebra-source-onboarding next` only when the report stdout tells you to. When user input is needed, ask clearly; this replay fixture will answer by playbook step.",
-          "interventions": [
-            {
-              "playbookStepID": "choose_ingest_scope",
-              "matcher": {
-                "type": "regex",
-                "pattern": "(?i)(all open reminders|one list|today|this week|custom|skip apple reminders|which scope|범위|미리알림|건너뛰기)"
-              },
-              "answer": "All open reminders",
-              "approval": "storable",
-              "secretPolicy": "forbid_raw_secret"
-            },
-            {
-              "playbookStepID": "confirm_ingest_plan",
-              "matcher": {
-                "type": "regex",
-                "pattern": "(?i)(confirm.*plan|explicit approval|approved scope|ingest plan|승인|시작)"
               },
               "answer": "yes",
               "approval": "requires_human_approval",

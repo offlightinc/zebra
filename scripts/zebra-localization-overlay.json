@@ -1,6 +1,19 @@
 {
   "brandSource": "cmux",
   "brandName": "Zebra",
+  "infoPlist": {
+    "fixedValues": {
+      "NSRemindersFullAccessUsageDescription": "Zebra reads the Apple Reminders scope you approve during Source Onboarding."
+    },
+    "localizedValues": {
+      "en": {
+        "NSRemindersFullAccessUsageDescription": "Zebra reads the Apple Reminders scope you approve during Source Onboarding."
+      },
+      "ja": {
+        "NSRemindersFullAccessUsageDescription": "ZebraはSource Onboardingで承認した範囲のAppleリマインダーを読み取ります。"
+      }
+    }
+  },
   "tables": {
     "Localizable": {
       "replaceBrandInKeys": [

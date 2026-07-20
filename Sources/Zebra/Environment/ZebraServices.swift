@@ -20,6 +20,8 @@ import ZebraVault
 /// for the rationale and rollout plan.
 @MainActor
 struct ZebraServices {
+    private static let sharedRemindersEventKit = ZebraRemindersRequestBroker.live()
+
     let sidebarMode: VerticalTabsSidebarModeState
     let vault: VerticalTabsSidebarVaultState
     let markdownFiles: MarkdownFileListStore
@@ -32,6 +34,7 @@ struct ZebraServices {
     let brainSync: BrainSyncSelectionService
     let brainSaveStatus: BrainSaveStatusService
     let onboardingChecklist: ZebraOnboardingChecklistStore
+    let remindersEventKit: ZebraRemindersRequestBroker
 
     /// Per-panel side-car controllers for markdown panels. Owner of all
     /// `MarkdownPanelController` instances — views may only `@ObservedObject`
@@ -60,6 +63,8 @@ struct ZebraServices {
         let brainSaveStatus = BrainSaveStatusService()
         let email = ZebraEmailListStore()
         let agentTerminals = ZebraAgentTerminalRegistry()
+        let remindersEventKit = Self.sharedRemindersEventKit
+        remindersEventKit.start()
         let emailDetail = ZebraEmailDetailStore(
             onConnectionRepairRequired: { repairState in
                 email.beginConnectionRepair(repairState)
@@ -87,6 +92,7 @@ struct ZebraServices {
             brainSync: brainSync,
             brainSaveStatus: brainSaveStatus,
             onboardingChecklist: ZebraOnboardingChecklistStore(),
+            remindersEventKit: remindersEventKit,
             panelControllers: MarkdownPanelControllerRegistry(),
             agentTerminals: agentTerminals
         )

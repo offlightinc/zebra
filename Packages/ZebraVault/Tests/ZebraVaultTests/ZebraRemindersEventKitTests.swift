@@ -73,6 +73,17 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         XCTAssertEqual(try jsonObject(consent.stdout)["reason"] as? String, "reminders_permission_consent_required")
         XCTAssertEqual(eventStore.authorizationRequestCount, 0)
 
+        let declined = try await runHelper(
+            helperURL,
+            ["apple-reminders", "check-access", "--permission-answer", "no"],
+            environment,
+            broker
+        )
+        XCTAssertEqual(declined.status, 1)
+        XCTAssertEqual(try jsonObject(declined.stdout)["reason"] as? String, "reminders_permission_declined")
+        XCTAssertEqual(try jsonObject(declined.stdout)["authorizationStatus"] as? String, "notDetermined")
+        XCTAssertEqual(eventStore.authorizationRequestCount, 0)
+
         let permission = try await runHelper(
             helperURL,
             ["apple-reminders", "check-access", "--permission-answer", "yes"],
@@ -88,7 +99,10 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         XCTAssertEqual(try jsonObject(smoke.stdout)["openReminderCount"] as? Int, 1)
         XCTAssertEqual(try runHelper(
             helperURL,
-            ["apple-reminders", "choose-scope", "--scope", "one-list", "--list", "Work"],
+            [
+                "apple-reminders", "choose-scope", "--scope", "custom",
+                "--list", "Work", "--status", "open",
+            ],
             environment
         ).status, 0)
         XCTAssertEqual(try runHelper(
@@ -113,7 +127,10 @@ final class ZebraRemindersEventKitTests: XCTestCase {
     }
 
     func testAuthorizationStatusDoesNotRequestAndExplicitRequestRunsOnce() async throws {
-        let store = FakeRemindersEventStore(authorizationStatus: .notDetermined)
+        let store = FakeRemindersEventStore(
+            authorizationStatus: .notDetermined,
+            requestedAuthorizationStatus: .authorized
+        )
         let processor = ZebraRemindersRequestProcessor(eventStore: store)
 
         let statusReceipt = await processor.process(
@@ -129,7 +146,6 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         XCTAssertEqual(statusReceipt.authorizationStatus, .notDetermined)
         XCTAssertEqual(store.authorizationRequestCount, 0)
 
-        store.authorizationStatusValue = .authorized
         let requestReceipt = await processor.process(
             ZebraRemindersRequest(
                 requestID: "authorize-1",
@@ -376,6 +392,7 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         }
 
         let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
