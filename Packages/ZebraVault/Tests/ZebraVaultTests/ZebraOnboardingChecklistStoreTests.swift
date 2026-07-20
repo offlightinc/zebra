@@ -3144,6 +3144,74 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testHomebrewInstallUsesVerifiedPostconditionOutsideInheritedPath() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/expect") else {
+            throw XCTSkip("expect is required to verify the interactive installer")
+        }
+        let root = try makeTemporaryDirectory()
+        let prefix = root.appendingPathComponent("homebrew-prefix", isDirectory: true)
+        let bin = prefix.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: root.appendingPathComponent("gbrain-state.json"),
+                gbrainAdapterOnboardingStateURL: root.appendingPathComponent("adapter-state.json"),
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let brewURL = bin.appendingPathComponent("brew")
+        let installerEnvironmentReceipt = root.appendingPathComponent("installer-environment.txt")
+        let installerURL = root.appendingPathComponent("installer.sh")
+        try installFakeCommand(
+            directory: root,
+            name: installerURL.lastPathComponent,
+            content: """
+            #!/bin/sh
+            printf 'ZDOTDIR=%s\n' "${ZDOTDIR-}" > '\(shellSingleQuoted(installerEnvironmentReceipt.path))'
+            /bin/cat > '\(shellSingleQuoted(brewURL.path))' <<'BREW'
+            #!/bin/sh
+            if [ "$1" = "--version" ]; then echo "Homebrew 99.0-test"; exit 0; fi
+            exit 0
+            BREW
+            /bin/chmod +x '\(shellSingleQuoted(brewURL.path))'
+            exit 1
+            """
+        )
+        let expectURL = root.appendingPathComponent("postcondition.expect")
+        try """
+        set timeout 20
+        spawn env PATH=/usr/bin:/bin HOMEBREW_PREFIX=$env(TEST_PREFIX) ZDOTDIR=$env(TEST_BUNDLE_ZDOTDIR) ZEBRA_SOURCE_ONBOARDING_STATE=$env(TEST_STATE) ZEBRA_SOURCE_ONBOARDING_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en ZEBRA_SOURCE_ONBOARDING_HOMEBREW_INSTALLER=$env(TEST_INSTALLER) $env(TEST_HELPER) install-homebrew --source apple-reminders
+        expect eof
+        set result [wait]
+        exit [lindex $result 3]
+        """.write(to: expectURL, atomically: true, encoding: .utf8)
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
+            arguments: [expectURL.path],
+            environment: [
+                "TEST_PREFIX": prefix.path,
+                "TEST_BUNDLE_ZDOTDIR": "/Volumes/Zebra/Zebra.app/Contents/Resources/shell-integration",
+                "TEST_STATE": stateURL.path,
+                "TEST_HOME": root.path,
+                "TEST_INSTALLER": installerURL.path,
+                "TEST_HELPER": helperURL.path,
+            ]
+        )
+
+        XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stdout.contains("homebrew_install_succeeded"), result.stdout)
+        XCTAssertTrue(result.stdout.contains(brewURL.path), result.stdout)
+        XCTAssertEqual(
+            try String(contentsOf: installerEnvironmentReceipt, encoding: .utf8),
+            "ZDOTDIR=\n"
+        )
+    }
+
+    @MainActor
     func testAppleNotesApprovedInstallPlanRetriesMemoWithoutReconsentOrRepeatingTap() throws {
         let root = try makeTemporaryDirectory()
         let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
