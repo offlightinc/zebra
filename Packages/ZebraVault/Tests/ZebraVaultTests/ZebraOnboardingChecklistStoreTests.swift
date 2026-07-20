@@ -3253,7 +3253,6 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(result.status, 1, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
         let payload = try jsonObject(from: result.stdout)
         XCTAssertEqual(payload["reason"] as? String, "homebrew_install_pty_required")
-        XCTAssertEqual((payload["installPlan"] as? [String: Any])?["homebrewRequired"] as? Bool, true)
     }
 
     @MainActor

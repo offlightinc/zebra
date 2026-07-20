@@ -8060,7 +8060,7 @@ struct ZebraSourceOnboardingHelper {
         command_path = required_cli_command_path("apple-reminders", run_state)
         return run_state, command_path
 
-    def homebrew_candidate_is_verified(candidate, trusted_override=False):
+    def homebrew_candidate_is_verified(candidate):
         candidate = (candidate or "").strip()
         if not candidate:
             return False
@@ -8068,7 +8068,7 @@ struct ZebraSourceOnboardingHelper {
         if not path.is_absolute() or not path.is_file() or not os.access(str(path), os.X_OK):
             return False
         resolved = str(path.resolve())
-        if ".app/Contents/" in resolved and not trusted_override:
+        if ".app/Contents/" in resolved:
             return False
         try:
             result = subprocess.run(
@@ -8111,7 +8111,7 @@ struct ZebraSourceOnboardingHelper {
         override_present = "ZEBRA_SOURCE_ONBOARDING_BREW_PATH" in os.environ
         override = os.environ.get("ZEBRA_SOURCE_ONBOARDING_BREW_PATH", "").strip()
         if override_present:
-            return override if homebrew_candidate_is_verified(override, trusted_override=True) else ""
+            return override if homebrew_candidate_is_verified(override) else ""
         candidates = [shutil.which("brew") or ""]
         prefix = os.environ.get("HOMEBREW_PREFIX", "").strip()
         if prefix:
