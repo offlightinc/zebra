@@ -117,6 +117,9 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
         XCTAssertTrue(artifact.contains("source: apple-reminders"), artifact)
         XCTAssertTrue(artifact.contains("playbook: apple-reminders.eventkit.v1"), artifact)
+        XCTAssertTrue(artifact.contains("schema: zebra-reminders-eventkit.v1"), artifact)
+        XCTAssertTrue(artifact.contains("scope: custom"), artifact)
+        XCTAssertTrue(artifact.contains("item_count: 1"), artifact)
         XCTAssertTrue(artifact.contains("Investor update"), artifact)
         XCTAssertTrue(artifact.contains("Send the revised deck"), artifact)
 

@@ -8798,6 +8798,7 @@ struct ZebraSourceOnboardingHelper {
             "",
             "source: apple-reminders",
             "playbook: apple-reminders.eventkit.v1",
+            "schema: zebra-reminders-eventkit.v1",
             "scope: " + str(run_state.get("scope")),
             "scope_summary: " + apple_reminders_scope_summary(run_state),
             "completed_included: " + str(bool(run_state.get("includeCompleted"))).lower(),
@@ -8850,7 +8851,15 @@ struct ZebraSourceOnboardingHelper {
             text = artifact.read_text(encoding="utf-8")
         except Exception:
             text = ""
-        if "source: apple-reminders" not in text or "playbook: apple-reminders.eventkit.v1" not in text:
+        required_lines = {
+            "source: apple-reminders",
+            "playbook: apple-reminders.eventkit.v1",
+            "schema: zebra-reminders-eventkit.v1",
+            "scope: " + str(run_state.get("scope")),
+            "item_count: " + str(run_state.get("ingestedReminderCount") or 0),
+        }
+        artifact_lines = set(text.splitlines())
+        if not required_lines.issubset(artifact_lines):
             run_state.update({"readbackStatus": "failed", "updatedAt": now()})
             run_path = save_source_run_state("apple-reminders", run_state)
             state = set_apple_reminders_row_state(
