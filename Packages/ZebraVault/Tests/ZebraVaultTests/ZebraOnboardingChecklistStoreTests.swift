@@ -3073,7 +3073,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             executableURL: URL(fileURLWithPath: "/usr/bin/expect"),
             arguments: [expectURL.path],
             environment: [
-                "TEST_PATH": "\(fakeBin.path):/usr/bin:/bin",
+                "TEST_PATH": "/usr/bin:/bin",
                 "TEST_STATE": stateURL.path,
                 "TEST_HOME": root.path,
                 "TEST_BREW": brewURL.path,
