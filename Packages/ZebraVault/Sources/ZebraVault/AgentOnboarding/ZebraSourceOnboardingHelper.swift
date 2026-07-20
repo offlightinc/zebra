@@ -8070,6 +8070,10 @@ struct ZebraSourceOnboardingHelper {
         resolved = str(path.resolve())
         if ".app/Contents/" in resolved:
             return False
+        if resolved == "/private/tmp" or resolved.startswith("/private/tmp/"):
+            return False
+        if resolved == "/var/tmp" or resolved.startswith("/var/tmp/"):
+            return False
         try:
             result = subprocess.run(
                 [resolved, "--version"], text=True, capture_output=True, timeout=10
