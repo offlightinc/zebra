@@ -3134,9 +3134,9 @@ struct ZebraSourceOnboardingHelper {
             ```
 
             1번은 `zebra-source-onboarding apple-reminders choose-scope --scope all-open`를 실행하세요.
-            2번은 list 이름을 확인한 뒤 `zebra-source-onboarding apple-reminders choose-scope --scope one-list --list "<list>"`를 실행하세요.
+            2번은 smoke 결과의 `lists`에서 사용자가 고른 항목의 ID를 확인한 뒤 `zebra-source-onboarding apple-reminders choose-scope --scope one-list --list-id "<list-id>"`를 실행하세요. 제목은 표시용일 뿐이며 같은 제목의 다른 list를 함께 선택하지 마세요.
             3번은 사용자가 오늘을 고르면 `--scope today`, 이번 주를 고르면 `--scope week`로 실행하세요.
-            4번은 completed 포함, overdue-only, 여러 list, completed 포함 전체, item cap/sample 같은 세부 조건을 확인한 뒤 `--scope custom`과 `--list`, `--include-completed yes`, `--status open|completed|all`, `--due-window overdue|today|week|all`, 필요한 경우 `--item-cap <n>`을 조합해 실행하세요.
+            4번은 completed 포함, overdue-only, 여러 list, completed 포함 전체, item cap/sample 같은 세부 조건을 확인한 뒤 `--scope custom`과 smoke 결과의 `--list-id`, `--include-completed yes`, `--status open|completed|all`, `--due-window overdue|today|week|all`, 필요한 경우 `--item-cap <n>`을 조합해 실행하세요.
             5번은 `zebra-source-onboarding apple-reminders choose-scope --scope skip`을 실행하세요.
 
             sample cap을 기본값처럼 만들지 마세요. 사용자가 bounded/sample ingest를 명시적으로 원할 때만 `--item-cap`을 사용하세요.
@@ -3158,9 +3158,9 @@ struct ZebraSourceOnboardingHelper {
             ```
 
             ユーザーが1番を選んだら`zebra-source-onboarding apple-reminders choose-scope --scope all-open`を実行してください。
-            ユーザーが2番を選んだらlist名を確認し、`zebra-source-onboarding apple-reminders choose-scope --scope one-list --list "<list>"`を実行してください。
+            ユーザーが2番を選んだらsmoke結果の`lists`から選択した項目のIDを確認し、`zebra-source-onboarding apple-reminders choose-scope --scope one-list --list-id "<list-id>"`を実行してください。タイトルは表示専用です。
             ユーザーが3番を選んだら、今日なら`--scope today`、今週なら`--scope week`を実行してください。
-            ユーザーが4番を選んだら、completedを含めるか、overdue-only、複数list、completedを含む全件、item cap/sampleなどの条件を確認し、`--scope custom`に`--list`、`--include-completed yes`、`--status open|completed|all`、`--due-window overdue|today|week|all`、必要なら`--item-cap <n>`を組み合わせて実行してください。
+            ユーザーが4番を選んだら、completedを含めるか、overdue-only、複数list、completedを含む全件、item cap/sampleなどの条件を確認し、`--scope custom`にsmoke結果の`--list-id`、`--include-completed yes`、`--status open|completed|all`、`--due-window overdue|today|week|all`、必要なら`--item-cap <n>`を組み合わせて実行してください。
             ユーザーが5番を選んだら`zebra-source-onboarding apple-reminders choose-scope --scope skip`を実行してください。
 
             sample capをデフォルト扱いにしないでください。ユーザーがbounded/sample ingestを明示的に望む場合だけ`--item-cap`を使ってください。
@@ -3181,9 +3181,9 @@ struct ZebraSourceOnboardingHelper {
         ```
 
         If the user chooses option 1, run `zebra-source-onboarding apple-reminders choose-scope --scope all-open`.
-        If the user chooses option 2, confirm the list name and run `zebra-source-onboarding apple-reminders choose-scope --scope one-list --list "<list>"`.
+        If the user chooses option 2, use the selected entry's ID from the smoke result `lists` and run `zebra-source-onboarding apple-reminders choose-scope --scope one-list --list-id "<list-id>"`. Titles are display-only; never select other lists that share the title.
         If the user chooses option 3, run `--scope today` for today or `--scope week` for this week.
-        If the user chooses option 4, ask only for the custom details needed for completed reminders, overdue-only, multiple lists, all including completed, or item cap/sample choices. Then run `--scope custom` with flags such as `--list`, `--include-completed yes`, `--status open|completed|all`, `--due-window overdue|today|week|all`, and optional `--item-cap <n>`.
+        If the user chooses option 4, ask only for the custom details needed for completed reminders, overdue-only, multiple lists, all including completed, or item cap/sample choices. Then run `--scope custom` with the selected smoke-result `--list-id` values, `--include-completed yes`, `--status open|completed|all`, `--due-window overdue|today|week|all`, and optional `--item-cap <n>`.
         If the user chooses option 5, run `zebra-source-onboarding apple-reminders choose-scope --scope skip`.
 
         Do not make a sample cap the default. Use `--item-cap` only when the user explicitly wants a bounded/sample ingest.
@@ -8082,17 +8082,20 @@ struct ZebraSourceOnboardingHelper {
         scope = str(run_state.get("scope") or "")
         result = {
             "kind": scope,
+            "listIDs": [],
             "listTitles": [],
             "status": "open",
             "dueWindow": "all",
         }
         if scope == "one-list":
+            result["listIDs"] = [str(run_state.get("listID") or "")]
             result["listTitles"] = [str(run_state.get("list") or "")]
         elif scope == "today":
             result["dueWindow"] = "today"
         elif scope == "week":
             result["dueWindow"] = "week"
         elif scope == "custom":
+            result["listIDs"] = [str(item) for item in (run_state.get("listIDs") or [])]
             result["listTitles"] = [str(item) for item in (run_state.get("lists") or [])]
             result["status"] = str(run_state.get("status") or "open")
             result["dueWindow"] = str(run_state.get("dueWindow") or "all")
@@ -8546,6 +8549,11 @@ struct ZebraSourceOnboardingHelper {
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
         result = receipt.get("result") if isinstance(receipt.get("result"), dict) else {}
+        reminder_lists = [
+            {"id": str(item.get("id")), "title": str(item.get("title"))}
+            for item in (result.get("lists") or [])
+            if isinstance(item, dict) and item.get("id") and item.get("title")
+        ][:20]
         list_titles = result.get("listTitles") if isinstance(result.get("listTitles"), list) else []
         fields = result.get("supportedFields") if isinstance(result.get("supportedFields"), list) else []
         list_count = int(result.get("listCount") or 0)
@@ -8554,6 +8562,7 @@ struct ZebraSourceOnboardingHelper {
             "smokeStatus": "passed",
             "listCount": list_count,
             "openReminderCount": open_count,
+            "reminderLists": reminder_lists,
             "listTitles": list_titles[:20],
             "observedReminderFields": fields,
             "observedFields": fields,
@@ -8574,6 +8583,7 @@ struct ZebraSourceOnboardingHelper {
             "ok": True,
             "listCount": list_count,
             "openReminderCount": open_count,
+            "lists": reminder_lists,
             "listTitles": list_titles[:20],
             "executionOwner": receipt.get("executionOwner"),
         }
@@ -8614,16 +8624,35 @@ struct ZebraSourceOnboardingHelper {
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
         update = {"scope": scope}
+        available_lists = run_state.get("reminderLists") if isinstance(run_state.get("reminderLists"), list) else []
+        available_by_id = {
+            str(item.get("id")): str(item.get("title"))
+            for item in available_lists
+            if isinstance(item, dict) and item.get("id") and item.get("title")
+        }
         if scope == "one-list":
-            list_name = single_flag_value("--list")
-            if not list_name:
-                print("--list is required when --scope one-list", file=sys.stderr)
+            list_id = single_flag_value("--list-id")
+            if not list_id:
+                print("--list-id is required when --scope one-list", file=sys.stderr)
                 return 2
+            if list_id not in available_by_id:
+                print("--list-id must identify a list returned by smoke-list", file=sys.stderr)
+                return 2
+            list_name = available_by_id[list_id]
+            update["listID"] = list_id
             update["list"] = list_name
             update["includeCompleted"] = False
             update["status"] = "open"
         if scope == "custom":
-            lists = parse_flag_value("--list")
+            list_ids = parse_flag_value("--list-id")
+            if parse_flag_value("--list") and not list_ids:
+                print("--list-id is required for each custom list selection", file=sys.stderr)
+                return 2
+            invalid_list_ids = [item for item in list_ids if item not in available_by_id]
+            if invalid_list_ids:
+                print("--list-id must identify a list returned by smoke-list", file=sys.stderr)
+                return 2
+            lists = [available_by_id[item] for item in list_ids]
             include_completed = apple_reminders_install_answer("--include-completed") == "yes"
             status = single_flag_value("--status") or ("all" if include_completed else "open")
             due_window = single_flag_value("--due-window") or "all"
@@ -8634,6 +8663,7 @@ struct ZebraSourceOnboardingHelper {
                 print("--status must be open, completed, or all", file=sys.stderr)
                 return 2
             update.update({
+                "listIDs": list_ids,
                 "lists": lists,
                 "includeCompleted": include_completed,
                 "status": status,

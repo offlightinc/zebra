@@ -116,7 +116,7 @@ final class ZebraRemindersEventKitTests: XCTestCase {
             helperURL,
             [
                 "apple-reminders", "choose-scope", "--scope", "custom",
-                "--list-id", "work-primary", "--list", "Work", "--status", "open",
+                "--list-id", "work-primary", "--status", "open",
             ],
             environment
         ).status, 0)
@@ -298,11 +298,12 @@ final class ZebraRemindersEventKitTests: XCTestCase {
 
         let cases: [(ZebraRemindersScope, [String])] = [
             (.allOpen, ["today-work", "week-home", "overdue-work"]),
-            (.oneList("Work"), ["today-work", "overdue-work"]),
+            (.oneList(id: "work", title: "Work"), ["today-work", "overdue-work"]),
             (.today, ["today-work"]),
             (.week, ["today-work", "week-home"]),
             (
                 .custom(
+                    listIDs: ["work"],
                     listTitles: ["Work"],
                     status: .all,
                     dueWindow: .all,

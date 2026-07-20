@@ -132,7 +132,7 @@ def main():
         print("error: overlay must define brandSource and brandName", file=sys.stderr)
         return 1
 
-    total_changed = 0
+    localization_changed = 0
     total_skipped = 0
     for table_name, table_overlay in overlay.get("tables", {}).items():
         changed, skipped = apply_table_overlay(
@@ -142,17 +142,16 @@ def main():
             brand_source,
             brand_name,
         )
-        total_changed += changed
+        localization_changed += changed
         total_skipped += skipped
         print(f"overlay {table_name}: changed {changed} locale(s), skipped {skipped}")
 
-    info_changed = apply_info_plist_overlay(app_path, resources_dir, overlay)
-    total_changed += info_changed
-    print(f"overlay InfoPlist: changed {info_changed} artifact(s)")
-
-    if total_changed == 0:
+    if localization_changed == 0:
         print("error: no localization tables were changed", file=sys.stderr)
         return 1
+
+    info_changed = apply_info_plist_overlay(app_path, resources_dir, overlay)
+    print(f"overlay InfoPlist: changed {info_changed} artifact(s)")
 
     return 0
 

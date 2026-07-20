@@ -54,6 +54,7 @@ enum ZebraRemindersDueWindow: String, Codable, Equatable, Sendable {
 
 struct ZebraRemindersScope: Codable, Equatable, Sendable {
     var kind: ZebraRemindersScopeKind
+    var listIDs: [String]
     var listTitles: [String]
     var status: ZebraRemindersCompletionFilter
     var dueWindow: ZebraRemindersDueWindow
@@ -61,6 +62,7 @@ struct ZebraRemindersScope: Codable, Equatable, Sendable {
 
     static let allOpen = Self(
         kind: .allOpen,
+        listIDs: [],
         listTitles: [],
         status: .open,
         dueWindow: .all,
@@ -68,6 +70,7 @@ struct ZebraRemindersScope: Codable, Equatable, Sendable {
     )
     static let today = Self(
         kind: .today,
+        listIDs: [],
         listTitles: [],
         status: .open,
         dueWindow: .today,
@@ -75,6 +78,7 @@ struct ZebraRemindersScope: Codable, Equatable, Sendable {
     )
     static let week = Self(
         kind: .week,
+        listIDs: [],
         listTitles: [],
         status: .open,
         dueWindow: .week,
@@ -82,15 +86,17 @@ struct ZebraRemindersScope: Codable, Equatable, Sendable {
     )
     static let skip = Self(
         kind: .skip,
+        listIDs: [],
         listTitles: [],
         status: .all,
         dueWindow: .all,
         itemCap: nil
     )
 
-    static func oneList(_ title: String) -> Self {
+    static func oneList(id: String, title: String) -> Self {
         Self(
             kind: .oneList,
+            listIDs: [id],
             listTitles: [title],
             status: .open,
             dueWindow: .all,
@@ -99,6 +105,7 @@ struct ZebraRemindersScope: Codable, Equatable, Sendable {
     }
 
     static func custom(
+        listIDs: [String],
         listTitles: [String],
         status: ZebraRemindersCompletionFilter,
         dueWindow: ZebraRemindersDueWindow,
@@ -106,6 +113,7 @@ struct ZebraRemindersScope: Codable, Equatable, Sendable {
     ) -> Self {
         Self(
             kind: .custom,
+            listIDs: listIDs,
             listTitles: listTitles,
             status: status,
             dueWindow: dueWindow,
@@ -168,6 +176,7 @@ struct ZebraRemindersRequest: Codable, Equatable, Sendable {
 struct ZebraRemindersResult: Codable, Equatable, Sendable {
     var listCount: Int
     var openReminderCount: Int
+    var lists: [ZebraRemindersListSnapshot]
     var listTitles: [String]
     var supportedFields: [String]
     var reminders: [ZebraReminderSnapshot]?
@@ -283,6 +292,16 @@ final class ZebraRemindersRequestProcessor {
                     startedAt: startedAt
                 )
             }
+            if scope.kind == .oneList && scope.listIDs.count != 1 {
+                return failureReceipt(
+                    request,
+                    status: .failed,
+                    authorizationStatus: eventStore.authorizationStatus(),
+                    reason: "reminders_scope_invalid",
+                    retryable: false,
+                    startedAt: startedAt
+                )
+            }
             if scope.kind == .skip {
                 return successReceipt(
                     request,
@@ -290,6 +309,7 @@ final class ZebraRemindersRequestProcessor {
                     result: ZebraRemindersResult(
                         listCount: 0,
                         openReminderCount: 0,
+                        lists: [],
                         listTitles: [],
                         supportedFields: supportedFields,
                         reminders: []
@@ -320,6 +340,7 @@ final class ZebraRemindersRequestProcessor {
                 result: ZebraRemindersResult(
                     listCount: snapshot.lists.count,
                     openReminderCount: openCount,
+                    lists: Array(snapshot.lists.prefix(20)),
                     listTitles: Array(snapshot.lists.map(\.title).prefix(20)),
                     supportedFields: supportedFields,
                     reminders: reminders
@@ -360,8 +381,8 @@ final class ZebraRemindersRequestProcessor {
         case .allOpen:
             result = result.filter { !$0.isCompleted }
         case .oneList:
-            let names = Set(scope.listTitles)
-            result = result.filter { !$0.isCompleted && names.contains($0.listTitle) }
+            let ids = Set(scope.listIDs)
+            result = result.filter { !$0.isCompleted && ids.contains($0.listID) }
         case .today:
             result = result.filter { reminder in
                 !reminder.isCompleted && reminder.dueDate.map { calendar.isDate($0, inSameDayAs: now()) } == true
@@ -374,9 +395,9 @@ final class ZebraRemindersRequestProcessor {
                 return due >= start && due < end
             }
         case .custom:
-            if !scope.listTitles.isEmpty {
-                let names = Set(scope.listTitles)
-                result = result.filter { names.contains($0.listTitle) }
+            if !scope.listIDs.isEmpty {
+                let ids = Set(scope.listIDs)
+                result = result.filter { ids.contains($0.listID) }
             }
             switch scope.status {
             case .open: result = result.filter { !$0.isCompleted }
