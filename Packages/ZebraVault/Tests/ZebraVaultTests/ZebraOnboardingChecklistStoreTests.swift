@@ -3047,7 +3047,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let expectURL = root.appendingPathComponent("homebrew-pty.expect", isDirectory: false)
         try """
         set timeout 20
-        spawn env PATH=$env(TEST_PATH) ZEBRA_SOURCE_ONBOARDING_STATE=$env(TEST_STATE) ZEBRA_SOURCE_ONBOARDING_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=en ZEBRA_SOURCE_ONBOARDING_BREW_PATH=$env(TEST_BREW) ZEBRA_SOURCE_ONBOARDING_HOMEBREW_INSTALLER=$env(TEST_INSTALLER) $env(TEST_HELPER) install-homebrew --source apple-notes
+        spawn env PATH=$env(TEST_PATH) ZEBRA_SOURCE_ONBOARDING_STATE=$env(TEST_STATE) ZEBRA_SOURCE_ONBOARDING_HOME=$env(TEST_HOME) ZEBRA_ONBOARDING_LANGUAGE=ko ZEBRA_SOURCE_ONBOARDING_BREW_PATH=$env(TEST_BREW) ZEBRA_SOURCE_ONBOARDING_HOMEBREW_INSTALLER=$env(TEST_INSTALLER) $env(TEST_HELPER) install-homebrew --source apple-notes
         expect eof
         set result [wait]
         exit [lindex $result 3]
@@ -3082,6 +3082,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             ]
         )
         XCTAssertEqual(result.status, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertTrue(result.stderr.contains("Homebrew 설치를 확인했습니다."), result.stderr)
+        XCTAssertTrue(result.stderr.contains("memo를 설치하는 중입니다..."), result.stderr)
+        XCTAssertTrue(result.stderr.contains("memo 설치를 확인하는 중입니다..."), result.stderr)
+        XCTAssertTrue(result.stderr.contains("Homebrew와 memo 설치가 완료되었습니다."), result.stderr)
 
         let installerPTY = try String(contentsOf: installerReceipt, encoding: .utf8)
         XCTAssertTrue(installerPTY.contains("stdin=true stdout=true stderr=true"), installerPTY)
