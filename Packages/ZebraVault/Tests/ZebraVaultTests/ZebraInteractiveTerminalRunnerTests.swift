@@ -239,6 +239,79 @@ final class ZebraInteractiveTerminalRunnerTests: XCTestCase {
         XCTAssertEqual(receipt["surfaceID"] as? String, "surface-fast")
     }
 
+    func testSuccessfulChildRestoresTheOriginSurface() throws {
+        let root = try temporaryDirectory()
+        let runner = try installedRunner(in: root)
+        let calls = root.appendingPathComponent("focus-calls.txt")
+        let fakeCLI = root.appendingPathComponent("focus-cmux")
+        try writeExecutable(
+            """
+            #!/bin/sh
+            printf '%s\n' "$*" >> '\(calls.path)'
+            if [ "$2" = "surface.create" ]; then
+              json="$3"
+              command="$(/usr/bin/python3 -c 'import json,sys; print(json.loads(sys.argv[1])["initial_command"])' "$json")"
+              /bin/sh -c "$command" >/dev/null
+              printf '%s\n' '{"surface_id":"surface-task","workspace_id":"workspace-1"}'
+            else
+              printf '%s\n' '{"ok":true}'
+            fi
+            """,
+            to: fakeCLI
+        )
+        var environment = startEnvironment(root: root, fakeCLI: fakeCLI)
+        environment.removeValue(forKey: "ZEBRA_INTERACTIVE_TERMINAL_RUNNER_WAIT")
+        environment["ZEBRA_INTERACTIVE_TERMINAL_RUNNER_WAIT_TIMEOUT"] = "5"
+        environment["CMUX_SURFACE_ID"] = "surface-origin"
+
+        let result = try run(
+            runner,
+            ["start", "--task", "fixture-success", "--run-id", "focus-run"],
+            environment: environment
+        )
+
+        XCTAssertEqual(result.status, 0, result.stderr)
+        let recorded = try String(contentsOf: calls, encoding: .utf8)
+        XCTAssertTrue(recorded.contains("rpc surface.focus"), recorded)
+        XCTAssertTrue(recorded.contains("surface-origin"), recorded)
+        let finalLine = try XCTUnwrap(result.stdout.split(separator: "\n").last)
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(finalLine.utf8)) as? [String: Any]
+        )
+        let receipt = try XCTUnwrap(payload["receipt"] as? [String: Any])
+        XCTAssertEqual(receipt["originFocusStatus"] as? String, "focused")
+    }
+
+    func testFailedChildPrintsRecoveryInstructionsBeforeShellHandoff() throws {
+        let root = try temporaryDirectory()
+        let runner = try installedRunner(in: root)
+        let fake = try makeFakeCLI(in: root)
+        var environment = startEnvironment(root: root, fakeCLI: fake.url)
+        environment["ZEBRA_INTERACTIVE_TERMINAL_RUNNER_KEEP_SHELL"] = "0"
+        environment["ZEBRA_ONBOARDING_LANGUAGE"] = "en"
+        let started = try run(
+            runner,
+            ["start", "--task", "fixture-failure", "--run-id", "failure-help"],
+            environment: environment
+        )
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(started.stdout.utf8)) as? [String: Any]
+        )
+        let request = try XCTUnwrap(payload["request"] as? [String: Any])
+        let requestID = try XCTUnwrap(request["id"] as? String)
+
+        let failed = try run(
+            runner,
+            ["execute", "--request", requestID],
+            environment: environment
+        )
+
+        XCTAssertEqual(failed.status, 42)
+        XCTAssertTrue(failed.stderr.contains("Task failed"), failed.stderr)
+        XCTAssertTrue(failed.stderr.contains("status --request \(requestID)"), failed.stderr)
+        XCTAssertTrue(failed.stderr.contains("exit"), failed.stderr)
+    }
+
     func testRejectsArbitraryCommandsSecretsAndUnsupportedSourcesBeforeLaunch() throws {
         let root = try temporaryDirectory()
         let runner = try installedRunner(in: root)
