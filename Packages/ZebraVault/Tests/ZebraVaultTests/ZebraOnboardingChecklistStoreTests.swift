@@ -3256,6 +3256,49 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testHomebrewResolverRejectsTransientExecutable() throws {
+        let root = try makeTemporaryDirectory()
+        let transientRoot = URL(fileURLWithPath: "/private/tmp")
+            .appendingPathComponent("zebra-homebrew-candidate-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: transientRoot, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: transientRoot) }
+        let brewURL = transientRoot.appendingPathComponent("brew")
+        try installFakeCommand(
+            directory: transientRoot,
+            name: "brew",
+            content: """
+            #!/bin/sh
+            if [ "$1" = "--version" ]; then echo "Homebrew 99.0-transient"; exit 0; fi
+            exit 0
+            """
+        )
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: root.appendingPathComponent("gbrain-state.json"),
+                gbrainAdapterOnboardingStateURL: root.appendingPathComponent("adapter-state.json"),
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: nil)
+        )
+
+        let result = try runProcess(
+            executableURL: URL(fileURLWithPath: launch.helperPath),
+            arguments: ["apple-notes", "check-cli", "--install-answer", "yes"],
+            environment: [
+                "PATH": "/usr/bin:/bin",
+                "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+                "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+                "ZEBRA_SOURCE_ONBOARDING_BREW_PATH": brewURL.path,
+                "ZEBRA_ONBOARDING_LANGUAGE": "en",
+            ]
+        )
+
+        XCTAssertEqual(result.status, 1, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)")
+        XCTAssertEqual(try jsonObject(from: result.stdout)["reason"] as? String, "homebrew_install_pty_required")
+    }
+
+    @MainActor
     func testAppleNotesApprovedInstallPlanRetriesMemoWithoutReconsentOrRepeatingTap() throws {
         let root = try makeTemporaryDirectory()
         let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
