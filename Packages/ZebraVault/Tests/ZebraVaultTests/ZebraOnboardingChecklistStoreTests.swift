@@ -1324,7 +1324,20 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
         let gbrainTarget = root.appendingPathComponent("brain", isDirectory: true)
+        let gbrainHome = root.appendingPathComponent("gbrain-home", isDirectory: true)
         try FileManager.default.createDirectory(at: gbrainTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let gbrainLog = root.appendingPathComponent("gbrain.log", isDirectory: false)
+        let gbrainExecutable = try installFakeGBrain(root: root, sourcePath: gbrainTarget.path, log: gbrainLog)
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: gbrainTarget.path,
+            executablePath: gbrainExecutable.path,
+            sourceRepoPath: gbrainHome.path
+        )
+        let sourceToTasksSkill = gbrainTarget.appendingPathComponent(".gbrain-adapter/skills/source-to-tasks/SKILL.md")
+        try FileManager.default.createDirectory(at: sourceToTasksSkill.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "source-to-tasks\n".write(to: sourceToTasksSkill, atomically: true, encoding: .utf8)
         let launch = try XCTUnwrap(
             ZebraSourceOnboardingHelper(
                 stateURL: stateURL,
@@ -1386,7 +1399,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             ("confirm_ingest_plan", "approved scope: one export sample", []),
             (
                 "ingest",
-                "wrote approved fallback ingest artifact",
+                "submitted approved fallback record through GBrain",
                 [
                     "--ingest-title", "KakaoTalk Sample",
                     "--ingest-file", approvedExport.path,
@@ -1425,19 +1438,33 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         XCTAssertEqual(finalReport.status, 0, "stdout:\n\(finalReport.stdout)\nstderr:\n\(finalReport.stderr)")
         let finalPayload = try jsonObject(from: finalReport.stdout)
-        XCTAssertEqual(finalPayload["complete"] as? Bool, true)
-        let completed = try readSourceOnboardingState(at: stateURL)
-        XCTAssertEqual(completed.status, .completed)
+        XCTAssertEqual(finalPayload["complete"] as? Bool, false)
+        var completed = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(completed.status, .running)
         XCTAssertEqual(completed.progress.sourceRows["kakaotalk"]?.status, "checked")
+        XCTAssertEqual(completed.progress.actionReview?.status, "ready")
 
-        let artifacts = try FileManager.default.contentsOfDirectory(atPath: gbrainTarget.path)
-        let artifactName = try XCTUnwrap(artifacts.first { $0.hasPrefix("source-onboarding-kakaotalk") })
-        let artifactText = try String(
-            contentsOf: gbrainTarget.appendingPathComponent(artifactName, isDirectory: false),
-            encoding: .utf8
-        )
-        XCTAssertTrue(artifactText.contains("approved sample body for GBrain ingest"), artifactText)
-        XCTAssertTrue(artifactText.contains("synthetic export fixture"), artifactText)
+        let pageStore = root.appendingPathComponent("fake-gbrain-pages", isDirectory: true)
+        let pageTexts = try FileManager.default.contentsOfDirectory(at: pageStore, includingPropertiesForKeys: nil)
+            .map { try String(contentsOf: $0, encoding: .utf8) }
+            .joined(separator: "\n")
+        XCTAssertTrue(pageTexts.contains("approved sample body for GBrain ingest"), pageTexts)
+        XCTAssertTrue(pageTexts.contains("synthetic export fixture"), pageTexts)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: gbrainTarget.path).contains {
+            $0.hasPrefix("source-onboarding-kakaotalk")
+        })
+        let gbrainCommands = try String(contentsOf: gbrainLog, encoding: .utf8)
+        XCTAssertTrue(gbrainCommands.contains("put sources/kakaotalk/kakaotalk-sample"), gbrainCommands)
+        XCTAssertTrue(gbrainCommands.contains("get sources/kakaotalk/kakaotalk-sample"), gbrainCommands)
+
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["actions", "begin"], environment: environment).status, 0)
+        XCTAssertEqual(try runProcess(
+            executableURL: helperURL,
+            arguments: ["actions", "report", "--status", "skipped", "--reason", "no_candidates"],
+            environment: environment
+        ).status, 0)
+        completed = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(completed.status, .completed)
 
         let runStatePath = try XCTUnwrap(completed.progress.sourceRows["kakaotalk"]?.runStatePath)
         let fallbackRunRoot = stateURL
@@ -1544,7 +1571,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         XCTAssertEqual(ingest.status, 1, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
         let payload = try jsonObject(from: ingest.stdout)
-        XCTAssertEqual(payload["reason"] as? String, "gbrain_target_missing")
+        XCTAssertEqual(payload["reason"] as? String, "targetBindingMismatch")
         XCTAssertEqual(payload["nextSourceID"] as? String, "kakaotalk")
         XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "ingest")
 
@@ -1553,7 +1580,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(row.status, "attention")
         XCTAssertEqual(row.phase, "ingest")
         XCTAssertEqual(row.playbookStepID, "ingest")
-        XCTAssertEqual(row.attentionReason, "waiting:gbrain_target_missing")
+        XCTAssertEqual(row.attentionReason, "targetBindingMismatch")
         XCTAssertNotEqual(row.playbookStepID, "verify_readback")
 
         let controlPlaneText = try [

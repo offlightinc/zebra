@@ -10,7 +10,8 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
             fixture.record(id: "two", body: "second body"),
         ])
 
-        XCTAssertEqual(result["complete"] as? Bool, true)
+        let diagnosticEvents = try fixture.events()
+        XCTAssertEqual(result["complete"] as? Bool, true, "result: \(result), events: \(diagnosticEvents)")
         XCTAssertNil(result["failure"] as? String)
         XCTAssertEqual(result["verifiedRecordCount"] as? Int, 2)
 
@@ -23,6 +24,16 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         XCTAssertTrue(arguments.contains("--json"))
         XCTAssertEqual(events.filter { $0["command"] as? String == "get" }.count, 2)
         XCTAssertTrue(events.allSatisfy { $0["source"] as? String == "verified-brain" })
+        let manifestEvent = try XCTUnwrap(events.first { $0["command"] as? String == "staging-manifest" })
+        let manifest = try XCTUnwrap(manifestEvent["manifest"] as? [String: Any])
+        let manifestRecords = try XCTUnwrap(manifest["records"] as? [[String: Any]])
+        XCTAssertEqual(manifestRecords.compactMap { $0["relativePath"] as? String }, ["obsidian/one.md", "obsidian/two.md"])
+        XCTAssertEqual(manifestRecords.compactMap { $0["slug"] as? String }, ["sources/obsidian/one", "sources/obsidian/two"])
+        XCTAssertTrue(manifestRecords.allSatisfy { ($0["identityDigest"] as? String)?.count == 64 })
+        let privateRoot = fixture.root.appendingPathComponent("private-staging", isDirectory: true)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: privateRoot.path).allSatisfy {
+            !$0.hasPrefix("zebra-gbrain-ingest-")
+        })
     }
 
     func testCommonFailuresBlockCompletion() throws {
@@ -31,6 +42,8 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
             ("malformed-json", "importResultMalformed"),
             ("numeric-errors", "importCountMismatch"),
             ("count-mismatch", "importCountMismatch"),
+            ("missing-runtime", "gbrainRuntimeMissing"),
+            ("wrong-target", "targetBindingMismatch"),
             ("wrong-source", "sourceRoutingMismatch"),
             ("missing-readback", "readbackMissing"),
             ("identity-mismatch", "readbackIdentityMismatch"),
@@ -45,7 +58,19 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
             ])
             XCTAssertEqual(result["complete"] as? Bool, false, item.scenario)
             XCTAssertEqual(result["failure"] as? String, item.failure, item.scenario)
+            let privateRoot = fixture.root.appendingPathComponent("private-staging", isDirectory: true)
+            if FileManager.default.fileExists(atPath: privateRoot.path) {
+                XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: privateRoot.path).allSatisfy {
+                    !$0.hasPrefix("zebra-gbrain-ingest-")
+                }, item.scenario)
+            }
         }
+
+        let duplicate = try Fixture()
+        let duplicateRecord = duplicate.record(id: "same", body: "body")
+        let stagingFailure = try duplicate.run(records: [duplicateRecord, duplicateRecord])
+        XCTAssertEqual(stagingFailure["complete"] as? Bool, false)
+        XCTAssertEqual(stagingFailure["failure"] as? String, "stagingFailed")
     }
 
     func testIncompleteAcquisitionBlocksWriteAndSingleRecordUsesPut() throws {
@@ -65,6 +90,26 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 1)
         XCTAssertEqual(events.filter { $0["command"] as? String == "import" }.count, 0)
         XCTAssertEqual(events.filter { $0["command"] as? String == "get" }.count, 1)
+    }
+
+    func testAcquisitionCountsDiagnosticsAndCancellationAreReconciledCentrally() throws {
+        let cases: [([String: Any], String)] = [
+            (["failedCount": 1], "acquisitionIncomplete"),
+            (["diagnosticCount": 1], "acquisitionIncomplete"),
+            (["normalizedCount": 0], "acquisitionIncomplete"),
+            (["selectedCount": 2, "discoveredCount": 1], "acquisitionIncomplete"),
+            (["cancelled": true], "cancelled"),
+        ]
+        for (override, expectedFailure) in cases {
+            let fixture = try Fixture()
+            let result = try fixture.run(
+                records: [fixture.record(id: "one", body: "body")],
+                acquisitionOverride: override
+            )
+            XCTAssertEqual(result["complete"] as? Bool, false, "\(override)")
+            XCTAssertEqual(result["failure"] as? String, expectedFailure, "\(override)")
+            XCTAssertTrue(try fixture.events().isEmpty, "\(override)")
+        }
     }
 
     func testSinglePutRequiresStructuredResultAndOversizedRecordUsesBulkImport() throws {
@@ -92,6 +137,95 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         XCTAssertEqual(results.count, 2)
         XCTAssertTrue(results.allSatisfy { $0["complete"] as? Bool == true })
         XCTAssertEqual(try fixture.events().filter { $0["command"] as? String == "import" }.count, 2)
+    }
+
+    func testEveryCommonFailureBlocksInstalledCLICompletionReport() throws {
+        let failures = [
+            "acquisitionIncomplete", "stagingFailed", "gbrainRuntimeMissing",
+            "targetBindingMismatch", "sourceRoutingMismatch", "importProcessFailed",
+            "importResultMalformed", "importCountMismatch", "readbackMissing",
+            "readbackIdentityMismatch", "writeThroughFailed", "cancelled",
+        ]
+        for failure in failures {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "ZebraSourceOnboardingCompletionGateTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            defer { try? FileManager.default.removeItem(at: root) }
+            let stateURL = root.appendingPathComponent("onboarding/source-onboarding-state.json")
+            let helper = ZebraSourceOnboardingHelper(stateURL: stateURL, homeDirectoryPath: root.path)
+            let launch = try helper.prepareLaunchResult(selectedVaultPath: nil).get()
+            let runStateURL = stateURL.deletingLastPathComponent()
+                .appendingPathComponent("source-run-state/obsidian.json")
+            try FileManager.default.createDirectory(at: runStateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let acquisitionComplete = failure != "acquisitionIncomplete" && failure != "cancelled"
+            let acquisition: [String: Any] = [
+                "discoveredCount": 1, "selectedCount": 1,
+                "normalizedCount": acquisitionComplete ? 1 : 0,
+                "failedCount": acquisitionComplete ? 0 : 1,
+                "diagnosticCount": 0, "cancelled": failure == "cancelled",
+                "complete": acquisitionComplete,
+            ]
+            let runState: [String: Any] = [
+                "acquisitionReceipt": acquisition,
+                "ingestReceipt": [
+                    "complete": false, "failure": failure,
+                    "expectedRecordCount": 1, "verifiedRecordCount": 0,
+                ],
+                "completionReportPending": true,
+                "completionDisposition": "checked",
+            ]
+            try JSONSerialization.data(withJSONObject: runState, options: [.sortedKeys])
+                .write(to: runStateURL, options: .atomic)
+            let state: [String: Any] = [
+                "schemaVersion": 1,
+                "status": "running",
+                "progress": [
+                    "normalizedSourceList": ["obsidian"],
+                    "confirmedSourceList": ["obsidian"],
+                    "executionOrder": ["obsidian"],
+                    "activeSourceID": "obsidian",
+                    "sourceRows": [
+                        "obsidian": [
+                            "sourceID": "obsidian", "displayName": "Obsidian",
+                            "status": "running", "phase": "complete",
+                            "selectionState": "confirmed",
+                            "playbookID": "obsidian.direct-markdown",
+                            "playbookVersion": "v1", "playbookStepID": "complete",
+                            "runStatePath": runStateURL.path,
+                        ],
+                    ],
+                ],
+            ]
+            try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+                .write(to: stateURL, options: .atomic)
+
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: launch.helperPath)
+            process.arguments = ["report", "--status", "completed", "--source", "obsidian"]
+            process.environment = ProcessInfo.processInfo.environment.merging([
+                "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+                "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            ]) { _, replacement in replacement }
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+            try process.run()
+            process.waitUntilExit()
+            let output = stdout.fileHandleForReading.readDataToEndOfFile()
+            XCTAssertEqual(process.terminationStatus, 1, failure)
+            let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: output) as? [String: Any])
+            XCTAssertEqual(payload["reason"] as? String, failure, failure)
+            let persisted = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+            )
+            let progress = try XCTUnwrap(persisted["progress"] as? [String: Any])
+            let rows = try XCTUnwrap(progress["sourceRows"] as? [String: Any])
+            let row = try XCTUnwrap(rows["obsidian"] as? [String: Any])
+            XCTAssertEqual(row["status"] as? String, "running", failure)
+        }
     }
 }
 
@@ -123,13 +257,16 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
                 "source-onboarding-runtime",
                 isDirectory: true
             )
-            executable = root.appendingPathComponent("fake-gbrain", isDirectory: false)
             log = root.appendingPathComponent("events.jsonl", isDirectory: false)
-            store = root.appendingPathComponent("readback", isDirectory: true)
+            store = root.appendingPathComponent("fake-gbrain-pages", isDirectory: true)
             self.scenario = scenario
-            try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
-            try Self.fakeGBrain.write(to: executable, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+            executable = try SourceOnboardingFakeGBrain.install(
+                root: root,
+                sourcePath: root.path,
+                log: root.appendingPathComponent("commands.log", isDirectory: false),
+                eventLog: log,
+                sourceID: "verified-brain"
+            )
             XCTAssertTrue(FileManager.default.fileExists(atPath: launch.helperPath))
         }
 
@@ -138,7 +275,7 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
         }
 
         func record(id: String, body: String) -> [String: Any] {
-            [
+            return [
                 "connectorID": "obsidian",
                 "logicalRecordID": id,
                 "slug": "sources/obsidian/\(id)",
@@ -147,8 +284,16 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
             ]
         }
 
-        func run(records: [[String: Any]], acquisitionComplete: Bool = true) throws -> [String: Any] {
-            let request = request(records: records, acquisitionComplete: acquisitionComplete)
+        func run(
+            records: [[String: Any]],
+            acquisitionComplete: Bool = true,
+            acquisitionOverride: [String: Any] = [:]
+        ) throws -> [String: Any] {
+            let request = request(
+                records: records,
+                acquisitionComplete: acquisitionComplete,
+                acquisitionOverride: acquisitionOverride
+            )
             let input = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
             let harness = root.appendingPathComponent("harness.py", isDirectory: false)
             let harnessText = """
@@ -164,8 +309,8 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
 
         func runConcurrently(records: [[String: Any]]) throws -> [[String: Any]] {
             let requests = [
-                request(records: records, acquisitionComplete: true),
-                request(records: records, acquisitionComplete: true),
+                request(records: records, acquisitionComplete: true, acquisitionOverride: [:]),
+                request(records: records, acquisitionComplete: true, acquisitionOverride: [:]),
             ]
             let input = try JSONSerialization.data(withJSONObject: requests, options: [.sortedKeys])
             let harness = root.appendingPathComponent("concurrent-harness.py", isDirectory: false)
@@ -185,29 +330,36 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
             return try XCTUnwrap(result["results"] as? [[String: Any]])
         }
 
-        private func request(records: [[String: Any]], acquisitionComplete: Bool) -> [String: Any] {
-            [
+        private func request(
+            records: [[String: Any]],
+            acquisitionComplete: Bool,
+            acquisitionOverride: [String: Any]
+        ) -> [String: Any] {
+            var acquisition: [String: Any] = [
+                "discoveredCount": records.count,
+                "selectedCount": records.count,
+                "normalizedCount": records.count,
+                "failedCount": acquisitionComplete ? 0 : 1,
+                "diagnosticCount": 0,
+                "cancelled": false,
+                "complete": acquisitionComplete,
+            ]
+            acquisition.merge(acquisitionOverride) { _, replacement in replacement }
+            return [
                 "attemptID": UUID().uuidString,
                 "binding": [
-                    "executable": executable.path,
+                    "executable": scenario == "missing-runtime"
+                        ? root.appendingPathComponent("missing-gbrain").path
+                        : executable.path,
                     "workingDirectory": root.path,
                     "sourceID": "verified-brain",
                     "environment": [
-                        "FAKE_GBRAIN_LOG": log.path,
-                        "FAKE_GBRAIN_STORE": store.path,
                         "FAKE_GBRAIN_SCENARIO": scenario,
                         "GBRAIN_HOME": root.appendingPathComponent("gbrain-home", isDirectory: true).path,
                     ],
                 ],
-                "acquisition": [
-                    "discoveredCount": records.count,
-                    "selectedCount": records.count,
-                    "normalizedCount": records.count,
-                    "failedCount": acquisitionComplete ? 0 : 1,
-                    "diagnosticCount": 0,
-                    "cancelled": false,
-                    "complete": acquisitionComplete,
-                ],
+                "privateRoot": root.appendingPathComponent("private-staging", isDirectory: true).path,
+                "acquisition": acquisition,
                 "records": records,
             ]
         }
@@ -250,80 +402,5 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
             case runtimeInstallFailed
             case invalidHarnessOutput(String)
         }
-
-        static let fakeGBrain = #"""
-        #!/usr/bin/python3
-        import hashlib
-        import json
-        import os
-        import pathlib
-        import shutil
-        import sys
-        import time
-
-        args = sys.argv[1:]
-        command = args[0] if args else ""
-        scenario = os.environ.get("FAKE_GBRAIN_SCENARIO", "success")
-        source = os.environ.get("GBRAIN_SOURCE", "")
-        log = pathlib.Path(os.environ["FAKE_GBRAIN_LOG"])
-        store = pathlib.Path(os.environ["FAKE_GBRAIN_STORE"])
-        store.mkdir(parents=True, exist_ok=True)
-        with log.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"command": command, "arguments": args[1:], "source": source}) + "\n")
-
-        if command == "sources":
-            current = "wrong-brain" if scenario == "wrong-source" else "verified-brain"
-            print(json.dumps({"sourceId": current, "localPath": os.getcwd()}))
-            raise SystemExit(0)
-
-        if command == "import":
-            if scenario == "import-exit":
-                raise SystemExit(9)
-            if scenario == "malformed-json":
-                print("not json")
-                raise SystemExit(0)
-            staging = pathlib.Path(args[1])
-            overlap = store / "import-active"
-            if scenario == "detect-overlap":
-                try:
-                    overlap.mkdir()
-                except FileExistsError:
-                    print("overlap", file=sys.stderr)
-                    raise SystemExit(17)
-                time.sleep(0.25)
-            files = [path for path in staging.rglob("*.md")]
-            for path in files:
-                text = path.read_text(encoding="utf-8")
-                slug = next(line.split(":", 1)[1].strip() for line in text.splitlines() if line.startswith("slug:"))
-                (store / (hashlib.sha256(slug.encode()).hexdigest() + ".md")).write_text(text, encoding="utf-8")
-            errors = 1 if scenario == "numeric-errors" else 0
-            imported = max(0, len(files) - 1) if scenario == "count-mismatch" else len(files)
-            payload = {"status": "success", "imported": imported, "skipped": 0, "errors": errors}
-            if scenario == "write-through":
-                payload["writeThrough"] = {"ok": False}
-            if overlap.exists():
-                overlap.rmdir()
-            print(json.dumps(payload))
-            raise SystemExit(0)
-
-        if command == "put":
-            slug = args[1]
-            text = sys.stdin.read()
-            (store / (hashlib.sha256(slug.encode()).hexdigest() + ".md")).write_text(text, encoding="utf-8")
-            print("not json" if scenario == "malformed-put" else json.dumps({"ok": True}))
-            raise SystemExit(0)
-
-        if command == "get":
-            if scenario == "missing-readback":
-                raise SystemExit(4)
-            slug = args[1]
-            text = (store / (hashlib.sha256(slug.encode()).hexdigest() + ".md")).read_text(encoding="utf-8")
-            if scenario == "identity-mismatch":
-                text = text.replace("zebra_identity_digest:", "zebra_identity_digest: deadbeef #")
-            print(text, end="")
-            raise SystemExit(0)
-
-        raise SystemExit(2)
-        """#
     }
 }
