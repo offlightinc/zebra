@@ -9351,8 +9351,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             arguments: ["next"],
             environment: environment
         )
-        XCTAssertEqual(next.status, 0, "stdout:\n\(next.stdout)\nstderr:\n\(next.stderr)")
-        XCTAssertEqual(try jsonObject(from: next.stdout)["nextPlaybookStepID"] as? String, "smoke_read")
+        XCTAssertEqual(next.status, 1, "stdout:\n\(next.stdout)\nstderr:\n\(next.stderr)")
+        XCTAssertEqual(try jsonObject(from: next.stdout)["nextPlaybookStepID"] as? String, "confirm_vault_if_needed")
+        let verified = try runProcess(
+            executableURL: helperURL,
+            arguments: ["obsidian", "verify-vault", "--path", vault.path],
+            environment: environment
+        )
+        XCTAssertEqual(verified.status, 0, "stdout:\n\(verified.stdout)\nstderr:\n\(verified.stderr)")
+        XCTAssertEqual(try jsonObject(from: verified.stdout)["nextPlaybookStepID"] as? String, "smoke_read")
         return ObsidianSmokeReadFixture(
             helperURL: helperURL,
             stateURL: stateURL,
