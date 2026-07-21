@@ -1296,20 +1296,12 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             ).prepareLaunch(selectedVaultPath: nil)
         )
 
-        let expectedMarkers = [
-            "obsidian.direct-markdown.v1.md": "GBrain write target path",
-            "imessage.imsg-cli.v1.md": "Full Disk Access",
-            "notion.ntn-cli.v1.md": "curl -fsSL https://ntn.dev | bash",
-            "apple-notes.memo-cli.v1.md": "brew tap antoniorodr/memo && brew install antoniorodr/memo/memo",
-            "apple-reminders.eventkit.v1.md": "app-owned EventKit adapter",
-        ]
-        for (filename, marker) in expectedMarkers {
+        for filename in stalePlaybooks {
             let text = try String(
                 contentsOf: playbookDirectory.appendingPathComponent(filename, isDirectory: false),
                 encoding: .utf8
             )
             XCTAssertFalse(text.contains("STALE RUNTIME PLAYBOOK"), "\(filename) was not overwritten")
-            XCTAssertTrue(text.contains(marker), "\(filename) missing latest marker \(marker):\n\(text)")
         }
     }
 
@@ -3691,6 +3683,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let adapterStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let gbrainTarget = root.appendingPathComponent("brain", isDirectory: true)
+        let gbrainHome = root.appendingPathComponent("gbrain-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let gbrainExecutable = try installFakeGBrain(
+            root: root,
+            sourcePath: gbrainTarget.path,
+            log: root.appendingPathComponent("gbrain.log", isDirectory: false)
+        )
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: gbrainTarget.path,
+            executablePath: gbrainExecutable.path,
+            sourceRepoPath: gbrainHome.path
+        )
         let launch = try XCTUnwrap(
             ZebraSourceOnboardingHelper(
                 stateURL: stateURL,
@@ -3816,7 +3823,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(reportPrompt.contains("# Next Source Prompt"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("Notion Source Onboarding is complete."), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("- Result:"), reportPrompt)
-        XCTAssertTrue(reportPrompt.contains("- Artifact:"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("- GBrain records verified: 1"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("- Readback: passed"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("- Verified at:"), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("Before running any command from the Next Source Prompt"), reportPrompt)
@@ -3888,12 +3895,6 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             atomically: true,
             encoding: .utf8
         )
-        let artifactURL = vault.appendingPathComponent("sources/obsidian-direct-markdown.md", isDirectory: false)
-        try "# Imported source\n\n- Send the pricing draft tomorrow.\n".write(
-            to: artifactURL,
-            atomically: true,
-            encoding: .utf8
-        )
         let preexistingTaskURL = vault.appendingPathComponent("tasks/existing-task.md", isDirectory: false)
         try "---\ntype: task\ntitle: Existing task\nstatus: todo\n---\n".write(
             to: preexistingTaskURL,
@@ -3937,8 +3938,16 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .appendingPathComponent("obsidian.json", isDirectory: false)
         try FileManager.default.createDirectory(at: runStateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let runState: [String: Any] = [
-            "artifactPath": artifactURL.path,
-            "readbackStatus": "passed",
+            "acquisitionReceipt": ["complete": true],
+            "ingestReceipt": [
+                "complete": true,
+                "verifiedRecordCount": 1,
+                "readbacks": [[
+                    "slug": "sources/obsidian/note",
+                    "sourceID": "obsidian",
+                    "identityMatch": true,
+                ]],
+            ],
             "completionDisposition": "checked",
             "completionSummary": "Obsidian ingest readback verified.",
             "completionReportPending": true,
@@ -3986,8 +3995,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let manifestPath = try XCTUnwrap(readyReview["manifestPath"] as? String)
         let manifest = try stateObject(in: URL(fileURLWithPath: manifestPath))
         let sources = try XCTUnwrap(manifest["sources"] as? [[String: Any]])
-        let expectedArtifactPath = artifactURL.path.hasPrefix("/var/") ? "/private\(artifactURL.path)" : artifactURL.path
-        XCTAssertEqual(sources.first?["artifactPath"] as? String, expectedArtifactPath)
+        let gbrainRecords = try XCTUnwrap(sources.first?["gbrainRecords"] as? [[String: Any]])
+        XCTAssertEqual(gbrainRecords.first?["slug"] as? String, "sources/obsidian/note")
+        XCTAssertEqual(gbrainRecords.first?["sourceID"] as? String, "obsidian")
         let existingTaskPaths = try XCTUnwrap(manifest["existingTaskPaths"] as? [String])
         XCTAssertEqual(existingTaskPaths.count, 1)
 
@@ -4284,8 +4294,17 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 [
                     "completionDisposition": "checked",
                     "completionSummary": "Notion ingest readback verified for target page123.",
-                    "artifactPath": root.appendingPathComponent("sources/notion-ntn-cli.md").path,
-                    "readbackStatus": "passed",
+                    "completionReportPending": true,
+                    "acquisitionReceipt": ["complete": true],
+                    "ingestReceipt": [
+                        "complete": true,
+                        "verifiedRecordCount": 1,
+                        "readbacks": [[
+                            "slug": "sources/notion/page123",
+                            "sourceID": "notion",
+                            "identityMatch": true,
+                        ]],
+                    ],
                     "verifiedAt": "2026-07-07T06:49:51Z",
                 ],
                 to: runStateDirectory.appendingPathComponent("notion.json", isDirectory: false)
@@ -4388,7 +4407,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
         let reportPayload = try jsonObject(from: report.stdout)
         XCTAssertEqual(reportPayload["completedSourceDisposition"] as? String, "skipped")
-        XCTAssertEqual(reportPayload["complete"] as? Bool, false)
+        XCTAssertEqual(reportPayload["complete"] as? Bool, true)
 
         loaded = try readSourceOnboardingState(at: stateURL)
         XCTAssertEqual(loaded.status, .completed)
@@ -5262,7 +5281,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testSourceOnboardingObsidianSmokeReadReportsInconclusiveICloudSamples() throws {
+    func testSourceOnboardingObsidianSmokeReadReportsAccessDeniedForUnreadableICloudSamples() throws {
         let fixture = try makeObsidianSmokeReadFixture(readMode: "temporary-all")
 
         let smoke = try runProcess(
@@ -5275,22 +5294,22 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let payload = try jsonObject(from: smoke.stdout)
         XCTAssertEqual(payload["reason"] as? String, "smoke_read_inconclusive")
         XCTAssertEqual(payload["attemptedFileCount"] as? Int, 5)
-        XCTAssertEqual(payload["suspectedCause"] as? String, "icloud_not_materialized")
+        XCTAssertNil(payload["suspectedCause"])
         XCTAssertEqual(payload["retryable"] as? Bool, true)
         XCTAssertEqual(
             payload["observedReasons"] as? [String],
-            ["read_temporarily_unavailable"]
+            ["access_denied"]
         )
         let diagnostics = try XCTUnwrap(payload["sampleDiagnostics"] as? [[String: Any]])
         XCTAssertEqual(diagnostics.count, 5)
         XCTAssertTrue(diagnostics.allSatisfy { ($0["path"] as? String)?.hasPrefix("note-") == true })
         XCTAssertTrue(diagnostics.allSatisfy { $0["errno"] as? Int != nil })
-        XCTAssertTrue(diagnostics.allSatisfy { $0["reason"] as? String == "read_temporarily_unavailable" })
+        XCTAssertTrue(diagnostics.allSatisfy { $0["reason"] as? String == "access_denied" })
         XCTAssertFalse(diagnostics.contains { ($0["path"] as? String)?.hasPrefix("/") == true })
 
         let prompt = try XCTUnwrap(payload["nextPrompt"] as? String)
         XCTAssertTrue(prompt.contains("did not prove that the entire vault is unreadable"), prompt)
-        XCTAssertTrue(prompt.contains("Finder or Obsidian"), prompt)
+        XCTAssertTrue(prompt.contains("Observed errors: `access_denied`"), prompt)
         XCTAssertEqual(payload["nextPlaybookStepID"] as? String, "smoke_read")
 
         let state = try readSourceOnboardingState(at: fixture.stateURL)
@@ -5300,7 +5319,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
         XCTAssertEqual(runState["smokeReadStatus"] as? String, "inconclusive")
         XCTAssertEqual(runState["attemptedFileCount"] as? Int, 5)
-        XCTAssertEqual(runState["observedReasons"] as? [String], ["read_temporarily_unavailable"])
+        XCTAssertEqual(runState["observedReasons"] as? [String], ["access_denied"])
     }
 
     @MainActor

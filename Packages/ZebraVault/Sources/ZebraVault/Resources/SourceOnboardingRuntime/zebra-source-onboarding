@@ -1,7 +1,11 @@
 #!/bin/sh
 set -eu
 
-RUNTIME_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/../source-onboarding-runtime" && pwd)"
+case "$0" in
+  */*) SCRIPT_DIR=${0%/*} ;;
+  *) SCRIPT_DIR=. ;;
+esac
+RUNTIME_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../source-onboarding-runtime" && pwd)"
 PYTHON_BIN="$(command -v python3 || true)"
 if [ -z "$PYTHON_BIN" ]; then
   echo "python3 is required for zebra-source-onboarding" >&2

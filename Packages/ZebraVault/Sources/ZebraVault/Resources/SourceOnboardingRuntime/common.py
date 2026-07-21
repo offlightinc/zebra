@@ -892,23 +892,6 @@ def action_review_source_records(state):
                     "runStatePath": row.get("runStatePath"),
                 })
                 continue
-        artifact_value = run_state.get("artifactPath") or run_state.get("gbrainArtifact")
-        if not isinstance(artifact_value, str) or not artifact_value.strip():
-            continue
-        artifact = Path(artifact_value).expanduser()
-        if not artifact.is_file():
-            continue
-        readback_status = run_state.get("readbackStatus")
-        if readback_status and readback_status != "passed":
-            continue
-        records.append({
-            "sourceID": source_id,
-            "displayName": row.get("displayName") or source_display_name(source_id),
-            "artifactPath": str(artifact.resolve(strict=False)),
-            "readbackStatus": readback_status or "passed",
-            "resultSummary": row.get("resultSummary") or run_state.get("completionSummary"),
-            "runStatePath": row.get("runStatePath"),
-        })
     return records
 
 def prepare_action_review(state):
@@ -2364,34 +2347,18 @@ def report_source_completion(state, source_id):
     if row.get("phase") != "complete" or row.get("playbookStepID") != "complete":
         return None, {"ok": False, "reason": "source_completion_not_pending", "sourceID": source_id}, 1
     run_state = load_source_run_state(source_id)
-    if source_id == "apple-reminders":
-        completed_ingest = (
-            run_state.get("workflowStatus") == "completionPending"
-            and run_state.get("ingestStatus") == "succeeded"
-            and run_state.get("readbackStatus") == "passed"
-        )
-        completed_skip = (
-            run_state.get("workflowStatus") == "completionPending"
-            and run_state.get("ingestStatus") == "skipped"
-            and run_state.get("readbackStatus") == "skipped"
-            and run_state.get("completionDisposition") == "skipped"
-        )
-        completion_gate_open = (completed_ingest or completed_skip) and bool(run_state.get("completionReportPending"))
-        if not completion_gate_open:
-            return None, {
-                "ok": False,
-                "reason": "reminders_completion_gate_blocked",
-                "sourceID": source_id,
-                "workflowStatus": run_state.get("workflowStatus"),
-                "ingestStatus": run_state.get("ingestStatus"),
-                "readbackStatus": run_state.get("readbackStatus"),
-            }, 1
     disposition = run_state.get("completionDisposition") or "checked"
     if disposition not in {"checked", "skipped"}:
         disposition = "checked"
     migrated_ingest_sources = {
         "obsidian", "agent-memory", "notion", "imessage", "apple-notes", "apple-reminders",
     }
+    if (source_id in migrated_ingest_sources or is_fallback_source_row(row)) and run_state.get("completionReportPending") is not True:
+        return None, {
+            "ok": False,
+            "reason": "source_completion_not_pending",
+            "sourceID": source_id,
+        }, 1
     if (source_id in migrated_ingest_sources or is_fallback_source_row(row)) and disposition == "checked":
         ingest_receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
         acquisition_receipt = run_state.get("acquisitionReceipt") if isinstance(run_state.get("acquisitionReceipt"), dict) else {}
