@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+RUNTIME_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/../source-onboarding-runtime" && pwd)"
+PYTHON_BIN="$(command -v python3 || true)"
+if [ -z "$PYTHON_BIN" ]; then
+  echo "python3 is required for zebra-source-onboarding" >&2
+  exit 1
+fi
+
+STATE="${ZEBRA_SOURCE_ONBOARDING_STATE:-$HOME/Library/Application Support/zebra/onboarding/source-onboarding-state.json}"
+COMMAND="${1:-status}"
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+  "$PYTHON_BIN" -I "$RUNTIME_DIR/main.py" "$STATE" "$COMMAND" "$@"

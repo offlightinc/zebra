@@ -27,7 +27,12 @@ let package = Package(
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
             ],
             resources: [
-                .process("Resources"),
+                .copy("Resources/SourceOnboardingRuntime"),
+                .process("Resources/SourcePlaybooks"),
+                .process("Resources/SourceReplayFixtures"),
+                .process("Resources/SourceReplayPolicies"),
+                .process("Resources/SourceReplayScenarios"),
+                .copy("Resources/zebra-agent-resolver"),
             ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
