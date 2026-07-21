@@ -5,6 +5,8 @@
   "requiredFiles": [
     "main.py",
     "common.py",
+    "domain.py",
+    "gbrain_ingest.py",
     "zebra-source-onboarding",
     "connectors/__init__.py",
     "connectors/obsidian.py",

@@ -11,7 +11,7 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         ])
 
         XCTAssertEqual(result["complete"] as? Bool, true)
-        XCTAssertNil(result["failure"])
+        XCTAssertNil(result["failure"] as? String)
         XCTAssertEqual(result["verifiedRecordCount"] as? Int, 2)
 
         let events = try fixture.events()
