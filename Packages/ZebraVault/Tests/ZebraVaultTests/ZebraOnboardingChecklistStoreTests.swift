@@ -6393,7 +6393,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testSourceOnboardingGmailConnectivityDoesNotClaimDataIngestion() throws {
+    func testSourceOnboardingGmailCompletesAsConnectivityOnlyWithoutIngestionState() throws {
         let root = try makeTemporaryDirectory()
         let serverScript = root.appendingPathComponent("gmail-fixture-server.py")
         let portFile = root.appendingPathComponent("gmail-fixture-port")
@@ -6465,13 +6465,13 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(row.status, "running")
         let runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
         XCTAssertEqual((runState["connectivityReceipt"] as? [String: Any])?["complete"] as? Bool, true)
-        XCTAssertEqual((runState["dataIngestionReceipt"] as? [String: Any])?["complete"] as? Bool, false)
-        XCTAssertEqual((runState["dataIngestionReceipt"] as? [String: Any])?["status"] as? String, "not_started")
-        XCTAssertEqual(runState["completionDisposition"] as? String, "skipped")
+        XCTAssertNil(runState["dataIngestionReceipt"])
+        XCTAssertEqual(runState["sourceMode"] as? String, "connectivity_only")
+        XCTAssertEqual(runState["completionKind"] as? String, "connectivity_ready")
+        XCTAssertEqual(runState["completionDisposition"] as? String, "checked")
         XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["report", "--status", "completed", "--source", "gmail"], environment: environment).status, 0)
         loaded = try readSourceOnboardingState(at: stateURL)
-        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.status, "skipped")
-        XCTAssertNotEqual(loaded.progress.sourceRows["gmail"]?.status, "checked")
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.status, "checked")
     }
 
     @MainActor
