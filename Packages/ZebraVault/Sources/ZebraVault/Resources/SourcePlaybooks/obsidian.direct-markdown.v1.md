@@ -33,18 +33,9 @@ The primary path is direct filesystem discovery/read:
 - Obsidian CLI can be used as a helper only if already working, but CLI setup is never required.
 - Clawvisor is not part of the Obsidian v1 path.
 
-If automatic discovery is needed, keep it conservative and fast. First read the Obsidian app registry at `~/Library/Application Support/obsidian/obsidian.json` and treat each `vaults.*.path` value as a bounded candidate when the path itself contains `.obsidian/`.
+Automatic discovery reads only the Obsidian app registry at `~/Library/Application Support/obsidian/obsidian.json` and treats each `vaults.*.path` value as a bounded candidate when the path itself contains `.obsidian/`. Do not enumerate iCloud Drive, Documents, CloudStorage, Dropbox, or other home-directory locations as fallback discovery.
 
-If the registry has no valid `.obsidian/` candidates, search only these bounded fallback candidates and check only whether the candidate itself contains `.obsidian/`:
-
-- direct children of `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/`
-- `~/Library/CloudStorage/OneDrive*/`
-- `~/Library/CloudStorage/GoogleDrive*/`
-- `~/Dropbox/`
-- `~/Documents/Obsidian/`
-- `~/Obsidian/`
-
-Do not recursively scan the full home directory, generic Documents/Desktop, iCloud Drive root, the Obsidian iCloud `Documents` parent itself, synced-drive roots, or nested folders under the fallback paths. Reject broad roots such as Home, Desktop, Documents, iCloud Drive root, or synced-drive roots unless the user explicitly confirms that exact root is the intended vault. If automatic fallback roots are unreadable, surface that diagnostic instead of silently treating it as "no vault found."
+If the registry is missing, invalid, unreadable, permission denied, or contains no valid candidates, preserve a compact registry diagnostic and ask the user for the exact Obsidian vault path. Reject broad roots such as Home, Desktop, or Documents. Full Disk Access and blanket folder approval are not recovery steps for this flow.
 
 State rules:
 
@@ -64,7 +55,7 @@ Attention rules:
 
 Work only the Obsidian `discover_vault` step.
 
-Find the Obsidian vault path to use. Do not use Zebra's GBrain write target path as an Obsidian source candidate, even if it contains Markdown files or an `.obsidian/` folder, and do not pass that path to `zebra-source-onboarding obsidian verify-vault`. Prefer bounded `.obsidian/` candidates from the Obsidian app registry. If there is exactly one valid candidate, Zebra may select it and continue to `smoke_read` because ingest is still gated later by scope choice and final plan confirmation. If there are multiple candidates, ask the user which one to use. If there are no valid registry candidates, use only the fallback discovery paths listed above or ask the user for the Obsidian vault path. Do not scan the entire home directory recursively.
+Find the Obsidian vault path to use. Do not use Zebra's GBrain write target path as an Obsidian source candidate, even if it contains Markdown files or an `.obsidian/` folder, and do not pass that path to `zebra-source-onboarding obsidian verify-vault`. Prefer bounded `.obsidian/` candidates from the Obsidian app registry. If there is exactly one valid candidate, Zebra may select it and continue to `smoke_read` because ingest is still gated later by scope choice and final plan confirmation. If there are multiple candidates, ask the user which one to use. If there are no valid registry candidates or the registry cannot be used, ask the user for the exact Obsidian vault path. Do not scan other folders automatically.
 
 If you need to explain what path is needed, ask for the folder that contains the user's `.md` notes, usually the folder containing `.obsidian/`. Do not ask the user to install Obsidian CLI.
 
@@ -84,7 +75,7 @@ Zebra needs the user to confirm, provide, or correct the Obsidian vault path. As
 
 If Zebra found no candidate, ask for the correct vault path and run `zebra-source-onboarding obsidian verify-vault --path "<vault-path>"`.
 
-If Zebra found multiple candidates, show the list and ask the user which vault to use. Do not choose among multiple registry or fallback candidates automatically.
+If Zebra found multiple registry candidates, show the list and ask the user which vault to use. Do not choose among them automatically.
 
 If the previous candidate was rejected because it was too broad, explain that Zebra needs the specific vault folder, not the whole home, Desktop, Documents, iCloud Drive, or synced-drive root.
 

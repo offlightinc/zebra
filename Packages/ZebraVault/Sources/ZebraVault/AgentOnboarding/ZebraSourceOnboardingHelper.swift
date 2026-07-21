@@ -236,7 +236,7 @@ struct ZebraSourceOnboardingHelper {
 
     ## Step: discover_vault
 
-    Prefer an Obsidian app registry candidate from `~/Library/Application Support/obsidian/obsidian.json`. If exactly one valid candidate exists, continue to `smoke_read`; ask the user only when there are no candidates or multiple candidates. Do not use the GBrain write target path as the Obsidian vault path.
+    Read only the Obsidian app registry at `~/Library/Application Support/obsidian/obsidian.json`. If exactly one valid candidate exists, continue to `smoke_read`. If there are no valid candidates, the registry cannot be read, or there are multiple candidates, ask the user for the exact vault path. Do not scan iCloud Drive, Documents, CloudStorage, Dropbox, or other home-directory locations. Do not use the GBrain write target path as the Obsidian vault path.
 
     When the user provides a candidate path, run `zebra-source-onboarding obsidian verify-vault --path "<vault-path>"`.
 
@@ -2463,10 +2463,10 @@ struct ZebraSourceOnboardingHelper {
         if estimated is None:
             estimated = "unknown"
         artifact = run_state.get("artifactPath") or "not created"
-        unreadable_roots = run_state.get("unreadableCandidateRoots") if isinstance(run_state.get("unreadableCandidateRoots"), list) else []
-        if step_id == "discover_vault" and unreadable_roots:
+        registry_diagnostics = run_state.get("registryDiagnostics") if isinstance(run_state.get("registryDiagnostics"), list) else []
+        if step_id == "confirm_vault_if_needed" and registry_diagnostics:
             lines = []
-            for item in unreadable_roots:
+            for item in registry_diagnostics:
                 if not isinstance(item, dict):
                     continue
                 root_path = item.get("path") or "unknown"
@@ -2478,11 +2478,11 @@ struct ZebraSourceOnboardingHelper {
                 lines.append(detail)
             if lines:
                 if language == "ko":
-                    section = section + "\\n\\n" + "Zebra가 아래 자동 탐색 위치를 확인하지 못했습니다. 자동 탐색 결과가 불완전할 수 있음을 사용자에게 알리고, 필요하면 정확한 Obsidian vault 경로를 물어보세요:\\n" + "\\n".join(lines)
+                    section = section + "\\n\\n" + "Zebra가 Obsidian registry를 사용할 수 없었습니다. 아래 진단을 간단히 알리고 정확한 Obsidian vault 경로를 입력해 달라고 요청하세요. 다른 폴더를 자동 탐색하지 마세요:\\n" + "\\n".join(lines)
                 elif language == "ja":
-                    section = section + "\\n\\n" + "Zebraは次の自動探索場所を確認できませんでした。自動探索結果が不完全な可能性をユーザーに伝え、必要であれば正確なObsidian vaultパスを尋ねてください:\\n" + "\\n".join(lines)
+                    section = section + "\\n\\n" + "Obsidian registryを使用できませんでした。次の診断を簡潔に伝え、正確なObsidian vaultパスの入力を求めてください。他のフォルダを自動探索しないでください:\\n" + "\\n".join(lines)
                 else:
-                    section = section + "\\n\\n" + "Zebra could not inspect these automatic discovery roots. Tell the user that automatic discovery may be incomplete and ask for the exact Obsidian vault path if needed:\\n" + "\\n".join(lines)
+                    section = section + "\\n\\n" + "Zebra could not use the Obsidian registry. Briefly report this diagnostic and ask the user to enter the exact Obsidian vault path. Do not scan other folders automatically:\\n" + "\\n".join(lines)
         if step_id == "confirm_vault_if_needed":
             candidate = run_state.get("candidateVaultPath")
             candidates = run_state.get("candidateVaultPaths") if isinstance(run_state.get("candidateVaultPaths"), list) else []
@@ -2539,6 +2539,13 @@ struct ZebraSourceOnboardingHelper {
                     section = section + "\\n\\n" + "Zebraは`" + str(method) + "`から複数の`.obsidian/` vault候補を見つけました。使用するvaultをユーザーに確認し、`zebra-source-onboarding obsidian verify-vault --path <vault-path>`を実行してください。候補:\\n\\n" + candidate_lines
                 else:
                     section = section + "\\n\\n" + "Zebra found multiple `.obsidian/` vault candidates from `" + str(method) + "`. Ask the user which one to use, then run `zebra-source-onboarding obsidian verify-vault --path <vault-path>`. Candidates:\\n\\n" + candidate_lines
+            else:
+                if language == "ko":
+                    section = section + "\\n\\n정확한 Obsidian vault 경로를 입력해 달라고 요청한 뒤 `zebra-source-onboarding obsidian verify-vault --path \\\"<vault-path>\\\"`를 실행하세요. iCloud Drive, Documents, CloudStorage, Dropbox 또는 다른 홈 폴더를 자동 탐색하지 마세요."
+                elif language == "ja":
+                    section = section + "\\n\\n正確なObsidian vaultパスの入力を求め、`zebra-source-onboarding obsidian verify-vault --path \\\"<vault-path>\\\"`を実行してください。iCloud Drive、Documents、CloudStorage、Dropbox、その他のホームフォルダを自動探索しないでください。"
+                else:
+                    section = section + "\\n\\nAsk the user to enter the exact Obsidian vault path, then run `zebra-source-onboarding obsidian verify-vault --path \\\"<vault-path>\\\"`. Do not scan iCloud Drive, Documents, CloudStorage, Dropbox, or other home folders automatically."
         if step_id == "choose_ingest_scope":
             section = obsidian_choose_scope_instruction(language)
         if step_id == "confirm_ingest_plan":
@@ -4792,12 +4799,13 @@ struct ZebraSourceOnboardingHelper {
         vault = Path(vault_path).expanduser()
         if not vault.is_dir():
             return []
+        vault_resolved = vault.resolve(strict=False)
         roots = []
         if folders:
             for folder in folders:
                 candidate = (vault / folder).resolve(strict=False)
                 try:
-                    candidate.relative_to(vault.resolve(strict=False))
+                    candidate.relative_to(vault_resolved)
                     if candidate.exists():
                         roots.append(candidate)
                 except Exception:
@@ -4816,10 +4824,13 @@ struct ZebraSourceOnboardingHelper {
                         continue
                     path = Path(current) / filename
                     try:
-                        path.relative_to(vault)
+                        resolved = path.resolve(strict=True)
+                        resolved.relative_to(vault_resolved)
+                        if not resolved.is_file():
+                            continue
                     except Exception:
                         continue
-                    files.append(path)
+                    files.append(resolved)
                     if limit and len(files) >= limit:
                         return files
         return files
@@ -4933,45 +4944,18 @@ struct ZebraSourceOnboardingHelper {
                     raw_path = item.get("path")
                     if isinstance(raw_path, str) and raw_path:
                         paths.append(Path(raw_path).expanduser())
-        except FileNotFoundError:
-            pass
+        except FileNotFoundError as error:
+            diagnostics.append({"path": str(registry), "reason": "registry_missing", "message": str(error)})
+        except json.JSONDecodeError as error:
+            diagnostics.append({"path": str(registry), "reason": "registry_invalid_json", "message": str(error)})
         except Exception as error:
             diagnostics.append(discovery_error_record(registry, error))
-        return deduped_paths(paths), diagnostics
-
-    def fallback_obsidian_candidate_paths():
-        paths = []
-        diagnostics = []
-        icloud_root = home / "Library/Mobile Documents/iCloud~md~obsidian/Documents"
-        try:
-            if icloud_root.exists() and icloud_root.is_dir():
-                paths.extend(sorted(child for child in icloud_root.iterdir() if child.is_dir()))
-        except Exception as error:
-            diagnostics.append(discovery_error_record(icloud_root, error))
-        cloud_storage = home / "Library/CloudStorage"
-        try:
-            if cloud_storage.exists() and cloud_storage.is_dir():
-                for pattern in ("OneDrive*", "GoogleDrive*"):
-                    paths.extend(sorted(child for child in cloud_storage.glob(pattern) if child.is_dir()))
-        except Exception as error:
-            diagnostics.append(discovery_error_record(cloud_storage, error))
-        paths.extend([
-            home / "Dropbox",
-            home / "Documents/Obsidian",
-            home / "Obsidian",
-        ])
         return deduped_paths(paths), diagnostics
 
     def discover_obsidian_marker_candidates():
         candidates = {}
         diagnostics = []
-        broad_roots = {
-            canonical_path(home),
-            canonical_path(home / "Desktop"),
-            canonical_path(home / "Documents"),
-            canonical_path(home / "Library/Mobile Documents"),
-            canonical_path(home / "Library/Mobile Documents/iCloud~md~obsidian/Documents"),
-        }
+        broad_roots = {canonical_path(home), canonical_path(home / "Desktop"), canonical_path(home / "Documents")}
         registry_paths, registry_diagnostics = obsidian_registry_candidate_paths()
         diagnostics.extend(registry_diagnostics)
         for discovery_method, paths in [("obsidian_registry", registry_paths)]:
@@ -4988,23 +4972,6 @@ struct ZebraSourceOnboardingHelper {
                 validation = vault_validation(vault)
                 if validation.get("ok") and validation.get("hasObsidianMarker"):
                     validation["discoveryMethod"] = discovery_method
-                    candidates[vault] = validation
-        if not candidates:
-            fallback_paths, fallback_diagnostics = fallback_obsidian_candidate_paths()
-            diagnostics.extend(fallback_diagnostics)
-            for path in fallback_paths:
-                try:
-                    if not path.is_dir() or not (path / ".obsidian").is_dir():
-                        continue
-                except Exception as error:
-                    diagnostics.append(discovery_error_record(path, error))
-                    continue
-                vault = canonical_path(path)
-                if vault in broad_roots:
-                    continue
-                validation = vault_validation(vault)
-                if validation.get("ok") and validation.get("hasObsidianMarker"):
-                    validation["discoveryMethod"] = "bounded_fallback_path"
                     candidates[vault] = validation
         return list(candidates.values()), diagnostics
 
@@ -5140,6 +5107,7 @@ struct ZebraSourceOnboardingHelper {
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 0
         discovered, discovery_diagnostics = discover_obsidian_marker_candidates()
+        discovered = [item for item in discovered if not is_gbrain_target_path(state, item.get("path") or "")]
         if len(discovered) == 1:
             validation = discovered[0]
             run_state = load_source_run_state("obsidian")
@@ -5151,7 +5119,7 @@ struct ZebraSourceOnboardingHelper {
                 "updatedAt": now(),
             })
             if discovery_diagnostics:
-                run_state["unreadableCandidateRoots"] = discovery_diagnostics
+                run_state["registryDiagnostics"] = discovery_diagnostics
             run_path = save_source_run_state("obsidian", run_state)
             state = set_obsidian_row_state(
                 state,
@@ -5174,7 +5142,7 @@ struct ZebraSourceOnboardingHelper {
                 "updatedAt": now(),
             })
             if discovery_diagnostics:
-                run_state["unreadableCandidateRoots"] = discovery_diagnostics
+                run_state["registryDiagnostics"] = discovery_diagnostics
             run_path = save_source_run_state("obsidian", run_state)
             state = set_obsidian_row_state(
                 state,
@@ -5191,34 +5159,29 @@ struct ZebraSourceOnboardingHelper {
             payload.update(source_next_prompt_payload(state, "obsidian", "confirm_vault_if_needed"))
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
+        run_state = load_source_run_state("obsidian")
         if discovery_diagnostics:
-            run_state = load_source_run_state("obsidian")
-            run_state.update({
-                "unreadableCandidateRoots": discovery_diagnostics,
-                "updatedAt": now(),
-            })
-            run_path = save_source_run_state("obsidian", run_state)
-            state = set_obsidian_row_state(
-                state,
-                "attention",
-                "preflight",
-                "discover_vault",
-                attention_reason="obsidian_candidate_discovery_unreadable",
-                run_state_path=run_path,
-            )
-            save_json(state)
-            payload = summary(state)
-            payload["ok"] = False
-            payload["reason"] = "obsidian_candidate_discovery_unreadable"
-            payload.update(source_next_prompt_payload(state, "obsidian", "discover_vault"))
-            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-            return 1
-        state = set_obsidian_row_state(state, "running", "preflight", "discover_vault")
+            run_state["registryDiagnostics"] = discovery_diagnostics
+        run_state.update({"discoveryMethod": "obsidian_registry", "updatedAt": now()})
+        run_path = save_source_run_state("obsidian", run_state)
+        reason = discovery_diagnostics[0].get("reason") if discovery_diagnostics else "obsidian_registry_no_valid_candidates"
+        state = set_obsidian_row_state(
+            state,
+            "attention",
+            "preflight",
+            "confirm_vault_if_needed",
+            attention_reason=reason,
+            run_state_path=run_path,
+        )
         save_json(state)
         payload = summary(state)
-        payload.update(source_next_prompt_payload(state, "obsidian", "discover_vault"))
+        payload["ok"] = False
+        payload["reason"] = reason
+        if discovery_diagnostics:
+            payload["registryDiagnostics"] = discovery_diagnostics
+        payload.update(source_next_prompt_payload(state, "obsidian", "confirm_vault_if_needed"))
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 0
+        return 1
 
     def start_imessage_from_next(state):
         progress = ensure_progress(state)
