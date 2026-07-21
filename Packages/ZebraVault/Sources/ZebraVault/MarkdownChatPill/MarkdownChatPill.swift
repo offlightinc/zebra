@@ -471,7 +471,7 @@ public struct MarkdownChatPill: View {
     let activeAgent: MarkdownPillAgent?
     /// Parent handles the actual split/tab creation and terminal input.
     /// The pill just emits the user's intent.
-    let onSubmit: (_ text: String, _ agent: MarkdownPillAgent) -> Void
+    let onSubmit: (_ text: String, _ agent: MarkdownPillAgent, _ executablePath: String) -> Void
     let onManageDefaultAgent: ((_ agent: ZebraAgentKind?, _ installApproved: Bool) -> Void)?
     let onHeightChange: ((CGFloat) -> Void)?
 
@@ -480,7 +480,7 @@ public struct MarkdownChatPill: View {
         displayTitle: String,
         availableContentHeight: CGFloat? = nil,
         activeAgent: MarkdownPillAgent?,
-        onSubmit: @escaping (_ text: String, _ agent: MarkdownPillAgent) -> Void,
+        onSubmit: @escaping (_ text: String, _ agent: MarkdownPillAgent, _ executablePath: String) -> Void,
         onManageDefaultAgent: ((_ agent: ZebraAgentKind?, _ installApproved: Bool) -> Void)? = nil,
         onHeightChange: ((CGFloat) -> Void)? = nil
     ) {
@@ -491,12 +491,21 @@ public struct MarkdownChatPill: View {
         self.onSubmit = onSubmit
         self.onManageDefaultAgent = onManageDefaultAgent
         self.onHeightChange = onHeightChange
-        self._agent = State(initialValue: MarkdownPillAgent.defaultAgent())
+        let preferences = ZebraAgentPreferenceStore().load()
+        let initialAgent = preferences.primaryAgent.map(MarkdownPillAgent.init(agentKind:))
+            ?? MarkdownPillAgent.defaultAgent()
+        self._agent = State(initialValue: initialAgent)
+        self._selectedExecutablePath = State(
+            initialValue: preferences.primaryAgent == initialAgent.agentKind
+                ? preferences.primaryAgentExecutablePath
+                : nil
+        )
     }
 
     @Binding private var isExpanded: Bool
     @State private var text: String = ""
     @State private var agent: MarkdownPillAgent
+    @State private var selectedExecutablePath: String?
     @State private var agentMenuOpen: Bool = false
     @State private var agentScanStatus: MarkdownPillAgentScanStatus = .idle
     @State private var agentInstallCandidates: [ZebraAgentInstallCandidate] = []
@@ -665,6 +674,7 @@ public struct MarkdownChatPill: View {
         .onChange(of: isExpanded) { _, expanded in
             if expanded, let activeAgent {
                 agent = activeAgent
+                selectedExecutablePath = executablePath(for: activeAgent.agentKind)
             }
             if !expanded {
                 textFieldFocused = false
@@ -809,6 +819,7 @@ public struct MarkdownChatPill: View {
         guard !isExpanded else { return }
         if let activeAgent {
             agent = activeAgent
+            selectedExecutablePath = executablePath(for: activeAgent.agentKind)
         }
         withAnimation(Self.motion) {
             isExpanded = true
@@ -832,7 +843,11 @@ public struct MarkdownChatPill: View {
     private func submit() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        onSubmit(trimmed, agent)
+        guard let executablePath = validatedSelectedExecutablePath() else {
+            openDefaultAgentFallback(agent.agentKind)
+            return
+        }
+        onSubmit(trimmed, agent, executablePath)
         text = ""
         measuredInputContentHeight = MarkdownChatPillLayout.baseInputHeight
         inputHeight = MarkdownChatPillLayout.baseInputHeight
@@ -1162,6 +1177,7 @@ public struct MarkdownChatPill: View {
                     isScanning: agentScanStatus == .scanning,
                     onSelectOnce: {
                         agent = option
+                        selectedExecutablePath = agentCandidate(for: option.agentKind)?.executablePath
                         agentMenuOpen = false
                     },
                     onPrimaryAction: {
@@ -1198,10 +1214,11 @@ public struct MarkdownChatPill: View {
     }
 
     private func syncAgentFromPrimaryPreferenceIfNeeded() {
-        let savedPrimary = ZebraAgentPreferenceStore().load().primaryAgent
-        primaryAgent = savedPrimary
-        guard activeAgent == nil, let savedPrimary else { return }
+        let preferences = ZebraAgentPreferenceStore().load()
+        primaryAgent = preferences.primaryAgent
+        guard activeAgent == nil, let savedPrimary = preferences.primaryAgent else { return }
         agent = MarkdownPillAgent(agentKind: savedPrimary)
+        selectedExecutablePath = preferences.primaryAgentExecutablePath
     }
 
     private func refreshAgentMenuState() {
@@ -1217,6 +1234,13 @@ public struct MarkdownChatPill: View {
                 agentInstallCandidates = candidates
                 primaryAgent = savedPrimary
                 agentScanStatus = .loaded
+                _ = try? ZebraAgentLaunchResolver().refreshSavedPrimaryExecutablePath(
+                    candidates: candidates,
+                    updatedBy: "chatPillAgentDropdownScan"
+                )
+                selectedExecutablePath = candidates.first(where: {
+                    $0.id == agent.agentKind && $0.installState == .installed && $0.terminalLaunchable
+                })?.executablePath
             }
         }
     }
@@ -1241,10 +1265,12 @@ public struct MarkdownChatPill: View {
         do {
             try ZebraAgentPreferenceStore().setPrimaryAgent(
                 agentKind,
+                executablePath: candidate.executablePath,
                 updatedBy: "chatPillAgentDropdown"
             )
             primaryAgent = agentKind
             agent = option
+            selectedExecutablePath = candidate.executablePath
             agentMenuOpen = false
         } catch {
             openDefaultAgentFallback(agentKind)
@@ -1257,6 +1283,18 @@ public struct MarkdownChatPill: View {
     ) {
         agentMenuOpen = false
         onManageDefaultAgent?(agent, installApproved)
+    }
+
+    private func validatedSelectedExecutablePath() -> String? {
+        ZebraAgentLaunchResolver().validatedExecutablePath(selectedExecutablePath)
+    }
+
+    private func executablePath(for agent: ZebraAgentKind) -> String? {
+        if let candidatePath = agentCandidate(for: agent)?.executablePath {
+            return candidatePath
+        }
+        let preferences = ZebraAgentPreferenceStore().load()
+        return preferences.primaryAgent == agent ? preferences.primaryAgentExecutablePath : nil
     }
 
     private var skillsButton: some View {

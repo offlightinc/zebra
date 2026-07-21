@@ -65,6 +65,42 @@ final class ZebraAgentLaunchResolverTests: XCTestCase {
         )
     }
 
+    func testSavedExecutablePathValidationUsesOnlyLocalExecutableCheck() {
+        var checkedPaths: [String] = []
+        let resolved = ZebraAgentLaunchResolver().validatedExecutablePath(
+            "/tools/../tools/codex",
+            isExecutableFileAtPath: { path in
+                checkedPaths.append(path)
+                return path == "/tools/codex"
+            }
+        )
+
+        XCTAssertEqual(resolved, "/tools/codex")
+        XCTAssertEqual(checkedPaths, ["/tools/codex"])
+    }
+
+    func testSavedExecutablePathValidationRejectsMissingAndRelativePaths() {
+        let resolver = ZebraAgentLaunchResolver()
+        XCTAssertNil(resolver.validatedExecutablePath(nil, isExecutableFileAtPath: { _ in true }))
+        XCTAssertNil(resolver.validatedExecutablePath("bin/codex", isExecutableFileAtPath: { _ in true }))
+        XCTAssertNil(resolver.validatedExecutablePath("/tools/codex", isExecutableFileAtPath: { _ in false }))
+    }
+
+    func testPickerScanRefreshPersistsVerifiedPrimaryExecutablePath() throws {
+        let store = ZebraAgentPreferenceStore(fileURL: try preferencesURL())
+        try store.setPrimaryAgent(.codex, updatedBy: "legacySelection")
+
+        let path = try ZebraAgentLaunchResolver().refreshSavedPrimaryExecutablePath(
+            preferenceStore: store,
+            candidates: [installed(.codex, path: "/tools/codex")],
+            updatedBy: "chatPillAgentDropdownScan"
+        )
+
+        XCTAssertEqual(path, "/tools/codex")
+        XCTAssertEqual(store.load().primaryAgentExecutablePath, "/tools/codex")
+        XCTAssertEqual(store.load().updatedBy, "chatPillAgentDropdownScan")
+    }
+
     private func assertFallback(
         candidates: [ZebraAgentInstallCandidate],
         invalidPrimary: ZebraAgentKind,

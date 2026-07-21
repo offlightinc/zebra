@@ -250,8 +250,12 @@ struct ZebraMarkdownPanelView<
                     displayTitle: panel.displayTitle,
                     availableContentHeight: proxy.size.height,
                     activeAgent: liveChatCompanionAgent,
-                    onSubmit: { text, agent in
-                        handlePillSubmit(text: text, agent: agent)
+                    onSubmit: { text, agent, executablePath in
+                        handlePillSubmit(
+                            text: text,
+                            agent: agent,
+                            executablePath: executablePath
+                        )
                     },
                     onManageDefaultAgent: { agent, installApproved in
                         startDefaultAgentManager(agent: agent, installApproved: installApproved)
@@ -565,20 +569,12 @@ struct ZebraMarkdownPanelView<
         .markdownFile((panel.filePath as NSString).resolvingSymlinksInPath)
     }
 
-    fileprivate func handlePillSubmit(text: String, agent: MarkdownPillAgent) {
-        Task {
-            let candidates = await Task.detached(priority: .userInitiated) {
-                ZebraAgentInstallScanner().scan()
-            }.value
-            guard let executablePath = ZebraAgentLaunchResolver().executablePath(
-                for: agent.agentKind,
-                candidates: candidates
-            ) else {
-                startDefaultAgentManager(agent: agent.agentKind)
-                return
-            }
-            launchPillSubmit(text: text, agent: agent, executablePath: executablePath)
-        }
+    fileprivate func handlePillSubmit(
+        text: String,
+        agent: MarkdownPillAgent,
+        executablePath: String
+    ) {
+        launchPillSubmit(text: text, agent: agent, executablePath: executablePath)
     }
 
     private func launchPillSubmit(text: String, agent: MarkdownPillAgent, executablePath: String) {

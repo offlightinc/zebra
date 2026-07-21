@@ -220,8 +220,13 @@ private struct ZebraEmailPanelHost: View {
                             contentPane: paneId,
                             markedBy: agentTerminals
                         ),
-                        onSubmit: { text, agent in
-                            handlePillSubmit(text: text, agent: agent, workspace: workspace)
+                        onSubmit: { text, agent, executablePath in
+                            handlePillSubmit(
+                                text: text,
+                                agent: agent,
+                                executablePath: executablePath,
+                                workspace: workspace
+                            )
                         },
                         onManageDefaultAgent: { agent, installApproved in
                             startDefaultAgentManager(
@@ -254,25 +259,18 @@ private struct ZebraEmailPanelHost: View {
     /// Send the pill prompt into an agent terminal in the companion pane.
     /// A split is created only when this content pane has no reusable
     /// terminal companion yet.
-    private func handlePillSubmit(text: String, agent: MarkdownPillAgent, workspace: Workspace) {
-        Task {
-            let candidates = await Task.detached(priority: .userInitiated) {
-                ZebraAgentInstallScanner().scan()
-            }.value
-            guard let executablePath = ZebraAgentLaunchResolver().executablePath(
-                for: agent.agentKind,
-                candidates: candidates
-            ) else {
-                startDefaultAgentManager(workspace: workspace, agent: agent.agentKind)
-                return
-            }
-            launchPillSubmit(
-                text: text,
-                agent: agent,
-                executablePath: executablePath,
-                workspace: workspace
-            )
-        }
+    private func handlePillSubmit(
+        text: String,
+        agent: MarkdownPillAgent,
+        executablePath: String,
+        workspace: Workspace
+    ) {
+        launchPillSubmit(
+            text: text,
+            agent: agent,
+            executablePath: executablePath,
+            workspace: workspace
+        )
     }
 
     private func launchPillSubmit(
