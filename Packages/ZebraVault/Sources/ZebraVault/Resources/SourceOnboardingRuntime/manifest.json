@@ -1,5 +1,18 @@
 {
   "schemaVersion": 1,
-  "runtimeVersion": "1",
-  "entrypoint": "main.py"
+  "runtimeVersion": "2",
+  "entrypoint": "main.py",
+  "requiredFiles": [
+    "main.py",
+    "common.py",
+    "zebra-source-onboarding",
+    "connectors/__init__.py",
+    "connectors/obsidian.py",
+    "connectors/agent_memory.py",
+    "connectors/notion.py",
+    "connectors/imessage.py",
+    "connectors/apple_notes.py",
+    "connectors/apple_reminders.py",
+    "connectors/gmail.py"
+  ]
 }

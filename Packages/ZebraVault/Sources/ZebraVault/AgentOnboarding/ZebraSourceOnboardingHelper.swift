@@ -107,9 +107,15 @@ struct ZebraSourceOnboardingHelper {
             try fileManager.copyItem(at: bundledRuntime, to: temporaryRuntime)
             guard Self.runtimeResourceIsComplete(at: temporaryRuntime) else { return nil }
             if fileManager.fileExists(atPath: runtimeDirectory.path) {
-                try fileManager.removeItem(at: runtimeDirectory)
+                _ = try fileManager.replaceItemAt(
+                    runtimeDirectory,
+                    withItemAt: temporaryRuntime,
+                    backupItemName: nil,
+                    options: []
+                )
+            } else {
+                try fileManager.moveItem(at: temporaryRuntime, to: runtimeDirectory)
             }
-            try fileManager.moveItem(at: temporaryRuntime, to: runtimeDirectory)
             let bundledEntrypoint = runtimeDirectory.appendingPathComponent(
                 "zebra-source-onboarding",
                 isDirectory: false
@@ -145,7 +151,15 @@ struct ZebraSourceOnboardingHelper {
     }
 
     private static func runtimeResourceIsComplete(at directory: URL) -> Bool {
-        let requiredFiles = ["manifest.json", "main.py", "zebra-source-onboarding"]
+        let manifestURL = directory.appendingPathComponent("manifest.json", isDirectory: false)
+        guard let data = try? Data(contentsOf: manifestURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["schemaVersion"] as? Int == 1,
+              let runtimeVersion = object["runtimeVersion"] as? String,
+              !runtimeVersion.isEmpty,
+              let requiredFiles = object["requiredFiles"] as? [String],
+              !requiredFiles.isEmpty
+        else { return false }
         return requiredFiles.allSatisfy {
             FileManager.default.fileExists(
                 atPath: directory.appendingPathComponent($0, isDirectory: false).path

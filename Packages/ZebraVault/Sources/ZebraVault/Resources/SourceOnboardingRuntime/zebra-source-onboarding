@@ -15,4 +15,6 @@ if [ "$#" -gt 0 ]; then
 fi
 
 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
-  "$PYTHON_BIN" -I "$RUNTIME_DIR/main.py" "$STATE" "$COMMAND" "$@"
+  "$PYTHON_BIN" -I -c \
+  'import runpy, sys; runtime = sys.argv.pop(1); sys.path.insert(0, runtime); runpy.run_path(runtime + "/main.py", run_name="__main__")' \
+  "$RUNTIME_DIR" "$STATE" "$COMMAND" "$@"
