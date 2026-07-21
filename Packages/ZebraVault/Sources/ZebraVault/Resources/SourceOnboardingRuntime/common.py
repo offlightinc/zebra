@@ -37,7 +37,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from playbooks import parse_playbook_markdown
-from state import load_json_file, load_source_run_state_file, save_json_file, save_source_run_state_file
+from domain import deterministic_slug
+from gbrain_ingest import submit_connector_ingestion
+from state import ingest_projection, load_json_file, load_source_run_state_file, save_json_file, save_source_run_state_file
 
 state_path = Path(sys.argv[1]).expanduser()
 
@@ -727,7 +729,7 @@ def write_fallback_artifacts(source_id, run_state, event):
         "attentionReason": event.get("attentionReason"),
         "strategy": run_state.get("strategy"),
         "ingestScope": run_state.get("ingestScope"),
-        "gbrainArtifact": run_state.get("gbrainArtifact"),
+        "ingestReceipt": run_state.get("ingestReceipt"),
         "updatedAt": event.get("updatedAt"),
     }
     write_json_file(directory / "fallback-summary.json", compact)
@@ -779,32 +781,6 @@ def gbrain_target_directory(state):
             candidate.mkdir(parents=True, exist_ok=True)
             return candidate
     return None
-
-def write_fallback_gbrain_artifact(state, source_id, title, body, provenance):
-    target = gbrain_target_directory(state)
-    if target is None:
-        return None
-    safe_title = prompt_file_safe_name(title or source_id)
-    path = target / ("source-onboarding-" + prompt_file_safe_name(source_id) + "-" + safe_title + ".md")
-    text = "\n".join([
-        "---",
-        "source: " + source_id,
-        "playbook: " + fallback_playbook["id"] + ".v1",
-        "provenance: " + str(provenance or "uncataloged fallback ingest"),
-        "---",
-        "",
-        "# " + str(title or source_id),
-        "",
-        str(body or "").rstrip(),
-        "",
-    ]).rstrip() + "\n"
-    path.write_text(text, encoding="utf-8")
-    digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
-    return {
-        "basename": path.name,
-        "pathHash": digest,
-        "kind": "gbrain-markdown",
-    }
 
 def ensure_progress(state):
     progress = state.get("progress")
@@ -2092,8 +2068,8 @@ def fallback_step_prompt(source_id, step_id, state, row):
     display = row.get("displayName") or record.get("displayName") or record.get("rawValue") or source_id
     run_state = load_source_run_state(source_id)
     last_summary = run_state.get("lastSummary") or "not recorded"
-    gbrain_artifact = run_state.get("gbrainArtifact") or {}
-    artifact_ref = gbrain_artifact.get("basename") if isinstance(gbrain_artifact, dict) else None
+    ingest_receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
+    verified_count = ingest_receipt.get("verifiedRecordCount") or 0
     if step_id == "classify_source":
         instruction = textwrap.dedent(f'''
         Classify `{display}` as one or more of: app, web service, file/export, CLI, API, or manual upload.
@@ -2134,15 +2110,15 @@ def fallback_step_prompt(source_id, step_id, state, row):
     elif step_id == "ingest":
         instruction = textwrap.dedent(f'''
         Ingest only the user-approved `{display}` scope into the GBrain target.
-        If the helper should write an export-derived markdown artifact, pass only a user-approved file reference to this ingest step:
+        Pass only a user-approved file reference to the common GBrain ingestion step:
         `zebra-source-onboarding fallback report --source {source_id} --step ingest --status completed --summary "<compact ingest result>" --ingest-title "<title>" --ingest-file "<approved-export-file>" --ingest-provenance "<provenance>"`
-        Do not pass raw source body as a CLI argument. The helper reads the approved file and writes its body to the GBrain target artifact, not to Source Onboarding state or fallback promotion artifacts.
+        Do not pass raw source body as a CLI argument. The helper reads the approved file, submits one normalized record to the common GBrain coordinator, and persists only bounded receipts.
         ''').strip()
     elif step_id == "verify_readback":
         instruction = textwrap.dedent(f'''
-        Verify the GBrain ingest artifact for `{display}` can be read back and contains expected provenance/schema.
-        Current GBrain artifact reference: `{artifact_ref or "not recorded"}`
-        If readback succeeds, report completed; the helper will move to the completion-report boundary.
+        Confirm the common GBrain ingestion receipt for `{display}` completed exact source-scoped readback.
+        Current verified GBrain record count: `{verified_count}`
+        Report completed only after the helper's common receipt is complete; the helper will reject an agent-only success claim.
         ''').strip()
     else:
         instruction = "Fallback Source Onboarding is complete. Run the completion report command when prompted."
@@ -2416,7 +2392,7 @@ def report_source_completion(state, source_id):
     migrated_ingest_sources = {
         "obsidian", "agent-memory", "notion", "imessage", "apple-notes", "apple-reminders",
     }
-    if source_id in migrated_ingest_sources and disposition == "checked":
+    if (source_id in migrated_ingest_sources or is_fallback_source_row(row)) and disposition == "checked":
         ingest_receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
         acquisition_receipt = run_state.get("acquisitionReceipt") if isinstance(run_state.get("acquisitionReceipt"), dict) else {}
         if ingest_receipt.get("complete") is not True or acquisition_receipt.get("complete") is not True:
@@ -2702,63 +2678,6 @@ def parse_flag_value(flag):
 def single_flag_value(flag):
     values = parse_flag_value(flag)
     return values[-1] if values else ""
-
-def run_imsg(arguments, timeout=15, failure_reason="history_read_failed"):
-    run_state, command_path = imessage_run_state_with_command_path()
-    if not command_path:
-        return run_state, {
-            "ok": False,
-            "reason": "imsg_cli_missing",
-            "stdout": "",
-            "stderr": "",
-            "returncode": 127,
-        }
-    try:
-        result = subprocess.run(
-            [command_path] + list(arguments),
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-        )
-        return run_state, {
-            "ok": result.returncode == 0,
-            "reason": None if result.returncode == 0 else failure_reason,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "returncode": result.returncode,
-        }
-    except subprocess.TimeoutExpired as error:
-        return run_state, {
-            "ok": False,
-            "reason": failure_reason,
-            "stdout": error.stdout or "",
-            "stderr": error.stderr or "imsg command timed out",
-            "returncode": 124,
-        }
-    except Exception as error:
-        return run_state, {
-            "ok": False,
-            "reason": failure_reason,
-            "stdout": "",
-            "stderr": str(error),
-            "returncode": 1,
-        }
-
-def parse_json_output(text):
-    raw = text or ""
-    try:
-        return json.loads(raw)
-    except Exception:
-        items = []
-        for line in raw.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                items.append(json.loads(stripped))
-            except Exception:
-                return None
-        return items if items else None
 
 def homebrew_candidate_is_verified(candidate):
     candidate = (candidate or "").strip()
@@ -3440,59 +3359,83 @@ def fallback_report():
             payload.update({"ok": False, "reason": "ingest_plan_unconfirmed"})
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
-        if parsed["ingestFile"]:
-            ingest_file = Path(parsed["ingestFile"]).expanduser()
-            try:
-                ingest_body = ingest_file.read_text(encoding="utf-8")
-            except Exception:
-                run_state["ingestFailureReason"] = "ingest_file_unreadable"
-                run_path = save_source_run_state(source_id, run_state)
-                state = set_fallback_row_state(
-                    state,
-                    source_id,
-                    "attention",
-                    fallback_phase_for_step("ingest"),
-                    "ingest",
-                    timestamp=timestamp,
-                    attention_reason="waiting:ingest_file_unreadable",
-                    result_summary="The approved ingest file could not be read.",
-                    run_state_path=run_path,
-                )
-                save_json(state)
-                payload = summary(state)
-                payload.update(source_next_prompt_payload(state, source_id, "ingest"))
-                payload.update({"ok": False, "reason": "ingest_file_unreadable"})
-                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-                return 1
-            artifact = write_fallback_gbrain_artifact(
-                state,
-                source_id,
-                parsed["ingestTitle"] or source_id,
-                ingest_body,
-                parsed["ingestProvenance"] or sanitized_summary,
+        if not parsed["ingestFile"]:
+            run_state["ingestFailureReason"] = "ingest_file_required"
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_fallback_row_state(
+                state, source_id, "attention", fallback_phase_for_step("ingest"), "ingest",
+                timestamp=timestamp, attention_reason="ingest_file_required",
+                result_summary="A user-approved ingest file is required.", run_state_path=run_path,
             )
-            if artifact:
-                run_state["gbrainArtifact"] = artifact
-            else:
-                run_state["ingestFailureReason"] = "gbrain_target_missing"
-                run_path = save_source_run_state(source_id, run_state)
-                state = set_fallback_row_state(
-                    state,
-                    source_id,
-                    "attention",
-                    fallback_phase_for_step("ingest"),
-                    "ingest",
-                    timestamp=timestamp,
-                    attention_reason="waiting:gbrain_target_missing",
-                    result_summary="GBrain target is required before fallback ingest can write approved source body.",
-                    run_state_path=run_path,
-                )
-                save_json(state)
-                payload = summary(state)
-                payload.update(source_next_prompt_payload(state, source_id, "ingest"))
-                payload.update({"ok": False, "reason": "gbrain_target_missing"})
-                print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-                return 1
+            save_json(state)
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, source_id, "ingest"))
+            payload.update({"ok": False, "reason": "ingest_file_required"})
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        ingest_file = Path(parsed["ingestFile"]).expanduser()
+        try:
+            ingest_body = ingest_file.read_text(encoding="utf-8")
+        except Exception:
+            run_state["ingestFailureReason"] = "ingest_file_unreadable"
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_fallback_row_state(
+                state, source_id, "attention", fallback_phase_for_step("ingest"), "ingest",
+                timestamp=timestamp, attention_reason="ingest_file_unreadable",
+                result_summary="The approved ingest file could not be read.", run_state_path=run_path,
+            )
+            save_json(state)
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, source_id, "ingest"))
+            payload.update({"ok": False, "reason": "ingest_file_unreadable"})
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        title = sanitize_control_plane_text(parsed["ingestTitle"] or source_id, limit=120)
+        provenance = sanitize_control_plane_text(parsed["ingestProvenance"] or "user-approved export", limit=180)
+        logical_id = title or source_id
+        record = {
+            "connectorID": source_id,
+            "logicalRecordID": logical_id,
+            "slug": deterministic_slug(source_id, logical_id),
+            "markdown": "# " + title + "\n\n> Provenance: " + provenance + "\n\n" + ingest_body,
+            "originURI": "uncataloged://" + prompt_file_safe_name(logical_id),
+        }
+        acquisition = {
+            "approvedScope": run_state.get("ingestScope"),
+            "discoveredCount": 1,
+            "selectedCount": 1,
+            "normalizedCount": 1,
+            "failedCount": 0,
+            "diagnosticCount": 0,
+            "cancelled": False,
+            "complete": True,
+        }
+        attempt_id = str(uuid.uuid4())
+        receipt = submit_connector_ingestion(
+            source_id, [record], acquisition, state, attempt_id, gbrain_state_path
+        )
+        run_state.update({
+            "ingestAttemptID": attempt_id,
+            "acquisitionReceipt": acquisition,
+            "ingestReceipt": receipt,
+            "ingestedRecordCount": 1,
+            "updatedAt": now(),
+        })
+        projection = ingest_projection(receipt)
+        if not projection["complete"]:
+            run_state["ingestFailureReason"] = projection["attentionReason"]
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_fallback_row_state(
+                state, source_id, "attention", fallback_phase_for_step("ingest"), "ingest",
+                timestamp=timestamp, attention_reason=projection["attentionReason"],
+                result_summary="Common GBrain ingestion did not complete.", run_state_path=run_path,
+            )
+            save_json(state)
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, source_id, "ingest"))
+            payload.update({"ok": False, "reason": projection["attentionReason"]})
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
 
     attention_reason = None
     if parsed["status"] == "waiting":
@@ -3563,6 +3506,26 @@ def fallback_report():
     run_state["fallbackArtifacts"] = write_fallback_artifacts(source_id, run_state, event)
     run_path = save_source_run_state(source_id, run_state)
     if parsed["step"] == "verify_readback":
+        receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
+        projection = ingest_projection(receipt)
+        if not projection["complete"]:
+            run_path = save_source_run_state(source_id, run_state)
+            state = set_fallback_row_state(
+                state, source_id, "attention", fallback_phase_for_step("verify_readback"), "verify_readback",
+                timestamp=timestamp, attention_reason=projection["attentionReason"] or "readbackMissing",
+                result_summary="Common GBrain readback is incomplete.", run_state_path=run_path,
+            )
+            save_json(state)
+            payload = summary(state)
+            payload.update(source_next_prompt_payload(state, source_id, "verify_readback"))
+            payload.update({"ok": False, "reason": projection["attentionReason"] or "readbackMissing"})
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        run_state.update({
+            "readbackStatus": "passed",
+            "verifiedRecordCount": receipt.get("verifiedRecordCount"),
+            "verifiedAt": now(),
+        })
         state = mark_source_completion_pending(state, source_id, "checked", sanitized_summary, run_state=run_state)
         save_json(state)
         payload = summary(state)

@@ -152,11 +152,23 @@ struct ZebraSourceOnboardingHelper {
             guard fileManager.fileExists(atPath: bundledEntrypoint.path) else {
                 throw InstallationError.runtimeEntrypointMissing
             }
+            let temporaryEntrypoint = directory.appendingPathComponent(
+                ".zebra-source-onboarding-\(UUID().uuidString)",
+                isDirectory: false
+            )
+            defer { try? fileManager.removeItem(at: temporaryEntrypoint) }
+            try fileManager.copyItem(at: bundledEntrypoint, to: temporaryEntrypoint)
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: temporaryEntrypoint.path)
             if fileManager.fileExists(atPath: url.path) {
-                try fileManager.removeItem(at: url)
+                _ = try fileManager.replaceItemAt(
+                    url,
+                    withItemAt: temporaryEntrypoint,
+                    backupItemName: nil,
+                    options: []
+                )
+            } else {
+                try fileManager.moveItem(at: temporaryEntrypoint, to: url)
             }
-            try fileManager.copyItem(at: bundledEntrypoint, to: url)
-            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
             guard ZebraInteractiveTerminalRunner.install(
                 in: directory,
                 fileManager: fileManager
@@ -192,10 +204,12 @@ struct ZebraSourceOnboardingHelper {
               object["schemaVersion"] as? Int == 1,
               let runtimeVersion = object["runtimeVersion"] as? String,
               !runtimeVersion.isEmpty,
+              let entrypoint = object["entrypoint"] as? String,
+              !entrypoint.isEmpty,
               let requiredFiles = object["requiredFiles"] as? [String],
               !requiredFiles.isEmpty
         else { return false }
-        return requiredFiles.allSatisfy {
+        return requiredFiles.contains(entrypoint) && requiredFiles.allSatisfy {
             FileManager.default.fileExists(
                 atPath: directory.appendingPathComponent($0, isDirectory: false).path
             )

@@ -4,6 +4,45 @@ from state import ingest_projection
 from playbooks import parse_playbook_markdown
 from common import *
 
+def run_imsg(arguments, timeout=15, failure_reason="history_read_failed"):
+    run_state, command_path = imessage_run_state_with_command_path()
+    if not command_path:
+        return run_state, {"ok": False, "reason": "imsg_cli_missing", "stdout": "", "stderr": "", "returncode": 127}
+    try:
+        result = subprocess.run([command_path] + list(arguments), text=True, capture_output=True, timeout=timeout)
+        return run_state, {
+            "ok": result.returncode == 0,
+            "reason": None if result.returncode == 0 else failure_reason,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode,
+        }
+    except subprocess.TimeoutExpired as error:
+        return run_state, {
+            "ok": False, "reason": failure_reason, "stdout": error.stdout or "",
+            "stderr": error.stderr or "imsg command timed out", "returncode": 124,
+        }
+    except Exception as error:
+        return run_state, {
+            "ok": False, "reason": failure_reason, "stdout": "", "stderr": str(error), "returncode": 1,
+        }
+
+def parse_json_output(text):
+    raw = text or ""
+    try:
+        return json.loads(raw)
+    except Exception:
+        items = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                items.append(json.loads(stripped))
+            except Exception:
+                return None
+        return items if items else None
+
 def imessage_playbook():
     return parse_playbook_markdown(
         playbook_dir / "imessage.imsg-cli.v1.md",

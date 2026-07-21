@@ -28,6 +28,7 @@ def identity_digest(markdown):
 
 
 def deterministic_slug(connector_id, logical_record_id):
+    connector = re.sub(r"[^a-z0-9._-]+", "-", str(connector_id or "source").lower()).strip("-.") or "source"
     logical = unicodedata.normalize("NFKC", str(logical_record_id or "record")).replace("\\", "/")
     parts = []
     for value in logical.split("/"):
@@ -35,7 +36,7 @@ def deterministic_slug(connector_id, logical_record_id):
         if safe:
             parts.append(safe)
     relative = "/".join(parts) or hashlib.sha256(logical.encode("utf-8")).hexdigest()[:16]
-    return "sources/" + str(connector_id) + "/" + relative
+    return "sources/" + connector + "/" + relative
 
 
 def normalized_record(value):
@@ -51,16 +52,38 @@ def normalized_record(value):
     return record
 
 
+def _receipt_count(acquisition, key):
+    value = acquisition.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def acquisition_failure(acquisition, expected_count):
+    if acquisition.get("cancelled") is True:
+        return "cancelled"
+    counts = {
+        key: _receipt_count(acquisition, key)
+        for key in ("discoveredCount", "selectedCount", "normalizedCount", "failedCount", "diagnosticCount")
+    }
+    if acquisition.get("complete") is not True or any(value is None for value in counts.values()):
+        return "acquisitionIncomplete"
+    if counts["failedCount"] != 0 or counts["diagnosticCount"] != 0:
+        return "acquisitionIncomplete"
+    if counts["selectedCount"] > counts["discoveredCount"]:
+        return "acquisitionIncomplete"
+    if counts["normalizedCount"] != counts["selectedCount"] or counts["normalizedCount"] != expected_count:
+        return "acquisitionIncomplete"
+    return None
+
+
 def reconciliation(acquisition, write, readbacks, expected_count):
-    if acquisition.get("cancelled"):
-        failure = "cancelled"
-    elif acquisition.get("complete") is not True:
-        failure = "acquisitionIncomplete"
-    elif write.get("failure"):
+    failure = acquisition_failure(acquisition, expected_count)
+    if failure is None and write.get("failure"):
         failure = write["failure"]
-    elif len(readbacks) != expected_count:
+    elif failure is None and len(readbacks) != expected_count:
         failure = "readbackMissing"
-    else:
+    elif failure is None:
         failure = next((item.get("failure") for item in readbacks if item.get("failure")), None)
     return {
         "complete": failure is None,

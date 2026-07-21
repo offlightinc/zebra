@@ -21,6 +21,7 @@ class ProcessClient:
         self.environment = os.environ.copy()
         self.environment.update({str(key): str(value) for key, value in binding.get("environment", {}).items()})
         self.environment["GBRAIN_SOURCE"] = binding["sourceID"]
+        self.last_result = None
 
     def run(self, arguments, stdin=None, timeout=300):
         try:
@@ -34,15 +35,18 @@ class ProcessClient:
                 timeout=timeout,
                 check=False,
             )
-            return {
+            self.last_result = {
                 "exitCode": completed.returncode,
                 "stdout": completed.stdout,
                 "stderr": completed.stderr,
             }
+            return self.last_result
         except subprocess.TimeoutExpired as error:
-            return {"exitCode": 124, "stdout": error.stdout or "", "stderr": error.stderr or "timeout"}
+            self.last_result = {"exitCode": 124, "stdout": error.stdout or "", "stderr": error.stderr or "timeout"}
+            return self.last_result
         except Exception as error:
-            return {"exitCode": 126, "stdout": "", "stderr": type(error).__name__}
+            self.last_result = {"exitCode": 126, "stdout": "", "stderr": type(error).__name__}
+            return self.last_result
 
 
 def _json_result(result):
@@ -206,8 +210,9 @@ def run_ingest(request):
     acquisition = dict(request.get("acquisition") or {})
     raw_records = request.get("records") if isinstance(request.get("records"), list) else []
     expected_count = len(raw_records)
-    if acquisition.get("complete") is not True or acquisition.get("cancelled"):
-        result = reconciliation(acquisition, {}, [], expected_count)
+    acquisition_result = reconciliation(acquisition, {}, [], expected_count)
+    if acquisition_result.get("failure") in {"acquisitionIncomplete", "cancelled"}:
+        result = acquisition_result
         return {**result, "attemptID": request.get("attemptID"), "write": {}, "readbacks": []}
 
     binding = dict(request.get("binding") or {})
@@ -220,7 +225,11 @@ def run_ingest(request):
     client = ProcessClient(binding)
     routing_failure = _verify_route(client)
     if routing_failure:
-        write = {"failure": routing_failure}
+        route_result = client.last_result or {}
+        write = {
+            "failure": routing_failure,
+            "processExitCode": route_result.get("exitCode"),
+        }
         result = reconciliation(acquisition, write, [], expected_count)
         return {**result, "attemptID": request.get("attemptID"), "write": write, "readbacks": []}
 
@@ -293,9 +302,11 @@ def run_ingest(request):
 
 def run_onboarding_ingest(request):
     acquisition = dict(request.get("acquisition") or {})
-    if acquisition.get("complete") is not True:
-        write = {"failure": "acquisitionIncomplete"}
-        result = reconciliation(acquisition, write, [], len(request.get("records") or []))
+    expected_count = len(request.get("records") or [])
+    acquisition_result = reconciliation(acquisition, {}, [], expected_count)
+    if acquisition_result.get("failure") in {"acquisitionIncomplete", "cancelled"}:
+        write = {"failure": acquisition_result["failure"]}
+        result = reconciliation(acquisition, write, [], expected_count)
         return {**result, "attemptID": request.get("attemptID"), "write": write, "readbacks": []}
     try:
         state = json.loads(pathlib.Path(request["gbrainStatePath"]).expanduser().read_text(encoding="utf-8"))
