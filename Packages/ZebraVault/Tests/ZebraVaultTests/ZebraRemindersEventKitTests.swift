@@ -328,6 +328,99 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         }
     }
 
+    func testScopeReadFailsWhenApprovedCalendarCannotBeResolved() async {
+        let store = FakeRemindersEventStore(
+            authorizationStatus: .authorized,
+            lists: [ZebraRemindersListSnapshot(id: "available", title: "Available")]
+        )
+
+        let receipt = await ZebraRemindersRequestProcessor(eventStore: store).process(
+            ZebraRemindersRequest(
+                requestID: "missing-approved-calendar",
+                sourceRunID: "run-1",
+                operation: .scopeRead,
+                scope: .oneList(id: "missing", title: "Display only")
+            )
+        )
+
+        XCTAssertEqual(receipt.state, .failed)
+        XCTAssertEqual(receipt.failureReason, "approved_calendar_unavailable")
+        XCTAssertNil(receipt.result)
+    }
+
+    func testNonEmptyDiscoveryFollowedByZeroIngestBlocksArtifactAndReadback() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ZebraRemindersMismatchTests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let brain = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: brain, withIntermediateDirectories: true)
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root.appendingPathComponent("gbrain-state.json")
+        let adapterStateURL = root.appendingPathComponent("adapter-state.json")
+        try writeCompletedGBrainState(to: gbrainStateURL, vaultPath: brain.path)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: brain.path)
+        )
+        let requestDirectory = root.appendingPathComponent("reminders-eventkit", isDirectory: true)
+        let eventStore = FakeRemindersEventStore(
+            authorizationStatus: .authorized,
+            lists: [ZebraRemindersListSnapshot(id: "selected", title: "Selected")],
+            reminders: [ZebraReminderSnapshot(
+                id: "present-at-discovery",
+                title: "Private title",
+                notes: "Private notes",
+                listID: "selected",
+                listTitle: "Selected",
+                isCompleted: false,
+                priority: 0,
+                dueDate: nil
+            )]
+        )
+        let broker = ZebraRemindersRequestBroker(
+            fileStore: ZebraRemindersRequestFileStore(directoryURL: requestDirectory),
+            processor: ZebraRemindersRequestProcessor(eventStore: eventStore)
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "PATH": "/usr/bin:/bin",
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_GBRAIN_WRITE_TARGET_PATH": brain.path,
+            "ZEBRA_REMINDERS_EVENTKIT_DIR": requestDirectory.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        XCTAssertEqual(try runHelper(helperURL, ["intake", "--raw", "Apple Reminders", "--candidate", "apple-reminders=Apple Reminders"], environment).status, 0)
+        XCTAssertEqual(try runHelper(helperURL, ["confirm", "--answer", "yes"], environment).status, 0)
+        _ = try runHelper(helperURL, ["next"], environment)
+        let access = try await runHelper(helperURL, ["apple-reminders", "check-access"], environment, broker)
+        XCTAssertEqual(access.status, 0)
+        let smoke = try await runHelper(helperURL, ["apple-reminders", "smoke-list"], environment, broker)
+        XCTAssertEqual(smoke.status, 0)
+        XCTAssertEqual(try runHelper(helperURL, ["apple-reminders", "choose-scope", "--scope", "one-list", "--list-id", "selected"], environment).status, 0)
+        XCTAssertEqual(try runHelper(helperURL, ["apple-reminders", "confirm-plan", "--answer", "yes"], environment).status, 0)
+
+        eventStore.reminders = []
+        let ingest = try await runHelper(helperURL, ["apple-reminders", "ingest"], environment, broker)
+        let payload = try jsonObject(ingest.stdout)
+
+        XCTAssertNotEqual(ingest.status, 0)
+        XCTAssertEqual(payload["reason"] as? String, "scope_changed_or_result_mismatch")
+        XCTAssertNil(payload["artifactPath"])
+        XCTAssertEqual(payload["workflowStatus"] as? String, "reconciliationRequired")
+        XCTAssertEqual(payload["ingestStatus"] as? String, "mismatch")
+        XCTAssertEqual(payload["readbackStatus"] as? String, "pending")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: brain.appendingPathComponent("sources/apple-reminders-eventkit.md").path))
+    }
+
     func testFetchFailureAndCancellationStayDistinct() async {
         let failedStore = FakeRemindersEventStore(
             authorizationStatus: .authorized,
