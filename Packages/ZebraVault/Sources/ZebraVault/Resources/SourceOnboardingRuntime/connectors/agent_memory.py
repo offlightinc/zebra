@@ -1,3 +1,6 @@
+from domain import deterministic_slug
+from gbrain_ingest import submit_connector_ingestion
+from state import ingest_projection
 from common import *
 
 def agent_memory_candidate_paths(agent):
@@ -160,7 +163,8 @@ def agent_memory_step_prompt(step_id, state, row):
     units = agent_memory_importable_units()
     found_summary = agent_memory_unit_summary(units)
     scope = run_state.get("scope") or "not selected"
-    artifact = run_state.get("artifactPath") or "not created"
+    receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
+    ingest_status = "passed" if receipt.get("complete") is True else receipt.get("failure") or "not started"
     if step_id == "review_found_agents":
         instruction = textwrap.dedent('''
         Show the user the existing agent memory/knowledge candidates that Zebra found and ask which scope to import.
@@ -183,7 +187,7 @@ def agent_memory_step_prompt(step_id, state, row):
 
         - Selected scope: `{scope}`
         - Found files: `{found_summary}`
-        - Artifact path: `{artifact}`
+        - Ingest path: common GBrain ingestion with exact source-scoped readback
 
         If approved, run `zebra-source-onboarding agent-memory confirm-plan --answer yes`.
         If not approved, run `zebra-source-onboarding agent-memory confirm-plan --answer no`.
@@ -201,7 +205,7 @@ def agent_memory_step_prompt(step_id, state, row):
     Current step: `{step_id}`
     Found importable files: `{found_summary}`
     Current ingest scope: `{scope}`
-    Current ingest artifact: `{artifact}`
+    Current GBrain ingest status: `{ingest_status}`
 
     Boundary rules:
     - Work only this existing agent memory step. Do not start another source unless the helper prints that source as the next active source.
@@ -248,14 +252,7 @@ def set_agent_memory_row_state(state, row_status, phase, step_id, timestamp=None
     state["updatedAt"] = timestamp
     return state
 
-def agent_memory_artifact_path(state):
-    target = gbrain_write_target_path or ((state.get("entryContext") or {}).get("gbrainWriteTargetPath") if isinstance(state.get("entryContext"), dict) else "")
-    if target and Path(target).is_dir():
-        directory = Path(target) / "sources"
-    else:
-        directory = state_path.parent / "source-ingest-artifacts"
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory / "agent-memory-knowledge.md"
+
 
 def agent_memory_selected_units(run_state):
     units = agent_memory_importable_units()
@@ -298,13 +295,11 @@ def start_agent_memory_from_next(state):
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 1
     run_state = load_source_run_state("agent-memory")
-    artifact = agent_memory_artifact_path(state)
     run_state.update({
         "phase": "review",
         "step": "review_found_agents",
         "foundUnitCount": len(units),
         "foundSummary": agent_memory_unit_summary(units),
-        "artifactPath": str(artifact),
         "updatedAt": now(),
     })
     run_path = save_source_run_state("agent-memory", run_state)
@@ -429,120 +424,49 @@ def agent_memory_ingest():
     if not run_state.get("scope") or run_state.get("scope") == "skip":
         state = set_agent_memory_row_state(state, "attention", "review", "review_found_agents", attention_reason="ingest_scope_required")
         save_json(state)
-        payload = summary(state)
-        payload["ok"] = False
-        payload["reason"] = "ingest_scope_required"
+        payload = {"ok": False, "reason": "ingest_scope_required"}
         payload.update(source_next_prompt_payload(state, "agent-memory", "review_found_agents"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    if (
-        run_state.get("step") != "ingest_memory"
-        or run_state.get("phase") != "ingest"
-        or not run_state.get("planConfirmed")
-        or not run_state.get("approvedAt")
-    ):
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
+    if not run_state.get("planConfirmed") or not run_state.get("approvedAt"):
         state = set_agent_memory_row_state(state, "attention", "confirm", "confirm_ingest_plan", attention_reason="ingest_plan_unconfirmed")
         save_json(state)
-        payload = summary(state)
-        payload["ok"] = False
-        payload["reason"] = "ingest_plan_unconfirmed"
+        payload = {"ok": False, "reason": "ingest_plan_unconfirmed"}
         payload.update(source_next_prompt_payload(state, "agent-memory", "confirm_ingest_plan"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
     units = agent_memory_selected_units(run_state)
-    artifact = agent_memory_artifact_path(state)
-    lines = [
-        "---",
-        "source: agent-memory",
-        "playbook: agent-memory.local-files.v1",
-        "created: " + now(),
-        "---",
-        "",
-        "# Existing Agent Memory",
-        "",
-    ]
+    records, failures = [], []
     for unit in units:
-        path = Path(unit["path"])
+        source_path = Path(unit["path"])
         try:
-            text = path.read_text(encoding="utf-8", errors="replace").strip()
-        except Exception:
-            continue
-        if len(text) > 12000:
-            text = text[:12000].rstrip() + "\n\n[Truncated by Zebra Source Onboarding]"
-        lines.extend([
-            "## " + unit["displayName"],
-            "",
-            "[Source: " + unit["displayName"] + " memory/knowledge file `" + str(path) + "`, " + now()[:10] + "]",
-            "",
-            text,
-            "",
-        ])
-    artifact.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    run_state.update({
-        "artifactPath": str(artifact),
-        "ingestedUnitCount": len(units),
-        "phase": "verify",
-        "step": "verify_readback",
-        "updatedAt": now(),
-    })
+            body = source_path.read_text(encoding="utf-8")
+            logical_id = str(unit.get("agentID") or unit.get("displayName") or "agent") + "/" + source_path.name
+            records.append({"connectorID": "agent-memory", "logicalRecordID": logical_id, "slug": deterministic_slug("agent-memory", logical_id), "markdown": body, "originURI": "agent-memory://" + logical_id})
+        except Exception as error:
+            failures.append({"logicalRecordID": source_path.name, "reason": type(error).__name__})
+    acquisition = {"discoveredCount": len(units), "selectedCount": len(units), "normalizedCount": len(records), "failedCount": len(failures), "diagnosticCount": 0, "cancelled": False, "complete": not failures and len(records) == len(units)}
+    attempt_id = str(uuid.uuid4())
+    receipt = submit_connector_ingestion("agent-memory", records, acquisition, state, attempt_id, gbrain_state_path)
+    run_state.update({"ingestAttemptID": attempt_id, "acquisitionReceipt": acquisition, "ingestReceipt": receipt, "ingestedUnitCount": len(records), "acquisitionDiagnostics": failures[:8], "phase": "verify", "step": "verify_readback", "updatedAt": now()})
     run_path = save_source_run_state("agent-memory", run_state)
-    state = set_agent_memory_row_state(
-        state,
-        "running",
-        "verify",
-        "verify_readback",
-        run_state_path=run_path,
-        result_summary="Wrote " + str(len(units)) + " existing agent memory/knowledge file(s).",
-    )
+    projection = ingest_projection(receipt)
+    state = set_agent_memory_row_state(state, "running" if projection["complete"] else "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"], run_state_path=run_path, result_summary="GBrain ingest attempted for " + str(len(records)) + " agent memory records.")
     save_json(state)
-    payload = summary(state)
-    payload["artifactPath"] = str(artifact)
-    payload["ingestedUnitCount"] = len(units)
-    payload.update(source_next_prompt_payload(state, "agent-memory", "verify_readback"))
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    return 0
+    payload = {"ok": projection["complete"], "reason": projection["attentionReason"], "ingestedUnitCount": len(records)}
+    payload.update(source_next_prompt_payload(state, "agent-memory", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0 if projection["complete"] else 1
+
 
 def agent_memory_verify_readback():
-    state = load_or_create_state()
-    run_state = load_source_run_state("agent-memory")
-    artifact = Path(run_state.get("artifactPath") or "")
-    if not artifact.is_file():
-        state = set_agent_memory_row_state(
-            state,
-            "attention",
-            "verify",
-            "verify_readback",
-            attention_reason="agent_memory_artifact_missing",
-            run_state_path=save_source_run_state("agent-memory", run_state),
-        )
-        save_json(state)
-        payload = summary(state)
-        payload["ok"] = False
-        payload["reason"] = "agent_memory_artifact_missing"
-        payload.update(source_next_prompt_payload(state, "agent-memory", "verify_readback"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    text = artifact.read_text(encoding="utf-8", errors="replace")
-    if "source: agent-memory" not in text:
-        payload = summary(state)
-        payload["ok"] = False
-        payload["reason"] = "agent_memory_readback_failed"
-        payload.update(source_next_prompt_payload(state, "agent-memory", "verify_readback"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    run_state.update({"readbackStatus": "verified", "verifiedAt": now(), "updatedAt": now()})
-    state = mark_source_completion_pending(
-        state,
-        "agent-memory",
-        "checked",
-        "Imported existing agent memory/knowledge files into " + str(artifact) + ".",
-        run_state,
-    )
-    save_json(state)
-    payload = summary(state)
-    payload.update(source_next_prompt_payload(state, "agent-memory", "complete"))
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    return 0
+    state = load_or_create_state(); run_state = load_source_run_state("agent-memory")
+    receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
+    projection = ingest_projection(receipt)
+    if not projection["complete"]:
+        state = set_agent_memory_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"] or "readbackMissing", run_state_path=save_source_run_state("agent-memory", run_state)); save_json(state)
+        payload = {"ok": False, "reason": projection["attentionReason"] or "readbackMissing"}; payload.update(source_next_prompt_payload(state, "agent-memory", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
+    run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
+    state = mark_source_completion_pending(state, "agent-memory", "checked", "GBrain ingest/readback verified for " + str(receipt.get("verifiedRecordCount") or 0) + " agent memory records.", run_state); save_json(state)
+    payload = {"ok": True, "readbackStatus": "passed", "verifiedRecordCount": receipt.get("verifiedRecordCount")}; payload.update(source_next_prompt_payload(state, "agent-memory", "complete")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0
+
 
 def agent_memory_command():
     if not args:
@@ -563,4 +487,3 @@ def agent_memory_command():
         return agent_memory_verify_readback()
     print("unknown agent-memory command: " + subcommand, file=sys.stderr)
     return 2
-

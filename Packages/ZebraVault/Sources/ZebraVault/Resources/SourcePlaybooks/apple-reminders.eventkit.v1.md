@@ -31,7 +31,7 @@ Use the helper-generated localized scope prompt. Ask the user to choose all open
 
 ## Step: confirm_ingest_plan
 
-Summarize the selected scope, expected count when known, supported fields, artifact path, readback plan, and redaction policy. Obtain an explicit yes/no answer before any scoped reminder content read.
+Summarize the selected scope, expected count when known, supported fields, common GBrain ingest/readback plan, and redaction policy. Obtain an explicit yes/no answer before any scoped reminder content read.
 
 ## Step: ingest_reminders
 
@@ -39,7 +39,7 @@ Run `zebra-source-onboarding apple-reminders ingest` only after `confirm-plan --
 
 ## Step: verify_readback
 
-Run `zebra-source-onboarding apple-reminders verify-readback`. The helper must verify the generated artifact before moving to `complete`.
+Run `zebra-source-onboarding apple-reminders verify-readback`. The helper must require the common GBrain receipt and exact source-scoped readback before moving to `complete`.
 
 ## Step: complete
 

@@ -34,6 +34,7 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
             ("wrong-source", "sourceRoutingMismatch"),
             ("missing-readback", "readbackMissing"),
             ("identity-mismatch", "readbackIdentityMismatch"),
+            ("write-through", "writeThroughFailed"),
         ]
 
         for item in cases {
@@ -64,6 +65,33 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 1)
         XCTAssertEqual(events.filter { $0["command"] as? String == "import" }.count, 0)
         XCTAssertEqual(events.filter { $0["command"] as? String == "get" }.count, 1)
+    }
+
+    func testSinglePutRequiresStructuredResultAndOversizedRecordUsesBulkImport() throws {
+        let malformed = try Fixture(scenario: "malformed-put")
+        let rejected = try malformed.run(records: [malformed.record(id: "one", body: "body")])
+        XCTAssertEqual(rejected["complete"] as? Bool, false)
+        XCTAssertEqual(rejected["failure"] as? String, "importResultMalformed")
+
+        let oversized = try Fixture()
+        let completed = try oversized.run(records: [
+            oversized.record(id: "large", body: String(repeating: "x", count: 5_000_001)),
+        ])
+        XCTAssertEqual(completed["complete"] as? Bool, true)
+        let events = try oversized.events()
+        XCTAssertEqual(events.filter { $0["command"] as? String == "import" }.count, 1)
+        XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 0)
+    }
+
+    func testBulkAttemptsSharingGBrainHomeAreSerialized() throws {
+        let fixture = try Fixture(scenario: "detect-overlap")
+        let results = try fixture.runConcurrently(records: [
+            fixture.record(id: "one", body: "first"),
+            fixture.record(id: "two", body: "second"),
+        ])
+        XCTAssertEqual(results.count, 2)
+        XCTAssertTrue(results.allSatisfy { $0["complete"] as? Bool == true })
+        XCTAssertEqual(try fixture.events().filter { $0["command"] as? String == "import" }.count, 2)
     }
 }
 
@@ -120,7 +148,45 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
         }
 
         func run(records: [[String: Any]], acquisitionComplete: Bool = true) throws -> [String: Any] {
-            let request: [String: Any] = [
+            let request = request(records: records, acquisitionComplete: acquisitionComplete)
+            let input = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+            let harness = root.appendingPathComponent("harness.py", isDirectory: false)
+            let harnessText = """
+            import json
+            import sys
+            sys.path.insert(0, \(String(reflecting: runtime.path)))
+            from gbrain_ingest import run_ingest
+            print(json.dumps(run_ingest(json.load(sys.stdin)), sort_keys=True))
+            """
+            try harnessText.write(to: harness, atomically: true, encoding: .utf8)
+            return try runHarness(harness, input: input)
+        }
+
+        func runConcurrently(records: [[String: Any]]) throws -> [[String: Any]] {
+            let requests = [
+                request(records: records, acquisitionComplete: true),
+                request(records: records, acquisitionComplete: true),
+            ]
+            let input = try JSONSerialization.data(withJSONObject: requests, options: [.sortedKeys])
+            let harness = root.appendingPathComponent("concurrent-harness.py", isDirectory: false)
+            let harnessText = """
+            import concurrent.futures
+            import json
+            import sys
+            sys.path.insert(0, \(String(reflecting: runtime.path)))
+            from gbrain_ingest import run_ingest
+            requests = json.load(sys.stdin)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(run_ingest, requests))
+            print(json.dumps(results, sort_keys=True))
+            """
+            try harnessText.write(to: harness, atomically: true, encoding: .utf8)
+            let result = try runHarness(harness, input: input)
+            return try XCTUnwrap(result["results"] as? [[String: Any]])
+        }
+
+        private func request(records: [[String: Any]], acquisitionComplete: Bool) -> [String: Any] {
+            [
                 "attemptID": UUID().uuidString,
                 "binding": [
                     "executable": executable.path,
@@ -130,6 +196,7 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
                         "FAKE_GBRAIN_LOG": log.path,
                         "FAKE_GBRAIN_STORE": store.path,
                         "FAKE_GBRAIN_SCENARIO": scenario,
+                        "GBRAIN_HOME": root.appendingPathComponent("gbrain-home", isDirectory: true).path,
                     ],
                 ],
                 "acquisition": [
@@ -143,16 +210,9 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
                 ],
                 "records": records,
             ]
-            let input = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
-            let harness = root.appendingPathComponent("harness.py", isDirectory: false)
-            let harnessText = """
-            import json
-            import sys
-            sys.path.insert(0, \(String(reflecting: runtime.path)))
-            from gbrain_ingest import run_ingest
-            print(json.dumps(run_ingest(json.load(sys.stdin)), sort_keys=True))
-            """
-            try harnessText.write(to: harness, atomically: true, encoding: .utf8)
+        }
+
+        private func runHarness(_ harness: URL, input: Data) throws -> [String: Any] {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
             process.arguments = ["-I", harness.path]
@@ -169,10 +229,10 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
             let output = stdout.fileHandleForReading.readDataToEndOfFile()
             let error = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             XCTAssertEqual(process.terminationStatus, 0, error)
-            return try XCTUnwrap(
-                JSONSerialization.jsonObject(with: output) as? [String: Any],
-                error
-            )
+            let object = try JSONSerialization.jsonObject(with: output)
+            if let dictionary = object as? [String: Any] { return dictionary }
+            if let array = object as? [[String: Any]] { return ["results": array] }
+            throw FixtureError.invalidHarnessOutput(error)
         }
 
         func events() throws -> [[String: Any]] {
@@ -188,6 +248,7 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
 
         enum FixtureError: Error {
             case runtimeInstallFailed
+            case invalidHarnessOutput(String)
         }
 
         static let fakeGBrain = #"""
@@ -198,6 +259,7 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
         import pathlib
         import shutil
         import sys
+        import time
 
         args = sys.argv[1:]
         command = args[0] if args else ""
@@ -221,6 +283,14 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
                 print("not json")
                 raise SystemExit(0)
             staging = pathlib.Path(args[1])
+            overlap = store / "import-active"
+            if scenario == "detect-overlap":
+                try:
+                    overlap.mkdir()
+                except FileExistsError:
+                    print("overlap", file=sys.stderr)
+                    raise SystemExit(17)
+                time.sleep(0.25)
             files = [path for path in staging.rglob("*.md")]
             for path in files:
                 text = path.read_text(encoding="utf-8")
@@ -228,14 +298,19 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
                 (store / (hashlib.sha256(slug.encode()).hexdigest() + ".md")).write_text(text, encoding="utf-8")
             errors = 1 if scenario == "numeric-errors" else 0
             imported = max(0, len(files) - 1) if scenario == "count-mismatch" else len(files)
-            print(json.dumps({"status": "success", "imported": imported, "skipped": 0, "errors": errors}))
+            payload = {"status": "success", "imported": imported, "skipped": 0, "errors": errors}
+            if scenario == "write-through":
+                payload["writeThrough"] = {"ok": False}
+            if overlap.exists():
+                overlap.rmdir()
+            print(json.dumps(payload))
             raise SystemExit(0)
 
         if command == "put":
             slug = args[1]
             text = sys.stdin.read()
             (store / (hashlib.sha256(slug.encode()).hexdigest() + ".md")).write_text(text, encoding="utf-8")
-            print(json.dumps({"ok": True}))
+            print("not json" if scenario == "malformed-put" else json.dumps({"ok": True}))
             raise SystemExit(0)
 
         if command == "get":

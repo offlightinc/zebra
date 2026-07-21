@@ -103,7 +103,7 @@ Run:
 zebra-source-onboarding notion ingest
 ```
 
-Convert the selected Notion content into a GBrain markdown artifact with Notion provenance. Do not assume native Notion database ingest. Do not preserve OAuth codes, tokens, signed URLs, credential-like query strings, or broad raw metadata dumps.
+Normalize the selected Notion content into logical page records with Notion provenance and submit them to common GBrain ingestion. Do not assume native Notion database ingest. Do not preserve OAuth codes, tokens, signed URLs, credential-like query strings, or broad raw metadata dumps.
 
 Sanitization must cover both URL/query forms and JSON/key-value forms from `ntn` stdout. Examples that must never appear in the artifact include `oauth_code=...`, `code=...`, `"oauth_code":"..."`, `"code":"12345678"`, access/refresh/id tokens, authorization headers, cookies, `secret_*`, `ntn_*`, and signed URL query parameters.
 
@@ -115,7 +115,7 @@ Run:
 zebra-source-onboarding notion verify-readback
 ```
 
-The helper verifies Notion provenance and sanitizer output in the generated artifact. If readback finds an unredacted credential-like value, keep the source in `verify_readback` attention instead of completing.
+The helper requires exact source-scoped GBrain readback and identity reconciliation for every expected Notion record. If acquisition or readback fails, keep the source in `verify_readback` attention instead of completing.
 
 ## Step: complete
 

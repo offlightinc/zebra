@@ -128,21 +128,21 @@ final class ZebraRemindersEventKitTests: XCTestCase {
 
         let ingest = try await runHelper(helperURL, ["apple-reminders", "ingest"], environment, broker)
         XCTAssertEqual(ingest.status, 0, ingest.stderr)
-        let artifactPath = try XCTUnwrap(jsonObject(ingest.stdout)["artifactPath"] as? String)
-        let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
-        XCTAssertTrue(artifact.contains("source: apple-reminders"), artifact)
-        XCTAssertTrue(artifact.contains("playbook: apple-reminders.eventkit.v1"), artifact)
-        XCTAssertTrue(artifact.contains("schema: zebra-reminders-eventkit.v1"), artifact)
-        XCTAssertTrue(artifact.contains("scope: custom"), artifact)
-        XCTAssertTrue(artifact.contains("item_count: 1"), artifact)
-        XCTAssertTrue(artifact.contains("Investor update"), artifact)
-        XCTAssertTrue(artifact.contains("Send the revised deck"), artifact)
-        XCTAssertFalse(artifact.contains("Unapproved duplicate-list reminder"), artifact)
+        let ingestPayload = try jsonObject(ingest.stdout)
+        XCTAssertEqual(ingestPayload["ingestedReminderCount"] as? Int, 1)
+        XCTAssertNil(ingestPayload["artifactPath"])
 
         let readback = try runHelper(helperURL, ["apple-reminders", "verify-readback"], environment)
         XCTAssertEqual(readback.status, 0, readback.stderr)
         XCTAssertEqual(try jsonObject(readback.stdout)["readbackStatus"] as? String, "passed")
+        XCTAssertEqual(try jsonObject(readback.stdout)["verifiedRecordCount"] as? Int, 1)
         XCTAssertEqual(try jsonObject(readback.stdout)["nextPlaybookStepID"] as? String, "complete")
+        let pageStore = root.appendingPathComponent("fake-gbrain-pages", isDirectory: true)
+        let pageURLs = try FileManager.default.contentsOfDirectory(at: pageStore, includingPropertiesForKeys: nil)
+        let persisted = try pageURLs.map { try String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
+        XCTAssertTrue(persisted.contains("Investor update"), persisted)
+        XCTAssertTrue(persisted.contains("Send the revised deck"), persisted)
+        XCTAssertFalse(persisted.contains("Unapproved duplicate-list reminder"), persisted)
         let completion = try runHelper(
             helperURL,
             ["report", "--status", "completed", "--source", "apple-reminders"],
@@ -476,7 +476,7 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         XCTAssertEqual(acceptedPayload["ingestedReminderCount"] as? Int, 0)
         XCTAssertEqual(acceptedPayload["outcome"] as? String, "confirmed-empty")
         XCTAssertEqual(acceptedPayload["reason"] as? String, "explicit_empty_approval")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: brain.appendingPathComponent("sources/apple-reminders-eventkit.md").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: brain.appendingPathComponent("sources/apple-reminders-eventkit.md").path))
     }
 
     func testDiscoveryConfirmedEmptyListHasDistinctSuccessfulOutcome() async throws {
@@ -835,43 +835,20 @@ private extension ZebraRemindersEventKitTests {
     }
 
     func writeCompletedGBrainState(to url: URL, vaultPath: String) throws {
-        let key = "vault:\(vaultPath)"
-        let timestamp = "2026-07-20T00:00:00Z"
-        let target: [String: Any] = [
-            "vaultPath": vaultPath,
-            "sourceId": "brain",
-            "gbrainExecutablePath": "/usr/bin/true",
-            "doctorStatus": ["ok": true, "status": "ok"],
-            "sourcesCurrentResult": ["ok": true, "sourceId": "brain", "localPath": vaultPath],
-            "searchProbeResult": ["ok": true, "status": "not_run"],
-            "verifiedAt": timestamp,
-            "complete": true,
-            "targetResolution": ["method": "user_created_repo", "confirmedAt": timestamp],
-            "reasons": [],
-        ]
-        let state: [String: Any] = [
-            "schemaVersion": 1,
-            "progress": [
-                "resolvedTargetKey": key,
-                "targetResolution": [
-                    "status": "verified",
-                    "method": "user_created_repo",
-                    "confirmedAt": timestamp,
-                ],
-            ],
-            "receipt": [
-                "globalReadiness": [
-                    "complete": true,
-                    "gbrainExecutablePath": "/usr/bin/true",
-                    "doctorOk": true,
-                    "verifiedAt": timestamp,
-                ],
-                "primaryTargetKey": key,
-                "targets": [key: target],
-            ],
-        ]
-        try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
-            .write(to: url, options: .atomic)
+        let root = url.deletingLastPathComponent()
+        let home = root.appendingPathComponent("gbrain-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let executable = try SourceOnboardingFakeGBrain.install(
+            root: root,
+            sourcePath: vaultPath,
+            log: root.appendingPathComponent("gbrain.log", isDirectory: false)
+        )
+        try SourceOnboardingFakeGBrain.writeCompletedState(
+            to: url,
+            vaultPath: vaultPath,
+            executablePath: executable.path,
+            sourceRepoPath: home.path
+        )
     }
 
     func writePlist(_ value: [String: Any], to url: URL) throws {

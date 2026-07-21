@@ -1992,6 +1992,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let adapterStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let gbrainTarget = root.appendingPathComponent("brain", isDirectory: true)
+        let gbrainHome = root.appendingPathComponent("gbrain-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let gbrainLog = root.appendingPathComponent("gbrain.log", isDirectory: false)
+        let gbrainExecutable = try installFakeGBrain(root: root, sourcePath: gbrainTarget.path, log: gbrainLog)
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: gbrainTarget.path,
+            executablePath: gbrainExecutable.path,
+            sourceRepoPath: gbrainHome.path
+        )
         let onboardingDirectory = stateURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: onboardingDirectory, withIntermediateDirectories: true)
         try writeJSONObject(
@@ -2068,11 +2080,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
         let ingestPayload = try jsonObject(from: ingest.stdout)
-        let artifactPath = try XCTUnwrap(ingestPayload["artifactPath"] as? String)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: artifactPath))
-        let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
-        XCTAssertTrue(artifact.contains("source: agent-memory"))
-        XCTAssertTrue(artifact.contains("Remember Zebra import behavior tests."))
+        XCTAssertEqual(ingestPayload["ingestedUnitCount"] as? Int, 1)
+        XCTAssertFalse(ingestPayload.keys.contains("artifactPath"))
+        XCTAssertTrue(try String(contentsOf: gbrainLog, encoding: .utf8).contains("put"))
 
         let verify = try runProcess(
             executableURL: helperURL,
@@ -2080,7 +2090,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             environment: environment
         )
         XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
-        XCTAssertEqual(try jsonObject(from: verify.stdout)["nextPlaybookStepID"] as? String, "complete")
+        let verifyPayload = try jsonObject(from: verify.stdout)
+        XCTAssertEqual(verifyPayload["nextPlaybookStepID"] as? String, "complete")
+        XCTAssertEqual(verifyPayload["verifiedRecordCount"] as? Int, 1)
 
         let blockedAfterVerify = try runProcess(
             executableURL: helperURL,
@@ -2617,10 +2629,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let adapterStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let gbrainHome = root.appendingPathComponent("gbrain-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let gbrainLog = root.appendingPathComponent("gbrain.log", isDirectory: false)
+        let gbrainExecutable = try installFakeGBrain(root: root, sourcePath: brain.path, log: gbrainLog)
         try writeCompletedGBrainState(
             stateURL: gbrainStateURL,
             vaultPath: brain.path,
-            executablePath: "/usr/bin/true"
+            executablePath: gbrainExecutable.path,
+            sourceRepoPath: gbrainHome.path
         )
         let launch = try XCTUnwrap(
             ZebraSourceOnboardingHelper(
@@ -2639,6 +2656,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
             "ZEBRA_GBRAIN_WRITE_TARGET_PATH": brain.path,
             "ZEBRA_ONBOARDING_LANGUAGE": "en",
+            "ZEBRA_SOURCE_ONBOARDING_BREW_PATH": "",
         ]
 
         XCTAssertEqual(try runProcess(
@@ -2739,6 +2757,10 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             content: """
             #!/bin/sh
             printf '%s\n' "$*" >> '\(shellSingleQuoted(brewLog.path))'
+            if [ "$1" = "--version" ]; then
+              echo "Homebrew 4.0.0-test"
+              exit 0
+            fi
             if [ "$1" = "tap" ] && [ "$2" = "antoniorodr/memo" ]; then
               exit 0
             fi
@@ -2759,6 +2781,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         )
         let brewEnvironment = baseEnvironment.merging([
             "PATH": "\(fakeBin.path):/usr/bin:/bin",
+            "ZEBRA_SOURCE_ONBOARDING_BREW_PATH": fakeBin.appendingPathComponent("brew").path,
         ]) { _, new in new }
         let memoOnlyConsent = try runProcess(
             executableURL: helperURL,
@@ -2850,19 +2873,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
         let ingestPayload = try jsonObject(from: ingest.stdout)
         XCTAssertEqual(ingestPayload["nextPlaybookStepID"] as? String, "verify_readback")
-        let artifactPath = try XCTUnwrap(ingestPayload["artifactPath"] as? String)
-        let expectedArtifact = brain
-            .appendingPathComponent("sources/apple-notes-memo-cli.md")
-            .standardizedFileURL
-            .path
-        XCTAssertEqual(
-            URL(fileURLWithPath: artifactPath).resolvingSymlinksInPath().path,
-            URL(fileURLWithPath: expectedArtifact).resolvingSymlinksInPath().path
-        )
-        let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
-        XCTAssertTrue(artifact.contains("source: apple-notes"), artifact)
-        XCTAssertTrue(artifact.contains("playbook: apple-notes.memo-cli.v1"), artifact)
-        XCTAssertTrue(artifact.contains("KakaoVentures VC framework"), artifact)
+        XCTAssertFalse(ingestPayload.keys.contains("artifactPath"))
 
         let verify = try runProcess(
             executableURL: helperURL,
@@ -2872,6 +2883,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
         let verifyPayload = try jsonObject(from: verify.stdout)
         XCTAssertEqual(verifyPayload["nextPlaybookStepID"] as? String, "complete")
+        XCTAssertEqual(verifyPayload["verifiedRecordCount"] as? Int, 1)
+        let pageStore = root.appendingPathComponent("fake-gbrain-pages", isDirectory: true)
+        let pageURLs = try FileManager.default.contentsOfDirectory(at: pageStore, includingPropertiesForKeys: nil)
+        let persistedPages = try pageURLs.map { try String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
+        XCTAssertTrue(persistedPages.contains("KakaoVentures VC framework"), persistedPages)
         XCTAssertTrue(try XCTUnwrap(verifyPayload["nextPrompt"] as? String).contains("report --status completed --source apple-notes"))
 
         var loaded = try readSourceOnboardingState(at: stateURL)
@@ -3437,10 +3453,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let adapterStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let gbrainHome = root.appendingPathComponent("gbrain-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let gbrainLog = root.appendingPathComponent("gbrain.log", isDirectory: false)
+        let gbrainExecutable = try installFakeGBrain(root: root, sourcePath: brain.path, log: gbrainLog)
         try writeCompletedGBrainState(
             stateURL: gbrainStateURL,
             vaultPath: brain.path,
-            executablePath: "/usr/bin/true"
+            executablePath: gbrainExecutable.path,
+            sourceRepoPath: gbrainHome.path
         )
         let launch = try XCTUnwrap(
             ZebraSourceOnboardingHelper(
@@ -3511,12 +3532,18 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             environment: environment
         )
         XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
-        XCTAssertEqual(try jsonObject(from: ingest.stdout)["ingestedNoteCount"] as? Int, 25)
-
-        let artifactPath = try XCTUnwrap(jsonObject(from: ingest.stdout)["artifactPath"] as? String)
-        let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
-        XCTAssertTrue(artifact.contains("note_count: 25"), artifact)
-        XCTAssertTrue(artifact.contains("Generated overflow note 25"), artifact)
+        let ingestPayload = try jsonObject(from: ingest.stdout)
+        XCTAssertEqual(ingestPayload["ingestedNoteCount"] as? Int, 25)
+        XCTAssertFalse(ingestPayload.keys.contains("artifactPath"))
+        let verify = try runProcess(
+            executableURL: helperURL,
+            arguments: ["apple-notes", "verify-readback"],
+            environment: environment
+        )
+        XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
+        XCTAssertEqual(try jsonObject(from: verify.stdout)["verifiedRecordCount"] as? Int, 25)
+        let commands = try String(contentsOf: gbrainLog, encoding: .utf8)
+        XCTAssertTrue(commands.contains("import"), commands)
     }
 
     @MainActor
@@ -3532,6 +3559,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let adapterStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let gbrainTarget = root.appendingPathComponent("brain", isDirectory: true)
+        let gbrainHome = root.appendingPathComponent("gbrain-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let gbrainExecutable = try installFakeGBrain(
+            root: root,
+            sourcePath: gbrainTarget.path,
+            log: root.appendingPathComponent("gbrain.log", isDirectory: false)
+        )
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: gbrainTarget.path,
+            executablePath: gbrainExecutable.path,
+            sourceRepoPath: gbrainHome.path
+        )
         let launch = try XCTUnwrap(
             ZebraSourceOnboardingHelper(
                 stateURL: stateURL,
@@ -3584,12 +3626,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             environment: environment
         )
         XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
-        let artifactPath = try XCTUnwrap(jsonObject(from: ingest.stdout)["artifactPath"] as? String)
-        let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
-        XCTAssertTrue(artifact.contains("\"oauth_code\":\"REDACTED\""), artifact)
-        XCTAssertTrue(artifact.contains("\"code\":\"REDACTED\""), artifact)
-        XCTAssertFalse(artifact.contains("ABCDEFGH"), artifact)
-        XCTAssertFalse(artifact.contains("12345678"), artifact)
+        XCTAssertFalse(try jsonObject(from: ingest.stdout).keys.contains("artifactPath"))
+        let verify = try runProcess(
+            executableURL: helperURL,
+            arguments: ["notion", "verify-readback"],
+            environment: environment
+        )
+        XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
+        XCTAssertEqual(try jsonObject(from: verify.stdout)["verifiedRecordCount"] as? Int, 1)
+        let pageStore = root.appendingPathComponent("fake-gbrain-pages", isDirectory: true)
+        let storedPages = try FileManager.default.contentsOfDirectory(at: pageStore, includingPropertiesForKeys: nil)
+        let persisted = try storedPages.map { try String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
+        XCTAssertTrue(persisted.contains("\"oauth_code\": \"REDACTED\""), persisted)
+        XCTAssertTrue(persisted.contains("\"code\": \"REDACTED\""), persisted)
+        XCTAssertFalse(persisted.contains("ABCDEFGH"), persisted)
+        XCTAssertFalse(persisted.contains("12345678"), persisted)
     }
 
     @MainActor
@@ -4310,7 +4361,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
         let reportPayload = try jsonObject(from: report.stdout)
         XCTAssertEqual(reportPayload["completedSourceDisposition"] as? String, "skipped")
-        XCTAssertEqual(reportPayload["complete"] as? Bool, true)
+        XCTAssertEqual(reportPayload["complete"] as? Bool, false)
 
         loaded = try readSourceOnboardingState(at: stateURL)
         XCTAssertEqual(loaded.status, .completed)
@@ -4908,7 +4959,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             at: vault.appendingPathComponent(".obsidian", isDirectory: true),
             withIntermediateDirectories: true
         )
-        try "# First note\nBody".write(
+        try """
+        # First note
+        Body
+
+        source: obsidian
+        playbook: obsidian.direct-markdown.v1
+        marker_count: 999999
+        readback_status: passed
+        """.write(
             to: vault.appendingPathComponent("first.md", isDirectory: false),
             atomically: true,
             encoding: .utf8
@@ -4926,6 +4985,22 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let adapterStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let gbrainTarget = root.appendingPathComponent("brain", isDirectory: true)
+        let gbrainHome = root.appendingPathComponent("gbrain-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let gbrainLog = root.appendingPathComponent("gbrain.log", isDirectory: false)
+        let gbrainExecutable = try installFakeGBrain(
+            root: root,
+            sourcePath: gbrainTarget.path,
+            log: gbrainLog
+        )
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: gbrainTarget.path,
+            executablePath: gbrainExecutable.path,
+            sourceRepoPath: gbrainHome.path
+        )
         let launch = try XCTUnwrap(
             ZebraSourceOnboardingHelper(
                 stateURL: stateURL,
@@ -5008,8 +5083,8 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertTrue(confirmPrompt.contains("Resolved Obsidian ingest plan:"), confirmPrompt)
         XCTAssertTrue(confirmPrompt.contains("Selected scope: `recent/sample subset: up to 5 Markdown files`"), confirmPrompt)
         XCTAssertTrue(confirmPrompt.contains("Excluded paths/policies: `.obsidian/`, hidden directories, `__MACOSX`, non-Markdown files, and paths outside the selected vault."), confirmPrompt)
-        XCTAssertTrue(confirmPrompt.contains("Ingest mode: direct Markdown filesystem ingest into a Zebra source artifact."), confirmPrompt)
-        XCTAssertTrue(confirmPrompt.contains("Verification plan: read back the generated Obsidian source artifact"), confirmPrompt)
+        XCTAssertTrue(confirmPrompt.contains("Ingest mode: normalize approved notes in private staging"), confirmPrompt)
+        XCTAssertTrue(confirmPrompt.contains("Verification plan: run `gbrain get` for every expected slug"), confirmPrompt)
 
         var koreanEnvironment = environment
         koreanEnvironment["ZEBRA_ONBOARDING_LANGUAGE"] = "ko"
@@ -5067,12 +5142,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
         let ingestPayload = try jsonObject(from: ingest.stdout)
         XCTAssertEqual(ingestPayload["nextPlaybookStepID"] as? String, "verify_readback")
-        XCTAssertEqual(ingestPayload["discoveredFileCount"] as? Int, 2)
-        XCTAssertEqual(ingestPayload["selectedFileCount"] as? Int, 2)
-        XCTAssertEqual(ingestPayload["successfullyReadFileCount"] as? Int, 2)
-        XCTAssertEqual(ingestPayload["failedReadFileCount"] as? Int, 0)
-        let artifactPath = try XCTUnwrap(ingestPayload["artifactPath"] as? String)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: artifactPath))
+        XCTAssertEqual(ingestPayload["ingestedFileCount"] as? Int, 2)
+        XCTAssertEqual(ingestPayload["verifiedRecordCount"] as? Int, 2)
+        XCTAssertFalse(ingestPayload.keys.contains("artifactPath"))
 
         let resumedVerify = try runProcess(
             executableURL: helperURL,
@@ -5090,9 +5162,11 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
         let verifyPayload = try jsonObject(from: verify.stdout)
         XCTAssertEqual(verifyPayload["nextPlaybookStepID"] as? String, "complete")
-        XCTAssertEqual(verifyPayload["artifactReadbackStatus"] as? String, "passed")
-        XCTAssertEqual(verifyPayload["failureManifestStatus"] as? String, "not_required")
-        XCTAssertEqual(verifyPayload["sourceCompleteness"] as? String, "complete")
+        XCTAssertEqual(verifyPayload["readbackStatus"] as? String, "passed")
+        XCTAssertEqual(verifyPayload["verifiedRecordCount"] as? Int, 2)
+        let gbrainCommands = try String(contentsOf: gbrainLog, encoding: .utf8)
+        XCTAssertTrue(gbrainCommands.contains("get sources/obsidian/first"), gbrainCommands)
+        XCTAssertTrue(gbrainCommands.contains("get sources/obsidian/second"), gbrainCommands)
         let pendingPrompt = try XCTUnwrap(verifyPayload["nextPrompt"] as? String)
         XCTAssertTrue(pendingPrompt.contains("completion report is required"), pendingPrompt)
         XCTAssertTrue(pendingPrompt.contains("# User-Facing Output"), pendingPrompt)
@@ -5117,6 +5191,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(row.phase, "complete")
         XCTAssertEqual(row.playbookStepID, "complete")
 
+        let sourceToTasksSkill = gbrainTarget.appendingPathComponent(".gbrain-adapter/skills/source-to-tasks/SKILL.md")
+        try FileManager.default.createDirectory(at: sourceToTasksSkill.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "source-to-tasks\n".write(to: sourceToTasksSkill, atomically: true, encoding: .utf8)
         let report = try runProcess(
             executableURL: helperURL,
             arguments: ["report", "--status", "completed", "--source", "obsidian"],
@@ -5125,13 +5202,14 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
         let reportPayload = try jsonObject(from: report.stdout)
         XCTAssertEqual(reportPayload["completedSourceID"] as? String, "obsidian")
-        XCTAssertEqual(reportPayload["complete"] as? Bool, true)
+        XCTAssertEqual(reportPayload["complete"] as? Bool, false)
         let reportPrompt = try XCTUnwrap(reportPayload["nextPrompt"] as? String)
         XCTAssertTrue(reportPrompt.contains("Obsidian Source Onboarding is complete."), reportPrompt)
-        XCTAssertTrue(reportPrompt.contains("You must first show the user the exact completion result below."), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("Now find actionable work in the sources that were just ingested."), reportPrompt)
         XCTAssertTrue(reportPrompt.contains("- Markdown files ingested: 2"), reportPrompt)
-        XCTAssertTrue(reportPrompt.contains("- Artifact: `"), reportPrompt)
-        XCTAssertTrue(reportPrompt.contains("Source Onboarding is complete"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("- Readback: passed"), reportPrompt)
+        XCTAssertFalse(reportPrompt.contains("- Artifact: `"), reportPrompt)
+        XCTAssertTrue(reportPrompt.contains("exact slug"), reportPrompt)
 
         loaded = try readSourceOnboardingState(at: stateURL)
         row = try XCTUnwrap(loaded.progress.sourceRows["obsidian"])
@@ -5144,13 +5222,14 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertNil(loaded.progress.activeSourceID)
         let runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
         XCTAssertEqual(runState["completionReportPending"] as? Bool, false)
-        XCTAssertEqual(runState["discoveredFileCount"] as? Int, 2)
         XCTAssertEqual(runState["selectedFileCount"] as? Int, 2)
         XCTAssertEqual(runState["successfullyReadFileCount"] as? Int, 2)
         XCTAssertEqual(runState["failedReadFileCount"] as? Int, 0)
-        XCTAssertEqual(runState["artifactReadbackStatus"] as? String, "passed")
-        XCTAssertEqual(runState["failureManifestStatus"] as? String, "not_required")
-        XCTAssertEqual(runState["sourceCompleteness"] as? String, "complete")
+        let acquisitionReceipt = try XCTUnwrap(runState["acquisitionReceipt"] as? [String: Any])
+        XCTAssertEqual(acquisitionReceipt["complete"] as? Bool, true)
+        let ingestReceipt = try XCTUnwrap(runState["ingestReceipt"] as? [String: Any])
+        XCTAssertEqual(ingestReceipt["complete"] as? Bool, true)
+        XCTAssertEqual(ingestReceipt["verifiedRecordCount"] as? Int, 2)
         XCTAssertNotNil(runState["completionReportedAt"] as? String)
         XCTAssertFalse(try String(contentsOf: stateURL, encoding: .utf8).contains("First note\\nBody"))
     }
@@ -5233,82 +5312,39 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(confirm.status, 0, "stdout:\n\(confirm.stdout)\nstderr:\n\(confirm.stderr)")
 
         let ingest = try runProcess(executableURL: fixture.helperURL, arguments: ["obsidian", "ingest"], environment: fixture.environment)
-        XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
+        XCTAssertEqual(ingest.status, 1, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
         let ingestPayload = try jsonObject(from: ingest.stdout)
-        XCTAssertEqual(ingestPayload["discoveredFileCount"] as? Int, 5)
-        XCTAssertEqual(ingestPayload["selectedFileCount"] as? Int, 5)
-        XCTAssertEqual(ingestPayload["successfullyReadFileCount"] as? Int, 1)
-        XCTAssertEqual(ingestPayload["failedReadFileCount"] as? Int, 4)
-        XCTAssertEqual(ingestPayload["selectedFileCount"] as? Int, (ingestPayload["successfullyReadFileCount"] as? Int ?? -1) + (ingestPayload["failedReadFileCount"] as? Int ?? -1))
-        let attemptID = try XCTUnwrap(ingestPayload["ingestAttemptID"] as? String)
-        XCTAssertFalse(attemptID.isEmpty)
-        let artifactPath = try XCTUnwrap(ingestPayload["artifactPath"] as? String)
-        let manifestPath = try XCTUnwrap(ingestPayload["failureManifestPath"] as? String)
-
-        let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
-        XCTAssertTrue(artifact.contains("Fixture body 5"), artifact)
-        for index in 1...4 {
-            XCTAssertFalse(artifact.contains("Fixture body \(index)"), artifact)
-            XCTAssertFalse(artifact.contains("### note-\(index).md"), artifact)
-        }
-        XCTAssertFalse(artifact.contains("read_error"), artifact)
-        XCTAssertEqual(artifact.components(separatedBy: "\n### ").count - 1, 1)
-
-        let manifestData = try Data(contentsOf: URL(fileURLWithPath: manifestPath))
-        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
-        XCTAssertEqual(manifest["ingestAttemptID"] as? String, attemptID)
-        XCTAssertEqual(manifest["failedReadFileCount"] as? Int, 4)
-        let signatures = try XCTUnwrap(manifest["signatures"] as? [[String: Any]])
-        XCTAssertEqual(signatures.count, 1)
-        let signature = try XCTUnwrap(signatures.first)
-        XCTAssertEqual(signature["errorType"] as? String, "PermissionError")
-        XCTAssertEqual(signature["errno"] as? Int, 13)
-        XCTAssertEqual(signature["message"] as? String, "Permission denied")
-        XCTAssertEqual(signature["count"] as? Int, 4)
-        let failedPaths = try XCTUnwrap(signature["paths"] as? [String])
-        XCTAssertEqual(Set(failedPaths), Set((1...4).map { "note-\($0).md" }))
-        XCTAssertEqual(signatures.reduce(0) { $0 + (($1["paths"] as? [String])?.count ?? 0) }, 4)
-        let manifestText = try String(contentsOfFile: manifestPath, encoding: .utf8)
-        XCTAssertFalse(manifestText.contains(fixture.vault.path), manifestText)
-        for index in 1...5 { XCTAssertFalse(manifestText.contains("Fixture body \(index)"), manifestText) }
+        XCTAssertEqual(ingestPayload["reason"] as? String, "acquisitionIncomplete")
+        let acquisition = try XCTUnwrap(ingestPayload["acquisition"] as? [String: Any])
+        XCTAssertEqual(acquisition["discoveredCount"] as? Int, 5)
+        XCTAssertEqual(acquisition["selectedCount"] as? Int, 5)
+        XCTAssertEqual(acquisition["normalizedCount"] as? Int, 1)
+        XCTAssertEqual(acquisition["failedCount"] as? Int, 4)
+        XCTAssertEqual(acquisition["complete"] as? Bool, false)
+        XCTAssertFalse(ingestPayload.keys.contains("artifactPath"))
+        XCTAssertFalse(ingestPayload.keys.contains("failureManifestPath"))
 
         let verify = try runProcess(executableURL: fixture.helperURL, arguments: ["obsidian", "verify-readback"], environment: fixture.environment)
         XCTAssertEqual(verify.status, 1, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
         let verifyPayload = try jsonObject(from: verify.stdout)
-        XCTAssertEqual(verifyPayload["artifactReadbackStatus"] as? String, "passed")
-        XCTAssertEqual(verifyPayload["failureManifestStatus"] as? String, "passed")
-        XCTAssertEqual(verifyPayload["sourceCompleteness"] as? String, "incomplete")
-        XCTAssertEqual(verifyPayload["selectedFileCount"] as? Int, 5)
-        XCTAssertEqual(verifyPayload["successfullyReadFileCount"] as? Int, 1)
-        XCTAssertEqual(verifyPayload["failedReadFileCount"] as? Int, 4)
-        XCTAssertEqual(verifyPayload["failureManifestPath"] as? String, manifestPath)
-        XCTAssertNotNil(verifyPayload["errorSignatures"] as? [[String: Any]])
-        XCTAssertFalse((verifyPayload["failurePathExamples"] as? [String] ?? []).isEmpty)
-        let nextPrompt = try XCTUnwrap(verifyPayload["nextPrompt"] as? String)
-        XCTAssertTrue(nextPrompt.contains("Selected: 5"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("successfully read: 1"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("failed to read: 4"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("PermissionError"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("note-1.md"), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains(manifestPath), nextPrompt)
-        XCTAssertTrue(nextPrompt.contains("was not completed automatically"), nextPrompt)
-        XCTAssertFalse(nextPrompt.contains("report --status completed"), nextPrompt)
+        XCTAssertEqual(verifyPayload["reason"] as? String, "acquisitionIncomplete")
+        XCTAssertFalse(try XCTUnwrap(verifyPayload["nextPrompt"] as? String).contains("report --status completed"))
 
         let state = try readSourceOnboardingState(at: fixture.stateURL)
         let row = try XCTUnwrap(state.progress.sourceRows["obsidian"])
         XCTAssertEqual(row.status, "attention")
         XCTAssertNotEqual(row.status, "checked")
         let persisted = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
-        XCTAssertEqual(persisted["ingestAttemptID"] as? String, attemptID)
-        XCTAssertEqual(persisted["discoveredFileCount"] as? Int, 5)
         XCTAssertEqual(persisted["selectedFileCount"] as? Int, 5)
         XCTAssertEqual(persisted["successfullyReadFileCount"] as? Int, 1)
         XCTAssertEqual(persisted["failedReadFileCount"] as? Int, 4)
-        XCTAssertEqual(persisted["artifactPath"] as? String, artifactPath)
-        XCTAssertEqual(persisted["failureManifestPath"] as? String, manifestPath)
-        XCTAssertEqual(persisted["artifactReadbackStatus"] as? String, "passed")
-        XCTAssertEqual(persisted["failureManifestStatus"] as? String, "passed")
-        XCTAssertEqual(persisted["sourceCompleteness"] as? String, "incomplete")
+        let persistedAcquisition = try XCTUnwrap(persisted["acquisitionReceipt"] as? [String: Any])
+        XCTAssertEqual(persistedAcquisition["complete"] as? Bool, false)
+        let persistedIngest = try XCTUnwrap(persisted["ingestReceipt"] as? [String: Any])
+        XCTAssertEqual(persistedIngest["failure"] as? String, "acquisitionIncomplete")
+        XCTAssertEqual(persistedIngest["complete"] as? Bool, false)
+        XCTAssertNil(persisted["artifactPath"])
+        XCTAssertNil(persisted["failureManifestPath"])
         XCTAssertNotEqual(persisted["completionReportPending"] as? Bool, true)
     }
 
@@ -5386,6 +5422,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let adapterStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let gbrainTarget = root.appendingPathComponent("brain", isDirectory: true)
+        let gbrainHome = root.appendingPathComponent("gbrain-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let gbrainExecutable = try installFakeGBrain(
+            root: root,
+            sourcePath: gbrainTarget.path,
+            log: root.appendingPathComponent("gbrain.log", isDirectory: false)
+        )
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: gbrainTarget.path,
+            executablePath: gbrainExecutable.path,
+            sourceRepoPath: gbrainHome.path
+        )
         let launch = try XCTUnwrap(
             ZebraSourceOnboardingHelper(
                 stateURL: stateURL,
@@ -5494,13 +5545,12 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             environment: environment
         )
         XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
-        let artifactPath = try XCTUnwrap(jsonObject(from: ingest.stdout)["artifactPath"] as? String)
-        let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
-        XCTAssertTrue(artifact.contains("scope: file"), artifact)
-        XCTAssertTrue(artifact.contains("### Notes/A.md"), artifact)
-        XCTAssertTrue(artifact.contains("Only this note"), artifact)
-        XCTAssertFalse(artifact.contains("Notes/B.md"), artifact)
-        XCTAssertFalse(artifact.contains("Do not ingest"), artifact)
+        XCTAssertFalse(try jsonObject(from: ingest.stdout).keys.contains("artifactPath"))
+        let pageStore = root.appendingPathComponent("fake-gbrain-pages", isDirectory: true)
+        let pageURLs = try FileManager.default.contentsOfDirectory(at: pageStore, includingPropertiesForKeys: nil)
+        let persistedPages = try pageURLs.map { try String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
+        XCTAssertTrue(persistedPages.contains("Only this note"), persistedPages)
+        XCTAssertFalse(persistedPages.contains("Do not ingest"), persistedPages)
     }
 
     @MainActor
@@ -5516,6 +5566,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let adapterStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let gbrainTarget = root.appendingPathComponent("brain", isDirectory: true)
+        let gbrainHome = root.appendingPathComponent("gbrain-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let gbrainExecutable = try installFakeGBrain(
+            root: root,
+            sourcePath: gbrainTarget.path,
+            log: root.appendingPathComponent("gbrain.log", isDirectory: false)
+        )
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: gbrainTarget.path,
+            executablePath: gbrainExecutable.path,
+            sourceRepoPath: gbrainHome.path
+        )
         let launch = try XCTUnwrap(
             ZebraSourceOnboardingHelper(
                 stateURL: stateURL,
@@ -5698,12 +5763,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let ingestPayload = try jsonObject(from: ingest.stdout)
         XCTAssertEqual(ingestPayload["nextPlaybookStepID"] as? String, "verify_readback")
         XCTAssertEqual(ingestPayload["ingestedThreadCount"] as? Int, 1)
-        let artifactPath = try XCTUnwrap(ingestPayload["artifactPath"] as? String)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: artifactPath))
-        let artifactBody = try String(contentsOfFile: artifactPath, encoding: .utf8)
-        XCTAssertTrue(artifactBody.contains("fixture raw message body"))
-        XCTAssertTrue(artifactBody.contains("chat-alpha"))
-        XCTAssertFalse(artifactBody.contains("chat-old"))
+        XCTAssertFalse(ingestPayload.keys.contains("artifactPath"))
 
         let verify = try runProcess(
             executableURL: helperURL,
@@ -5713,6 +5773,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
         let verifyPayload = try jsonObject(from: verify.stdout)
         XCTAssertEqual(verifyPayload["nextPlaybookStepID"] as? String, "complete")
+        XCTAssertEqual(verifyPayload["verifiedRecordCount"] as? Int, 1)
         let pendingPrompt = try XCTUnwrap(verifyPayload["nextPrompt"] as? String)
         XCTAssertTrue(pendingPrompt.contains("completion report is required"), pendingPrompt)
         XCTAssertTrue(pendingPrompt.contains("zebra-source-onboarding report --status completed --source imessage"), pendingPrompt)
@@ -5722,6 +5783,9 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(row.status, "running")
         XCTAssertEqual(row.phase, "complete")
 
+        let sourceToTasksSkill = gbrainTarget.appendingPathComponent(".gbrain-adapter/skills/source-to-tasks/SKILL.md")
+        try FileManager.default.createDirectory(at: sourceToTasksSkill.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "source-to-tasks\n".write(to: sourceToTasksSkill, atomically: true, encoding: .utf8)
         let report = try runProcess(
             executableURL: helperURL,
             arguments: ["report", "--status", "completed", "--source", "imessage"],
@@ -5730,7 +5794,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertEqual(report.status, 0, "stdout:\n\(report.stdout)\nstderr:\n\(report.stderr)")
         let reportPayload = try jsonObject(from: report.stdout)
         XCTAssertEqual(reportPayload["completedSourceID"] as? String, "imessage")
-        XCTAssertEqual(reportPayload["complete"] as? Bool, true)
+        XCTAssertEqual(reportPayload["complete"] as? Bool, false)
 
         loaded = try readSourceOnboardingState(at: stateURL)
         row = try XCTUnwrap(loaded.progress.sourceRows["imessage"])
@@ -6256,6 +6320,88 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         XCTAssertFalse(persistedState.contains("task_test"))
         XCTAssertFalse(result.stdout.contains("cvis_test"))
         XCTAssertFalse(result.stdout.contains("task_test"))
+    }
+
+    @MainActor
+    func testSourceOnboardingGmailConnectivityDoesNotClaimDataIngestion() throws {
+        let root = try makeTemporaryDirectory()
+        let serverScript = root.appendingPathComponent("gmail-fixture-server.py")
+        let portFile = root.appendingPathComponent("gmail-fixture-port")
+        try """
+        import http.server, json, pathlib, sys
+        port_file = pathlib.Path(sys.argv[1])
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def send_json(self, payload):
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def do_GET(self):
+                self.send_json({"authorized_actions": [{"service": "google.gmail:test"}]})
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(length)
+                self.send_json({"status": "completed", "result": {"messages": []}})
+            def log_message(self, format, *args):
+                pass
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        port_file.write_text(str(server.server_address[1]), encoding="utf-8")
+        server.serve_forever()
+        """.write(to: serverScript, atomically: true, encoding: .utf8)
+        let server = Process()
+        server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        server.arguments = [serverScript.path, portFile.path]
+        server.standardOutput = Pipe()
+        server.standardError = Pipe()
+        try server.run()
+        defer { if server.isRunning { server.terminate() } }
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: portFile.path) {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        let port = try String(contentsOf: portFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        try writeClawvisorEnv(
+            """
+            CLAWVISOR_URL=http://127.0.0.1:\(port)
+            CLAWVISOR_AGENT_TOKEN=cvis_test
+            CLAWVISOR_TASK_ID=task_test
+            """,
+            homeURL: root
+        )
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root.appendingPathComponent("onboarding/gbrain-setup-state.json")
+        let adapterStateURL = root.appendingPathComponent("onboarding/gbrain-adapter-state.json")
+        let launch = try XCTUnwrap(ZebraSourceOnboardingHelper(
+            stateURL: stateURL,
+            gbrainOnboardingStateURL: gbrainStateURL,
+            gbrainAdapterOnboardingStateURL: adapterStateURL,
+            homeDirectoryPath: root.path
+        ).prepareLaunch(selectedVaultPath: nil))
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+        ]
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["intake", "--raw", "gmail", "--candidate", "gmail=gmail"], environment: environment).status, 0)
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["confirm", "--answer", "yes"], environment: environment).status, 0)
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["next"], environment: environment).status, 0)
+        let verify = try runProcess(executableURL: helperURL, arguments: ["gmail", "verify-connection"], environment: environment)
+        XCTAssertEqual(verify.status, 0, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
+        var loaded = try readSourceOnboardingState(at: stateURL)
+        let row = try XCTUnwrap(loaded.progress.sourceRows["gmail"])
+        XCTAssertEqual(row.status, "running")
+        let runState = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual((runState["connectivityReceipt"] as? [String: Any])?["complete"] as? Bool, true)
+        XCTAssertEqual((runState["dataIngestionReceipt"] as? [String: Any])?["complete"] as? Bool, false)
+        XCTAssertEqual((runState["dataIngestionReceipt"] as? [String: Any])?["status"] as? String, "not_started")
+        XCTAssertEqual(runState["completionDisposition"] as? String, "skipped")
+        XCTAssertEqual(try runProcess(executableURL: helperURL, arguments: ["report", "--status", "completed", "--source", "gmail"], environment: environment).status, 0)
+        loaded = try readSourceOnboardingState(at: stateURL)
+        XCTAssertEqual(loaded.progress.sourceRows["gmail"]?.status, "skipped")
+        XCTAssertNotEqual(loaded.progress.sourceRows["gmail"]?.status, "checked")
     }
 
     @MainActor
@@ -8938,6 +9084,21 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let adapterStateURL = root
             .appendingPathComponent("onboarding", isDirectory: true)
             .appendingPathComponent("gbrain-adapter-state.json", isDirectory: false)
+        let gbrainTarget = root.appendingPathComponent("brain", isDirectory: true)
+        let gbrainHome = root.appendingPathComponent("gbrain-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: gbrainTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: gbrainHome, withIntermediateDirectories: true)
+        let gbrainExecutable = try installFakeGBrain(
+            root: root,
+            sourcePath: gbrainTarget.path,
+            log: root.appendingPathComponent("gbrain.log", isDirectory: false)
+        )
+        try writeCompletedGBrainState(
+            stateURL: gbrainStateURL,
+            vaultPath: gbrainTarget.path,
+            executablePath: gbrainExecutable.path,
+            sourceRepoPath: gbrainHome.path
+        )
         let launch = try XCTUnwrap(
             ZebraSourceOnboardingHelper(
                 stateURL: stateURL,
@@ -9071,11 +9232,15 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             withIntermediateDirectories: true
         )
         for index in 1...5 {
+            let noteURL = vault.appendingPathComponent("note-\(index).md", isDirectory: false)
             try "# Note \(index)\nFixture body \(index)".write(
-                to: vault.appendingPathComponent("note-\(index).md", isDirectory: false),
+                to: noteURL,
                 atomically: true,
                 encoding: .utf8
             )
+            if readMode == "temporary-all" || (readMode == "four-denied" && index != 5) {
+                try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: noteURL.path)
+            }
         }
 
         let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
@@ -9089,33 +9254,6 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                 homeDirectoryPath: root.path
             ).prepareLaunch(selectedVaultPath: nil)
         )
-        let hookDirectory = root.appendingPathComponent("python-hooks", isDirectory: true)
-        try FileManager.default.createDirectory(at: hookDirectory, withIntermediateDirectories: true)
-        try """
-        import errno
-        import os
-        from pathlib import Path
-
-        _original_read_text = Path.read_text
-        _target = os.environ.get("ZEBRA_TEST_OBSIDIAN_VAULT", "")
-        _mode = os.environ.get("ZEBRA_TEST_OBSIDIAN_READ_MODE", "")
-
-        def _fixture_read_text(path, *args, **kwargs):
-            raw = str(path)
-            if _target and raw.startswith(_target + os.sep) and raw.endswith(".md"):
-                if _mode == "temporary-all":
-                    raise OSError(errno.EDEADLK, "Resource deadlock avoided", raw)
-                if _mode == "four-denied" and path.name != "note-5.md":
-                    raise PermissionError(errno.EACCES, "Permission denied", raw)
-            return _original_read_text(path, *args, **kwargs)
-
-        Path.read_text = _fixture_read_text
-        """.write(
-            to: hookDirectory.appendingPathComponent("sitecustomize.py", isDirectory: false),
-            atomically: true,
-            encoding: .utf8
-        )
-
         var environment = [
             "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
             "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
@@ -9123,7 +9261,6 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
             "ZEBRA_ONBOARDING_LANGUAGE": "en",
             "ZEBRA_TEST_OBSIDIAN_VAULT": pythonResolvedPath(vault),
-            "PYTHONPATH": hookDirectory.path,
         ]
         if let readMode {
             environment["ZEBRA_TEST_OBSIDIAN_READ_MODE"] = readMode
@@ -9878,29 +10015,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     private func installFakeGBrain(root: URL, sourcePath: String, log: URL) throws -> URL {
-        let bin = root.appendingPathComponent("bin", isDirectory: true)
-        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        let script = bin.appendingPathComponent("gbrain", isDirectory: false)
-        let scriptContent = """
-        #!/bin/sh
-        echo "$@" >> '\(shellSingleQuoted(log.path))'
-        if [ "$1" = "doctor" ]; then
-          echo '{"ok":true}'
-          exit 0
-        fi
-        if [ "$1" = "sources" ] && [ "$2" = "current" ]; then
-          echo '{"source_id":"brain"}'
-          exit 0
-        fi
-        if [ "$1" = "sources" ] && [ "$2" = "list" ]; then
-          echo '{"sources":[{"id":"brain","local_path":"\(jsonEscaped(sourcePath))"}]}'
-          exit 0
-        fi
-        exit 0
-        """
-        try scriptContent.write(to: script, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
-        return script
+        try SourceOnboardingFakeGBrain.install(root: root, sourcePath: sourcePath, log: log)
     }
 
     private func runProcess(

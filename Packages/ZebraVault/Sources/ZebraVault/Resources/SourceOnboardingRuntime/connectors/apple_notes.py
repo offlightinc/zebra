@@ -1,3 +1,12 @@
+from domain import deterministic_slug
+from gbrain_ingest import submit_connector_ingestion
+from state import ingest_projection
+from playbooks import parse_playbook_markdown
+from connectors.apple_reminders import (
+    apple_reminders_brew_path,
+    apple_reminders_command_result,
+    apple_reminders_install_answer,
+)
 from common import *
 
 def apple_notes_playbook():
@@ -51,8 +60,8 @@ def apple_notes_ingest_plan_summary(run_state):
         - 선택한 범위: `{apple_notes_scope_summary(run_state)}`
         - 예상 노트 수: `{count_text}`
         - 민감정보 안내: 승인된 범위에는 개인 메모, 회사 메모, 링크, 사람 이름, 계정 정보처럼 민감할 수 있는 note body가 저장될 수 있습니다.
-        - Ingest 방식: `memo` CLI로 승인된 노트만 읽어 선택된 brain repo의 `sources/` 아래 markdown artifact를 작성합니다.
-        - 검증 계획: 생성된 Apple Notes source artifact를 다시 읽고 `source: apple-notes`와 `playbook: apple-notes.memo-cli.v1`를 확인합니다.
+        - Ingest 방식: `memo` CLI로 승인된 노트만 읽어 정규화한 뒤 공통 GBrain ingestion에 제출합니다.
+        - 검증 계획: 같은 source scope에서 모든 예상 slug를 `gbrain get`으로 확인합니다.
 
         ingest를 실행하기 전에 사용자에게 명시적으로 승인받으세요. 승인하면 `zebra-source-onboarding apple-notes confirm-plan --answer yes`를 실행하고, 승인하지 않으면 `zebra-source-onboarding apple-notes confirm-plan --answer no`를 실행하세요.
         ''').strip()
@@ -63,8 +72,8 @@ def apple_notes_ingest_plan_summary(run_state):
         - 選択した範囲: `{apple_notes_scope_summary(run_state)}`
         - 推定ノート数: `{count_text}`
         - 機微情報の注意: 承認された範囲には個人メモ、仕事メモ、リンク、人名、アカウント情報など機微になり得るnote bodyが保存される可能性があります。
-        - Ingest方式: `memo` CLIで承認済みノートだけを読み、選択されたbrain repoの`sources/`下にmarkdown artifactを書き込みます。
-        - 検証計画: 生成されたApple Notes source artifactを読み戻し、`source: apple-notes`と`playbook: apple-notes.memo-cli.v1`を確認します。
+        - Ingest方式: `memo` CLIで承認済みノートだけを読み、正規化して共通GBrain ingestionへ渡します。
+        - 検証計画: 同じsource scopeですべての期待slugを`gbrain get`で確認します。
 
         ingestを実行する前にユーザーから明示的な承認を得てください。承認されたら`zebra-source-onboarding apple-notes confirm-plan --answer yes`を実行し、承認されなければ`zebra-source-onboarding apple-notes confirm-plan --answer no`を実行してください。
         ''').strip()
@@ -74,8 +83,8 @@ def apple_notes_ingest_plan_summary(run_state):
     - Selected scope: `{apple_notes_scope_summary(run_state)}`
     - Estimated note count: `{count_text}`
     - Sensitive data notice: approved scope may store note bodies containing personal notes, work notes, links, names, or account-like information.
-    - Ingest mode: read only approved notes with the `memo` CLI and write a markdown artifact under the selected brain repo's `sources/` directory.
-    - Verification plan: read back the generated Apple Notes source artifact and require `source: apple-notes` plus `playbook: apple-notes.memo-cli.v1`.
+    - Ingest mode: read only approved notes with the `memo` CLI, normalize them, and submit them to common GBrain ingestion.
+    - Verification plan: use `gbrain get` for every expected slug in the same source scope.
 
     Ask the user for explicit approval before running ingest. If approved, run `zebra-source-onboarding apple-notes confirm-plan --answer yes`. If not approved, run `zebra-source-onboarding apple-notes confirm-plan --answer no`.
     ''').strip()
@@ -179,7 +188,8 @@ def apple_notes_step_prompt(step_id, state, row):
     command_path = run_state.get("memoCommandPath") or "not verified"
     access = run_state.get("accessStatus") or "not verified"
     smoke = run_state.get("smokeListStatus") or "not run"
-    artifact = run_state.get("artifactPath") or "not created"
+    receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
+    ingest_status = "passed" if receipt.get("complete") is True else receipt.get("failure") or "not started"
     return textwrap.dedent(f'''
     Zebra Source Onboarding: Apple Notes is the active source.
 
@@ -189,7 +199,7 @@ def apple_notes_step_prompt(step_id, state, row):
     Notes Automation/access status: `{access}`
     Smoke list status: `{smoke}`
     Current ingest scope: `{apple_notes_scope_summary(run_state)}`
-    Current ingest artifact: `{artifact}`
+    Current GBrain ingest status: `{ingest_status}`
 
     Boundary rules:
     - Work only this Apple Notes step. Do not start Notion, Obsidian, iMessage, Gmail, or another source unless the helper prints that source as the next active source.
@@ -418,16 +428,7 @@ def memo_preview(text, limit=4000):
     value = str(text or "").strip()
     return value[:limit]
 
-def apple_notes_artifact_path(state=None):
-    target = None
-    if isinstance(state, dict):
-        target = state.get("entryContext", {}).get("gbrainTargetPath")
-    if target and Path(target).is_dir():
-        directory = Path(target) / "sources"
-    else:
-        directory = state_path.parent / "source-ingest-artifacts"
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory / "apple-notes-memo-cli.md"
+
 
 def apple_notes_install_consent_prompt(homebrew_required):
     language = onboarding_language()
@@ -841,126 +842,39 @@ def apple_notes_read_note(note_id):
     return result
 
 def apple_notes_ingest():
-    state = load_or_create_state()
-    run_state = load_source_run_state("apple-notes")
+    state = load_or_create_state(); run_state = load_source_run_state("apple-notes")
     if not run_state.get("scope") or run_state.get("scope") == "skip":
-        state = set_apple_notes_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="ingest_scope_required")
-        save_json(state)
-        payload = {"ok": False, "reason": "ingest_scope_required"}
-        payload.update(source_next_prompt_payload(state, "apple-notes", "choose_ingest_scope"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
+        state = set_apple_notes_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="ingest_scope_required"); save_json(state)
+        payload = {"ok": False, "reason": "ingest_scope_required"}; payload.update(source_next_prompt_payload(state, "apple-notes", "choose_ingest_scope")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
     if not run_state.get("planConfirmed"):
-        state = set_apple_notes_row_state(state, "attention", "ingest", "confirm_ingest_plan", attention_reason="ingest_plan_unconfirmed")
-        save_json(state)
-        payload = {"ok": False, "reason": "ingest_plan_unconfirmed"}
-        payload.update(source_next_prompt_payload(state, "apple-notes", "confirm_ingest_plan"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    note_ids = run_state.get("resolvedNoteIDs") if isinstance(run_state.get("resolvedNoteIDs"), list) else []
+        state = set_apple_notes_row_state(state, "attention", "ingest", "confirm_ingest_plan", attention_reason="ingest_plan_unconfirmed"); save_json(state)
+        payload = {"ok": False, "reason": "ingest_plan_unconfirmed"}; payload.update(source_next_prompt_payload(state, "apple-notes", "confirm_ingest_plan")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
+    note_ids = run_state.get("resolvedNoteIDs") if isinstance(run_state.get("resolvedNoteIDs"), list) else apple_notes_estimate_scope(run_state)
     if not note_ids:
-        note_ids = apple_notes_estimate_scope(run_state)
-    if not note_ids:
-        reason = "no_notes_in_approved_scope"
-        run_state.update({"ingestStatus": "failed", "ingestFailureReason": reason, "updatedAt": now()})
-        run_path = save_source_run_state("apple-notes", run_state)
-        state = set_apple_notes_row_state(
-            state,
-            "attention",
-            "ingest",
-            "ingest_notes",
-            attention_reason=reason,
-            run_state_path=run_path,
-        )
-        save_json(state)
-        payload = {"ok": False, "reason": reason}
-        payload.update(source_next_prompt_payload(state, "apple-notes", "ingest_notes"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    artifact = apple_notes_artifact_path(state)
-    lines = [
-        "# Apple Notes Source Onboarding Ingest",
-        "",
-        "source: apple-notes",
-        "playbook: apple-notes.memo-cli.v1",
-        "scope: " + str(run_state.get("scope")),
-        "scope_summary: " + apple_notes_scope_summary(run_state),
-        "note_count: " + str(len(note_ids)),
-        "",
-        "## Notes",
-    ]
-    ingested = 0
+        reason = "no_notes_in_approved_scope"; state = set_apple_notes_row_state(state, "attention", "ingest", "ingest_notes", attention_reason=reason); save_json(state)
+        payload = {"ok": False, "reason": reason}; payload.update(source_next_prompt_payload(state, "apple-notes", "ingest_notes")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
+    records, failures = [], []
     for note_id in note_ids:
         result = apple_notes_read_note(note_id)
-        lines.extend(["", "### Note " + str(note_id), ""])
         if not result.get("ok"):
-            lines.append("read_error: " + str(result.get("reason") or "memo_note_read_failed"))
-            continue
-        lines.extend([
-            "```text",
-            str(result.get("stdout") or "").rstrip(),
-            "```",
-        ])
-        ingested += 1
-    artifact.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    run_state.update({
-        "artifactPath": str(artifact),
-        "ingestedNoteCount": ingested,
-        "ingestedAt": now(),
-        "updatedAt": now(),
-    })
-    run_path = save_source_run_state("apple-notes", run_state)
-    state = set_apple_notes_row_state(
-        state,
-        "running",
-        "verify",
-        "verify_readback",
-        run_state_path=run_path,
-        result_summary="Apple Notes ingest artifact written for " + str(ingested) + " notes.",
-    )
-    save_json(state)
-    payload = {"ok": True, "artifactPath": str(artifact), "ingestedNoteCount": ingested}
-    payload.update(source_next_prompt_payload(state, "apple-notes", "verify_readback"))
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    return 0
+            failures.append({"logicalRecordID": str(note_id), "reason": result.get("reason") or "memo_note_read_failed"}); continue
+        records.append({"connectorID": "apple-notes", "logicalRecordID": str(note_id), "slug": deterministic_slug("apple-notes", str(note_id)), "markdown": str(result.get("stdout") or ""), "originURI": "apple-notes://" + str(note_id)})
+    acquisition = {"discoveredCount": len(note_ids), "selectedCount": len(note_ids), "normalizedCount": len(records), "failedCount": len(failures), "diagnosticCount": 0, "cancelled": False, "complete": not failures and len(records) == len(note_ids)}
+    attempt_id = str(uuid.uuid4()); receipt = submit_connector_ingestion("apple-notes", records, acquisition, state, attempt_id, gbrain_state_path)
+    run_state.update({"ingestAttemptID": attempt_id, "acquisitionReceipt": acquisition, "ingestReceipt": receipt, "ingestedNoteCount": len(records), "acquisitionDiagnostics": failures[:8], "updatedAt": now()})
+    run_path = save_source_run_state("apple-notes", run_state); projection = ingest_projection(receipt)
+    state = set_apple_notes_row_state(state, "running" if projection["complete"] else "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"], run_state_path=run_path, result_summary="GBrain ingest attempted for " + str(len(records)) + " Apple Notes."); save_json(state)
+    payload = {"ok": projection["complete"], "reason": projection["attentionReason"], "ingestedNoteCount": len(records)}; payload.update(source_next_prompt_payload(state, "apple-notes", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0 if projection["complete"] else 1
+
 
 def apple_notes_verify_readback():
-    state = load_or_create_state()
-    run_state = load_source_run_state("apple-notes")
-    artifact = Path(run_state.get("artifactPath") or "")
-    try:
-        text = artifact.read_text(encoding="utf-8")
-    except Exception:
-        text = ""
-    if "source: apple-notes" not in text or "playbook: apple-notes.memo-cli.v1" not in text:
-        run_state.update({"readbackStatus": "failed", "updatedAt": now()})
-        run_path = save_source_run_state("apple-notes", run_state)
-        state = set_apple_notes_row_state(
-            state,
-            "attention",
-            "verify",
-            "verify_readback",
-            attention_reason="readback_failed",
-            run_state_path=run_path,
-        )
-        save_json(state)
-        payload = {"ok": False, "reason": "readback_failed"}
-        payload.update(source_next_prompt_payload(state, "apple-notes", "verify_readback"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
-    state = mark_source_completion_pending(
-        state,
-        "apple-notes",
-        "checked",
-        "Apple Notes ingest readback verified for " + str(run_state.get("ingestedNoteCount") or 0) + " notes.",
-        run_state=run_state,
-    )
-    save_json(state)
-    payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
-    payload.update(source_next_prompt_payload(state, "apple-notes", "complete"))
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    return 0
+    state = load_or_create_state(); run_state = load_source_run_state("apple-notes"); receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}; projection = ingest_projection(receipt)
+    if not projection["complete"]:
+        state = set_apple_notes_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"] or "readbackMissing", run_state_path=save_source_run_state("apple-notes", run_state)); save_json(state)
+        payload = {"ok": False, "reason": projection["attentionReason"] or "readbackMissing"}; payload.update(source_next_prompt_payload(state, "apple-notes", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
+    run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()}); state = mark_source_completion_pending(state, "apple-notes", "checked", "GBrain ingest/readback verified for " + str(receipt.get("verifiedRecordCount") or 0) + " Apple Notes.", run_state=run_state); save_json(state)
+    payload = {"ok": True, "readbackStatus": "passed", "verifiedRecordCount": receipt.get("verifiedRecordCount")}; payload.update(source_next_prompt_payload(state, "apple-notes", "complete")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0
+
 
 def apple_notes_command():
     if not args:
@@ -986,4 +900,3 @@ def apple_notes_command():
         return apple_notes_verify_readback()
     print("unknown apple-notes subcommand: " + subcommand, file=sys.stderr)
     return 2
-

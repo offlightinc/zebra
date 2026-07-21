@@ -27,7 +27,7 @@ The primary path is the local `imsg` CLI against the macOS Messages database. It
 State rules:
 
 - `source-onboarding-state.json` stores only compact cursor/result fields.
-- Use `runStatePath` for compact per-run checkpoint data such as CLI path, access status, smoke outcome, selected scope, internal bounded window, thread-level limit, artifact path, and readback status.
+- Use `runStatePath` for compact per-run checkpoint data such as CLI path, access status, smoke outcome, selected scope, internal bounded window, thread-level limit, and bounded GBrain receipts.
 - Never store raw message bodies, large chat/history JSON, prompt bodies, or transcripts in Source Onboarding state.
 
 Attention rules:
@@ -158,7 +158,7 @@ Run:
 zebra-source-onboarding imessage verify-readback
 ```
 
-The helper verifies the generated artifact can be read back. If verification succeeds, iMessage can be marked complete. If it fails, report the compact attention reason from stdout.
+The helper requires exact `gbrain get` readback for every expected conversation record in the verified source scope. If verification succeeds, iMessage can be marked complete. If it fails, report the compact attention reason from stdout.
 
 ## Step: complete
 

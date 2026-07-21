@@ -1,3 +1,7 @@
+from domain import deterministic_slug
+from gbrain_ingest import submit_connector_ingestion
+from state import ingest_projection
+from playbooks import parse_playbook_markdown
 from common import *
 
 def notion_playbook():
@@ -53,7 +57,7 @@ def notion_workspace_confirmation_text(run_state):
 
         진행 전 안내:
         - 예상 시간: workspace 크기와 Notion API 응답 속도에 따라 오래 걸릴 수 있습니다.
-        - 토큰/임베딩 비용 가능성: GBrain markdown artifact를 import/embedding할 때 비용이 발생할 수 있습니다.
+        - 토큰/임베딩 비용 가능성: 정규화된 레코드를 GBrain으로 import/embedding할 때 비용이 발생할 수 있습니다.
         - 권한 누락 가능성: `ntn`이 접근할 수 없는 private page/data source는 일부 누락될 수 있습니다.
         - 민감 정보 가능성: private/sensitive page, people directory, attachment metadata가 포함될 수 있습니다.
 
@@ -68,7 +72,7 @@ def notion_workspace_confirmation_text(run_state):
 
         続行前の確認:
         - 想定時間: workspace の規模と Notion API の応答速度によって長くかかる場合があります。
-        - トークン/embedding コストの可能性: GBrain markdown artifact を import/embedding するときにコストが発生する場合があります。
+        - トークン/embedding コストの可能性: 正規化されたレコードをGBrainへimport/embeddingするときにコストが発生する場合があります。
         - 権限不足の可能性: `ntn` がアクセスできない private page/data source は一部欠落する場合があります。
         - 機密情報の可能性: private/sensitive page, people directory, attachment metadata が含まれる場合があります。
 
@@ -82,7 +86,7 @@ def notion_workspace_confirmation_text(run_state):
 
     Before continuing:
     - Expected duration: this can take a long time depending on workspace size and Notion API response speed.
-    - Token/embedding cost possibility: importing/embedding the GBrain markdown artifact may incur cost.
+    - Token/embedding cost possibility: importing/embedding normalized records into GBrain may incur cost.
     - Permission gaps: private pages/data sources that `ntn` cannot access may be omitted.
     - Sensitive information possibility: private/sensitive pages, people directory data, and attachment metadata may be included.
 
@@ -205,7 +209,8 @@ def notion_step_prompt(step_id, state, row):
     section = notion_step_instruction(step_id, run_state)
     target = run_state.get("target") or "not selected"
     scope = run_state.get("scope") or "not selected"
-    artifact = run_state.get("artifactPath") or "not created"
+    receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
+    ingest_status = "passed" if receipt.get("complete") is True else receipt.get("failure") or "not started"
     if language == "ko":
         return textwrap.dedent(f'''
         Zebra Source Onboarding: Notion이 활성 source입니다.
@@ -214,14 +219,14 @@ def notion_step_prompt(step_id, state, row):
         현재 단계: `{step_id}`
         현재 Notion 범위: `{scope}`
         현재 Notion target: `{target}`
-        현재 ingest artifact: `{artifact}`
+        현재 GBrain ingest 상태: `{ingest_status}`
 
         경계 규칙:
         - 이 Notion 단계만 진행하세요. helper가 다른 source를 다음 active source로 출력하지 않는 한 iMessage, Gmail, Obsidian 또는 다른 source를 시작하지 마세요.
         - 공식 `ntn` CLI 경로를 사용하세요. 기본 인증은 `ntn login`이고, `ntn login --no-browser`는 headless fallback일 때만 사용합니다.
         - `source-onboarding-state.json`을 직접 편집하지 마세요. Source Onboarding state 쓰기는 helper CLI만 담당합니다.
         - prompt body, OAuth code, token, signed URL, credential-like query string을 저장하지 마세요.
-        - Notion data source ingest는 GBrain용 markdown/page artifact 변환으로 다루고, native Notion database ingest로 가정하지 마세요.
+        - Notion data source ingest는 정규화된 page record를 공통 GBrain ingestion에 제출하는 흐름이며, native Notion database ingest로 가정하지 마세요.
         - helper stdout의 `nextPrompt`에서만 계속 진행하세요. `nextPromptPath`는 fallback/debug 파일로만 사용하세요.
 
         Playbook 단계 안내:
@@ -236,14 +241,14 @@ def notion_step_prompt(step_id, state, row):
         現在の step: `{step_id}`
         現在の Notion scope: `{scope}`
         現在の Notion target: `{target}`
-        現在の ingest artifact: `{artifact}`
+        現在の GBrain ingest status: `{ingest_status}`
 
         境界ルール:
         - この Notion step だけを進めてください。helper が別の source を次の active source として出力しない限り、iMessage, Gmail, Obsidian, または他の source を開始しないでください。
         - 公式 `ntn` CLI を使ってください。基本認証は `ntn login` で、`ntn login --no-browser` は headless fallback の場合だけ使います。
         - `source-onboarding-state.json` を直接編集しないでください。Source Onboarding state の書き込みは helper CLI だけが行います。
         - prompt body, OAuth code, token, signed URL, credential-like query string を保存しないでください。
-        - Notion data source ingest は GBrain 用の markdown/page artifact 変換として扱い、native Notion database ingest と仮定しないでください。
+        - Notion data source ingest は正規化されたpage recordを共通GBrain ingestionへ渡す処理であり、native Notion database ingest と仮定しないでください。
         - helper stdout の `nextPrompt` からだけ続行してください。`nextPromptPath` は fallback/debug file としてのみ使ってください。
 
         Playbook step の案内:
@@ -257,14 +262,14 @@ def notion_step_prompt(step_id, state, row):
     Current step: `{step_id}`
     Current Notion scope: `{scope}`
     Current Notion target: `{target}`
-    Current ingest artifact: `{artifact}`
+    Current GBrain ingest status: `{ingest_status}`
 
     Boundary rules:
     - Work only this Notion step. Do not start iMessage, Gmail, Obsidian, or another source unless the helper prints that source as the next active source.
     - Use the official `ntn` CLI path. Primary auth is `ntn login`; `ntn login --no-browser` is only the headless fallback.
     - Do not edit `source-onboarding-state.json` directly. The helper CLI is the only Source Onboarding state write path.
     - Do not store prompt bodies, OAuth codes, tokens, signed URLs, or credential-like query strings.
-    - Treat Notion data source ingest as markdown/page artifact conversion for GBrain, not native Notion database ingest.
+    - Treat Notion data source ingest as normalized page records submitted to common GBrain ingestion, not native Notion database ingest.
     - Continue only from helper stdout `nextPrompt`; use `nextPromptPath` only as a fallback/debug file.
 
     Playbook step instructions:
@@ -410,16 +415,7 @@ def start_notion_from_next(state):
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 
-def notion_artifact_path(state=None):
-    target = None
-    if isinstance(state, dict):
-        target = state.get("entryContext", {}).get("gbrainTargetPath")
-    if target and Path(target).is_dir():
-        directory = Path(target) / "sources"
-    else:
-        directory = state_path.parent / "source-ingest-artifacts"
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory / "notion-source-onboarding.md"
+
 
 def sanitize_notion_text(value):
     text = str(value or "")
@@ -566,15 +562,15 @@ def notion_smoke_summary(scope, target, smoke):
 def notion_fetch_result_summary(label, result):
     stdout = result.get("stdout") or ""
     stderr = result.get("stderr") or ""
-    body = stdout.strip() or stderr.strip()
-    if len(body) > 4000:
-        body = body[:4000] + "...(truncated)"
+    full_body = stdout.strip() or stderr.strip()
+    body = full_body if len(full_body) <= 4000 else full_body[:4000] + "...(truncated)"
     return {
         "label": sanitize_notion_text(label),
         "status": result.get("status"),
         "ok": bool(result.get("ok")),
         "command": "ntn " + " ".join(result.get("args") or []),
         "sample": body,
+        "body": sanitize_notion_text(full_body),
     }
 
 def notion_ingest_fetch_results(run_state):
@@ -617,6 +613,32 @@ def notion_ingest_fetch_passed(scope, results):
         }
         return bool(labels.get("page")) and bool(labels.get("page-subtree-children"))
     return any(isinstance(item, dict) and item.get("ok") for item in results)
+
+def notion_normalized_records(run_state, results):
+    records = []
+    for result in results:
+        if not isinstance(result, dict) or not result.get("ok"):
+            continue
+        label = str(result.get("label") or "notion-record")
+        body = str(result.get("body") or "")
+        try:
+            parsed = json.loads(body)
+        except Exception:
+            parsed = None
+        values = parsed.get("results") if isinstance(parsed, dict) and isinstance(parsed.get("results"), list) else None
+        if values is None:
+            values = [parsed] if isinstance(parsed, dict) else [body]
+        for index, value in enumerate(values, start=1):
+            logical_id = str(value.get("id") if isinstance(value, dict) else "") or (label + "-" + str(index))
+            markdown = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
+            records.append({
+                "connectorID": "notion",
+                "logicalRecordID": logical_id,
+                "slug": deterministic_slug("notion", logical_id),
+                "markdown": markdown,
+                "originURI": "notion://" + logical_id,
+            })
+    return records
 
 def notion_choose_scope():
     scope = single_flag_value("--scope")
@@ -839,200 +861,37 @@ def notion_confirm_workspace():
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 
-def notion_artifact_markdown(run_state):
-    scope = run_state.get("scope") or "unknown"
-    target = run_state.get("target") or "workspace"
-    title = "Notion Source Onboarding Ingest"
-    smoke = run_state.get("smokeSummary") if isinstance(run_state.get("smokeSummary"), dict) else {}
-    candidates = run_state.get("searchCandidates") if isinstance(run_state.get("searchCandidates"), list) else []
-    ingest_results = run_state.get("ingestResults") if isinstance(run_state.get("ingestResults"), list) else []
-    lines = [
-        "---",
-        "type: source-ingest",
-        "source: notion",
-        "source_kind: notion",
-        "playbook: notion.ntn-cli.v1",
-        "scope: " + sanitize_notion_text(scope),
-        "source_uri: " + sanitize_notion_text(target),
-        "notion_target_id: " + sanitize_notion_text(run_state.get("targetID") or ""),
-        "created: " + now(),
-        "---",
-        "",
-        "# " + title,
-        "",
-        "This artifact was generated by Zebra Source Onboarding from Notion via `ntn`.",
-        "",
-        "## Provenance",
-        "",
-        "- Source: Notion",
-        "- Source kind: notion",
-        "- Scope: " + sanitize_notion_text(scope),
-        "- Source URI: " + sanitize_notion_text(target),
-        "- Notion target ID: " + sanitize_notion_text(run_state.get("targetID") or ""),
-        "- Ingest mode: markdown/page artifact conversion for GBrain, not native Notion database ingest",
-        "",
-        "## Smoke read",
-        "",
-    ]
-    if smoke:
-        lines.extend([
-            "- Command: `" + sanitize_notion_text(smoke.get("command") or "") + "`",
-            "- Status: `" + sanitize_notion_text(smoke.get("status")) + "`",
-            "",
-            "```text",
-            sanitize_notion_text(smoke.get("sample") or ""),
-            "```",
-        ])
-    elif candidates:
-        lines.extend([
-            "- Workspace candidate count: `" + str(len(candidates)) + "`",
-            "",
-            "## Workspace candidates",
-            "",
-        ])
-        for item in candidates:
-            if isinstance(item, dict):
-                lines.append("- " + sanitize_notion_text(item.get("object") or "unknown") + ": " + sanitize_notion_text(item.get("title") or "Untitled") + " (" + sanitize_notion_text(item.get("id") or "") + ")")
-    else:
-        lines.append("- No smoke sample was persisted.")
-    if ingest_results:
-        lines.extend([
-            "",
-            "## Ingest fetch",
-            "",
-        ])
-        for item in ingest_results:
-            if not isinstance(item, dict):
-                continue
-            lines.extend([
-                "### " + sanitize_notion_text(item.get("label") or "Notion fetch"),
-                "",
-                "- Command: `" + sanitize_notion_text(item.get("command") or "") + "`",
-                "- Status: `" + sanitize_notion_text(item.get("status")) + "`",
-                "",
-                "```text",
-                sanitize_notion_text(item.get("sample") or ""),
-                "```",
-                "",
-            ])
-    return sanitize_notion_text("\n".join(lines).rstrip() + "\n")
+
 
 def notion_ingest():
-    state = load_or_create_state()
-    run_state = load_source_run_state("notion")
-    scope = run_state.get("scope")
+    state = load_or_create_state(); run_state = load_source_run_state("notion"); scope = run_state.get("scope")
     if not scope or scope in {"skip", "workspace-search"}:
-        state = set_notion_row_state(state, "attention", "preflight", "choose_scope", attention_reason="notion_scope_required")
-        save_json(state)
-        payload = {"ok": False, "reason": "notion_scope_required"}
-        payload.update(source_next_prompt_payload(state, "notion", "choose_scope"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
+        state = set_notion_row_state(state, "attention", "preflight", "choose_scope", attention_reason="notion_scope_required"); save_json(state)
+        payload = {"ok": False, "reason": "notion_scope_required"}; payload.update(source_next_prompt_payload(state, "notion", "choose_scope")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
     if scope == "workspace-all" and not run_state.get("workspaceConfirmed"):
-        state = set_notion_row_state(state, "attention", "estimate", "confirm_workspace_ingest", attention_reason="workspace_ingest_confirmation_required")
-        save_json(state)
-        payload = {"ok": False, "reason": "workspace_ingest_confirmation_required"}
-        payload.update(source_next_prompt_payload(state, "notion", "confirm_workspace_ingest"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
+        state = set_notion_row_state(state, "attention", "estimate", "confirm_workspace_ingest", attention_reason="workspace_ingest_confirmation_required"); save_json(state)
+        payload = {"ok": False, "reason": "workspace_ingest_confirmation_required"}; payload.update(source_next_prompt_payload(state, "notion", "confirm_workspace_ingest")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
     if scope != "workspace-all" and run_state.get("smokeStatus") != "passed":
-        state = set_notion_row_state(state, "attention", "smoke", "choose_scope", attention_reason="notion_smoke_read_required")
-        save_json(state)
-        payload = {"ok": False, "reason": "notion_smoke_read_required"}
-        payload.update(source_next_prompt_payload(state, "notion", "choose_scope"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    ingest_results = notion_ingest_fetch_results(run_state)
-    if not notion_ingest_fetch_passed(scope, ingest_results):
-        run_state.update({
-            "ingestResults": ingest_results,
-            "phase": "ingest",
-            "step": "ingest_notion",
-            "updatedAt": now(),
-        })
-        run_path = save_source_run_state("notion", run_state)
-        state = set_notion_row_state(
-            state,
-            "attention",
-            "ingest",
-            "ingest_notion",
-            attention_reason="notion_ingest_fetch_failed",
-            run_state_path=run_path,
-        )
-        save_json(state)
-        payload = {"ok": False, "reason": "notion_ingest_fetch_failed", "scope": scope, "ingestResults": ingest_results}
-        payload.update(source_next_prompt_payload(state, "notion", "ingest_notion"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    run_state["ingestResults"] = ingest_results
-    artifact = notion_artifact_path(state)
-    artifact.write_text(notion_artifact_markdown(run_state), encoding="utf-8")
-    run_state.update({
-        "artifactPath": str(artifact),
-        "ingestedAt": now(),
-        "phase": "verify",
-        "step": "verify_readback",
-        "updatedAt": now(),
-    })
-    run_path = save_source_run_state("notion", run_state)
-    state = set_notion_row_state(
-        state,
-        "running",
-        "verify",
-        "verify_readback",
-        run_state_path=run_path,
-        result_summary="Notion ingest artifact written for scope " + str(scope) + ".",
-    )
-    save_json(state)
-    payload = {"ok": True, "artifactPath": str(artifact), "scope": scope}
-    payload.update(source_next_prompt_payload(state, "notion", "verify_readback"))
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    return 0
+        state = set_notion_row_state(state, "attention", "smoke", "choose_scope", attention_reason="notion_smoke_read_required"); save_json(state)
+        payload = {"ok": False, "reason": "notion_smoke_read_required"}; payload.update(source_next_prompt_payload(state, "notion", "choose_scope")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
+    fetched = notion_ingest_fetch_results(run_state); failures = [item for item in fetched if not isinstance(item, dict) or not item.get("ok")]
+    records = notion_normalized_records(run_state, fetched)
+    expected = len(fetched); acquisition = {"discoveredCount": expected, "selectedCount": expected, "normalizedCount": len(records), "failedCount": len(failures), "diagnosticCount": 0, "cancelled": False, "complete": not failures and notion_ingest_fetch_passed(scope, fetched) and bool(records)}
+    attempt_id = str(uuid.uuid4()); receipt = submit_connector_ingestion("notion", records, acquisition, state, attempt_id, gbrain_state_path)
+    run_state.update({"ingestAttemptID": attempt_id, "acquisitionReceipt": acquisition, "ingestReceipt": receipt, "ingestedRecordCount": len(records), "acquisitionDiagnostics": [{"label": item.get("label"), "status": item.get("status")} for item in failures if isinstance(item, dict)][:8], "phase": "verify", "step": "verify_readback", "updatedAt": now()})
+    run_path = save_source_run_state("notion", run_state); projection = ingest_projection(receipt)
+    state = set_notion_row_state(state, "running" if projection["complete"] else "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"], run_state_path=run_path, result_summary="GBrain ingest attempted for " + str(len(records)) + " Notion records."); save_json(state)
+    payload = {"ok": projection["complete"], "reason": projection["attentionReason"], "ingestedRecordCount": len(records)}; payload.update(source_next_prompt_payload(state, "notion", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0 if projection["complete"] else 1
+
 
 def notion_verify_readback():
-    state = load_or_create_state()
-    run_state = load_source_run_state("notion")
-    artifact = Path(run_state.get("artifactPath") or "")
-    try:
-        text = artifact.read_text(encoding="utf-8")
-    except Exception:
-        text = ""
-    forbidden_patterns = [
-        "secret_",
-        "ntn_",
-        "oauth_code=",
-        "X-Amz-Signature",
-    ]
-    has_forbidden = any(pattern in text for pattern in forbidden_patterns)
-    if "source_kind: notion" not in text or "playbook: notion.ntn-cli.v1" not in text or has_forbidden:
-        run_state.update({"readbackStatus": "failed", "phase": "verify", "step": "verify_readback", "updatedAt": now()})
-        run_path = save_source_run_state("notion", run_state)
-        state = set_notion_row_state(
-            state,
-            "attention",
-            "verify",
-            "verify_readback",
-            attention_reason="readback_failed",
-            run_state_path=run_path,
-        )
-        save_json(state)
-        payload = {"ok": False, "reason": "readback_failed", "hasForbiddenMaterial": has_forbidden}
-        payload.update(source_next_prompt_payload(state, "notion", "verify_readback"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "phase": "complete", "step": "complete", "updatedAt": now()})
-    state = mark_source_completion_pending(
-        state,
-        "notion",
-        "checked",
-        "Notion ingest readback verified.",
-        run_state=run_state,
-    )
-    save_json(state)
-    payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
-    payload.update(source_next_prompt_payload(state, "notion", "complete"))
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    return 0
+    state = load_or_create_state(); run_state = load_source_run_state("notion"); receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}; projection = ingest_projection(receipt)
+    if not projection["complete"]:
+        state = set_notion_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"] or "readbackMissing", run_state_path=save_source_run_state("notion", run_state)); save_json(state)
+        payload = {"ok": False, "reason": projection["attentionReason"] or "readbackMissing"}; payload.update(source_next_prompt_payload(state, "notion", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
+    run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "phase": "complete", "step": "complete", "updatedAt": now()}); state = mark_source_completion_pending(state, "notion", "checked", "GBrain ingest/readback verified for " + str(receipt.get("verifiedRecordCount") or 0) + " Notion records.", run_state=run_state); save_json(state)
+    payload = {"ok": True, "readbackStatus": "passed", "verifiedRecordCount": receipt.get("verifiedRecordCount")}; payload.update(source_next_prompt_payload(state, "notion", "complete")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0
+
 
 def notion_command():
     if not args:
@@ -1054,4 +913,3 @@ def notion_command():
         return notion_verify_readback()
     print("unknown notion subcommand: " + subcommand, file=sys.stderr)
     return 2
-

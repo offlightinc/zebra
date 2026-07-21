@@ -1,6 +1,14 @@
 import Foundation
 
 struct ZebraSourceOnboardingHelper {
+    enum InstallationError: Error, Equatable {
+        case runtimeResourceMissing
+        case runtimeResourceIncomplete
+        case installedRuntimeIncomplete
+        case runtimeEntrypointMissing
+        case filesystemFailure(String)
+    }
+
     struct LaunchContext {
         var helperPath: String
         var launchDirectory: String
@@ -13,24 +21,40 @@ struct ZebraSourceOnboardingHelper {
     private let gbrainAdapterOnboardingStateURL: URL
     private let fileManager: FileManager
     private let homeDirectoryPath: String
+    private let runtimeResourceLocator: () -> URL?
 
     init(
         stateURL: URL = ZebraSourceOnboardingState.defaultStateURL(),
         gbrainOnboardingStateURL: URL = ZebraGBrainOnboardingStore.defaultStateURL(),
         gbrainAdapterOnboardingStateURL: URL = ZebraGBrainAdapterOnboardingStore.defaultStateURL(),
         fileManager: FileManager = .default,
-        homeDirectoryPath: String = NSHomeDirectory()
+        homeDirectoryPath: String = NSHomeDirectory(),
+        runtimeResourceLocator: @escaping () -> URL? = { Self.sourceOnboardingRuntimeResourceURL() }
     ) {
         self.stateURL = stateURL
         self.gbrainOnboardingStateURL = gbrainOnboardingStateURL
         self.gbrainAdapterOnboardingStateURL = gbrainAdapterOnboardingStateURL
         self.fileManager = fileManager
         self.homeDirectoryPath = Self.standardizedPath(homeDirectoryPath)
+        self.runtimeResourceLocator = runtimeResourceLocator
     }
 
     func prepareLaunch(selectedVaultPath: String?) -> LaunchContext? {
-        guard let helperURL = installHelperScript() else { return nil }
-        guard let playbookDirectory = installSourcePlaybooks() else { return nil }
+        try? prepareLaunchResult(selectedVaultPath: selectedVaultPath).get()
+    }
+
+    func prepareLaunchResult(selectedVaultPath: String?) -> Result<LaunchContext, InstallationError> {
+        let helperURL: URL
+        do {
+            helperURL = try installHelperScript()
+        } catch let error as InstallationError {
+            return .failure(error)
+        } catch {
+            return .failure(.filesystemFailure(String(describing: error)))
+        }
+        guard let playbookDirectory = installSourcePlaybooks() else {
+            return .failure(.filesystemFailure("source_playbook_install_failed"))
+        }
         let helperDirectory = helperURL.deletingLastPathComponent().path
         let languageCode = ZebraOnboardingLanguage.current().code
         persistOnboardingLanguageCode(languageCode)
@@ -47,12 +71,12 @@ struct ZebraSourceOnboardingHelper {
         if let selectedVaultPath = standardizedExistingDirectoryPath(selectedVaultPath) {
             commands.append("export ZEBRA_GBRAIN_WRITE_TARGET_PATH=\(ZebraAgentLaunchCommand.shellQuote(selectedVaultPath))")
         }
-        return LaunchContext(
+        return .success(LaunchContext(
             helperPath: helperURL.path,
             launchDirectory: onboardingWorkDirectoryPath(),
             runtimePromptDirectory: runtimePromptDirectoryPath(),
             shellEnvironmentPrefix: commands.joined(separator: " && ") + " && "
-        )
+        ))
     }
 
     private func persistOnboardingLanguageCode(_ languageCode: String) {
@@ -86,7 +110,7 @@ struct ZebraSourceOnboardingHelper {
         }
     }
 
-    private func installHelperScript() -> URL? {
+    private func installHelperScript() throws -> URL {
         let onboardingDirectory = stateURL.deletingLastPathComponent()
         let directory = onboardingDirectory.appendingPathComponent("bin", isDirectory: true)
         let runtimeDirectory = onboardingDirectory.appendingPathComponent(
@@ -95,9 +119,12 @@ struct ZebraSourceOnboardingHelper {
         )
         let url = directory.appendingPathComponent("zebra-source-onboarding", isDirectory: false)
         do {
-            guard let bundledRuntime = Self.sourceOnboardingRuntimeResourceURL(),
-                  Self.runtimeResourceIsComplete(at: bundledRuntime)
-            else { return nil }
+            guard let bundledRuntime = runtimeResourceLocator() else {
+                throw InstallationError.runtimeResourceMissing
+            }
+            guard Self.runtimeResourceIsComplete(at: bundledRuntime) else {
+                throw InstallationError.runtimeResourceIncomplete
+            }
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             let temporaryRuntime = onboardingDirectory.appendingPathComponent(
                 ".source-onboarding-runtime-\(UUID().uuidString)",
@@ -105,7 +132,9 @@ struct ZebraSourceOnboardingHelper {
             )
             defer { try? fileManager.removeItem(at: temporaryRuntime) }
             try fileManager.copyItem(at: bundledRuntime, to: temporaryRuntime)
-            guard Self.runtimeResourceIsComplete(at: temporaryRuntime) else { return nil }
+            guard Self.runtimeResourceIsComplete(at: temporaryRuntime) else {
+                throw InstallationError.installedRuntimeIncomplete
+            }
             if fileManager.fileExists(atPath: runtimeDirectory.path) {
                 _ = try fileManager.replaceItemAt(
                     runtimeDirectory,
@@ -120,7 +149,9 @@ struct ZebraSourceOnboardingHelper {
                 "zebra-source-onboarding",
                 isDirectory: false
             )
-            guard fileManager.fileExists(atPath: bundledEntrypoint.path) else { return nil }
+            guard fileManager.fileExists(atPath: bundledEntrypoint.path) else {
+                throw InstallationError.runtimeEntrypointMissing
+            }
             if fileManager.fileExists(atPath: url.path) {
                 try fileManager.removeItem(at: url)
             }
@@ -129,10 +160,14 @@ struct ZebraSourceOnboardingHelper {
             guard ZebraInteractiveTerminalRunner.install(
                 in: directory,
                 fileManager: fileManager
-            ) != nil else { return nil }
+            ) != nil else {
+                throw InstallationError.filesystemFailure("interactive_terminal_runner_install_failed")
+            }
             return url
+        } catch let error as InstallationError {
+            throw error
         } catch {
-            return nil
+            throw InstallationError.filesystemFailure(String(describing: error))
         }
     }
 

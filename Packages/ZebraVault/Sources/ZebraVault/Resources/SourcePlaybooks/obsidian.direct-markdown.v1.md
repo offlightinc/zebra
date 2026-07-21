@@ -40,7 +40,7 @@ If the registry is missing, invalid, unreadable, permission denied, or contains 
 State rules:
 
 - `source-onboarding-state.json` stores only compact cursor/result fields.
-- Use `runStatePath` for compact per-run checkpoint data such as resolved source vault path, scope, counts, artifact path, and readback status.
+- Use `runStatePath` for compact per-run checkpoint data such as resolved source vault path, scope, acquisition counts, and bounded GBrain receipts.
 - Never store prompt bodies, large file lists, or Markdown bodies in Source Onboarding state.
 - Markdown content may be written only to the approved ingest artifact after `confirm_ingest_plan`.
 
@@ -171,7 +171,7 @@ zebra-source-onboarding obsidian ingest
 
 This runner writes a bounded source onboarding artifact for the approved Obsidian scope and records compact checkpoint metadata. It must not store Markdown bodies in `source-onboarding-state.json`.
 
-For this helper slice, ingest writes a source artifact from the approved Markdown files. Do not mutate unrelated files. Do not stage or commit unrelated git state. If a future target requires sync or git commit, stage only explicit pathspecs created by this ingest.
+The helper normalizes approved Markdown records in private staging and submits one common GBrain ingestion request. Do not mutate unrelated files or write a connector-owned final artifact.
 
 Continue only from the returned `nextPrompt`.
 
@@ -185,9 +185,9 @@ Run:
 zebra-source-onboarding obsidian verify-readback
 ```
 
-The helper verifies the generated artifact can be read back. If verification succeeds, Obsidian can be marked complete. If it fails, report the compact attention reason from stdout.
+The helper requires exact `gbrain get` readback for every expected slug in the verified source scope. If verification succeeds, Obsidian can be marked complete. If it fails, report the compact attention reason from stdout.
 
-Readback failure means the source is not complete. Keep Obsidian at `attention` or `verify_readback` until the artifact can be read or the user chooses to skip.
+Readback failure means the source is not complete. Keep Obsidian at `attention` or `verify_readback` until the common GBrain receipt succeeds or the user chooses to skip.
 
 ## Step: complete
 

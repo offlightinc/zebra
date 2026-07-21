@@ -12,6 +12,9 @@ import time
 from domain import FAILURES, normalized_record, reconciliation
 
 
+MAX_PUT_STDIN_BYTES = 5_000_000
+
+
 class ProcessClient:
     def __init__(self, binding):
         self.binding = binding
@@ -170,6 +173,8 @@ def _summary_counts(payload):
         value = summary.get(key)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
+        if value < 0 or int(value) != value:
+            return None
         values[key] = int(value)
     return values
 
@@ -229,7 +234,8 @@ def run_ingest(request):
         staging = pathlib.Path(tempfile.mkdtemp(prefix="zebra-gbrain-ingest-", dir=str(private_root)))
         staging.chmod(0o700)
         _write_staging(staging, records, request.get("attemptID"))
-        mode = "singleRetry" if len(records) == 1 or request.get("mode") == "singleRetry" else "bulk"
+        single_fits_stdin = len(records) == 1 and len(_staged_text(records[0]).encode("utf-8")) <= MAX_PUT_STDIN_BYTES
+        mode = "singleRetry" if single_fits_stdin and (len(records) == 1 or request.get("mode") == "singleRetry") else "bulk"
         write["mode"] = mode
         if mode == "bulk":
             workers = max(1, min(int(request.get("workers") or 4), 8))
@@ -262,7 +268,9 @@ def run_ingest(request):
                 write["failure"] = "importProcessFailed"
             else:
                 payload = _json_result(process)
-                if payload is not None and _write_through_failed(payload):
+                if payload is None:
+                    write["failure"] = "importResultMalformed"
+                elif _write_through_failed(payload):
                     write["failure"] = "writeThroughFailed"
                 else:
                     write["imported"] = 1
@@ -281,3 +289,67 @@ def run_ingest(request):
         result["failure"] = "importProcessFailed"
         result["complete"] = False
     return {**result, "attemptID": request.get("attemptID"), "write": write, "readbacks": readbacks}
+
+
+def run_onboarding_ingest(request):
+    acquisition = dict(request.get("acquisition") or {})
+    if acquisition.get("complete") is not True:
+        write = {"failure": "acquisitionIncomplete"}
+        result = reconciliation(acquisition, write, [], len(request.get("records") or []))
+        return {**result, "attemptID": request.get("attemptID"), "write": write, "readbacks": []}
+    try:
+        state = json.loads(pathlib.Path(request["gbrainStatePath"]).expanduser().read_text(encoding="utf-8"))
+    except Exception:
+        state = {}
+    receipt = state.get("receipt") if isinstance(state.get("receipt"), dict) else {}
+    targets = receipt.get("targets") if isinstance(receipt.get("targets"), dict) else {}
+    selected_path = request.get("selectedTargetPath")
+    target_key = None
+    target = None
+    if selected_path:
+        selected = _canonical(selected_path)
+        for key, candidate in targets.items():
+            if isinstance(candidate, dict) and candidate.get("vaultPath") and _canonical(candidate["vaultPath"]) == selected:
+                target_key, target = key, candidate
+                break
+    if target is None and not selected_path:
+        target_key = receipt.get("primaryTargetKey")
+        target = targets.get(target_key) if target_key else None
+    readiness = receipt.get("globalReadiness") if isinstance(receipt.get("globalReadiness"), dict) else {}
+    if not isinstance(target, dict) or target.get("complete") is not True:
+        binding_failure = "targetBindingMismatch"
+    elif not target.get("sourceId"):
+        binding_failure = "sourceRoutingMismatch"
+    else:
+        binding_failure = None
+    executable = (target or {}).get("gbrainExecutablePath") or readiness.get("gbrainExecutablePath")
+    binding = state.get("activeGBrainBinding") if isinstance(state.get("activeGBrainBinding"), dict) else {}
+    environment = {}
+    if binding.get("gbrainHomePath"):
+        environment["GBRAIN_HOME"] = binding["gbrainHomePath"]
+    if binding_failure:
+        acquisition = dict(request.get("acquisition") or {})
+        write = {"failure": binding_failure}
+        result = reconciliation(acquisition, write, [], len(request.get("records") or []))
+        return {**result, "attemptID": request.get("attemptID"), "write": write, "readbacks": []}
+    enriched = dict(request)
+    enriched["binding"] = {
+        "executable": executable,
+        "workingDirectory": target.get("vaultPath"),
+        "sourceID": target.get("sourceId"),
+        "environment": environment,
+    }
+    enriched.setdefault("privateRoot", str(pathlib.Path(request["gbrainStatePath"]).parent / "private-ingest-staging"))
+    return run_ingest(enriched)
+
+
+def submit_connector_ingestion(connector_id, records, acquisition, state, attempt_id, gbrain_state_path):
+    entry = state.get("entryContext") if isinstance(state.get("entryContext"), dict) else {}
+    return run_onboarding_ingest({
+        "attemptID": attempt_id,
+        "connectorID": connector_id,
+        "gbrainStatePath": str(gbrain_state_path),
+        "selectedTargetPath": entry.get("gbrainTargetPath") or entry.get("gbrainWriteTargetPath"),
+        "acquisition": acquisition,
+        "records": records,
+    })

@@ -1,3 +1,7 @@
+from domain import deterministic_slug
+from gbrain_ingest import submit_connector_ingestion
+from state import ingest_projection
+from playbooks import parse_playbook_markdown
 from common import *
 
 def apple_reminders_playbook():
@@ -53,7 +57,6 @@ def apple_reminders_ingest_plan_summary(run_state):
     count_text = str(count) if count is not None else "unknown"
     fields = run_state.get("observedReminderFields") if isinstance(run_state.get("observedReminderFields"), list) else []
     fields_text = ", ".join(str(item) for item in fields) if fields else "unknown until approved read"
-    artifact = run_state.get("plannedArtifactPath") or run_state.get("artifactPath") or "will be created under the selected brain repo sources directory"
     bounded = "bounded" if run_state.get("itemCap") is not None else "full approved scope"
     language = onboarding_language()
     if language == "ko":
@@ -66,8 +69,8 @@ def apple_reminders_ingest_plan_summary(run_state):
         - 예상 reminder 수: `{count_text}`
         - 저장할 필드: `{fields_text}`
         - unsupported fields: EventKit 경로에서 sections, smart lists, tags, attachments, urgent/private flags는 보장하지 않습니다.
-        - artifact path: `{artifact}`
-        - readback plan: 생성된 artifact에서 `source: apple-reminders`와 `playbook: apple-reminders.eventkit.v1`를 확인합니다.
+        - ingest 방식: 승인된 reminder를 정규화해 공통 GBrain ingestion에 제출합니다.
+        - readback plan: 같은 source scope에서 모든 예상 slug를 `gbrain get`으로 확인합니다.
         - redaction policy: raw EventKit dump는 저장하지 않고, 승인된 scope 안에서 Zebra adapter가 실제 반환한 필드만 markdown으로 씁니다.
 
         ingest를 실행하기 전에 사용자에게 명시적으로 승인받으세요. 승인하면 `zebra-source-onboarding apple-reminders confirm-plan --answer yes`를 실행하고, 승인하지 않으면 `zebra-source-onboarding apple-reminders confirm-plan --answer no`를 실행하세요.
@@ -81,8 +84,8 @@ def apple_reminders_ingest_plan_summary(run_state):
     - Expected reminder count: `{count_text}`
     - Fields to store: `{fields_text}`
     - Unsupported fields: sections, smart lists, tags, attachments, and urgent/private flags are not guaranteed through EventKit.
-    - Artifact path: `{artifact}`
-    - Readback plan: require `source: apple-reminders` plus `playbook: apple-reminders.eventkit.v1` in the generated artifact.
+    - Ingest mode: normalize approved reminders and submit them to common GBrain ingestion.
+    - Readback plan: use `gbrain get` for every expected slug in the same source scope.
     - Redaction policy: do not store a raw EventKit dump; write only fields returned by Zebra's adapter from the approved scope.
 
     Ask the user for explicit approval before running ingest. If approved, run `zebra-source-onboarding apple-reminders confirm-plan --answer yes`. If not approved, run `zebra-source-onboarding apple-reminders confirm-plan --answer no`.
@@ -178,7 +181,8 @@ def apple_reminders_step_prompt(step_id, state, row):
         section = section + "\n\n" + apple_reminders_ingest_plan_summary(run_state)
     permission = run_state.get("authorizationStatus") or "not verified"
     smoke = run_state.get("smokeStatus") or "not run"
-    artifact = run_state.get("artifactPath") or "not created"
+    receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
+    ingest_status = "passed" if receipt.get("complete") is True else receipt.get("failure") or "not started"
     return textwrap.dedent(f'''
     Zebra Source Onboarding: Apple Reminders is the active source.
 
@@ -187,7 +191,7 @@ def apple_reminders_step_prompt(step_id, state, row):
     macOS Apple Reminders data access: `{permission}`
     Smoke status: `{smoke}`
     Current ingest scope: `{apple_reminders_scope_summary(run_state)}`
-    Current ingest artifact: `{artifact}`
+    Current GBrain ingest status: `{ingest_status}`
 
     Boundary rules:
     - Work only this Apple Reminders step. Do not start Notion, Obsidian, iMessage, Gmail, Apple Notes, or another source unless the helper prints that source as the next active source.
@@ -408,8 +412,8 @@ def apple_reminders_transition(run_state, target):
         "scopeApproved": {"fetching", "scopeProposed", "failed", "cancelled", "attention"},
         "fetching": {"reconciliationRequired", "readyToCommit", "failed", "cancelled", "attention"},
         "reconciliationRequired": {"discovering", "fetching", "scopeProposed", "cancelled", "attention"},
-        "readyToCommit": {"artifactCommitted", "failed", "cancelled", "attention"},
-        "artifactCommitted": {"readbackPassed", "failed", "attention"},
+        "readyToCommit": {"gbrainCommitted", "failed", "cancelled", "attention"},
+        "gbrainCommitted": {"readbackPassed", "failed", "attention"},
         "readbackPassed": {"completionPending", "failed", "attention"},
         "completionPending": {"completed", "failed", "attention"},
         "completed": set(),
@@ -842,7 +846,6 @@ def apple_reminders_choose_scope():
         "readbackStatus": "pending",
         "observedReminderFields": fields,
         "planConfirmed": False,
-        "plannedArtifactPath": str(apple_reminders_artifact_path(state)),
         "updatedAt": now(),
     })
     run_path = save_source_run_state("apple-reminders", run_state)
@@ -908,16 +911,7 @@ def apple_reminders_confirm_plan():
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 
-def apple_reminders_artifact_path(state=None):
-    target = None
-    if isinstance(state, dict):
-        target = state.get("entryContext", {}).get("gbrainTargetPath")
-    if target and Path(target).is_dir():
-        directory = Path(target) / "sources"
-    else:
-        directory = state_path.parent / "source-ingest-artifacts"
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory / "apple-reminders-eventkit.md"
+
 
 def apple_reminders_item_list_name(item, run_state):
     if not isinstance(item, dict):
@@ -936,199 +930,57 @@ def apple_reminders_field_value(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 def apple_reminders_ingest():
-    state = load_or_create_state()
-    run_state = load_source_run_state("apple-reminders")
+    state = load_or_create_state(); run_state = load_source_run_state("apple-reminders")
     if not run_state.get("scope") or run_state.get("scope") == "skip":
-        state = set_apple_reminders_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="ingest_scope_required")
-        save_json(state)
-        payload = {"ok": False, "reason": "ingest_scope_required"}
-        payload.update(source_next_prompt_payload(state, "apple-reminders", "choose_ingest_scope"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
+        state = set_apple_reminders_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="ingest_scope_required"); save_json(state)
+        payload = {"ok": False, "reason": "ingest_scope_required"}; payload.update(source_next_prompt_payload(state, "apple-reminders", "choose_ingest_scope")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
     if not run_state.get("planConfirmed"):
-        state = set_apple_reminders_row_state(state, "attention", "ingest", "confirm_ingest_plan", attention_reason="ingest_plan_unconfirmed")
-        save_json(state)
-        payload = {"ok": False, "reason": "ingest_plan_unconfirmed"}
-        payload.update(source_next_prompt_payload(state, "apple-reminders", "confirm_ingest_plan"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
+        state = set_apple_reminders_row_state(state, "attention", "ingest", "confirm_ingest_plan", attention_reason="ingest_plan_unconfirmed"); save_json(state)
+        payload = {"ok": False, "reason": "ingest_plan_unconfirmed"}; payload.update(source_next_prompt_payload(state, "apple-reminders", "confirm_ingest_plan")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
     source_run_id = apple_reminders_source_run_id(run_state)
-    apple_reminders_transition(run_state, "fetching")
-    run_state.update({"ingestStatus": "pending", "readbackStatus": "pending", "updatedAt": now()})
-    save_source_run_state("apple-reminders", run_state)
-    receipt = apple_reminders_eventkit_request(
-        "scope-read",
-        source_run_id,
-        scope=run_state.get("approvedScope") if isinstance(run_state.get("approvedScope"), dict) else apple_reminders_eventkit_scope(run_state),
-        timeout=60,
-    )
-    if receipt.get("state") != "succeeded":
-        reason = apple_reminders_receipt_failure(receipt, "reminders_ingest_read_failed")
-        terminal_status = "cancelled" if receipt.get("state") == "cancelled" else "failed"
-        apple_reminders_transition(run_state, terminal_status)
-        run_state.update({"ingestStatus": terminal_status, "readbackStatus": "pending", "ingestFailureReason": reason, "updatedAt": now()})
-        run_path = save_source_run_state("apple-reminders", run_state)
-        state = set_apple_reminders_row_state(state, "attention", "ingest", "ingest_reminders", attention_reason=reason, run_state_path=run_path)
-        save_json(state)
-        payload = {
-            "ok": False,
-            "reason": reason,
-            "retryable": bool(receipt.get("retryable")),
-        }
-        payload.update(source_next_prompt_payload(state, "apple-reminders", "ingest_reminders"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    result = receipt.get("result") if isinstance(receipt.get("result"), dict) else {}
-    items = result.get("reminders") if isinstance(result.get("reminders"), list) else []
-    diagnostics = {
-        "requestedCalendarCount": int(receipt.get("requestedCalendarCount") or result.get("requestedCalendarCount") or 0),
-        "resolvedCalendarCount": int(receipt.get("resolvedCalendarCount") or result.get("resolvedCalendarCount") or 0),
-        "fetchedReminderCount": int(receipt.get("fetchedReminderCount") or result.get("fetchedReminderCount") or 0),
-        "resultReminderCount": int(receipt.get("resultReminderCount") or result.get("resultReminderCount") or len(items)),
-        "outcome": str(receipt.get("outcome") or result.get("outcome") or "succeeded"),
-        "reason": receipt.get("reason") or result.get("reason"),
-        "schemaProvenance": receipt.get("schemaProvenance") or "zebra-reminders-eventkit.v1",
-        "buildProvenance": receipt.get("buildProvenance") or "unavailable",
-    }
-    approved_scope = run_state.get("approvedScope") if isinstance(run_state.get("approvedScope"), dict) else {}
-    observed_open_count = approved_scope.get("observedOpenReminderCount")
-    accept_empty = apple_reminders_install_answer("--accept-empty") == "yes"
-    mismatch = isinstance(observed_open_count, int) and observed_open_count > 0 and len(items) == 0
-    if mismatch and not accept_empty:
+    source_receipt = apple_reminders_eventkit_request("scope-read", source_run_id, scope=run_state.get("approvedScope") if isinstance(run_state.get("approvedScope"), dict) else apple_reminders_eventkit_scope(run_state), timeout=60)
+    if source_receipt.get("state") != "succeeded":
+        reason = apple_reminders_receipt_failure(source_receipt, "reminders_ingest_read_failed"); state = set_apple_reminders_row_state(state, "attention", "ingest", "ingest_reminders", attention_reason=reason); save_json(state)
+        payload = {"ok": False, "reason": reason}; payload.update(source_next_prompt_payload(state, "apple-reminders", "ingest_reminders")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
+    result = source_receipt.get("result") if isinstance(source_receipt.get("result"), dict) else {}; items = result.get("reminders") if isinstance(result.get("reminders"), list) else []
+    approved_scope = run_state.get("approvedScope") if isinstance(run_state.get("approvedScope"), dict) else {}; observed = approved_scope.get("observedOpenReminderCount"); accept_empty = apple_reminders_install_answer("--accept-empty") == "yes"
+    if isinstance(observed, int) and observed > 0 and not items and not accept_empty:
         reason = "scope_changed_or_result_mismatch"
-        apple_reminders_transition(run_state, "reconciliationRequired")
-        run_state.update({
-            "ingestStatus": "mismatch",
-            "readbackStatus": "pending", "attentionReason": reason,
-            "ingestDiagnostics": {**diagnostics, "outcome": "attention", "reason": reason},
-            "updatedAt": now(),
-        })
-        run_state.pop("artifactPath", None)
+        run_state.update({"workflowStatus": "reconciliationRequired", "ingestStatus": "mismatch", "readbackStatus": "pending", "updatedAt": now()})
         run_path = save_source_run_state("apple-reminders", run_state)
-        state = set_apple_reminders_row_state(state, "attention", "ingest", "ingest_reminders", attention_reason=reason, run_state_path=run_path)
-        save_json(state)
-        payload = {"ok": False, "workflowStatus": "reconciliationRequired", "ingestStatus": "mismatch", "readbackStatus": "pending", **diagnostics}
-        payload.update(source_next_prompt_payload(state, "apple-reminders", "ingest_reminders"))
-        payload["reason"] = reason
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    if len(items) == 0:
-        diagnostics["outcome"] = "confirmed-empty"
-        diagnostics["reason"] = "explicit_empty_approval" if mismatch else "discovery_confirmed_empty"
-    fields = reminder_field_names(items)
-    apple_reminders_transition(run_state, "readyToCommit")
-    artifact = apple_reminders_artifact_path(state)
-    today = now()[:10]
-    lines = [
-        "# Apple Reminders Source Onboarding Ingest",
-        "",
-        "source: apple-reminders",
-        "playbook: apple-reminders.eventkit.v1",
-        "schema: zebra-reminders-eventkit.v1",
-        "scope: " + str(run_state.get("scope")),
-        "scope_summary: " + apple_reminders_scope_summary(run_state),
-        "completed_included: " + str(bool(run_state.get("includeCompleted"))).lower(),
-        "item_count: " + str(len(items)),
-        "fields_returned: " + (", ".join(fields) if fields else "none"),
-        "redaction_policy: approved scope only; raw EventKit dump not stored",
-        "",
-        "## Reminders",
-    ]
+        state = set_apple_reminders_row_state(state, "attention", "ingest", "ingest_reminders", attention_reason=reason, run_state_path=run_path); save_json(state)
+        payload = {"ok": False, "reason": reason, "workflowStatus": "reconciliationRequired", "ingestStatus": "mismatch", "readbackStatus": "pending"}; payload.update(source_next_prompt_payload(state, "apple-reminders", "ingest_reminders")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
+    empty_outcome = None
+    empty_reason = None
+    if not items:
+        empty_outcome = "confirmed-empty"
+        empty_reason = "explicit_empty_approval" if isinstance(observed, int) and observed > 0 else "discovery_confirmed_empty"
+    records = []
     for index, item in enumerate(items, start=1):
-        list_name = apple_reminders_item_list_name(item, run_state)
-        title = str(item.get("title") or item.get("name") or ("Reminder " + str(index))) if isinstance(item, dict) else "Reminder " + str(index)
-        lines.extend(["", "### " + title, ""])
-        if isinstance(item, dict):
-            for key in fields:
-                if key in item:
-                    lines.append("- " + str(key) + ": " + apple_reminders_field_value(item.get(key)))
-        lines.append("")
-        lines.append('[Source: Apple Reminders list "' + list_name + '", ' + today + ']')
-    artifact.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    apple_reminders_transition(run_state, "artifactCommitted")
-    run_state.update({
-        "ingestStatus": "succeeded",
-        "readbackStatus": "pending",
-        "ingestDiagnostics": diagnostics,
-        "artifactPath": str(artifact),
-        "ingestedReminderCount": len(items),
-        "observedReminderFields": fields,
-        "ingestOperation": "eventkit.scope-read",
-        "ingestExecutionOwner": receipt.get("executionOwner"),
-        "ingestedAt": now(),
-        "updatedAt": now(),
-    })
-    run_path = save_source_run_state("apple-reminders", run_state)
-    state = set_apple_reminders_row_state(
-        state,
-        "running",
-        "verify",
-        "verify_readback",
-        run_state_path=run_path,
-        result_summary="Apple Reminders ingest artifact written for " + str(len(items)) + " reminders.",
-    )
-    save_json(state)
-    payload = {"ok": True, "artifactPath": str(artifact), "ingestedReminderCount": len(items), **diagnostics}
-    payload.update(source_next_prompt_payload(state, "apple-reminders", "verify_readback"))
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    return 0
+        item = item if isinstance(item, dict) else {"title": str(item)}
+        logical_id = str(item.get("id") or item.get("externalIdentifier") or (apple_reminders_item_list_name(item, run_state) + "/" + str(index)))
+        body = "# " + str(item.get("title") or item.get("name") or ("Reminder " + str(index))) + "\n\n" + "\n".join("- " + str(key) + ": " + apple_reminders_field_value(value) for key, value in sorted(item.items())) + "\n"
+        records.append({"connectorID": "apple-reminders", "logicalRecordID": logical_id, "slug": deterministic_slug("apple-reminders", logical_id), "markdown": body, "originURI": "apple-reminders://" + logical_id})
+    acquisition = {"discoveredCount": len(items), "selectedCount": len(items), "normalizedCount": len(records), "failedCount": 0, "diagnosticCount": 0, "cancelled": False, "complete": True}
+    attempt_id = str(uuid.uuid4()); receipt = submit_connector_ingestion("apple-reminders", records, acquisition, state, attempt_id, gbrain_state_path)
+    run_state.update({"workflowStatus": "gbrainCommitted" if receipt.get("complete") else "attention", "ingestStatus": "succeeded" if receipt.get("complete") else "failed", "readbackStatus": "pending", "ingestAttemptID": attempt_id, "acquisitionReceipt": acquisition, "ingestReceipt": receipt, "ingestedReminderCount": len(records), "updatedAt": now()})
+    run_path = save_source_run_state("apple-reminders", run_state); projection = ingest_projection(receipt)
+    state = set_apple_reminders_row_state(state, "running" if projection["complete"] else "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"], run_state_path=run_path, result_summary="GBrain ingest attempted for " + str(len(records)) + " reminders."); save_json(state)
+    payload = {"ok": projection["complete"], "reason": projection["attentionReason"], "ingestedReminderCount": len(records)}
+    if empty_outcome:
+        payload.update({"outcome": empty_outcome, "reason": empty_reason})
+    payload.update(source_next_prompt_payload(state, "apple-reminders", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0 if projection["complete"] else 1
+
 
 def apple_reminders_verify_readback():
-    state = load_or_create_state()
-    run_state = load_source_run_state("apple-reminders")
-    if run_state.get("workflowStatus") != "artifactCommitted" or run_state.get("ingestStatus") != "succeeded":
-        payload = {"ok": False, "reason": "reminders_completion_gate_blocked"}
-        payload.update(source_next_prompt_payload(state, "apple-reminders", "ingest_reminders"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    artifact = Path(run_state.get("artifactPath") or "")
-    try:
-        text = artifact.read_text(encoding="utf-8")
-    except Exception:
-        text = ""
-    required_lines = {
-        "source: apple-reminders",
-        "playbook: apple-reminders.eventkit.v1",
-        "schema: zebra-reminders-eventkit.v1",
-        "scope: " + str(run_state.get("scope")),
-        "item_count: " + str(run_state.get("ingestedReminderCount") or 0),
-    }
-    artifact_lines = set(text.splitlines())
-    if not required_lines.issubset(artifact_lines):
-        apple_reminders_transition(run_state, "attention")
-        run_state.update({"readbackStatus": "failed", "updatedAt": now()})
-        run_path = save_source_run_state("apple-reminders", run_state)
-        state = set_apple_reminders_row_state(
-            state,
-            "attention",
-            "verify",
-            "verify_readback",
-            attention_reason="readback_failed",
-            run_state_path=run_path,
-        )
-        save_json(state)
-        payload = {"ok": False, "reason": "readback_failed"}
-        payload.update(source_next_prompt_payload(state, "apple-reminders", "verify_readback"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    apple_reminders_transition(run_state, "readbackPassed")
-    run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
-    state = mark_source_completion_pending(
-        state,
-        "apple-reminders",
-        "checked",
-        "Apple Reminders EventKit ingest readback verified for " + str(run_state.get("ingestedReminderCount") or 0) + " reminders.",
-        run_state=run_state,
-    )
-    run_state = load_source_run_state("apple-reminders")
-    apple_reminders_transition(run_state, "completionPending")
-    run_state.update({"updatedAt": now()})
-    save_source_run_state("apple-reminders", run_state)
-    save_json(state)
-    payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
-    payload.update(source_next_prompt_payload(state, "apple-reminders", "complete"))
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    return 0
+    state = load_or_create_state(); run_state = load_source_run_state("apple-reminders"); receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}; projection = ingest_projection(receipt)
+    if not projection["complete"]:
+        state = set_apple_reminders_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"] or "readbackMissing", run_state_path=save_source_run_state("apple-reminders", run_state)); save_json(state)
+        payload = {"ok": False, "reason": projection["attentionReason"] or "readbackMissing"}; payload.update(source_next_prompt_payload(state, "apple-reminders", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
+    run_state.update({"workflowStatus": "completionPending", "ingestStatus": "succeeded", "readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
+    state = mark_source_completion_pending(state, "apple-reminders", "checked", "GBrain ingest/readback verified for " + str(receipt.get("verifiedRecordCount") or 0) + " reminders.", run_state=run_state); save_json(state)
+    payload = {"ok": True, "readbackStatus": "passed", "verifiedRecordCount": receipt.get("verifiedRecordCount")}; payload.update(source_next_prompt_payload(state, "apple-reminders", "complete")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0
+
 
 def apple_reminders_command():
     if not args:
@@ -1152,4 +1004,3 @@ def apple_reminders_command():
         return apple_reminders_verify_readback()
     print("unknown apple-reminders subcommand: " + subcommand, file=sys.stderr)
     return 2
-

@@ -459,11 +459,25 @@ def gmail_verify_connection():
     )
     payload = {"ok": True, "service": service}
     if should_update_gmail_runner(state):
+        run_state = load_source_run_state("gmail")
+        run_state.update({
+            "connectivityReceipt": {
+                "complete": True,
+                "service": service,
+                "verifiedAt": now(),
+            },
+            "dataIngestionReceipt": {
+                "complete": False,
+                "status": "not_started",
+            },
+            "updatedAt": now(),
+        })
         state = mark_source_completion_pending(
             state,
             "gmail",
-            "checked",
-            "Gmail Clawvisor gateway smoke check passed for service " + service,
+            "skipped",
+            "Gmail connectivity was verified for " + service + "; no Gmail message data was ingested.",
+            run_state=run_state,
         )
         save_json(state)
         payload.update(source_next_prompt_payload(state, "gmail", "complete"))
@@ -484,4 +498,3 @@ def gmail_command():
         return gmail_verify_connection()
     print("unknown gmail subcommand: " + subcommand, file=sys.stderr)
     return 2
-

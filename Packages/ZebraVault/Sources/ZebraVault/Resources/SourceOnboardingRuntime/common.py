@@ -36,6 +36,9 @@ from datetime import datetime, timezone
 
 from pathlib import Path
 
+from playbooks import parse_playbook_markdown
+from state import load_json_file, load_source_run_state_file, save_json_file, save_source_run_state_file
+
 state_path = Path(sys.argv[1]).expanduser()
 
 command = sys.argv[2] or "status"
@@ -313,12 +316,7 @@ def now():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 def load_json(path):
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            value = json.load(handle)
-        return value if isinstance(value, dict) else {}
-    except Exception:
-        return {}
+    return load_json_file(path)
 
 def migrate_source_state(value):
     changed = False
@@ -342,12 +340,7 @@ def migrate_source_state(value):
     return changed
 
 def save_json(value):
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = state_path.with_suffix(state_path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.write("\n")
-    os.replace(tmp, state_path)
+    save_json_file(state_path, value)
 
 def canonical_path(value):
     if not value:
@@ -537,81 +530,15 @@ def load_or_create_state():
     })
     return state
 
-def parse_playbook_markdown(path, fallback=None):
-    fallback = fallback or obsidian_playbook_fallback
-    result = {
-        "id": "",
-        "version": "",
-        "sourceID": "",
-        "initialStepID": "",
-        "steps": [],
-        "sections": {},
-    }
-    try:
-        text = path.read_text(encoding="utf-8")
-    except Exception:
-        return dict(fallback)
-    body = text
-    if text.startswith("---"):
-        marker = text.find("\n---", 3)
-        if marker >= 0:
-            frontmatter = text[3:marker].strip().splitlines()
-            body = text[marker + 4:]
-            current_list = None
-            for raw in frontmatter:
-                if not raw.strip():
-                    continue
-                if raw.startswith("  - ") and current_list == "steps":
-                    result["steps"].append(raw[4:].strip())
-                    continue
-                current_list = None
-                if ":" not in raw:
-                    continue
-                key, value = raw.split(":", 1)
-                key = key.strip()
-                value = value.strip()
-                if key == "steps":
-                    current_list = "steps"
-                elif key in result and isinstance(result[key], str):
-                    result[key] = value
-    current_step = None
-    buffer = []
-    for line in body.splitlines():
-        if line.startswith("## Step: "):
-            if current_step:
-                result["sections"][current_step] = "\n".join(buffer).strip()
-            current_step = line[len("## Step: "):].strip()
-            buffer = []
-        elif current_step:
-            buffer.append(line)
-    if current_step:
-        result["sections"][current_step] = "\n".join(buffer).strip()
-    for key in ("id", "version", "sourceID", "initialStepID"):
-        if not result.get(key):
-            result[key] = fallback[key]
-    if not result.get("steps"):
-        result["steps"] = list(fallback["steps"])
-    return result
-
 def source_run_state_path(source_id):
-    directory = state_path.parent / "source-run-state"
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory / (prompt_file_safe_name(source_id) + ".json")
+    from state import source_run_state_path as resolved_path
+    return resolved_path(state_path, source_id)
 
 def load_source_run_state(source_id):
-    path = source_run_state_path(source_id)
-    value = load_json(path)
-    return value if isinstance(value, dict) else {}
+    return load_source_run_state_file(state_path, source_id)
 
 def save_source_run_state(source_id, value):
-    path = source_run_state_path(source_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.write("\n")
-    os.replace(tmp, path)
-    return str(path)
+    return save_source_run_state_file(state_path, source_id, value)
 
 def prompt_file_safe_name(value):
     safe = "".join(
@@ -969,6 +896,26 @@ def action_review_source_records(state):
         if row.get("status") != "checked":
             continue
         run_state = load_source_run_state(source_id)
+        ingest_receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else None
+        if ingest_receipt and ingest_receipt.get("complete") is True:
+            readbacks = ingest_receipt.get("readbacks") if isinstance(ingest_receipt.get("readbacks"), list) else []
+            verified_records = [
+                {"slug": item.get("slug"), "sourceID": item.get("sourceID"), "identityMatch": True}
+                for item in readbacks
+                if isinstance(item, dict)
+                and item.get("identityMatch") is True
+                and isinstance(item.get("slug"), str) and item.get("slug")
+                and isinstance(item.get("sourceID"), str) and item.get("sourceID")
+            ]
+            if verified_records and len(verified_records) == ingest_receipt.get("verifiedRecordCount"):
+                records.append({
+                    "sourceID": source_id,
+                    "displayName": row.get("displayName") or source_display_name(source_id),
+                    "gbrainRecords": verified_records,
+                    "resultSummary": row.get("resultSummary") or run_state.get("completionSummary"),
+                    "runStatePath": row.get("runStatePath"),
+                })
+                continue
         artifact_value = run_state.get("artifactPath") or run_state.get("gbrainArtifact")
         if not isinstance(artifact_value, str) or not artifact_value.strip():
             continue
@@ -1713,9 +1660,14 @@ def source_completion_detail_lines(source_id, row, run_state, summary_text):
     summary = compact_completion_value(summary_text or run_state.get("completionSummary") or row.get("resultSummary"))
     if summary:
         lines.append("- Result: " + summary)
-    artifact = compact_completion_value(run_state.get("artifactPath"))
-    if artifact:
-        lines.append("- Artifact: `" + artifact + "`")
+    migrated_ingest_sources = {"obsidian", "agent-memory", "notion", "imessage", "apple-notes", "apple-reminders"}
+    if source_id not in migrated_ingest_sources:
+        artifact = compact_completion_value(run_state.get("artifactPath"))
+        if artifact:
+            lines.append("- Artifact: `" + artifact + "`")
+    ingest_receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
+    if source_id in migrated_ingest_sources and ingest_receipt.get("verifiedRecordCount") is not None:
+        lines.append("- GBrain records verified: " + str(ingest_receipt.get("verifiedRecordCount")))
     readback = compact_completion_value(run_state.get("readbackStatus"))
     if readback:
         lines.append("- Readback: " + readback)
@@ -1940,7 +1892,7 @@ def source_action_review_handoff_prompt(source_id, summary_text, review, detail_
 
         1. `zebra-source-onboarding actions begin`을 실행하세요.
         2. `{skill_path}` 스킬을 읽고 그대로 따르세요.
-        3. 입력 범위는 `{manifest_path}`에 기록된 artifact로만 제한하세요.
+        3. 입력 범위는 `{manifest_path}`에 기록된 GBrain record 또는 legacy artifact로만 제한하세요. GBrain record는 manifest의 sourceID 범위에서 exact slug로 읽으세요.
         4. 후보를 최대 5개 제안하고, 사용자가 번호를 승인하기 전에는 `tasks/*.md`를 만들지 마세요.
         5. 완료 또는 건너뛰기 결과를 반드시 `zebra-source-onboarding actions report`로 보고하세요.
 
@@ -1956,7 +1908,7 @@ def source_action_review_handoff_prompt(source_id, summary_text, review, detail_
 
         1. `zebra-source-onboarding actions begin` を実行してください。
         2. `{skill_path}` のスキルを読み、その契約に従ってください。
-        3. `{manifest_path}` に記載された artifact だけを対象にしてください。
+        3. `{manifest_path}` に記載された GBrain record または legacy artifact だけを対象にしてください。GBrain record は manifest の sourceID 範囲で exact slug を指定して読み込んでください。
         4. 候補は最大5件とし、ユーザーが番号を承認するまで `tasks/*.md` を作成しないでください。
         5. 完了またはスキップ結果を `zebra-source-onboarding actions report` で必ず報告してください。
 
@@ -1971,7 +1923,7 @@ def source_action_review_handoff_prompt(source_id, summary_text, review, detail_
 
     1. Run `zebra-source-onboarding actions begin`.
     2. Read and follow the skill at `{skill_path}`.
-    3. Limit input to the artifacts listed in `{manifest_path}`.
+    3. Limit input to the GBrain records or legacy artifacts listed in `{manifest_path}`. Read each GBrain record by exact slug within its manifest sourceID scope.
     4. Propose at most five candidates. Do not create `tasks/*.md` until the user approves candidate numbers.
     5. Report completion or skip through `zebra-source-onboarding actions report`.
 
@@ -2461,6 +2413,18 @@ def report_source_completion(state, source_id):
     disposition = run_state.get("completionDisposition") or "checked"
     if disposition not in {"checked", "skipped"}:
         disposition = "checked"
+    migrated_ingest_sources = {
+        "obsidian", "agent-memory", "notion", "imessage", "apple-notes", "apple-reminders",
+    }
+    if source_id in migrated_ingest_sources and disposition == "checked":
+        ingest_receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
+        acquisition_receipt = run_state.get("acquisitionReceipt") if isinstance(run_state.get("acquisitionReceipt"), dict) else {}
+        if ingest_receipt.get("complete") is not True or acquisition_receipt.get("complete") is not True:
+            return None, {
+                "ok": False,
+                "reason": ingest_receipt.get("failure") or "acquisitionIncomplete",
+                "sourceID": source_id,
+            }, 1
     summary_text = row.get("resultSummary") or run_state.get("completionSummary") or (source_display_name(source_id) + " Source Onboarding completed.")
     timestamp = now()
     if source_id == "gmail":
@@ -3620,4 +3584,3 @@ def fallback_report():
     payload.update(source_next_prompt_payload(state, source_id, next_step))
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
-

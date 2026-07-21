@@ -1,4 +1,6 @@
 import hashlib
+import re
+import unicodedata
 
 
 FAILURES = frozenset({
@@ -23,6 +25,17 @@ def normalized_markdown(value):
 
 def identity_digest(markdown):
     return hashlib.sha256(normalized_markdown(markdown).encode("utf-8")).hexdigest()
+
+
+def deterministic_slug(connector_id, logical_record_id):
+    logical = unicodedata.normalize("NFKC", str(logical_record_id or "record")).replace("\\", "/")
+    parts = []
+    for value in logical.split("/"):
+        safe = re.sub(r"[^a-z0-9._-]+", "-", value.lower()).strip("-.")
+        if safe:
+            parts.append(safe)
+    relative = "/".join(parts) or hashlib.sha256(logical.encode("utf-8")).hexdigest()[:16]
+    return "sources/" + str(connector_id) + "/" + relative
 
 
 def normalized_record(value):

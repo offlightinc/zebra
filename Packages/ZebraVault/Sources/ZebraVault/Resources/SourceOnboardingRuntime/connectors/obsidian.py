@@ -1,3 +1,7 @@
+from domain import deterministic_slug
+from gbrain_ingest import submit_connector_ingestion
+from state import ingest_projection
+from playbooks import parse_playbook_markdown
 from common import *
 
 def obsidian_playbook():
@@ -92,7 +96,7 @@ def obsidian_step_prompt(step_id, state, row):
     estimated = run_state.get("estimatedFileCount")
     if estimated is None:
         estimated = "unknown"
-    artifact = run_state.get("artifactPath") or "not created"
+    ingest_status = (run_state.get("ingestReceipt") or {}).get("failure") or ("verified" if (run_state.get("ingestReceipt") or {}).get("complete") else "not started")
     unreadable_roots = run_state.get("unreadableCandidateRoots") if isinstance(run_state.get("unreadableCandidateRoots"), list) else []
     if step_id == "discover_vault" and unreadable_roots:
         lines = []
@@ -208,36 +212,6 @@ def obsidian_step_prompt(step_id, state, row):
         section = section + "\n\n" + recovery
     if step_id == "confirm_ingest_plan":
         section = section + "\n\n" + obsidian_ingest_plan_summary(run_state)
-    if step_id == "ingest_read_failures":
-        selected = int(run_state.get("selectedFileCount") or 0)
-        successful = int(run_state.get("successfullyReadFileCount") or 0)
-        failed = int(run_state.get("failedReadFileCount") or 0)
-        manifest = run_state.get("failureManifestPath") or "not created"
-        summaries = run_state.get("errorSignatures") if isinstance(run_state.get("errorSignatures"), list) else []
-        signature_lines = [
-            "- " + str(item.get("errorType") or "Error") + " (errno=" + str(item.get("errno")) + "): "
-            + str(item.get("message") or "read failed") + " — " + str(item.get("count") or 0) + " file(s)"
-            for item in summaries if isinstance(item, dict)
-        ]
-        examples = run_state.get("failurePathExamples") if isinstance(run_state.get("failurePathExamples"), list) else []
-        example_lines = ["- `" + str(item) + "`" for item in examples]
-        section = textwrap.dedent(f'''
-        Obsidian ingest stopped with unresolved source read failures.
-
-        - Selected: {selected}
-        - successfully read: {successful}
-        - failed to read: {failed}
-
-        Error signatures:
-        {chr(10).join(signature_lines) or "- unavailable"}
-
-        Bounded failed path examples:
-        {chr(10).join(example_lines) or "- unavailable"}
-
-        Failure manifest: `{manifest}`
-
-        Obsidian Source Onboarding was not completed automatically. Show these results to the user and stop. Do not run a completion report, retry reads, approve partial completion, or invent a restart/resume action.
-        ''').strip()
     return textwrap.dedent(f'''
     Zebra Source Onboarding: Obsidian is the active source.
 
@@ -246,7 +220,7 @@ def obsidian_step_prompt(step_id, state, row):
     Current vault path: `{vault}`
     Current ingest scope: `{scope}`
     Approximate file count: `{estimated}`
-    Current ingest artifact: `{artifact}`
+    Current GBrain ingest status: `{ingest_status}`
 
     Boundary rules:
     - Work only this Obsidian step. Do not start Notion, iMessage, Gmail, or another source unless the helper prints that source as the next active source.
@@ -634,8 +608,8 @@ def obsidian_ingest_plan_summary(run_state):
         - 예상 Markdown 파일 수: `{count_text}`
         - 제외 경로/정책: `.obsidian/`, hidden directory, `__MACOSX`, Markdown이 아닌 파일, 선택된 vault 밖의 경로는 제외합니다.
         - 예상 소요 등급: `{duration}`
-        - Ingest 방식: Markdown 파일시스템을 직접 읽어 Zebra source artifact를 작성합니다.
-        - 검증 계획: 생성된 Obsidian source artifact를 다시 읽고 `source: obsidian`와 `playbook: obsidian.direct-markdown.v1`를 확인합니다.
+        - Ingest 방식: 승인된 note를 private staging에 정규화한 뒤 검증된 source ID로 GBrain import를 실행합니다.
+        - 검증 계획: 같은 GBrain source scope에서 모든 예상 slug를 `gbrain get`으로 읽고 identity를 확인합니다.
 
         ingest를 실행하기 전에 사용자에게 명시적으로 승인받으세요. 승인하면 `zebra-source-onboarding obsidian confirm-plan --answer yes`를 실행하고, 승인하지 않으면 `zebra-source-onboarding obsidian confirm-plan --answer no`를 실행하세요.
         ''').strip()
@@ -658,8 +632,8 @@ def obsidian_ingest_plan_summary(run_state):
         - 推定Markdownファイル数: `{count_text}`
         - 除外パス/ポリシー: `.obsidian/`、hidden directory、`__MACOSX`、Markdown以外のファイル、選択されたvault外のパスは除外します。
         - 想定所要時間クラス: `{duration}`
-        - Ingest方式: Markdownファイルシステムを直接読み、Zebra source artifactを書き込みます。
-        - 検証計画: 生成されたObsidian source artifactを読み戻し、`source: obsidian`と`playbook: obsidian.direct-markdown.v1`を確認します。
+        - Ingest方式: 承認済みnoteをprivate stagingへ正規化し、検証済みsource IDでGBrain importを実行します。
+        - 検証計画: 同じGBrain source scopeですべての期待slugを`gbrain get`し、identityを確認します。
 
         ingestを実行する前にユーザーから明示的な承認を得てください。承認されたら`zebra-source-onboarding obsidian confirm-plan --answer yes`を実行し、承認されなければ`zebra-source-onboarding obsidian confirm-plan --answer no`を実行してください。
         ''').strip()
@@ -670,26 +644,13 @@ def obsidian_ingest_plan_summary(run_state):
     - Approximate Markdown file count: `{count_text}`
     - Excluded paths/policies: `.obsidian/`, hidden directories, `__MACOSX`, non-Markdown files, and paths outside the selected vault.
     - Expected duration class: `{duration}`
-    - Ingest mode: direct Markdown filesystem ingest into a Zebra source artifact.
-    - Verification plan: read back the generated Obsidian source artifact and require `source: obsidian` plus `playbook: obsidian.direct-markdown.v1`.
+    - Ingest mode: normalize approved notes in private staging, then run GBrain import with the verified source ID.
+    - Verification plan: run `gbrain get` for every expected slug in the same GBrain source scope and verify identity.
 
     Ask the user for explicit approval before running ingest. If approved, run `zebra-source-onboarding obsidian confirm-plan --answer yes`. If not approved, run `zebra-source-onboarding obsidian confirm-plan --answer no`.
     ''').strip()
 
-def obsidian_artifact_path(state=None):
-    target = None
-    if isinstance(state, dict):
-        target = state.get("entryContext", {}).get("gbrainTargetPath")
-    if target and Path(target).is_dir():
-        directory = Path(target) / "sources"
-    else:
-        directory = state_path.parent / "source-ingest-artifacts"
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory / "obsidian-direct-markdown.md"
 
-def obsidian_failure_manifest_path(state, attempt_id):
-    artifact = obsidian_artifact_path(state)
-    return artifact.parent / ("obsidian-read-failures-" + str(attempt_id) + ".json")
 
 def gbrain_target_paths(state):
     paths = set()
@@ -1108,7 +1069,17 @@ def obsidian_ingest():
         return 1
     vault = run_state.get("selectedVaultPath")
     scope = run_state.get("scope")
-    files = obsidian_markdown_files_for_scope(vault, run_state)
+    if scope == "file":
+        files = obsidian_markdown_files_for_scope(vault, run_state)
+        traversal_diagnostics = []
+    else:
+        scan = markdown_scan_for_vault(
+            vault,
+            folders=run_state.get("folders") if scope == "folders" else None,
+            limit=5 if scope == "sample" else None,
+        )
+        files = scan["files"]
+        traversal_diagnostics = scan["traversalDiagnostics"]
     if scope == "file" and not files:
         state = set_obsidian_row_state(state, "attention", "ingest", "choose_ingest_scope", attention_reason="selected_file_unavailable")
         save_json(state)
@@ -1116,213 +1087,81 @@ def obsidian_ingest():
         payload.update(source_next_prompt_payload(state, "obsidian", "choose_ingest_scope"))
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 1
-    artifact = obsidian_artifact_path(state)
     attempt_id = str(uuid.uuid4())
-    discovered_count = int(run_state.get("estimatedFileCount") or len(files))
-    successes = []
-    failures_by_signature = {}
-    for path in files:
+    records = []
+    read_failures = []
+    for source_path in files:
         try:
-            relative = str(path.relative_to(Path(vault)))
-            body = path.read_text(encoding="utf-8", errors="replace")
-            successes.append({"path": relative, "body": body})
-        except Exception as error:
-            try:
-                relative = str(path.relative_to(Path(vault)))
-            except Exception:
-                relative = path.name
-            error_type = type(error).__name__
-            error_errno = getattr(error, "errno", None)
-            message = getattr(error, "strerror", None)
-            if not message and len(getattr(error, "args", ())) > 1:
-                message = error.args[1]
-            message = " ".join(str(message or error_type).split())[:240]
-            signature_key = (error_type, error_errno, message)
-            record = failures_by_signature.setdefault(signature_key, {
-                "errorType": error_type, "errno": error_errno, "message": message, "paths": [],
+            relative = str(source_path.relative_to(Path(vault)))
+            body = source_path.read_text(encoding="utf-8")
+            records.append({
+                "connectorID": "obsidian",
+                "logicalRecordID": relative,
+                "slug": deterministic_slug("obsidian", str(Path(relative).with_suffix(""))),
+                "markdown": body,
+                "originURI": "obsidian://" + relative,
             })
-            record["paths"].append(relative)
-    selected_count = len(files)
-    successful_count = len(successes)
-    failed_count = sum(len(item["paths"]) for item in failures_by_signature.values())
-    signatures = []
-    for item in failures_by_signature.values():
-        item["paths"].sort()
-        signatures.append({
-            "errorType": item["errorType"], "errno": item["errno"], "message": item["message"],
-            "count": len(item["paths"]), "paths": item["paths"],
-        })
-    signatures.sort(key=lambda item: (item["errorType"], str(item["errno"]), item["message"]))
-    signature_summaries = [
-        {key: item.get(key) for key in ("errorType", "errno", "message", "count")}
-        for item in signatures
-    ]
-    failure_examples = [path for item in signatures for path in item["paths"]][:5]
-    manifest_path = None
-    if failed_count:
-        manifest_path = obsidian_failure_manifest_path(state, attempt_id)
-        manifest_path.write_text(json.dumps({
-            "schemaVersion": 1, "source": "obsidian", "ingestAttemptID": attempt_id,
-            "selectedFileCount": selected_count, "successfullyReadFileCount": successful_count,
-            "failedReadFileCount": failed_count, "signatures": signatures,
-        }, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    lines = [
-        "# Obsidian Source Onboarding Ingest",
-        "",
-        "source: obsidian",
-        "playbook: obsidian.direct-markdown.v1",
-        "ingest_attempt_id: " + attempt_id,
-        "scope: " + str(scope),
-        "selected_file_count: " + str(selected_count),
-        "successfully_read_file_count: " + str(successful_count),
-        "failed_read_file_count: " + str(failed_count),
-    ]
-    lines.extend(["", "## Notes"])
-    for success in successes:
-        lines.extend([
-            "",
-            "<!-- zebra-obsidian-note-entry -->",
-            "### " + success["path"],
-            "",
-            "```markdown",
-            success["body"].rstrip(),
-            "```",
-        ])
-    artifact.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        except Exception as error:
+            read_failures.append(obsidian_error_diagnostic(Path(vault), source_path, error))
+    acquisition = {
+        "discoveredCount": int(run_state.get("estimatedFileCount") or len(files)),
+        "selectedCount": len(files),
+        "normalizedCount": len(records),
+        "failedCount": len(read_failures),
+        "diagnosticCount": len(traversal_diagnostics),
+        "cancelled": False,
+        "complete": not read_failures and not traversal_diagnostics and len(records) == len(files),
+    }
+    receipt = submit_connector_ingestion("obsidian", records, acquisition, state, attempt_id, gbrain_state_path)
     run_state.update({
-        "artifactPath": str(artifact),
-        "failureManifestPath": str(manifest_path) if manifest_path else None,
         "ingestAttemptID": attempt_id,
-        "discoveredFileCount": discovered_count,
-        "selectedFileCount": selected_count,
-        "successfullyReadFileCount": successful_count,
-        "failedReadFileCount": failed_count,
-        "ingestedFileCount": successful_count,
-        "errorSignatures": signature_summaries,
-        "failurePathExamples": failure_examples,
-        "artifactReadbackStatus": "pending",
-        "failureManifestStatus": "pending" if failed_count else "not_required",
-        "sourceCompleteness": "complete" if failed_count == 0 else "incomplete",
+        "acquisitionReceipt": acquisition,
+        "ingestReceipt": receipt,
+        "selectedFileCount": len(files),
+        "successfullyReadFileCount": len(records),
+        "failedReadFileCount": len(read_failures),
+        "acquisitionDiagnostics": (traversal_diagnostics + read_failures)[:8],
         "completionReportPending": False,
-        "ingestedAt": now(),
         "updatedAt": now(),
     })
     run_path = save_source_run_state("obsidian", run_state)
-    state = set_obsidian_row_state(
-        state,
-        "running",
-        "verify",
-        "verify_readback",
-        run_state_path=run_path,
-        result_summary="Obsidian ingest read " + str(successful_count) + " of " + str(selected_count) + " selected Markdown files.",
-    )
+    projection = ingest_projection(receipt)
+    if not projection["complete"]:
+        state = set_obsidian_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"], run_state_path=run_path)
+        save_json(state)
+        payload = {"ok": False, "reason": projection["attentionReason"], "acquisition": acquisition}
+        payload.update(source_next_prompt_payload(state, "obsidian", "verify_readback"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 1
+    state = set_obsidian_row_state(state, "running", "verify", "verify_readback", run_state_path=run_path, result_summary="GBrain ingested and read back " + str(len(records)) + " Obsidian notes.")
     save_json(state)
-    payload = {
-        "ok": True, "artifactPath": str(artifact),
-        "failureManifestPath": str(manifest_path) if manifest_path else None,
-        "ingestAttemptID": attempt_id, "discoveredFileCount": discovered_count,
-        "selectedFileCount": selected_count, "successfullyReadFileCount": successful_count,
-        "failedReadFileCount": failed_count, "errorSignatures": signature_summaries,
-        "failurePathExamples": failure_examples,
-    }
+    payload = {"ok": True, "ingestAttemptID": attempt_id, "ingestedFileCount": len(records), "verifiedRecordCount": receipt.get("verifiedRecordCount")}
     payload.update(source_next_prompt_payload(state, "obsidian", "verify_readback"))
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 
+
 def obsidian_verify_readback():
     state = load_or_create_state()
     run_state = load_source_run_state("obsidian")
-    artifact = Path(run_state.get("artifactPath") or "")
-    try:
-        text = artifact.read_text(encoding="utf-8")
-    except Exception:
-        text = ""
-    expected_entries = int(run_state.get("successfullyReadFileCount") or 0)
-    artifact_passed = (
-        "source: obsidian" in text
-        and "playbook: obsidian.direct-markdown.v1" in text
-        and text.count("<!-- zebra-obsidian-note-entry -->") == expected_entries
-    )
-    if not artifact_passed:
-        run_state.update({"readbackStatus": "failed", "artifactReadbackStatus": "failed", "updatedAt": now()})
+    receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
+    projection = ingest_projection(receipt)
+    if not projection["complete"]:
         run_path = save_source_run_state("obsidian", run_state)
-        state = set_obsidian_row_state(
-            state,
-            "attention",
-            "verify",
-            "verify_readback",
-            attention_reason="readback_failed",
-            run_state_path=run_path,
-        )
+        state = set_obsidian_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"] or "readbackMissing", run_state_path=run_path)
         save_json(state)
-        payload = {"ok": False, "reason": "readback_failed"}
+        payload = {"ok": False, "reason": projection["attentionReason"] or "readbackMissing"}
         payload.update(source_next_prompt_payload(state, "obsidian", "verify_readback"))
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 1
-    failed_count = int(run_state.get("failedReadFileCount") or 0)
-    manifest_status = "not_required"
-    if failed_count:
-        try:
-            manifest = json.loads(Path(run_state.get("failureManifestPath") or "").read_text(encoding="utf-8"))
-            manifest_paths = [
-                path for item in manifest.get("signatures", []) if isinstance(item, dict)
-                for path in item.get("paths", [])
-            ]
-            manifest_status = "passed" if len(manifest_paths) == failed_count else "failed"
-        except Exception:
-            manifest_status = "failed"
-    source_completeness = "complete" if failed_count == 0 else "incomplete"
-    run_state.update({
-        "readbackStatus": "passed",
-        "artifactReadbackStatus": "passed",
-        "failureManifestStatus": manifest_status,
-        "sourceCompleteness": source_completeness,
-        "verifiedAt": now(),
-        "updatedAt": now(),
-    })
-    if manifest_status == "failed":
-        run_path = save_source_run_state("obsidian", run_state)
-        state = set_obsidian_row_state(state, "attention", "verify", "verify_readback", attention_reason="failure_manifest_verification_failed", run_state_path=run_path)
-        save_json(state)
-        payload = {"ok": False, "reason": "failure_manifest_verification_failed", "artifactReadbackStatus": "passed", "failureManifestStatus": "failed", "sourceCompleteness": source_completeness}
-        payload.update(source_next_prompt_payload(state, "obsidian", "verify_readback"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    if failed_count:
-        run_state["completionReportPending"] = False
-        run_path = save_source_run_state("obsidian", run_state)
-        state = set_obsidian_row_state(
-            state, "attention", "verify", "ingest_read_failures",
-            attention_reason="ingest_read_failures", run_state_path=run_path,
-            result_summary="Obsidian ingest stopped with " + str(failed_count) + " unresolved read failures.",
-        )
-        save_json(state)
-        payload = {
-            "ok": False, "reason": "ingest_read_failures", "artifactPath": str(artifact),
-            "failureManifestPath": run_state.get("failureManifestPath"),
-            "artifactReadbackStatus": "passed", "failureManifestStatus": "passed",
-            "sourceCompleteness": "incomplete",
-            "selectedFileCount": run_state.get("selectedFileCount"),
-            "successfullyReadFileCount": run_state.get("successfullyReadFileCount"),
-            "failedReadFileCount": failed_count,
-            "errorSignatures": run_state.get("errorSignatures") or [],
-            "failurePathExamples": run_state.get("failurePathExamples") or [],
-        }
-        payload.update(source_next_prompt_payload(state, "obsidian", "ingest_read_failures"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    state = mark_source_completion_pending(
-        state,
-        "obsidian",
-        "checked",
-        "Obsidian ingest readback verified for " + str(run_state.get("successfullyReadFileCount") or 0) + " Markdown files.",
-        run_state=run_state,
-    )
+    run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
+    state = mark_source_completion_pending(state, "obsidian", "checked", "GBrain ingest/readback verified for " + str(receipt.get("verifiedRecordCount") or 0) + " Obsidian notes.", run_state=run_state)
     save_json(state)
-    payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed", "artifactReadbackStatus": "passed", "failureManifestStatus": "not_required", "sourceCompleteness": "complete"}
+    payload = {"ok": True, "readbackStatus": "passed", "verifiedRecordCount": receipt.get("verifiedRecordCount")}
     payload.update(source_next_prompt_payload(state, "obsidian", "complete"))
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
+
 
 def obsidian_command():
     if not args:
@@ -1346,4 +1185,3 @@ def obsidian_command():
         return obsidian_verify_readback()
     print("unknown obsidian subcommand: " + subcommand, file=sys.stderr)
     return 2
-
