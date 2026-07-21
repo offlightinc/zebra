@@ -2586,6 +2586,36 @@ struct ZebraSourceOnboardingHelper {
             section = section + "\\n\\n" + recovery
         if step_id == "confirm_ingest_plan":
             section = section + "\\n\\n" + obsidian_ingest_plan_summary(run_state)
+        if step_id == "ingest_read_failures":
+            selected = int(run_state.get("selectedFileCount") or 0)
+            successful = int(run_state.get("successfullyReadFileCount") or 0)
+            failed = int(run_state.get("failedReadFileCount") or 0)
+            manifest = run_state.get("failureManifestPath") or "not created"
+            summaries = run_state.get("errorSignatures") if isinstance(run_state.get("errorSignatures"), list) else []
+            signature_lines = [
+                "- " + str(item.get("errorType") or "Error") + " (errno=" + str(item.get("errno")) + "): "
+                + str(item.get("message") or "read failed") + " — " + str(item.get("count") or 0) + " file(s)"
+                for item in summaries if isinstance(item, dict)
+            ]
+            examples = run_state.get("failurePathExamples") if isinstance(run_state.get("failurePathExamples"), list) else []
+            example_lines = ["- `" + str(item) + "`" for item in examples]
+            section = textwrap.dedent(f'''
+            Obsidian ingest stopped with unresolved source read failures.
+
+            - Selected: {selected}
+            - successfully read: {successful}
+            - failed to read: {failed}
+
+            Error signatures:
+            {chr(10).join(signature_lines) or "- unavailable"}
+
+            Bounded failed path examples:
+            {chr(10).join(example_lines) or "- unavailable"}
+
+            Failure manifest: `{manifest}`
+
+            Obsidian Source Onboarding was not completed automatically. Show these results to the user and stop. Do not run a completion report, retry reads, approve partial completion, or invent a restart/resume action.
+            ''').strip()
         return textwrap.dedent(f'''
         Zebra Source Onboarding: Obsidian is the active source.
 
@@ -3607,7 +3637,9 @@ struct ZebraSourceOnboardingHelper {
                 lines.append("- Verified Notion fetches: " + ", ".join(labels[:4]))
         elif source_id == "obsidian":
             vault = compact_completion_value(run_state.get("vaultPath"))
-            count = run_state.get("ingestedFileCount")
+            count = run_state.get("successfullyReadFileCount")
+            if count is None:
+                count = run_state.get("ingestedFileCount")
             if vault:
                 lines.append("- Vault: `" + vault + "`")
             if count is not None:
@@ -5184,6 +5216,10 @@ struct ZebraSourceOnboardingHelper {
         directory.mkdir(parents=True, exist_ok=True)
         return directory / "obsidian-direct-markdown.md"
 
+    def obsidian_failure_manifest_path(state, attempt_id):
+        artifact = obsidian_artifact_path(state)
+        return artifact.parent / ("obsidian-read-failures-" + str(attempt_id) + ".json")
+
     def gbrain_target_paths(state):
         paths = set()
         entry = state.get("entryContext") if isinstance(state.get("entryContext"), dict) else {}
@@ -6592,48 +6628,93 @@ struct ZebraSourceOnboardingHelper {
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
         artifact = obsidian_artifact_path(state)
+        attempt_id = str(uuid.uuid4())
+        discovered_count = int(run_state.get("estimatedFileCount") or len(files))
+        successes = []
+        failures_by_signature = {}
+        for path in files:
+            try:
+                relative = str(path.relative_to(Path(vault)))
+                body = path.read_text(encoding="utf-8", errors="replace")
+                successes.append({"path": relative, "body": body})
+            except Exception as error:
+                try:
+                    relative = str(path.relative_to(Path(vault)))
+                except Exception:
+                    relative = path.name
+                error_type = type(error).__name__
+                error_errno = getattr(error, "errno", None)
+                message = getattr(error, "strerror", None)
+                if not message and len(getattr(error, "args", ())) > 1:
+                    message = error.args[1]
+                message = " ".join(str(message or error_type).split())[:240]
+                signature_key = (error_type, error_errno, message)
+                record = failures_by_signature.setdefault(signature_key, {
+                    "errorType": error_type, "errno": error_errno, "message": message, "paths": [],
+                })
+                record["paths"].append(relative)
+        selected_count = len(files)
+        successful_count = len(successes)
+        failed_count = sum(len(item["paths"]) for item in failures_by_signature.values())
+        signatures = []
+        for item in failures_by_signature.values():
+            item["paths"].sort()
+            signatures.append({
+                "errorType": item["errorType"], "errno": item["errno"], "message": item["message"],
+                "count": len(item["paths"]), "paths": item["paths"],
+            })
+        signatures.sort(key=lambda item: (item["errorType"], str(item["errno"]), item["message"]))
+        signature_summaries = [
+            {key: item.get(key) for key in ("errorType", "errno", "message", "count")}
+            for item in signatures
+        ]
+        failure_examples = [path for item in signatures for path in item["paths"]][:5]
+        manifest_path = None
+        if failed_count:
+            manifest_path = obsidian_failure_manifest_path(state, attempt_id)
+            manifest_path.write_text(json.dumps({
+                "schemaVersion": 1, "source": "obsidian", "ingestAttemptID": attempt_id,
+                "selectedFileCount": selected_count, "successfullyReadFileCount": successful_count,
+                "failedReadFileCount": failed_count, "signatures": signatures,
+            }, ensure_ascii=False, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
         lines = [
             "# Obsidian Source Onboarding Ingest",
             "",
             "source: obsidian",
             "playbook: obsidian.direct-markdown.v1",
-            "vault: " + str(vault),
+            "ingest_attempt_id: " + attempt_id,
             "scope: " + str(scope),
-            "file_count: " + str(len(files)),
-            "",
-            "## Files",
+            "selected_file_count: " + str(selected_count),
+            "successfully_read_file_count: " + str(successful_count),
+            "failed_read_file_count: " + str(failed_count),
         ]
-        for path in files:
-            try:
-                relative = str(path.relative_to(Path(vault)))
-            except Exception:
-                relative = str(path)
-            lines.append("- " + relative)
         lines.extend(["", "## Notes"])
-        for path in files:
-            try:
-                relative = str(path.relative_to(Path(vault)))
-                body = path.read_text(encoding="utf-8", errors="replace")
-            except Exception as error:
-                lines.extend([
-                    "",
-                    "### " + str(path),
-                    "",
-                    "read_error: " + type(error).__name__,
-                ])
-                continue
+        for success in successes:
             lines.extend([
                 "",
-                "### " + relative,
+                "<!-- zebra-obsidian-note-entry -->",
+                "### " + success["path"],
                 "",
                 "```markdown",
-                body.rstrip(),
+                success["body"].rstrip(),
                 "```",
             ])
         artifact.write_text("\\n".join(lines).rstrip() + "\\n", encoding="utf-8")
         run_state.update({
             "artifactPath": str(artifact),
-            "ingestedFileCount": len(files),
+            "failureManifestPath": str(manifest_path) if manifest_path else None,
+            "ingestAttemptID": attempt_id,
+            "discoveredFileCount": discovered_count,
+            "selectedFileCount": selected_count,
+            "successfullyReadFileCount": successful_count,
+            "failedReadFileCount": failed_count,
+            "ingestedFileCount": successful_count,
+            "errorSignatures": signature_summaries,
+            "failurePathExamples": failure_examples,
+            "artifactReadbackStatus": "pending",
+            "failureManifestStatus": "pending" if failed_count else "not_required",
+            "sourceCompleteness": "complete" if failed_count == 0 else "incomplete",
+            "completionReportPending": False,
             "ingestedAt": now(),
             "updatedAt": now(),
         })
@@ -6644,10 +6725,17 @@ struct ZebraSourceOnboardingHelper {
             "verify",
             "verify_readback",
             run_state_path=run_path,
-            result_summary="Obsidian ingest artifact written with " + str(len(files)) + " Markdown files.",
+            result_summary="Obsidian ingest read " + str(successful_count) + " of " + str(selected_count) + " selected Markdown files.",
         )
         save_json(state)
-        payload = {"ok": True, "artifactPath": str(artifact), "ingestedFileCount": len(files)}
+        payload = {
+            "ok": True, "artifactPath": str(artifact),
+            "failureManifestPath": str(manifest_path) if manifest_path else None,
+            "ingestAttemptID": attempt_id, "discoveredFileCount": discovered_count,
+            "selectedFileCount": selected_count, "successfullyReadFileCount": successful_count,
+            "failedReadFileCount": failed_count, "errorSignatures": signature_summaries,
+            "failurePathExamples": failure_examples,
+        }
         payload.update(source_next_prompt_payload(state, "obsidian", "verify_readback"))
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
@@ -6660,8 +6748,14 @@ struct ZebraSourceOnboardingHelper {
             text = artifact.read_text(encoding="utf-8")
         except Exception:
             text = ""
-        if "source: obsidian" not in text or "playbook: obsidian.direct-markdown.v1" not in text:
-            run_state.update({"readbackStatus": "failed", "updatedAt": now()})
+        expected_entries = int(run_state.get("successfullyReadFileCount") or 0)
+        artifact_passed = (
+            "source: obsidian" in text
+            and "playbook: obsidian.direct-markdown.v1" in text
+            and text.count("<!-- zebra-obsidian-note-entry -->") == expected_entries
+        )
+        if not artifact_passed:
+            run_state.update({"readbackStatus": "failed", "artifactReadbackStatus": "failed", "updatedAt": now()})
             run_path = save_source_run_state("obsidian", run_state)
             state = set_obsidian_row_state(
                 state,
@@ -6676,16 +6770,67 @@ struct ZebraSourceOnboardingHelper {
             payload.update(source_next_prompt_payload(state, "obsidian", "verify_readback"))
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
-        run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
+        failed_count = int(run_state.get("failedReadFileCount") or 0)
+        manifest_status = "not_required"
+        if failed_count:
+            try:
+                manifest = json.loads(Path(run_state.get("failureManifestPath") or "").read_text(encoding="utf-8"))
+                manifest_paths = [
+                    path for item in manifest.get("signatures", []) if isinstance(item, dict)
+                    for path in item.get("paths", [])
+                ]
+                manifest_status = "passed" if len(manifest_paths) == failed_count else "failed"
+            except Exception:
+                manifest_status = "failed"
+        source_completeness = "complete" if failed_count == 0 else "incomplete"
+        run_state.update({
+            "readbackStatus": "passed",
+            "artifactReadbackStatus": "passed",
+            "failureManifestStatus": manifest_status,
+            "sourceCompleteness": source_completeness,
+            "verifiedAt": now(),
+            "updatedAt": now(),
+        })
+        if manifest_status == "failed":
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(state, "attention", "verify", "verify_readback", attention_reason="failure_manifest_verification_failed", run_state_path=run_path)
+            save_json(state)
+            payload = {"ok": False, "reason": "failure_manifest_verification_failed", "artifactReadbackStatus": "passed", "failureManifestStatus": "failed", "sourceCompleteness": source_completeness}
+            payload.update(source_next_prompt_payload(state, "obsidian", "verify_readback"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if failed_count:
+            run_state["completionReportPending"] = False
+            run_path = save_source_run_state("obsidian", run_state)
+            state = set_obsidian_row_state(
+                state, "attention", "verify", "ingest_read_failures",
+                attention_reason="ingest_read_failures", run_state_path=run_path,
+                result_summary="Obsidian ingest stopped with " + str(failed_count) + " unresolved read failures.",
+            )
+            save_json(state)
+            payload = {
+                "ok": False, "reason": "ingest_read_failures", "artifactPath": str(artifact),
+                "failureManifestPath": run_state.get("failureManifestPath"),
+                "artifactReadbackStatus": "passed", "failureManifestStatus": "passed",
+                "sourceCompleteness": "incomplete",
+                "selectedFileCount": run_state.get("selectedFileCount"),
+                "successfullyReadFileCount": run_state.get("successfullyReadFileCount"),
+                "failedReadFileCount": failed_count,
+                "errorSignatures": run_state.get("errorSignatures") or [],
+                "failurePathExamples": run_state.get("failurePathExamples") or [],
+            }
+            payload.update(source_next_prompt_payload(state, "obsidian", "ingest_read_failures"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
         state = mark_source_completion_pending(
             state,
             "obsidian",
             "checked",
-            "Obsidian ingest readback verified for " + str(run_state.get("ingestedFileCount") or 0) + " Markdown files.",
+            "Obsidian ingest readback verified for " + str(run_state.get("successfullyReadFileCount") or 0) + " Markdown files.",
             run_state=run_state,
         )
         save_json(state)
-        payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
+        payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed", "artifactReadbackStatus": "passed", "failureManifestStatus": "not_required", "sourceCompleteness": "complete"}
         payload.update(source_next_prompt_payload(state, "obsidian", "complete"))
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
