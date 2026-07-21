@@ -110,8 +110,8 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         let smoke = try await runHelper(helperURL, ["apple-reminders", "smoke-list"], environment, broker)
         XCTAssertEqual(smoke.status, 0, smoke.stderr)
         XCTAssertEqual(try jsonObject(smoke.stdout)["openReminderCount"] as? Int, 2)
-        let smokeLists = try XCTUnwrap(try jsonObject(smoke.stdout)["lists"] as? [[String: String]])
-        XCTAssertEqual(smokeLists.map { $0["id"] }, ["work-primary", "work-secondary"])
+        let smokeLists = try XCTUnwrap(try jsonObject(smoke.stdout)["lists"] as? [[String: Any]])
+        XCTAssertEqual(smokeLists.compactMap { $0["id"] as? String }, ["work-primary", "work-secondary"])
         XCTAssertEqual(try runHelper(
             helperURL,
             [
@@ -143,6 +143,27 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         XCTAssertEqual(readback.status, 0, readback.stderr)
         XCTAssertEqual(try jsonObject(readback.stdout)["readbackStatus"] as? String, "passed")
         XCTAssertEqual(try jsonObject(readback.stdout)["nextPlaybookStepID"] as? String, "complete")
+        let completion = try runHelper(
+            helperURL,
+            ["report", "--status", "completed", "--source", "apple-reminders"],
+            environment
+        )
+        XCTAssertEqual(completion.status, 0, completion.stderr)
+        XCTAssertEqual(try jsonObject(completion.stdout)["completedSourceID"] as? String, "apple-reminders")
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        let progress = try XCTUnwrap(state["progress"] as? [String: Any])
+        let rows = try XCTUnwrap(progress["sourceRows"] as? [String: Any])
+        let row = try XCTUnwrap(rows["apple-reminders"] as? [String: Any])
+        XCTAssertEqual(row["status"] as? String, "checked")
+        let runStatePath = try XCTUnwrap(row["runStatePath"] as? String)
+        let runState = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: runStatePath))) as? [String: Any]
+        )
+        XCTAssertEqual(runState["workflowStatus"] as? String, "completed")
+        XCTAssertEqual(runState["ingestStatus"] as? String, "succeeded")
+        XCTAssertEqual(runState["readbackStatus"] as? String, "passed")
     }
 
     func testAuthorizationStatusDoesNotRequestAndExplicitRequestRunsOnce() async throws {
@@ -346,6 +367,16 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         XCTAssertEqual(receipt.state, .failed)
         XCTAssertEqual(receipt.failureReason, "approved_calendar_unavailable")
         XCTAssertNil(receipt.result)
+        XCTAssertEqual(store.lastRequestedCalendarIDs, ["missing"])
+        XCTAssertEqual(receipt.requestedCalendarCount, 1)
+        XCTAssertEqual(receipt.resolvedCalendarCount, 0)
+        XCTAssertEqual(receipt.fetchedReminderCount, 0)
+        XCTAssertEqual(receipt.resultReminderCount, 0)
+        XCTAssertEqual(receipt.outcome, "failed")
+        XCTAssertEqual(receipt.reason, "approved_calendar_unavailable")
+        XCTAssertEqual(receipt.schemaProvenance, "zebra-reminders-eventkit.v1")
+        XCTAssertFalse(receipt.buildProvenance.isEmpty)
+        XCTAssertEqual(store.reminderFetchCount, 0)
     }
 
     func testNonEmptyDiscoveryFollowedByZeroIngestBlocksArtifactAndReadback() async throws {
@@ -419,6 +450,93 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         XCTAssertEqual(payload["ingestStatus"] as? String, "mismatch")
         XCTAssertEqual(payload["readbackStatus"] as? String, "pending")
         XCTAssertFalse(FileManager.default.fileExists(atPath: brain.appendingPathComponent("sources/apple-reminders-eventkit.md").path))
+        let blockedCompletion = try runHelper(
+            helperURL,
+            ["report", "--status", "completed", "--source", "apple-reminders"],
+            environment
+        )
+        XCTAssertNotEqual(blockedCompletion.status, 0)
+        let blockedState = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        XCTAssertNotEqual(blockedState["status"] as? String, "completed")
+        let blockedProgress = try XCTUnwrap(blockedState["progress"] as? [String: Any])
+        let blockedRows = try XCTUnwrap(blockedProgress["sourceRows"] as? [String: Any])
+        let blockedRow = try XCTUnwrap(blockedRows["apple-reminders"] as? [String: Any])
+        XCTAssertEqual(blockedRow["status"] as? String, "attention")
+
+        let acceptedEmpty = try await runHelper(
+            helperURL,
+            ["apple-reminders", "ingest", "--accept-empty", "yes"],
+            environment,
+            broker
+        )
+        let acceptedPayload = try jsonObject(acceptedEmpty.stdout)
+        XCTAssertEqual(acceptedEmpty.status, 0, acceptedEmpty.stderr)
+        XCTAssertEqual(acceptedPayload["ingestedReminderCount"] as? Int, 0)
+        XCTAssertEqual(acceptedPayload["outcome"] as? String, "confirmed-empty")
+        XCTAssertEqual(acceptedPayload["reason"] as? String, "explicit_empty_approval")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: brain.appendingPathComponent("sources/apple-reminders-eventkit.md").path))
+    }
+
+    func testDiscoveryConfirmedEmptyListHasDistinctSuccessfulOutcome() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ZebraRemindersConfirmedEmptyTests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let brain = root.appendingPathComponent("brain", isDirectory: true)
+        try FileManager.default.createDirectory(at: brain, withIntermediateDirectories: true)
+        let stateURL = ZebraSourceOnboardingState.defaultStateURL(homeDirectoryPath: root.path)
+        let gbrainStateURL = root.appendingPathComponent("gbrain-state.json")
+        let adapterStateURL = root.appendingPathComponent("adapter-state.json")
+        try writeCompletedGBrainState(to: gbrainStateURL, vaultPath: brain.path)
+        let launch = try XCTUnwrap(
+            ZebraSourceOnboardingHelper(
+                stateURL: stateURL,
+                gbrainOnboardingStateURL: gbrainStateURL,
+                gbrainAdapterOnboardingStateURL: adapterStateURL,
+                homeDirectoryPath: root.path
+            ).prepareLaunch(selectedVaultPath: brain.path)
+        )
+        let requestDirectory = root.appendingPathComponent("reminders-eventkit", isDirectory: true)
+        let broker = ZebraRemindersRequestBroker(
+            fileStore: ZebraRemindersRequestFileStore(directoryURL: requestDirectory),
+            processor: ZebraRemindersRequestProcessor(eventStore: FakeRemindersEventStore(
+                authorizationStatus: .authorized,
+                lists: [ZebraRemindersListSnapshot(id: "empty", title: "Empty")],
+                reminders: []
+            ))
+        )
+        let helperURL = URL(fileURLWithPath: launch.helperPath)
+        let environment = [
+            "PATH": "/usr/bin:/bin",
+            "ZEBRA_SOURCE_ONBOARDING_STATE": stateURL.path,
+            "ZEBRA_GBRAIN_SETUP_STATE": gbrainStateURL.path,
+            "ZEBRA_GBRAIN_ADAPTER_STATE": adapterStateURL.path,
+            "ZEBRA_SOURCE_ONBOARDING_HOME": root.path,
+            "ZEBRA_GBRAIN_WRITE_TARGET_PATH": brain.path,
+            "ZEBRA_REMINDERS_EVENTKIT_DIR": requestDirectory.path,
+            "ZEBRA_ONBOARDING_LANGUAGE": "en",
+        ]
+
+        XCTAssertEqual(try runHelper(helperURL, ["intake", "--raw", "Apple Reminders", "--candidate", "apple-reminders=Apple Reminders"], environment).status, 0)
+        XCTAssertEqual(try runHelper(helperURL, ["confirm", "--answer", "yes"], environment).status, 0)
+        _ = try runHelper(helperURL, ["next"], environment)
+        let access = try await runHelper(helperURL, ["apple-reminders", "check-access"], environment, broker)
+        XCTAssertEqual(access.status, 0)
+        let smoke = try await runHelper(helperURL, ["apple-reminders", "smoke-list"], environment, broker)
+        XCTAssertEqual(smoke.status, 0)
+        let smokeLists = try XCTUnwrap(try jsonObject(smoke.stdout)["lists"] as? [[String: Any]])
+        XCTAssertEqual(smokeLists.first?["openReminderCount"] as? Int, 0)
+        XCTAssertEqual(try runHelper(helperURL, ["apple-reminders", "choose-scope", "--scope", "one-list", "--list-id", "empty"], environment).status, 0)
+        XCTAssertEqual(try runHelper(helperURL, ["apple-reminders", "confirm-plan", "--answer", "yes"], environment).status, 0)
+
+        let ingest = try await runHelper(helperURL, ["apple-reminders", "ingest"], environment, broker)
+        let payload = try jsonObject(ingest.stdout)
+        XCTAssertEqual(ingest.status, 0, ingest.stderr)
+        XCTAssertEqual(payload["ingestedReminderCount"] as? Int, 0)
+        XCTAssertEqual(payload["outcome"] as? String, "confirmed-empty")
+        XCTAssertEqual(payload["reason"] as? String, "discovery_confirmed_empty")
     }
 
     func testFetchFailureAndCancellationStayDistinct() async {
@@ -459,16 +577,25 @@ final class ZebraRemindersEventKitTests: XCTestCase {
             isDirectory: true
         )
         let fileStore = ZebraRemindersRequestFileStore(directoryURL: root)
-        let fake = FakeRemindersEventStore(authorizationStatus: .authorized)
+        let fake = FakeRemindersEventStore(
+            authorizationStatus: .authorized,
+            lists: [ZebraRemindersListSnapshot(id: "stable-list", title: "Display")]
+        )
         let processor = ZebraRemindersRequestProcessor(eventStore: fake)
         let broker = ZebraRemindersRequestBroker(fileStore: fileStore, processor: processor)
         let request = ZebraRemindersRequest(
             requestID: "stable-request",
             sourceRunID: "run-1",
-            operation: .smokeRead
+            operation: .scopeRead,
+            scope: .oneList(id: "stable-list", title: "Display"),
+            helperBuildProvenance: "helper-test-build"
         )
 
         try fileStore.writeRequest(request)
+        let decodedRequest = try XCTUnwrap(fileStore.pendingRequests().first)
+        XCTAssertEqual(decodedRequest.scope?.listIDs, ["stable-list"])
+        XCTAssertEqual(decodedRequest.schemaProvenance, "zebra-reminders-eventkit.v1")
+        XCTAssertEqual(decodedRequest.helperBuildProvenance, "helper-test-build")
         try await broker.processPendingRequestsOnce()
         try await broker.processPendingRequestsOnce()
 
@@ -477,6 +604,7 @@ final class ZebraRemindersEventKitTests: XCTestCase {
         XCTAssertEqual(receipt.requestID, request.requestID)
         XCTAssertEqual(receipt.executionOwner, .zebraApp)
         XCTAssertEqual(receipt.state, .succeeded)
+        XCTAssertEqual(fake.lastRequestedCalendarIDs, ["stable-list"])
 
         let attributes = try FileManager.default.attributesOfItem(
             atPath: fileStore.receiptURL(requestID: request.requestID).path
@@ -581,6 +709,8 @@ private final class FakeRemindersEventStore: ZebraRemindersEventStore {
     var fetchError: Error?
     private(set) var authorizationRequestCount = 0
     private(set) var fetchCount = 0
+    private(set) var reminderFetchCount = 0
+    private(set) var lastRequestedCalendarIDs: [String]?
 
     init(
         authorizationStatus: ZebraRemindersAuthorizationStatus,
@@ -606,10 +736,35 @@ private final class FakeRemindersEventStore: ZebraRemindersEventStore {
         return requestedAuthorizationStatus
     }
 
-    func fetchSnapshot() async throws -> ZebraRemindersStoreSnapshot {
+    func fetchSnapshot(calendarIDs: [String]?) async throws -> ZebraRemindersStoreSnapshot {
         fetchCount += 1
+        lastRequestedCalendarIDs = calendarIDs
         if let fetchError { throw fetchError }
-        return ZebraRemindersStoreSnapshot(lists: lists, reminders: reminders)
+        let requested = calendarIDs.map(Set.init)
+        let openCounts = Dictionary(grouping: reminders.filter { !$0.isCompleted }, by: \.listID).mapValues(\.count)
+        let countedLists = lists.map {
+            ZebraRemindersListSnapshot(id: $0.id, title: $0.title, openReminderCount: openCounts[$0.id, default: 0])
+        }
+        let resolvedLists = requested.map { ids in countedLists.filter { ids.contains($0.id) } } ?? countedLists
+        if let calendarIDs, resolvedLists.count != calendarIDs.count {
+            return ZebraRemindersStoreSnapshot(
+                lists: resolvedLists,
+                reminders: [],
+                requestedCalendarCount: calendarIDs.count,
+                resolvedCalendarCount: resolvedLists.count,
+                fetchedReminderCount: 0
+            )
+        }
+        reminderFetchCount += 1
+        let resolvedIDs = Set(resolvedLists.map(\.id))
+        let fetched = calendarIDs == nil ? reminders : reminders.filter { resolvedIDs.contains($0.listID) }
+        return ZebraRemindersStoreSnapshot(
+            lists: resolvedLists,
+            reminders: fetched,
+            requestedCalendarCount: calendarIDs?.count ?? resolvedLists.count,
+            resolvedCalendarCount: resolvedLists.count,
+            fetchedReminderCount: fetched.count
+        )
     }
 }
 

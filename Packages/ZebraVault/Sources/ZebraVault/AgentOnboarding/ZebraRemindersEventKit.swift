@@ -125,6 +125,7 @@ struct ZebraRemindersScope: Codable, Equatable, Sendable {
 struct ZebraRemindersListSnapshot: Codable, Equatable, Sendable {
     var id: String
     var title: String
+    var openReminderCount: Int = 0
 }
 
 struct ZebraReminderSnapshot: Codable, Equatable, Sendable {
@@ -141,6 +142,9 @@ struct ZebraReminderSnapshot: Codable, Equatable, Sendable {
 struct ZebraRemindersStoreSnapshot: Codable, Equatable, Sendable {
     var lists: [ZebraRemindersListSnapshot]
     var reminders: [ZebraReminderSnapshot]
+    var requestedCalendarCount: Int = 0
+    var resolvedCalendarCount: Int = 0
+    var fetchedReminderCount: Int = 0
 }
 
 struct ZebraRemindersRequest: Codable, Equatable, Sendable {
@@ -153,6 +157,8 @@ struct ZebraRemindersRequest: Codable, Equatable, Sendable {
     var operation: ZebraRemindersOperation
     var scope: ZebraRemindersScope?
     var createdAt: Date
+    var schemaProvenance: String?
+    var helperBuildProvenance: String?
 
     init(
         schemaVersion: Int = Self.currentSchemaVersion,
@@ -161,7 +167,9 @@ struct ZebraRemindersRequest: Codable, Equatable, Sendable {
         sourceRunID: String,
         operation: ZebraRemindersOperation,
         scope: ZebraRemindersScope? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        schemaProvenance: String? = "zebra-reminders-eventkit.v1",
+        helperBuildProvenance: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.requestID = requestID
@@ -170,6 +178,8 @@ struct ZebraRemindersRequest: Codable, Equatable, Sendable {
         self.operation = operation
         self.scope = scope
         self.createdAt = createdAt
+        self.schemaProvenance = schemaProvenance
+        self.helperBuildProvenance = helperBuildProvenance
     }
 }
 
@@ -180,6 +190,12 @@ struct ZebraRemindersResult: Codable, Equatable, Sendable {
     var listTitles: [String]
     var supportedFields: [String]
     var reminders: [ZebraReminderSnapshot]?
+    var requestedCalendarCount: Int
+    var resolvedCalendarCount: Int
+    var fetchedReminderCount: Int
+    var resultReminderCount: Int
+    var outcome: String
+    var reason: String?
 }
 
 struct ZebraRemindersReceipt: Codable, Equatable, Sendable {
@@ -198,13 +214,30 @@ struct ZebraRemindersReceipt: Codable, Equatable, Sendable {
     var createdAt: Date
     var startedAt: Date
     var completedAt: Date?
+    var requestedCalendarCount: Int = 0
+    var resolvedCalendarCount: Int = 0
+    var fetchedReminderCount: Int = 0
+    var resultReminderCount: Int = 0
+    var outcome: String = "pending"
+    var reason: String?
+    var schemaProvenance: String = "zebra-reminders-eventkit.v1"
+    var buildProvenance: String = ZebraRemindersBuildProvenance.current
+}
+
+private enum ZebraRemindersBuildProvenance {
+    static var current: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "unknown"
+        let build = info["CFBundleVersion"] as? String ?? "unknown"
+        return "zebra-reminders-eventkit.v1;version=\(version);build=\(build)"
+    }
 }
 
 @MainActor
 protocol ZebraRemindersEventStore: AnyObject {
     func authorizationStatus() -> ZebraRemindersAuthorizationStatus
     func requestAuthorization() async throws -> ZebraRemindersAuthorizationStatus
-    func fetchSnapshot() async throws -> ZebraRemindersStoreSnapshot
+    func fetchSnapshot(calendarIDs: [String]?) async throws -> ZebraRemindersStoreSnapshot
 }
 
 @MainActor
@@ -312,7 +345,8 @@ final class ZebraRemindersRequestProcessor {
                         lists: [],
                         listTitles: [],
                         supportedFields: supportedFields,
-                        reminders: []
+                        reminders: [], requestedCalendarCount: 0, resolvedCalendarCount: 0,
+                        fetchedReminderCount: 0, resultReminderCount: 0, outcome: "succeeded", reason: nil
                     ),
                     startedAt: startedAt
                 )
@@ -331,7 +365,22 @@ final class ZebraRemindersRequestProcessor {
             return permissionFailureReceipt(request, status: status, startedAt: startedAt)
         }
         do {
-            let snapshot = try await eventStore.fetchSnapshot()
+            let requestedIDs: [String]?
+            if let scope, scope.kind == .oneList || (scope.kind == .custom && !scope.listIDs.isEmpty) {
+                requestedIDs = scope.listIDs
+            } else {
+                requestedIDs = nil
+            }
+            let snapshot = try await eventStore.fetchSnapshot(calendarIDs: requestedIDs)
+            if requestedIDs != nil && snapshot.resolvedCalendarCount != snapshot.requestedCalendarCount {
+                return failureReceipt(
+                    request, status: .failed, authorizationStatus: .authorized,
+                    reason: "approved_calendar_unavailable", retryable: true, startedAt: startedAt,
+                    requestedCalendarCount: snapshot.requestedCalendarCount,
+                    resolvedCalendarCount: snapshot.resolvedCalendarCount,
+                    fetchedReminderCount: snapshot.fetchedReminderCount
+                )
+            }
             let openCount = snapshot.reminders.filter { !$0.isCompleted }.count
             let reminders = scope.map { filtered(snapshot.reminders, for: $0) }
             return successReceipt(
@@ -343,7 +392,13 @@ final class ZebraRemindersRequestProcessor {
                     lists: Array(snapshot.lists.prefix(20)),
                     listTitles: Array(snapshot.lists.map(\.title).prefix(20)),
                     supportedFields: supportedFields,
-                    reminders: reminders
+                    reminders: reminders,
+                    requestedCalendarCount: snapshot.requestedCalendarCount,
+                    resolvedCalendarCount: snapshot.resolvedCalendarCount,
+                    fetchedReminderCount: snapshot.fetchedReminderCount,
+                    resultReminderCount: reminders?.count ?? 0,
+                    outcome: "succeeded",
+                    reason: nil
                 ),
                 startedAt: startedAt
             )
@@ -488,7 +543,13 @@ final class ZebraRemindersRequestProcessor {
             retryable: false,
             createdAt: request.createdAt,
             startedAt: startedAt,
-            completedAt: now()
+            completedAt: now(),
+            requestedCalendarCount: result?.requestedCalendarCount ?? 0,
+            resolvedCalendarCount: result?.resolvedCalendarCount ?? 0,
+            fetchedReminderCount: result?.fetchedReminderCount ?? 0,
+            resultReminderCount: result?.resultReminderCount ?? 0,
+            outcome: "succeeded",
+            reason: nil
         )
     }
 
@@ -498,7 +559,11 @@ final class ZebraRemindersRequestProcessor {
         authorizationStatus: ZebraRemindersAuthorizationStatus,
         reason: String,
         retryable: Bool,
-        startedAt: Date
+        startedAt: Date,
+        requestedCalendarCount: Int = 0,
+        resolvedCalendarCount: Int = 0,
+        fetchedReminderCount: Int = 0,
+        resultReminderCount: Int = 0
     ) -> ZebraRemindersReceipt {
         ZebraRemindersReceipt(
             schemaVersion: ZebraRemindersReceipt.currentSchemaVersion,
@@ -513,7 +578,13 @@ final class ZebraRemindersRequestProcessor {
             retryable: retryable,
             createdAt: request.createdAt,
             startedAt: startedAt,
-            completedAt: now()
+            completedAt: now(),
+            requestedCalendarCount: requestedCalendarCount,
+            resolvedCalendarCount: resolvedCalendarCount,
+            fetchedReminderCount: fetchedReminderCount,
+            resultReminderCount: resultReminderCount,
+            outcome: status == .cancelled ? "cancelled" : "failed",
+            reason: reason
         )
     }
 }
@@ -730,8 +801,23 @@ private final class ZebraSystemRemindersEventStore: ZebraRemindersEventStore {
         return granted ? .authorized : authorizationStatus()
     }
 
-    func fetchSnapshot() async throws -> ZebraRemindersStoreSnapshot {
-        let calendars = eventStore.calendars(for: .reminder)
+    func fetchSnapshot(calendarIDs: [String]?) async throws -> ZebraRemindersStoreSnapshot {
+        let allCalendars = eventStore.calendars(for: .reminder)
+        let requested = calendarIDs.map(Set.init)
+        let calendars = requested.map { ids in
+            allCalendars.filter { ids.contains($0.calendarIdentifier) }
+        } ?? allCalendars
+        if let calendarIDs, calendars.count != calendarIDs.count {
+            return ZebraRemindersStoreSnapshot(
+                lists: calendars.map {
+                    ZebraRemindersListSnapshot(id: $0.calendarIdentifier, title: $0.title)
+                },
+                reminders: [],
+                requestedCalendarCount: calendarIDs.count,
+                resolvedCalendarCount: calendars.count,
+                fetchedReminderCount: 0
+            )
+        }
         let predicate = eventStore.predicateForReminders(in: calendars)
         let reminders: [EKReminder] = await withCheckedContinuation { continuation in
             eventStore.fetchReminders(matching: predicate) { reminders in
@@ -739,11 +825,7 @@ private final class ZebraSystemRemindersEventStore: ZebraRemindersEventStore {
             }
         }
         let listByID = Dictionary(uniqueKeysWithValues: calendars.map { ($0.calendarIdentifier, $0.title) })
-        return ZebraRemindersStoreSnapshot(
-            lists: calendars.map {
-                ZebraRemindersListSnapshot(id: $0.calendarIdentifier, title: $0.title)
-            },
-            reminders: reminders.map { reminder in
+        let snapshots = reminders.map { reminder in
                 let listID = reminder.calendar.calendarIdentifier
                 return ZebraReminderSnapshot(
                     id: reminder.calendarItemIdentifier,
@@ -756,6 +838,18 @@ private final class ZebraSystemRemindersEventStore: ZebraRemindersEventStore {
                     dueDate: reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) }
                 )
             }
+        let openCounts = Dictionary(grouping: snapshots.filter { !$0.isCompleted }, by: \.listID).mapValues(\.count)
+        return ZebraRemindersStoreSnapshot(
+            lists: calendars.map {
+                ZebraRemindersListSnapshot(
+                    id: $0.calendarIdentifier, title: $0.title,
+                    openReminderCount: openCounts[$0.calendarIdentifier, default: 0]
+                )
+            },
+            reminders: snapshots,
+            requestedCalendarCount: calendarIDs?.count ?? calendars.count,
+            resolvedCalendarCount: calendars.count,
+            fetchedReminderCount: snapshots.count
         )
     }
 }

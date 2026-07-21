@@ -4318,6 +4318,14 @@ struct ZebraSourceOnboardingHelper {
 
     def set_apple_reminders_row_state(state, row_status, phase, step_id, timestamp=None, attention_reason=None, result_summary=None, run_state_path=None):
         timestamp = timestamp or now()
+        canonical_run_state = load_json(Path(run_state_path)) if run_state_path else {}
+        workflow_status = canonical_run_state.get("workflowStatus") if isinstance(canonical_run_state, dict) else None
+        if workflow_status == "completed":
+            row_status = "skipped" if canonical_run_state.get("completionDisposition") == "skipped" else "checked"
+            phase = "complete"
+            step_id = "complete"
+        elif row_status in {"checked", "skipped"}:
+            row_status = "attention" if workflow_status in {"attention", "failed", "cancelled", "reconciliationRequired"} else "running"
         progress = ensure_progress(state)
         rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
         row = rows.get("apple-reminders") if isinstance(rows.get("apple-reminders"), dict) else source_row_for("apple-reminders", timestamp)
@@ -4706,6 +4714,28 @@ struct ZebraSourceOnboardingHelper {
         if row.get("phase") != "complete" or row.get("playbookStepID") != "complete":
             return None, {"ok": False, "reason": "source_completion_not_pending", "sourceID": source_id}, 1
         run_state = load_source_run_state(source_id)
+        if source_id == "apple-reminders":
+            completed_ingest = (
+                run_state.get("workflowStatus") == "completionPending"
+                and run_state.get("ingestStatus") == "succeeded"
+                and run_state.get("readbackStatus") == "passed"
+            )
+            completed_skip = (
+                run_state.get("workflowStatus") == "completionPending"
+                and run_state.get("ingestStatus") == "skipped"
+                and run_state.get("readbackStatus") == "skipped"
+                and run_state.get("completionDisposition") == "skipped"
+            )
+            completion_gate_open = (completed_ingest or completed_skip) and bool(run_state.get("completionReportPending"))
+            if not completion_gate_open:
+                return None, {
+                    "ok": False,
+                    "reason": "reminders_completion_gate_blocked",
+                    "sourceID": source_id,
+                    "workflowStatus": run_state.get("workflowStatus"),
+                    "ingestStatus": run_state.get("ingestStatus"),
+                    "readbackStatus": run_state.get("readbackStatus"),
+                }, 1
         disposition = run_state.get("completionDisposition") or "checked"
         if disposition not in {"checked", "skipped"}:
             disposition = "checked"
@@ -4732,6 +4762,7 @@ struct ZebraSourceOnboardingHelper {
             run_path = save_source_run_state(source_id, run_state)
             state = set_apple_notes_row_state(state, disposition, "complete", "complete", timestamp=timestamp, result_summary=summary_text, run_state_path=run_path)
         elif source_id == "apple-reminders":
+            apple_reminders_transition(run_state, "completed")
             run_state.update({"completionReportPending": False, "completionReportedAt": timestamp, "updatedAt": timestamp})
             run_path = save_source_run_state(source_id, run_state)
             state = set_apple_reminders_row_state(state, disposition, "complete", "complete", timestamp=timestamp, result_summary=summary_text, run_state_path=run_path)
@@ -8030,6 +8061,8 @@ struct ZebraSourceOnboardingHelper {
             "sourceRunID": source_run_id,
             "operation": operation,
             "createdAt": now(),
+            "schemaProvenance": "zebra-reminders-eventkit.v1",
+            "helperBuildProvenance": os.environ.get("ZEBRA_BUILD_PROVENANCE") or "unavailable",
         }
         if scope is not None:
             request["scope"] = scope
@@ -8108,6 +8141,29 @@ struct ZebraSourceOnboardingHelper {
 
     def apple_reminders_receipt_failure(receipt, fallback):
         return str(receipt.get("failureReason") or fallback)
+
+    def apple_reminders_transition(run_state, target):
+        allowed = {
+            None: {"discovering", "scopeProposed"},
+            "discovering": {"scopeProposed", "failed", "cancelled", "attention"},
+            "scopeProposed": {"discovering", "scopeProposed", "scopeApproved", "completionPending", "failed", "cancelled", "attention"},
+            "scopeApproved": {"fetching", "scopeProposed", "failed", "cancelled", "attention"},
+            "fetching": {"reconciliationRequired", "readyToCommit", "failed", "cancelled", "attention"},
+            "reconciliationRequired": {"discovering", "fetching", "scopeProposed", "cancelled", "attention"},
+            "readyToCommit": {"artifactCommitted", "failed", "cancelled", "attention"},
+            "artifactCommitted": {"readbackPassed", "failed", "attention"},
+            "readbackPassed": {"completionPending", "failed", "attention"},
+            "completionPending": {"completed", "failed", "attention"},
+            "completed": set(),
+            "failed": set(),
+            "cancelled": set(),
+            "attention": {"discovering", "scopeProposed", "scopeApproved", "fetching", "cancelled"},
+        }
+        current = run_state.get("workflowStatus")
+        if target not in allowed.get(current, set()):
+            raise RuntimeError("invalid Apple Reminders workflow transition: " + str(current) + " -> " + str(target))
+        run_state["workflowStatus"] = target
+        return run_state
 
     def homebrew_candidate_is_verified(candidate):
         candidate = (candidate or "").strip()
@@ -8526,10 +8582,13 @@ struct ZebraSourceOnboardingHelper {
             payload.update(source_next_prompt_payload(state, "apple-reminders", "check_reminders_permission"))
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
+        apple_reminders_transition(run_state, "discovering")
+        save_source_run_state("apple-reminders", run_state)
         source_run_id = apple_reminders_source_run_id(run_state)
         receipt = apple_reminders_eventkit_request("smoke-read", source_run_id, timeout=30)
         if receipt.get("state") != "succeeded":
             reason = apple_reminders_receipt_failure(receipt, "reminders_fetch_failed")
+            apple_reminders_transition(run_state, "cancelled" if receipt.get("state") == "cancelled" else "failed")
             run_state.update({
                 "smokeStatus": "cancelled" if receipt.get("state") == "cancelled" else "failed",
                 "smokeFailureReason": reason,
@@ -8550,7 +8609,11 @@ struct ZebraSourceOnboardingHelper {
             return 1
         result = receipt.get("result") if isinstance(receipt.get("result"), dict) else {}
         reminder_lists = [
-            {"id": str(item.get("id")), "title": str(item.get("title"))}
+            {
+                "id": str(item.get("id")),
+                "title": str(item.get("title")),
+                "openReminderCount": int(item.get("openReminderCount") or 0),
+            }
             for item in (result.get("lists") or [])
             if isinstance(item, dict) and item.get("id") and item.get("title")
         ][:20]
@@ -8558,6 +8621,7 @@ struct ZebraSourceOnboardingHelper {
         fields = result.get("supportedFields") if isinstance(result.get("supportedFields"), list) else []
         list_count = int(result.get("listCount") or 0)
         open_count = int(result.get("openReminderCount") or 0)
+        apple_reminders_transition(run_state, "scopeProposed")
         run_state.update({
             "smokeStatus": "passed",
             "listCount": list_count,
@@ -8599,7 +8663,13 @@ struct ZebraSourceOnboardingHelper {
         state = load_or_create_state()
         run_state = load_source_run_state("apple-reminders")
         if scope == "skip":
-            run_state.update({"scope": "skip", "phase": "complete", "step": "complete", "updatedAt": now()})
+            if run_state.get("workflowStatus") != "scopeProposed":
+                apple_reminders_transition(run_state, "scopeProposed")
+            apple_reminders_transition(run_state, "completionPending")
+            run_state.update({
+                "scope": "skip", "ingestStatus": "skipped", "readbackStatus": "skipped",
+                "phase": "complete", "step": "complete", "updatedAt": now(),
+            })
             state = mark_source_completion_pending(
                 state,
                 "apple-reminders",
@@ -8626,7 +8696,7 @@ struct ZebraSourceOnboardingHelper {
         update = {"scope": scope}
         available_lists = run_state.get("reminderLists") if isinstance(run_state.get("reminderLists"), list) else []
         available_by_id = {
-            str(item.get("id")): str(item.get("title"))
+            str(item.get("id")): item
             for item in available_lists
             if isinstance(item, dict) and item.get("id") and item.get("title")
         }
@@ -8638,7 +8708,7 @@ struct ZebraSourceOnboardingHelper {
             if list_id not in available_by_id:
                 print("--list-id must identify a list returned by smoke-list", file=sys.stderr)
                 return 2
-            list_name = available_by_id[list_id]
+            list_name = str(available_by_id[list_id].get("title"))
             update["listID"] = list_id
             update["list"] = list_name
             update["includeCompleted"] = False
@@ -8652,7 +8722,7 @@ struct ZebraSourceOnboardingHelper {
             if invalid_list_ids:
                 print("--list-id must identify a list returned by smoke-list", file=sys.stderr)
                 return 2
-            lists = [available_by_id[item] for item in list_ids]
+            lists = [str(available_by_id[item].get("title")) for item in list_ids]
             include_completed = apple_reminders_install_answer("--include-completed") == "yes"
             status = single_flag_value("--status") or ("all" if include_completed else "open")
             due_window = single_flag_value("--due-window") or "all"
@@ -8682,11 +8752,31 @@ struct ZebraSourceOnboardingHelper {
             update["itemCap"] = cap_value
         elif "itemCap" in run_state:
             run_state.pop("itemCap", None)
+        approved_list_ids = ([str(update.get("listID"))] if scope == "one-list" else [str(item) for item in update.get("listIDs", [])])
+        approved_list_titles = ([str(update.get("list"))] if scope == "one-list" else [str(item) for item in update.get("lists", [])])
+        selected_open_count = sum(
+            int(available_by_id[item].get("openReminderCount") or 0)
+            for item in approved_list_ids if item in available_by_id
+        ) if approved_list_ids else None
+        approved_scope = {
+            "kind": scope,
+            "listIDs": approved_list_ids,
+            "listTitles": approved_list_titles,
+            "status": str(update.get("status") or "open"),
+            "dueWindow": str(update.get("dueWindow") or ("today" if scope == "today" else "week" if scope == "week" else "all")),
+            "observedOpenReminderCount": selected_open_count,
+        }
+        if isinstance(update.get("itemCap"), int):
+            approved_scope["itemCap"] = update["itemCap"]
         run_state.update(update)
-        expected_count = run_state.get("openReminderCount") if scope == "all-open" else None
+        expected_count = run_state.get("openReminderCount") if scope == "all-open" else selected_open_count
         fields = run_state.get("observedReminderFields") if isinstance(run_state.get("observedReminderFields"), list) else []
+        apple_reminders_transition(run_state, "scopeProposed")
         run_state.update({
             "expectedCount": expected_count,
+            "approvedScope": approved_scope,
+            "ingestStatus": "pending",
+            "readbackStatus": "pending",
             "observedReminderFields": fields,
             "planConfirmed": False,
             "plannedArtifactPath": str(apple_reminders_artifact_path(state)),
@@ -8715,6 +8805,7 @@ struct ZebraSourceOnboardingHelper {
         state = load_or_create_state()
         run_state = load_source_run_state("apple-reminders")
         if answer in {"no", "n"}:
+            apple_reminders_transition(run_state, "attention")
             run_state.update({"planConfirmed": False, "updatedAt": now()})
             run_path = save_source_run_state("apple-reminders", run_state)
             state = set_apple_reminders_row_state(
@@ -8737,6 +8828,7 @@ struct ZebraSourceOnboardingHelper {
             payload.update(source_next_prompt_payload(state, "apple-reminders", "choose_ingest_scope"))
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
+        apple_reminders_transition(run_state, "scopeApproved")
         run_state.update({"planConfirmed": True, "confirmedAt": now(), "updatedAt": now()})
         run_path = save_source_run_state("apple-reminders", run_state)
         state = set_apple_reminders_row_state(
@@ -8798,15 +8890,20 @@ struct ZebraSourceOnboardingHelper {
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
         source_run_id = apple_reminders_source_run_id(run_state)
+        apple_reminders_transition(run_state, "fetching")
+        run_state.update({"ingestStatus": "pending", "readbackStatus": "pending", "updatedAt": now()})
+        save_source_run_state("apple-reminders", run_state)
         receipt = apple_reminders_eventkit_request(
             "scope-read",
             source_run_id,
-            scope=apple_reminders_eventkit_scope(run_state),
+            scope=run_state.get("approvedScope") if isinstance(run_state.get("approvedScope"), dict) else apple_reminders_eventkit_scope(run_state),
             timeout=60,
         )
         if receipt.get("state") != "succeeded":
             reason = apple_reminders_receipt_failure(receipt, "reminders_ingest_read_failed")
-            run_state.update({"ingestStatus": "failed", "ingestFailureReason": reason, "updatedAt": now()})
+            terminal_status = "cancelled" if receipt.get("state") == "cancelled" else "failed"
+            apple_reminders_transition(run_state, terminal_status)
+            run_state.update({"ingestStatus": terminal_status, "readbackStatus": "pending", "ingestFailureReason": reason, "updatedAt": now()})
             run_path = save_source_run_state("apple-reminders", run_state)
             state = set_apple_reminders_row_state(state, "attention", "ingest", "ingest_reminders", attention_reason=reason, run_state_path=run_path)
             save_json(state)
@@ -8820,7 +8917,43 @@ struct ZebraSourceOnboardingHelper {
             return 1
         result = receipt.get("result") if isinstance(receipt.get("result"), dict) else {}
         items = result.get("reminders") if isinstance(result.get("reminders"), list) else []
+        diagnostics = {
+            "requestedCalendarCount": int(receipt.get("requestedCalendarCount") or result.get("requestedCalendarCount") or 0),
+            "resolvedCalendarCount": int(receipt.get("resolvedCalendarCount") or result.get("resolvedCalendarCount") or 0),
+            "fetchedReminderCount": int(receipt.get("fetchedReminderCount") or result.get("fetchedReminderCount") or 0),
+            "resultReminderCount": int(receipt.get("resultReminderCount") or result.get("resultReminderCount") or len(items)),
+            "outcome": str(receipt.get("outcome") or result.get("outcome") or "succeeded"),
+            "reason": receipt.get("reason") or result.get("reason"),
+            "schemaProvenance": receipt.get("schemaProvenance") or "zebra-reminders-eventkit.v1",
+            "buildProvenance": receipt.get("buildProvenance") or "unavailable",
+        }
+        approved_scope = run_state.get("approvedScope") if isinstance(run_state.get("approvedScope"), dict) else {}
+        observed_open_count = approved_scope.get("observedOpenReminderCount")
+        accept_empty = apple_reminders_install_answer("--accept-empty") == "yes"
+        mismatch = isinstance(observed_open_count, int) and observed_open_count > 0 and len(items) == 0
+        if mismatch and not accept_empty:
+            reason = "scope_changed_or_result_mismatch"
+            apple_reminders_transition(run_state, "reconciliationRequired")
+            run_state.update({
+                "ingestStatus": "mismatch",
+                "readbackStatus": "pending", "attentionReason": reason,
+                "ingestDiagnostics": {**diagnostics, "outcome": "attention", "reason": reason},
+                "updatedAt": now(),
+            })
+            run_state.pop("artifactPath", None)
+            run_path = save_source_run_state("apple-reminders", run_state)
+            state = set_apple_reminders_row_state(state, "attention", "ingest", "ingest_reminders", attention_reason=reason, run_state_path=run_path)
+            save_json(state)
+            payload = {"ok": False, "workflowStatus": "reconciliationRequired", "ingestStatus": "mismatch", "readbackStatus": "pending", **diagnostics}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "ingest_reminders"))
+            payload["reason"] = reason
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
+        if len(items) == 0:
+            diagnostics["outcome"] = "confirmed-empty"
+            diagnostics["reason"] = "explicit_empty_approval" if mismatch else "discovery_confirmed_empty"
         fields = reminder_field_names(items)
+        apple_reminders_transition(run_state, "readyToCommit")
         artifact = apple_reminders_artifact_path(state)
         today = now()[:10]
         lines = [
@@ -8849,7 +8982,11 @@ struct ZebraSourceOnboardingHelper {
             lines.append("")
             lines.append('[Source: Apple Reminders list "' + list_name + '", ' + today + ']')
         artifact.write_text("\\n".join(lines).rstrip() + "\\n", encoding="utf-8")
+        apple_reminders_transition(run_state, "artifactCommitted")
         run_state.update({
+            "ingestStatus": "succeeded",
+            "readbackStatus": "pending",
+            "ingestDiagnostics": diagnostics,
             "artifactPath": str(artifact),
             "ingestedReminderCount": len(items),
             "observedReminderFields": fields,
@@ -8868,7 +9005,7 @@ struct ZebraSourceOnboardingHelper {
             result_summary="Apple Reminders ingest artifact written for " + str(len(items)) + " reminders.",
         )
         save_json(state)
-        payload = {"ok": True, "artifactPath": str(artifact), "ingestedReminderCount": len(items)}
+        payload = {"ok": True, "artifactPath": str(artifact), "ingestedReminderCount": len(items), **diagnostics}
         payload.update(source_next_prompt_payload(state, "apple-reminders", "verify_readback"))
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
@@ -8876,6 +9013,11 @@ struct ZebraSourceOnboardingHelper {
     def apple_reminders_verify_readback():
         state = load_or_create_state()
         run_state = load_source_run_state("apple-reminders")
+        if run_state.get("workflowStatus") != "artifactCommitted" or run_state.get("ingestStatus") != "succeeded":
+            payload = {"ok": False, "reason": "reminders_completion_gate_blocked"}
+            payload.update(source_next_prompt_payload(state, "apple-reminders", "ingest_reminders"))
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 1
         artifact = Path(run_state.get("artifactPath") or "")
         try:
             text = artifact.read_text(encoding="utf-8")
@@ -8890,6 +9032,7 @@ struct ZebraSourceOnboardingHelper {
         }
         artifact_lines = set(text.splitlines())
         if not required_lines.issubset(artifact_lines):
+            apple_reminders_transition(run_state, "attention")
             run_state.update({"readbackStatus": "failed", "updatedAt": now()})
             run_path = save_source_run_state("apple-reminders", run_state)
             state = set_apple_reminders_row_state(
@@ -8905,6 +9048,7 @@ struct ZebraSourceOnboardingHelper {
             payload.update(source_next_prompt_payload(state, "apple-reminders", "verify_readback"))
             print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             return 1
+        apple_reminders_transition(run_state, "readbackPassed")
         run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
         state = mark_source_completion_pending(
             state,
@@ -8913,6 +9057,10 @@ struct ZebraSourceOnboardingHelper {
             "Apple Reminders EventKit ingest readback verified for " + str(run_state.get("ingestedReminderCount") or 0) + " reminders.",
             run_state=run_state,
         )
+        run_state = load_source_run_state("apple-reminders")
+        apple_reminders_transition(run_state, "completionPending")
+        run_state.update({"updatedAt": now()})
+        save_source_run_state("apple-reminders", run_state)
         save_json(state)
         payload = {"ok": True, "artifactPath": str(artifact), "readbackStatus": "passed"}
         payload.update(source_next_prompt_payload(state, "apple-reminders", "complete"))
