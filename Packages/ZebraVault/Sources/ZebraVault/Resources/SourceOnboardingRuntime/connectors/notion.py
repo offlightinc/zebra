@@ -548,15 +548,15 @@ def notion_smoke_summary(scope, target, smoke):
     stdout = smoke.get("stdout") or ""
     stderr = smoke.get("stderr") or ""
     body = stdout.strip() or stderr.strip()
-    if len(body) > 1200:
-        body = body[:1200] + "...(truncated)"
     return {
         "scope": scope,
         "target": sanitize_notion_text(target),
         "targetID": sanitize_notion_text(extract_notion_id(target)),
         "status": smoke.get("status"),
         "command": "ntn " + " ".join(smoke.get("args") or []),
-        "sample": body,
+        "sampleAvailable": bool(body),
+        "sampleByteCount": len(body.encode("utf-8")),
+        "diagnostic": None if smoke.get("ok") else "notion_command_failed",
     }
 
 def notion_fetch_result_summary(label, result):
@@ -879,18 +879,13 @@ def notion_ingest():
     expected = len(fetched); acquisition = {"discoveredCount": expected, "selectedCount": expected, "normalizedCount": len(records), "failedCount": len(failures), "diagnosticCount": 0, "cancelled": False, "complete": not failures and notion_ingest_fetch_passed(scope, fetched) and bool(records)}
     attempt_id = str(uuid.uuid4()); receipt = submit_connector_ingestion("notion", records, acquisition, state, attempt_id, gbrain_state_path)
     run_state.update({"ingestAttemptID": attempt_id, "acquisitionReceipt": acquisition, "ingestReceipt": receipt, "ingestedRecordCount": len(records), "acquisitionDiagnostics": [{"label": item.get("label"), "status": item.get("status")} for item in failures if isinstance(item, dict)][:8], "phase": "verify", "step": "verify_readback", "updatedAt": now()})
-    run_path = save_source_run_state("notion", run_state); projection = ingest_projection(receipt)
+    run_path = save_source_run_state("notion", run_state); projection = ingest_projection(receipt, acquisition)
     state = set_notion_row_state(state, "running" if projection["complete"] else "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"], run_state_path=run_path, result_summary="GBrain ingest attempted for " + str(len(records)) + " Notion records."); save_json(state)
     payload = {"ok": projection["complete"], "reason": projection["attentionReason"], "ingestedRecordCount": len(records)}; payload.update(source_next_prompt_payload(state, "notion", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0 if projection["complete"] else 1
 
 
 def notion_verify_readback():
-    state = load_or_create_state(); run_state = load_source_run_state("notion"); receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}; projection = ingest_projection(receipt)
-    if not projection["complete"]:
-        state = set_notion_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"] or "readbackMissing", run_state_path=save_source_run_state("notion", run_state)); save_json(state)
-        payload = {"ok": False, "reason": projection["attentionReason"] or "readbackMissing"}; payload.update(source_next_prompt_payload(state, "notion", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
-    run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "phase": "complete", "step": "complete", "updatedAt": now()}); state = mark_source_completion_pending(state, "notion", "checked", "GBrain ingest/readback verified for " + str(receipt.get("verifiedRecordCount") or 0) + " Notion records.", run_state=run_state); save_json(state)
-    payload = {"ok": True, "readbackStatus": "passed", "verifiedRecordCount": receipt.get("verifiedRecordCount")}; payload.update(source_next_prompt_payload(state, "notion", "complete")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0
+    return verify_common_ingestion_completion("notion", "Notion records")
 
 
 def notion_command():

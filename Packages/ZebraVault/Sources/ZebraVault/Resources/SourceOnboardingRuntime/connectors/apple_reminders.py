@@ -964,7 +964,7 @@ def apple_reminders_ingest():
     acquisition = {"discoveredCount": len(items), "selectedCount": len(items), "normalizedCount": len(records), "failedCount": 0, "diagnosticCount": 0, "cancelled": False, "complete": True}
     attempt_id = str(uuid.uuid4()); receipt = submit_connector_ingestion("apple-reminders", records, acquisition, state, attempt_id, gbrain_state_path)
     run_state.update({"workflowStatus": "gbrainCommitted" if receipt.get("complete") else "attention", "ingestStatus": "succeeded" if receipt.get("complete") else "failed", "readbackStatus": "pending", "ingestAttemptID": attempt_id, "acquisitionReceipt": acquisition, "ingestReceipt": receipt, "ingestedReminderCount": len(records), "updatedAt": now()})
-    run_path = save_source_run_state("apple-reminders", run_state); projection = ingest_projection(receipt)
+    run_path = save_source_run_state("apple-reminders", run_state); projection = ingest_projection(receipt, acquisition)
     state = set_apple_reminders_row_state(state, "running" if projection["complete"] else "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"], run_state_path=run_path, result_summary="GBrain ingest attempted for " + str(len(records)) + " reminders."); save_json(state)
     payload = {"ok": projection["complete"], "reason": projection["attentionReason"], "ingestedReminderCount": len(records)}
     if empty_outcome:
@@ -973,13 +973,9 @@ def apple_reminders_ingest():
 
 
 def apple_reminders_verify_readback():
-    state = load_or_create_state(); run_state = load_source_run_state("apple-reminders"); receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}; projection = ingest_projection(receipt)
-    if not projection["complete"]:
-        state = set_apple_reminders_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"] or "readbackMissing", run_state_path=save_source_run_state("apple-reminders", run_state)); save_json(state)
-        payload = {"ok": False, "reason": projection["attentionReason"] or "readbackMissing"}; payload.update(source_next_prompt_payload(state, "apple-reminders", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
-    run_state.update({"workflowStatus": "completionPending", "ingestStatus": "succeeded", "readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
-    state = mark_source_completion_pending(state, "apple-reminders", "checked", "GBrain ingest/readback verified for " + str(receipt.get("verifiedRecordCount") or 0) + " reminders.", run_state=run_state); save_json(state)
-    payload = {"ok": True, "readbackStatus": "passed", "verifiedRecordCount": receipt.get("verifiedRecordCount")}; payload.update(source_next_prompt_payload(state, "apple-reminders", "complete")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0
+    def success(run_state):
+        run_state.update({"workflowStatus": "completionPending", "ingestStatus": "succeeded"})
+    return verify_common_ingestion_completion("apple-reminders", "reminders", success_hook=success)
 
 
 def apple_reminders_command():

@@ -2,6 +2,8 @@ import json
 import os
 from pathlib import Path
 
+from domain import reconciliation
+
 
 def load_json_file(path):
     try:
@@ -42,13 +44,30 @@ def save_source_run_state_file(control_state_path, source_id, value):
     return str(path)
 
 
-def ingest_projection(receipt):
-    complete = receipt.get("complete") is True
+def ingest_projection(receipt, acquisition=None):
+    acquisition_value = acquisition if isinstance(acquisition, dict) else receipt.get("acquisition")
+    acquisition_value = acquisition_value if isinstance(acquisition_value, dict) else {}
+    write = receipt.get("write") if isinstance(receipt.get("write"), dict) else {}
+    if not write and receipt.get("complete") is False and receipt.get("failure"):
+        write = {"failure": receipt.get("failure")}
+    readbacks = receipt.get("readbacks") if isinstance(receipt.get("readbacks"), list) else []
+    expected_count = receipt.get("expectedRecordCount")
+    if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 0:
+        expected_count = -1
+    reconciled = reconciliation(
+        acquisition_value,
+        write,
+        readbacks,
+        expected_count,
+        expected_slugs=receipt.get("expectedSlugs") if isinstance(receipt.get("expectedSlugs"), list) else None,
+        expected_source_id=receipt.get("expectedSourceID"),
+    )
+    complete = reconciled.get("complete") is True
     return {
         "complete": complete,
         "rowStatus": "running" if complete else "attention",
         "phase": "complete" if complete else "ingest",
         "step": "complete" if complete else "verify_readback",
-        "attentionReason": None if complete else receipt.get("failure"),
-        "retryable": receipt.get("retryable") is True,
+        "attentionReason": None if complete else reconciled.get("failure") or receipt.get("failure"),
+        "retryable": reconciled.get("retryable") is True,
     }

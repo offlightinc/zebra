@@ -9,42 +9,74 @@ import subprocess
 import tempfile
 import time
 
-from domain import FAILURES, normalized_record, reconciliation
+from domain import FAILURES, deterministic_slug, normalized_record, reconciliation
 
 
 MAX_PUT_STDIN_BYTES = 5_000_000
 
 
 class ProcessClient:
-    def __init__(self, binding):
+    def __init__(self, binding, cancellation_path=None):
         self.binding = binding
         self.environment = os.environ.copy()
         self.environment.update({str(key): str(value) for key, value in binding.get("environment", {}).items()})
         self.environment["GBRAIN_SOURCE"] = binding["sourceID"]
         self.last_result = None
+        self.cancellation_path = pathlib.Path(cancellation_path).expanduser() if cancellation_path else None
+
+    def cancelled(self):
+        return self.cancellation_path is not None and self.cancellation_path.exists()
 
     def run(self, arguments, stdin=None, timeout=300):
+        if self.cancelled():
+            self.last_result = {"exitCode": 130, "stdout": "", "stderr": "cancelled", "cancelled": True}
+            return self.last_result
+        process = None
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 [self.binding["executable"], *arguments],
-                input=stdin,
-                capture_output=True,
+                stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 cwd=self.binding["workingDirectory"],
                 env=self.environment,
-                timeout=timeout,
-                check=False,
             )
+            deadline = time.monotonic() + timeout
+            pending_input = stdin
+            while True:
+                if self.cancelled():
+                    process.terminate()
+                    try:
+                        stdout, stderr = process.communicate(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        stdout, stderr = process.communicate()
+                    self.last_result = {
+                        "exitCode": 130, "stdout": stdout or "", "stderr": stderr or "cancelled", "cancelled": True,
+                    }
+                    return self.last_result
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                    self.last_result = {"exitCode": 124, "stdout": stdout or "", "stderr": stderr or "timeout"}
+                    return self.last_result
+                try:
+                    stdout, stderr = process.communicate(input=pending_input, timeout=min(0.1, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    pending_input = None
             self.last_result = {
-                "exitCode": completed.returncode,
-                "stdout": completed.stdout,
-                "stderr": completed.stderr,
+                "exitCode": process.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
             }
             return self.last_result
-        except subprocess.TimeoutExpired as error:
-            self.last_result = {"exitCode": 124, "stdout": error.stdout or "", "stderr": error.stderr or "timeout"}
-            return self.last_result
         except Exception as error:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate()
             self.last_result = {"exitCode": 126, "stdout": "", "stderr": type(error).__name__}
             return self.last_result
 
@@ -87,7 +119,10 @@ def _validate_binding(binding):
 
 
 def _verify_route(client):
-    payload = _json_result(client.run(["sources", "current", "--json"], timeout=30))
+    route_result = client.run(["sources", "current", "--json"], timeout=30)
+    if route_result.get("cancelled"):
+        return "cancelled"
+    payload = _json_result(route_result)
     if payload is None:
         return "targetBindingMismatch"
     if str(_current_source(payload) or "") != client.binding["sourceID"]:
@@ -189,7 +224,7 @@ def _write_through_failed(payload):
     value = payload.get("writeThrough")
     if isinstance(value, dict):
         return value.get("ok") is False or value.get("failed") is True
-    return value is False or payload.get("writeThroughFailed") is True
+    return payload.get("ok") is False or value is False or payload.get("writeThroughFailed") is True
 
 
 def _readback(client, record):
@@ -222,7 +257,7 @@ def run_ingest(request):
         result = reconciliation(acquisition, write, [], expected_count)
         return {**result, "attemptID": request.get("attemptID"), "write": write, "readbacks": []}
 
-    client = ProcessClient(binding)
+    client = ProcessClient(binding, cancellation_path=request.get("cancellationPath"))
     routing_failure = _verify_route(client)
     if routing_failure:
         route_result = client.last_result or {}
@@ -240,6 +275,7 @@ def run_ingest(request):
     private_root.mkdir(parents=True, exist_ok=True)
     try:
         records = [normalized_record(value) for value in raw_records]
+        expected_slugs = [record["slug"] for record in records]
         staging = pathlib.Path(tempfile.mkdtemp(prefix="zebra-gbrain-ingest-", dir=str(private_root)))
         staging.chmod(0o700)
         _write_staging(staging, records, request.get("attemptID"))
@@ -253,7 +289,9 @@ def run_ingest(request):
                     "import", str(staging), "--source-id", binding["sourceID"],
                     "--workers", str(workers), "--fresh", "--json",
                 ], timeout=1800)
-            if process.get("exitCode") != 0:
+            if process.get("cancelled"):
+                write["failure"] = "cancelled"
+            elif process.get("exitCode") != 0:
                 write["failure"] = "importProcessFailed"
             else:
                 payload = _json_result(process)
@@ -266,6 +304,38 @@ def run_ingest(request):
                     write["failure"] = "importCountMismatch"
                 else:
                     write.update(counts)
+            if write.get("failure") == "importCountMismatch":
+                initial_readbacks = [_readback(client, record) for record in records]
+                retry_records = [
+                    record for record, readback in zip(records, initial_readbacks)
+                    if readback.get("identityMatch") is not True
+                ]
+                if retry_records and len(retry_records) < len(records) and not client.cancelled():
+                    retry_failed = False
+                    for record in retry_records:
+                        staged = _staged_text(record)
+                        retry_process = client.run([
+                            "put", record["slug"], "--source-kind", record["connectorID"],
+                            "--source-uri", record["originURI"], "--ingested-via", "zebra-source-onboarding",
+                        ], stdin=staged, timeout=300)
+                        retry_payload = _json_result(retry_process)
+                        if retry_process.get("cancelled"):
+                            write["failure"] = "cancelled"
+                            retry_failed = True
+                            break
+                        if retry_payload is None or _write_through_failed(retry_payload):
+                            retry_failed = True
+                            break
+                    if not retry_failed:
+                        retry_slugs = {record["slug"] for record in retry_records}
+                        readbacks = [
+                            _readback(client, record) if record["slug"] in retry_slugs else readback
+                            for record, readback in zip(records, initial_readbacks)
+                        ]
+                        if all(item.get("identityMatch") is True for item in readbacks):
+                            write["failure"] = None
+                            write["mode"] = "bulkWithIsolatedRetry"
+                            write["retried"] = len(retry_records)
         else:
             record = records[0]
             staged = _staged_text(record)
@@ -273,7 +343,9 @@ def run_ingest(request):
                 "put", record["slug"], "--source-kind", record["connectorID"],
                 "--source-uri", record["originURI"], "--ingested-via", "zebra-source-onboarding",
             ], stdin=staged, timeout=300)
-            if process.get("exitCode") != 0:
+            if process.get("cancelled"):
+                write["failure"] = "cancelled"
+            elif process.get("exitCode") != 0:
                 write["failure"] = "importProcessFailed"
             else:
                 payload = _json_result(process)
@@ -283,7 +355,7 @@ def run_ingest(request):
                     write["failure"] = "writeThroughFailed"
                 else:
                     write["imported"] = 1
-        if write.get("failure") is None:
+        if write.get("failure") is None and not readbacks:
             readbacks = [_readback(client, record) for record in records]
     except TimeoutError:
         write["failure"] = "importProcessFailed"
@@ -293,11 +365,25 @@ def run_ingest(request):
         if staging is not None:
             shutil.rmtree(staging, ignore_errors=True)
 
-    result = reconciliation(acquisition, write, readbacks, expected_count)
+    expected_slugs = [deterministic_slug(value.get("connectorID"), value.get("logicalRecordID")) for value in raw_records]
+    result = reconciliation(
+        acquisition,
+        write,
+        readbacks,
+        expected_count,
+        expected_slugs=expected_slugs,
+        expected_source_id=binding.get("sourceID"),
+    )
     if result.get("failure") not in FAILURES and result.get("failure") is not None:
         result["failure"] = "importProcessFailed"
         result["complete"] = False
-    return {**result, "attemptID": request.get("attemptID"), "write": write, "readbacks": readbacks}
+    return {
+        **result,
+        "attemptID": request.get("attemptID"),
+        "acquisition": acquisition,
+        "write": write,
+        "readbacks": readbacks,
+    }
 
 
 def run_onboarding_ingest(request):

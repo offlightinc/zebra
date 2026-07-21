@@ -448,7 +448,7 @@ def agent_memory_ingest():
     receipt = submit_connector_ingestion("agent-memory", records, acquisition, state, attempt_id, gbrain_state_path)
     run_state.update({"ingestAttemptID": attempt_id, "acquisitionReceipt": acquisition, "ingestReceipt": receipt, "ingestedUnitCount": len(records), "acquisitionDiagnostics": failures[:8], "phase": "verify", "step": "verify_readback", "updatedAt": now()})
     run_path = save_source_run_state("agent-memory", run_state)
-    projection = ingest_projection(receipt)
+    projection = ingest_projection(receipt, acquisition)
     state = set_agent_memory_row_state(state, "running" if projection["complete"] else "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"], run_state_path=run_path, result_summary="GBrain ingest attempted for " + str(len(records)) + " agent memory records.")
     save_json(state)
     payload = {"ok": projection["complete"], "reason": projection["attentionReason"], "ingestedUnitCount": len(records)}
@@ -457,15 +457,7 @@ def agent_memory_ingest():
 
 
 def agent_memory_verify_readback():
-    state = load_or_create_state(); run_state = load_source_run_state("agent-memory")
-    receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
-    projection = ingest_projection(receipt)
-    if not projection["complete"]:
-        state = set_agent_memory_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"] or "readbackMissing", run_state_path=save_source_run_state("agent-memory", run_state)); save_json(state)
-        payload = {"ok": False, "reason": projection["attentionReason"] or "readbackMissing"}; payload.update(source_next_prompt_payload(state, "agent-memory", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
-    run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
-    state = mark_source_completion_pending(state, "agent-memory", "checked", "GBrain ingest/readback verified for " + str(receipt.get("verifiedRecordCount") or 0) + " agent memory records.", run_state); save_json(state)
-    payload = {"ok": True, "readbackStatus": "passed", "verifiedRecordCount": receipt.get("verifiedRecordCount")}; payload.update(source_next_prompt_payload(state, "agent-memory", "complete")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0
+    return verify_common_ingestion_completion("agent-memory", "agent memory records")
 
 
 def agent_memory_command():

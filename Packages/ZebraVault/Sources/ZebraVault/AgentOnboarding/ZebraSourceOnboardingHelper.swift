@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct ZebraSourceOnboardingHelper {
     enum InstallationError: Error, Equatable {
@@ -117,6 +118,10 @@ struct ZebraSourceOnboardingHelper {
             "source-onboarding-runtime",
             isDirectory: true
         )
+        let runtimeGenerationsDirectory = onboardingDirectory.appendingPathComponent(
+            "source-onboarding-runtimes",
+            isDirectory: true
+        )
         let url = directory.appendingPathComponent("zebra-source-onboarding", isDirectory: false)
         do {
             guard let bundledRuntime = runtimeResourceLocator() else {
@@ -126,48 +131,91 @@ struct ZebraSourceOnboardingHelper {
                 throw InstallationError.runtimeResourceIncomplete
             }
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            let temporaryRuntime = onboardingDirectory.appendingPathComponent(
-                ".source-onboarding-runtime-\(UUID().uuidString)",
+            guard let bundledVersion = Self.runtimeVersion(at: bundledRuntime) else {
+                throw InstallationError.runtimeResourceIncomplete
+            }
+            let safeVersion = bundledVersion.map { character in
+                character.isLetter || character.isNumber || character == "." || character == "-"
+                    ? String(character)
+                    : "-"
+            }.joined()
+            let generationDirectory = runtimeGenerationsDirectory.appendingPathComponent(
+                "runtime-\(safeVersion)",
                 isDirectory: true
             )
-            defer { try? fileManager.removeItem(at: temporaryRuntime) }
-            try fileManager.copyItem(at: bundledRuntime, to: temporaryRuntime)
-            guard Self.runtimeResourceIsComplete(at: temporaryRuntime) else {
-                throw InstallationError.installedRuntimeIncomplete
-            }
-            if fileManager.fileExists(atPath: runtimeDirectory.path) {
-                _ = try fileManager.replaceItemAt(
-                    runtimeDirectory,
-                    withItemAt: temporaryRuntime,
-                    backupItemName: nil,
-                    options: []
+            try fileManager.createDirectory(at: runtimeGenerationsDirectory, withIntermediateDirectories: true)
+            if !Self.runtimeResourceIsComplete(at: generationDirectory) {
+                let temporaryRuntime = runtimeGenerationsDirectory.appendingPathComponent(
+                    ".source-onboarding-runtime-\(UUID().uuidString)",
+                    isDirectory: true
                 )
-            } else {
-                try fileManager.moveItem(at: temporaryRuntime, to: runtimeDirectory)
+                defer { try? fileManager.removeItem(at: temporaryRuntime) }
+                try fileManager.copyItem(at: bundledRuntime, to: temporaryRuntime)
+                guard Self.runtimeResourceIsComplete(at: temporaryRuntime) else {
+                    throw InstallationError.installedRuntimeIncomplete
+                }
+                if Self.pathEntryExists(generationDirectory, fileManager: fileManager) {
+                    _ = try fileManager.replaceItemAt(
+                        generationDirectory,
+                        withItemAt: temporaryRuntime,
+                        backupItemName: nil,
+                        options: []
+                    )
+                } else {
+                    try fileManager.moveItem(at: temporaryRuntime, to: generationDirectory)
+                }
             }
-            let bundledEntrypoint = runtimeDirectory.appendingPathComponent(
+            let currentGeneration = runtimeDirectory.resolvingSymlinksInPath().standardizedFileURL
+            let reuseInstalledRuntime = currentGeneration == generationDirectory.standardizedFileURL
+                && Self.runtimeResourceIsComplete(at: runtimeDirectory)
+            if !reuseInstalledRuntime {
+                let temporaryLink = onboardingDirectory.appendingPathComponent(
+                    ".source-onboarding-runtime-current-\(UUID().uuidString)",
+                    isDirectory: false
+                )
+                defer { try? fileManager.removeItem(at: temporaryLink) }
+                try fileManager.createSymbolicLink(at: temporaryLink, withDestinationURL: generationDirectory)
+                if Self.pathEntryExists(runtimeDirectory, fileManager: fileManager) {
+                    let attributes = try fileManager.attributesOfItem(atPath: runtimeDirectory.path)
+                    let fileType = attributes[.type] as? FileAttributeType
+                    let result: Int32
+                    if fileType == .typeDirectory {
+                        result = renamex_np(temporaryLink.path, runtimeDirectory.path, UInt32(RENAME_SWAP))
+                    } else {
+                        result = rename(temporaryLink.path, runtimeDirectory.path)
+                    }
+                    guard result == 0 else {
+                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                } else {
+                    try fileManager.moveItem(at: temporaryLink, to: runtimeDirectory)
+                }
+            }
+            let bundledEntrypoint = generationDirectory.appendingPathComponent(
                 "zebra-source-onboarding",
                 isDirectory: false
             )
             guard fileManager.fileExists(atPath: bundledEntrypoint.path) else {
                 throw InstallationError.runtimeEntrypointMissing
             }
-            let temporaryEntrypoint = directory.appendingPathComponent(
-                ".zebra-source-onboarding-\(UUID().uuidString)",
-                isDirectory: false
-            )
-            defer { try? fileManager.removeItem(at: temporaryEntrypoint) }
-            try fileManager.copyItem(at: bundledEntrypoint, to: temporaryEntrypoint)
-            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: temporaryEntrypoint.path)
-            if fileManager.fileExists(atPath: url.path) {
-                _ = try fileManager.replaceItemAt(
-                    url,
-                    withItemAt: temporaryEntrypoint,
-                    backupItemName: nil,
-                    options: []
+            if !reuseInstalledRuntime || !fileManager.isExecutableFile(atPath: url.path) {
+                let temporaryEntrypoint = directory.appendingPathComponent(
+                    ".zebra-source-onboarding-\(UUID().uuidString)",
+                    isDirectory: false
                 )
-            } else {
-                try fileManager.moveItem(at: temporaryEntrypoint, to: url)
+                defer { try? fileManager.removeItem(at: temporaryEntrypoint) }
+                try fileManager.copyItem(at: bundledEntrypoint, to: temporaryEntrypoint)
+                try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: temporaryEntrypoint.path)
+                if fileManager.fileExists(atPath: url.path) {
+                    _ = try fileManager.replaceItemAt(
+                        url,
+                        withItemAt: temporaryEntrypoint,
+                        backupItemName: nil,
+                        options: []
+                    )
+                } else {
+                    try fileManager.moveItem(at: temporaryEntrypoint, to: url)
+                }
             }
             guard ZebraInteractiveTerminalRunner.install(
                 in: directory,
@@ -214,6 +262,20 @@ struct ZebraSourceOnboardingHelper {
                 atPath: directory.appendingPathComponent($0, isDirectory: false).path
             )
         }
+    }
+
+    private static func runtimeVersion(at directory: URL) -> String? {
+        let manifestURL = directory.appendingPathComponent("manifest.json", isDirectory: false)
+        guard let data = try? Data(contentsOf: manifestURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = object["runtimeVersion"] as? String,
+              !version.isEmpty
+        else { return nil }
+        return version
+    }
+
+    private static func pathEntryExists(_ url: URL, fileManager: FileManager) -> Bool {
+        (try? fileManager.attributesOfItem(atPath: url.path)) != nil
     }
 
     private func installSourcePlaybooks() -> URL? {

@@ -37,6 +37,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from playbooks import parse_playbook_markdown
+import action_review
+import daily_planner
+import uncataloged_fallback
 from domain import deterministic_slug
 from gbrain_ingest import submit_connector_ingestion
 from state import ingest_projection, load_json_file, load_source_run_state_file, save_json_file, save_source_run_state_file
@@ -573,33 +576,13 @@ def source_row_for(source_id, timestamp):
     }
 
 def uncataloged_record_for(progress, source_id):
-    records = progress.get("uncatalogedSources")
-    if not isinstance(records, list):
-        return {}
-    for item in records:
-        if isinstance(item, dict) and item.get("normalizedValue") == source_id:
-            return item
-    return {}
+    return uncataloged_fallback.record_for(progress, source_id)
 
 def fallback_source_row_for(progress, source_id, timestamp):
-    record = uncataloged_record_for(progress, source_id)
-    return {
-        "id": source_id,
-        "displayName": record.get("displayName") or record.get("rawValue") or source_id,
-        "type": "uncataloged",
-        "phase": "intake",
-        "status": "unchecked",
-        "selectionState": "confirmed",
-        "playbookID": fallback_playbook["id"],
-        "playbookVersion": fallback_playbook["version"],
-        "updatedAt": timestamp,
-    }
+    return uncataloged_fallback.source_row_for(progress, source_id, timestamp, fallback_playbook)
 
 def is_fallback_source_row(row):
-    return isinstance(row, dict) and (
-        row.get("type") == "uncataloged"
-        or row.get("playbookID") == fallback_playbook["id"]
-    )
+    return uncataloged_fallback.is_source_row(row, fallback_playbook)
 
 def set_fallback_row_state(state, source_id, row_status, phase, step_id, timestamp=None, attention_reason=None, result_summary=None, run_state_path=None):
     timestamp = timestamp or now()
@@ -636,28 +619,10 @@ def set_fallback_row_state(state, source_id, row_status, phase, step_id, timesta
     return state
 
 def fallback_phase_for_step(step_id):
-    if step_id in {"classify_source", "research_access_paths", "choose_strategy"}:
-        return "investigate"
-    if step_id in {"smoke_read"}:
-        return "preflight"
-    if step_id in {"propose_ingest_scope", "confirm_ingest_plan"}:
-        return "scope"
-    if step_id == "ingest":
-        return "ingest"
-    if step_id == "verify_readback":
-        return "verify"
-    if step_id == "complete":
-        return "complete"
-    return "intake"
+    return uncataloged_fallback.phase_for_step(step_id)
 
 def next_fallback_step_id(step_id):
-    steps = fallback_playbook["steps"]
-    if step_id not in steps:
-        return fallback_playbook["initialStepID"]
-    index = steps.index(step_id)
-    if index + 1 >= len(steps):
-        return "complete"
-    return steps[index + 1]
+    return uncataloged_fallback.next_step_id(step_id, fallback_playbook)
 
 def redaction_report():
     return {"secret": 0, "privatePath": 0, "rawBody": 0}
@@ -864,153 +829,33 @@ def action_review_manifest_path():
     return state_path.parent / "source-action-review-manifest.json"
 
 def action_review_source_records(state):
-    progress = ensure_progress(state)
-    rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
-    records = []
-    for source_id in ensure_execution_order(progress):
-        row = rows.get(source_id) if isinstance(rows.get(source_id), dict) else {}
-        if row.get("status") != "checked":
-            continue
-        run_state = load_source_run_state(source_id)
-        ingest_receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else None
-        if ingest_receipt and ingest_receipt.get("complete") is True:
-            readbacks = ingest_receipt.get("readbacks") if isinstance(ingest_receipt.get("readbacks"), list) else []
-            verified_records = [
-                {"slug": item.get("slug"), "sourceID": item.get("sourceID"), "identityMatch": True}
-                for item in readbacks
-                if isinstance(item, dict)
-                and item.get("identityMatch") is True
-                and isinstance(item.get("slug"), str) and item.get("slug")
-                and isinstance(item.get("sourceID"), str) and item.get("sourceID")
-            ]
-            if verified_records and len(verified_records) == ingest_receipt.get("verifiedRecordCount"):
-                records.append({
-                    "sourceID": source_id,
-                    "displayName": row.get("displayName") or source_display_name(source_id),
-                    "gbrainRecords": verified_records,
-                    "resultSummary": row.get("resultSummary") or run_state.get("completionSummary"),
-                    "runStatePath": row.get("runStatePath"),
-                })
-                continue
-    return records
+    return action_review.source_records(
+        state,
+        ensure_progress,
+        ensure_execution_order,
+        load_source_run_state,
+        source_display_name,
+    )
 
 def prepare_action_review(state):
-    progress = ensure_progress(state)
-    existing = progress.get("actionReview") if isinstance(progress.get("actionReview"), dict) else None
-    if existing and existing.get("required"):
-        return state, existing
-    timestamp = now()
-    records = action_review_source_records(state)
-    review_id = str(uuid.uuid4())
-    target = gbrain_target_directory(state)
-    target_path = str(target.resolve(strict=False)) if target is not None else ""
-    existing_task_paths = []
-    if target is not None:
-        tasks_directory = target / "tasks"
-        if tasks_directory.is_dir():
-            existing_task_paths = sorted(
-                str(path.resolve(strict=False))
-                for path in tasks_directory.glob("*.md")
-                if path.is_file()
-            )
-    manifest_path = action_review_manifest_path()
-    manifest = {
-        "schemaVersion": 1,
-        "reviewID": review_id,
-        "brainTargetPath": target_path,
-        "sourceOnboardingStatePath": str(state_path),
-        "createdAt": timestamp,
-        "sources": records,
-        "existingTaskPaths": existing_task_paths,
-    }
-    write_json_file(manifest_path, manifest)
-    skill_path = target / ".gbrain-adapter/skills/source-to-tasks/SKILL.md" if target is not None else None
-    if target is None or not records:
-        status_value = "skipped"
-        reason = "no_eligible_artifacts"
-    elif skill_path is None or not skill_path.is_file():
-        status_value = "attention"
-        reason = "source_to_tasks_skill_missing"
-    else:
-        status_value = "ready"
-        reason = None
-    review = {
-        "required": True,
-        "status": status_value,
-        "reviewID": review_id,
-        "manifestPath": str(manifest_path),
-        "skillPath": str(skill_path) if skill_path is not None else None,
-        "eligibleSourceCount": len(records),
-        "candidateCount": None,
-        "approvedCount": None,
-        "taskPaths": [],
-        "reason": reason,
-        "updatedAt": timestamp,
-    }
-    progress["actionReview"] = review
-    state["status"] = source_completion_status(state)
-    state["updatedAt"] = timestamp
-    save_json(state)
-    return state, review
+    return action_review.prepare(
+        state, state_path=state_path, ensure_progress=ensure_progress,
+        records=action_review_source_records, now=now,
+        target_directory=gbrain_target_directory, write_json_file=write_json_file,
+        source_completion_status=source_completion_status, save_json=save_json,
+    )
 
 def validated_action_task_path(state, raw_path):
-    target = gbrain_target_directory(state)
-    if target is None:
-        return None, "gbrain_target_missing"
-    target = target.resolve(strict=False)
-    candidate = Path(raw_path).expanduser()
-    if not candidate.is_absolute():
-        candidate = target / candidate
-    candidate = candidate.resolve(strict=False)
-    tasks_root = (target / "tasks").resolve(strict=False)
-    try:
-        candidate.relative_to(tasks_root)
-    except Exception:
-        return None, "task_path_outside_tasks"
-    if candidate.suffix.lower() != ".md" or not candidate.is_file():
-        return None, "task_file_missing"
-    try:
-        content = candidate.read_text(encoding="utf-8")
-    except Exception:
-        return None, "task_file_unreadable"
-    if not re.search(r"(?m)^type:\s*task\s*$", content[:4096]):
-        return None, "task_type_missing"
-    review = ensure_progress(state).get("actionReview")
-    manifest = load_json(Path(review.get("manifestPath") or "")) if isinstance(review, dict) else {}
-    existing_paths = manifest.get("existingTaskPaths") if isinstance(manifest.get("existingTaskPaths"), list) else []
-    if str(candidate) in existing_paths:
-        return None, "task_preexisted_action_review"
-    return str(candidate), None
+    return action_review.validated_task_path(
+        state,
+        raw_path,
+        gbrain_target_directory,
+        ensure_progress,
+        load_json,
+    )
 
 def parse_action_review_args():
-    parsed = {
-        "status": "",
-        "candidateCount": None,
-        "approvedCount": None,
-        "taskPaths": [],
-        "reason": "",
-    }
-    index = 0
-    while index < len(args):
-        token = args[index]
-        if token == "--status" and index + 1 < len(args):
-            parsed["status"] = args[index + 1].strip().lower()
-            index += 2
-        elif token == "--candidate-count" and index + 1 < len(args):
-            parsed["candidateCount"] = int(args[index + 1])
-            index += 2
-        elif token == "--approved-count" and index + 1 < len(args):
-            parsed["approvedCount"] = int(args[index + 1])
-            index += 2
-        elif token == "--task-path" and index + 1 < len(args):
-            parsed["taskPaths"].append(args[index + 1])
-            index += 2
-        elif token == "--reason" and index + 1 < len(args):
-            parsed["reason"] = args[index + 1].strip()
-            index += 2
-        else:
-            raise ValueError("unknown or incomplete argument: " + token)
-    return parsed
+    return action_review.parse_args(args)
 
 def action_review_command():
     subcommand = args.pop(0) if args else "status"
@@ -1140,48 +985,12 @@ def action_review_command():
     return 0
 
 def prepare_daily_plan(state):
-    progress = ensure_progress(state)
-    existing = progress.get("dailyPlan") if isinstance(progress.get("dailyPlan"), dict) else None
-    if existing and existing.get("required"):
-        return state, existing
-    timestamp = now()
-    target = gbrain_target_directory(state)
-    skill_path = target / ".gbrain-adapter/skills/zebra-daily-planner/SKILL.md" if target is not None else None
-    adapter = load_json(adapter_state_path)
-    adapter_receipt = adapter.get("receipt") if isinstance(adapter.get("receipt"), dict) else {}
-    adapter_checks = adapter_receipt.get("checks") if isinstance(adapter_receipt.get("checks"), dict) else {}
-    planner_expected = adapter_checks.get("adapterSkillZebraDailyPlanner") is True
-    if target is None or not planner_expected:
-        required_value = False
-        status_value = "skipped"
-        reason = "gbrain_target_missing" if target is None else "legacy_adapter_without_daily_planner"
-    elif skill_path is None or not skill_path.is_file():
-        required_value = True
-        status_value = "attention"
-        reason = "zebra_daily_planner_skill_missing"
-    else:
-        required_value = True
-        status_value = "ready"
-        reason = None
-    daily_plan = {
-        "required": required_value,
-        "status": status_value,
-        "skillPath": str(skill_path) if skill_path is not None else None,
-        "calendarCoverage": None,
-        "freeMinutes": None,
-        "scheduledMinutes": None,
-        "plannedTaskCount": None,
-        "scheduledTaskPaths": [],
-        "calendarWriteStatus": None,
-        "calendarEventIDs": [],
-        "reason": reason,
-        "updatedAt": timestamp,
-    }
-    progress["dailyPlan"] = daily_plan
-    state["status"] = source_completion_status(state)
-    state["updatedAt"] = timestamp
-    save_json(state)
-    return state, daily_plan
+    return daily_planner.prepare(
+        state, ensure_progress=ensure_progress, now=now,
+        target_directory=gbrain_target_directory, adapter_state_path=adapter_state_path,
+        load_json=load_json, source_completion_status=source_completion_status,
+        save_json=save_json,
+    )
 
 def daily_plan_handoff_prompt(daily_plan):
     status_value = daily_plan.get("status")
@@ -1243,122 +1052,19 @@ def daily_plan_handoff_prompt(daily_plan):
     ''').strip()
 
 def parse_daily_plan_args():
-    parsed = {
-        "status": "",
-        "calendarCoverage": "",
-        "freeMinutes": None,
-        "scheduledMinutes": None,
-        "plannedTaskCount": None,
-        "taskPaths": [],
-        "calendarWriteStatus": "",
-        "calendarEventIDs": [],
-        "reason": "",
-    }
-    index = 0
-    while index < len(args):
-        token = args[index]
-        if token == "--status" and index + 1 < len(args):
-            parsed["status"] = args[index + 1].strip().lower()
-        elif token == "--calendar-coverage" and index + 1 < len(args):
-            parsed["calendarCoverage"] = args[index + 1].strip()
-        elif token == "--free-minutes" and index + 1 < len(args):
-            parsed["freeMinutes"] = int(args[index + 1])
-        elif token == "--scheduled-minutes" and index + 1 < len(args):
-            parsed["scheduledMinutes"] = int(args[index + 1])
-        elif token == "--task-count" and index + 1 < len(args):
-            parsed["plannedTaskCount"] = int(args[index + 1])
-        elif token == "--task-path" and index + 1 < len(args):
-            parsed["taskPaths"].append(args[index + 1].strip())
-        elif token == "--calendar-write-status" and index + 1 < len(args):
-            parsed["calendarWriteStatus"] = args[index + 1].strip().lower()
-        elif token == "--event-id" and index + 1 < len(args):
-            parsed["calendarEventIDs"].append(args[index + 1].strip())
-        elif token == "--reason" and index + 1 < len(args):
-            parsed["reason"] = args[index + 1].strip()
-        else:
-            raise ValueError("unknown or incomplete argument: " + token)
-        index += 2
-    return parsed
+    return daily_planner.parse_args(args)
 
 def planned_task_frontmatter(path):
-    try:
-        text = path.read_text(encoding="utf-8")
-    except Exception:
-        return None
-    lines = text[:16384].splitlines()
-    if not lines or lines[0].strip() != "---":
-        return None
-    values = {}
-    for raw in lines[1:]:
-        stripped = raw.strip()
-        if stripped == "---":
-            return values
-        if not stripped or raw[:1].isspace() or ":" not in raw:
-            continue
-        key, value = raw.split(":", 1)
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        values[key.strip()] = value
-    return None
+    return daily_planner.task_frontmatter(path)
 
 def parse_planned_timestamp(raw):
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    value = raw.strip()
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        return None
-    return parsed
+    return daily_planner.parse_timestamp(raw)
 
 def validated_planned_task_path(state, raw_path):
-    target = gbrain_target_directory(state)
-    if target is None:
-        return None, "gbrain_target_missing"
-    target = target.resolve(strict=False)
-    candidate = Path(raw_path).expanduser()
-    if not candidate.is_absolute():
-        candidate = target / candidate
-    candidate = candidate.resolve(strict=False)
-    tasks_root = (target / "tasks").resolve(strict=False)
-    try:
-        candidate.relative_to(tasks_root)
-    except Exception:
-        return None, "planned_task_path_outside_tasks"
-    if candidate.suffix.lower() != ".md" or not candidate.is_file():
-        return None, "planned_task_file_missing"
-    values = planned_task_frontmatter(candidate)
-    if not isinstance(values, dict) or values.get("type", "").lower() != "task":
-        return None, "planned_task_type_missing"
-    start_raw = values.get("planned_start_at")
-    end_raw = values.get("planned_end_at")
-    if not start_raw or not end_raw:
-        return None, "planned_task_interval_missing"
-    start = parse_planned_timestamp(start_raw)
-    end = parse_planned_timestamp(end_raw)
-    if start is None or end is None:
-        return None, "planned_task_timestamp_invalid"
-    if end <= start:
-        return None, "planned_task_interval_invalid"
-    return str(candidate), None
+    return daily_planner.validated_task_path(state, raw_path, gbrain_target_directory)
 
 def validated_planned_task_paths(state, raw_paths):
-    validated = []
-    seen = set()
-    for raw_path in raw_paths:
-        task_path, reason = validated_planned_task_path(state, raw_path)
-        if reason:
-            return None, reason, raw_path
-        if task_path in seen:
-            return None, "planned_task_path_duplicate", raw_path
-        seen.add(task_path)
-        validated.append(task_path)
-    return validated, None, None
+    return daily_planner.validated_task_paths(state, raw_paths, gbrain_target_directory)
 
 def daily_plan_command():
     subcommand = args.pop(0) if args else "status"
@@ -2129,6 +1835,16 @@ def fallback_step_prompt(source_id, step_id, state, row):
     ''').strip()
 
 def set_cli_source_row_state(source_id, state, row_status, phase, step_id, attention_reason=None, result_summary=None, run_state_path=None):
+    if source_id == "obsidian":
+        return set_obsidian_row_state(
+            state, row_status, phase, step_id, attention_reason=attention_reason,
+            result_summary=result_summary, run_state_path=run_state_path,
+        )
+    if source_id == "agent-memory":
+        return set_agent_memory_row_state(
+            state, row_status, phase, step_id, attention_reason=attention_reason,
+            result_summary=result_summary, run_state_path=run_state_path,
+        )
     if source_id == "imessage":
         return set_imessage_row_state(
             state,
@@ -2334,6 +2050,42 @@ def mark_source_completion_pending(state, source_id, disposition, result_summary
         )
     return state
 
+def verify_common_ingestion_completion(source_id, summary_label, success_hook=None):
+    state = load_or_create_state()
+    run_state = load_source_run_state(source_id)
+    receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
+    acquisition = run_state.get("acquisitionReceipt") if isinstance(run_state.get("acquisitionReceipt"), dict) else {}
+    projection = ingest_projection(receipt, acquisition)
+    if not projection["complete"]:
+        run_path = save_source_run_state(source_id, run_state)
+        state = set_cli_source_row_state(
+            source_id, state, "attention", "verify", "verify_readback",
+            attention_reason=projection["attentionReason"] or "readbackMissing",
+            run_state_path=run_path,
+        )
+        save_json(state)
+        payload = {"ok": False, "reason": projection["attentionReason"] or "readbackMissing"}
+        payload.update(source_next_prompt_payload(state, source_id, "verify_readback"))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 1
+    if callable(success_hook):
+        success_hook(run_state)
+    timestamp = now()
+    run_state.update({"readbackStatus": "passed", "verifiedAt": timestamp, "updatedAt": timestamp})
+    verified_count = receipt.get("verifiedRecordCount") or 0
+    state = mark_source_completion_pending(
+        state,
+        source_id,
+        "checked",
+        "GBrain ingest/readback verified for " + str(verified_count) + " " + summary_label + ".",
+        run_state=run_state,
+    )
+    save_json(state)
+    payload = {"ok": True, "readbackStatus": "passed", "verifiedRecordCount": verified_count}
+    payload.update(source_next_prompt_payload(state, source_id, "complete"))
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0
+
 def report_source_completion(state, source_id):
     progress = ensure_progress(state)
     rows = progress.get("sourceRows") if isinstance(progress.get("sourceRows"), dict) else {}
@@ -2362,10 +2114,11 @@ def report_source_completion(state, source_id):
     if (source_id in migrated_ingest_sources or is_fallback_source_row(row)) and disposition == "checked":
         ingest_receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
         acquisition_receipt = run_state.get("acquisitionReceipt") if isinstance(run_state.get("acquisitionReceipt"), dict) else {}
-        if ingest_receipt.get("complete") is not True or acquisition_receipt.get("complete") is not True:
+        projection = ingest_projection(ingest_receipt, acquisition_receipt)
+        if projection.get("complete") is not True:
             return None, {
                 "ok": False,
-                "reason": ingest_receipt.get("failure") or "acquisitionIncomplete",
+                "reason": projection.get("attentionReason") or "acquisitionIncomplete",
                 "sourceID": source_id,
             }, 1
     summary_text = row.get("resultSummary") or run_state.get("completionSummary") or (source_display_name(source_id) + " Source Onboarding completed.")
@@ -3388,7 +3141,7 @@ def fallback_report():
             "ingestedRecordCount": 1,
             "updatedAt": now(),
         })
-        projection = ingest_projection(receipt)
+        projection = ingest_projection(receipt, acquisition)
         if not projection["complete"]:
             run_state["ingestFailureReason"] = projection["attentionReason"]
             run_path = save_source_run_state(source_id, run_state)
@@ -3474,7 +3227,8 @@ def fallback_report():
     run_path = save_source_run_state(source_id, run_state)
     if parsed["step"] == "verify_readback":
         receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
-        projection = ingest_projection(receipt)
+        acquisition = run_state.get("acquisitionReceipt") if isinstance(run_state.get("acquisitionReceipt"), dict) else {}
+        projection = ingest_projection(receipt, acquisition)
         if not projection["complete"]:
             run_path = save_source_run_state(source_id, run_state)
             state = set_fallback_row_state(

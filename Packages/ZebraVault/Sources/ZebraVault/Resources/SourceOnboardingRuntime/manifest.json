@@ -1,10 +1,13 @@
 {
   "schemaVersion": 1,
-  "runtimeVersion": "5",
+  "runtimeVersion": "7",
   "entrypoint": "main.py",
   "requiredFiles": [
     "main.py",
     "common.py",
+    "action_review.py",
+    "daily_planner.py",
+    "uncataloged_fallback.py",
     "domain.py",
     "gbrain_ingest.py",
     "playbooks.py",

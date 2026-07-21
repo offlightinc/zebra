@@ -43,12 +43,16 @@ def normalized_record(value):
     record = dict(value)
     record["connectorID"] = str(record.get("connectorID") or "").strip()
     record["logicalRecordID"] = str(record.get("logicalRecordID") or "").strip()
-    record["slug"] = str(record.get("slug") or "").strip().strip("/")
+    supplied_slug = str(record.get("slug") or "").strip().strip("/")
     record["originURI"] = str(record.get("originURI") or "").strip()
     record["markdown"] = normalized_markdown(record.get("markdown"))
     record["identityDigest"] = identity_digest(record["markdown"])
-    if not all(record.get(key) for key in ("connectorID", "logicalRecordID", "slug", "originURI")):
+    if not all(record.get(key) for key in ("connectorID", "logicalRecordID", "originURI")):
         raise ValueError("record_identity_missing")
+    expected_slug = deterministic_slug(record["connectorID"], record["logicalRecordID"])
+    if supplied_slug and supplied_slug != expected_slug:
+        raise ValueError("record_slug_mismatch")
+    record["slug"] = expected_slug
     return record
 
 
@@ -77,7 +81,14 @@ def acquisition_failure(acquisition, expected_count):
     return None
 
 
-def reconciliation(acquisition, write, readbacks, expected_count):
+def reconciliation(
+    acquisition,
+    write,
+    readbacks,
+    expected_count,
+    expected_slugs=None,
+    expected_source_id=None,
+):
     failure = acquisition_failure(acquisition, expected_count)
     if failure is None and write.get("failure"):
         failure = write["failure"]
@@ -85,10 +96,24 @@ def reconciliation(acquisition, write, readbacks, expected_count):
         failure = "readbackMissing"
     elif failure is None:
         failure = next((item.get("failure") for item in readbacks if item.get("failure")), None)
+    if failure is None and expected_source_id:
+        if any(str(item.get("sourceID") or "") != str(expected_source_id) for item in readbacks):
+            failure = "sourceRoutingMismatch"
+    actual_slugs = [str(item.get("slug") or "") for item in readbacks]
+    if failure is None and len(set(actual_slugs)) != len(actual_slugs):
+        failure = "readbackMissing"
+    if failure is None and expected_slugs is not None:
+        expected = [str(value) for value in expected_slugs]
+        if set(actual_slugs) != set(expected):
+            failure = "readbackIdentityMismatch"
+    if failure is None and any(item.get("identityMatch") is not True for item in readbacks):
+        failure = "readbackIdentityMismatch"
     return {
         "complete": failure is None,
         "failure": failure,
         "retryable": failure not in {None, "cancelled", "acquisitionIncomplete", "targetBindingMismatch", "sourceRoutingMismatch"},
         "expectedRecordCount": expected_count,
         "verifiedRecordCount": sum(1 for item in readbacks if item.get("identityMatch") is True),
+        "expectedSlugs": list(expected_slugs) if expected_slugs is not None else None,
+        "expectedSourceID": expected_source_id,
     }

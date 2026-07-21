@@ -3944,14 +3944,23 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             .appendingPathComponent("obsidian.json", isDirectory: false)
         try FileManager.default.createDirectory(at: runStateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let runState: [String: Any] = [
-            "acquisitionReceipt": ["complete": true],
+            "acquisitionReceipt": [
+                "discoveredCount": 1, "selectedCount": 1, "normalizedCount": 1,
+                "failedCount": 0, "diagnosticCount": 0, "cancelled": false, "complete": true,
+            ],
             "ingestReceipt": [
                 "complete": true,
+                "failure": NSNull(),
+                "expectedRecordCount": 1,
+                "expectedSlugs": ["sources/obsidian/note"],
+                "expectedSourceID": "brain",
                 "verifiedRecordCount": 1,
+                "write": ["failure": NSNull(), "sourceID": "brain", "expectedCount": 1],
                 "readbacks": [[
                     "slug": "sources/obsidian/note",
-                    "sourceID": "obsidian",
+                    "sourceID": "brain",
                     "identityMatch": true,
+                    "failure": NSNull(),
                 ]],
             ],
             "completionDisposition": "checked",
@@ -4003,7 +4012,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
         let sources = try XCTUnwrap(manifest["sources"] as? [[String: Any]])
         let gbrainRecords = try XCTUnwrap(sources.first?["gbrainRecords"] as? [[String: Any]])
         XCTAssertEqual(gbrainRecords.first?["slug"] as? String, "sources/obsidian/note")
-        XCTAssertEqual(gbrainRecords.first?["sourceID"] as? String, "obsidian")
+        XCTAssertEqual(gbrainRecords.first?["sourceID"] as? String, "brain")
         let existingTaskPaths = try XCTUnwrap(manifest["existingTaskPaths"] as? [String])
         XCTAssertEqual(existingTaskPaths.count, 1)
 
@@ -4301,14 +4310,23 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
                     "completionDisposition": "checked",
                     "completionSummary": "Notion ingest readback verified for target page123.",
                     "completionReportPending": true,
-                    "acquisitionReceipt": ["complete": true],
+                    "acquisitionReceipt": [
+                        "discoveredCount": 1, "selectedCount": 1, "normalizedCount": 1,
+                        "failedCount": 0, "diagnosticCount": 0, "cancelled": false, "complete": true,
+                    ],
                     "ingestReceipt": [
                         "complete": true,
+                        "failure": NSNull(),
+                        "expectedRecordCount": 1,
+                        "expectedSlugs": ["sources/notion/page123"],
+                        "expectedSourceID": "brain",
                         "verifiedRecordCount": 1,
+                        "write": ["failure": NSNull(), "sourceID": "brain", "expectedCount": 1],
                         "readbacks": [[
                             "slug": "sources/notion/page123",
-                            "sourceID": "notion",
+                            "sourceID": "brain",
                             "identityMatch": true,
+                            "failure": NSNull(),
                         ]],
                     ],
                     "verifiedAt": "2026-07-07T06:49:51Z",

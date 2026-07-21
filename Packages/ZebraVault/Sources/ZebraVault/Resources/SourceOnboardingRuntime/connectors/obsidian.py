@@ -1093,11 +1093,12 @@ def obsidian_ingest():
     for source_path in files:
         try:
             relative = str(source_path.relative_to(Path(vault)))
+            logical_id = str(Path(relative).with_suffix(""))
             body = source_path.read_text(encoding="utf-8")
             records.append({
                 "connectorID": "obsidian",
-                "logicalRecordID": relative,
-                "slug": deterministic_slug("obsidian", str(Path(relative).with_suffix(""))),
+                "logicalRecordID": logical_id,
+                "slug": deterministic_slug("obsidian", logical_id),
                 "markdown": body,
                 "originURI": "obsidian://" + relative,
             })
@@ -1125,7 +1126,7 @@ def obsidian_ingest():
         "updatedAt": now(),
     })
     run_path = save_source_run_state("obsidian", run_state)
-    projection = ingest_projection(receipt)
+    projection = ingest_projection(receipt, acquisition)
     if not projection["complete"]:
         state = set_obsidian_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"], run_state_path=run_path)
         save_json(state)
@@ -1142,25 +1143,7 @@ def obsidian_ingest():
 
 
 def obsidian_verify_readback():
-    state = load_or_create_state()
-    run_state = load_source_run_state("obsidian")
-    receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}
-    projection = ingest_projection(receipt)
-    if not projection["complete"]:
-        run_path = save_source_run_state("obsidian", run_state)
-        state = set_obsidian_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"] or "readbackMissing", run_state_path=run_path)
-        save_json(state)
-        payload = {"ok": False, "reason": projection["attentionReason"] or "readbackMissing"}
-        payload.update(source_next_prompt_payload(state, "obsidian", "verify_readback"))
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 1
-    run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()})
-    state = mark_source_completion_pending(state, "obsidian", "checked", "GBrain ingest/readback verified for " + str(receipt.get("verifiedRecordCount") or 0) + " Obsidian notes.", run_state=run_state)
-    save_json(state)
-    payload = {"ok": True, "readbackStatus": "passed", "verifiedRecordCount": receipt.get("verifiedRecordCount")}
-    payload.update(source_next_prompt_payload(state, "obsidian", "complete"))
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    return 0
+    return verify_common_ingestion_completion("obsidian", "Obsidian notes")
 
 
 def obsidian_command():

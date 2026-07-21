@@ -103,9 +103,9 @@ def gmail_step_prompt(step_id, state, row):
         ''').strip()
     if step_id == "complete":
         return textwrap.dedent('''
-        Zebra Source Onboarding: Gmail is complete.
+        Zebra Source Onboarding: Gmail connectivity setup is complete; data ingestion has not started.
 
-        Do not run more Gmail verification commands. Briefly tell the user that Gmail is connected for Zebra Source Onboarding, then stop unless Zebra has printed a next source prompt.
+        Do not claim that Gmail messages were ingested or checked. Briefly tell the user only that Gmail connectivity is ready, then stop unless Zebra has printed a next source prompt.
         ''').strip()
     return textwrap.dedent('''
     Zebra Source Onboarding: Gmail needs attention.

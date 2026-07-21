@@ -878,18 +878,13 @@ def imessage_ingest():
     acquisition = {"discoveredCount": len(thread_ids), "selectedCount": len(thread_ids), "normalizedCount": len(records), "failedCount": len(failures), "diagnosticCount": 0, "cancelled": False, "complete": not failures and len(records) == len(thread_ids)}
     attempt_id = str(uuid.uuid4()); receipt = submit_connector_ingestion("imessage", records, acquisition, state, attempt_id, gbrain_state_path)
     run_state.update({"ingestAttemptID": attempt_id, "acquisitionReceipt": acquisition, "ingestReceipt": receipt, "ingestedThreadCount": len(records), "acquisitionDiagnostics": failures[:8], "updatedAt": now()})
-    run_path = save_source_run_state("imessage", run_state); projection = ingest_projection(receipt)
+    run_path = save_source_run_state("imessage", run_state); projection = ingest_projection(receipt, acquisition)
     state = set_imessage_row_state(state, "running" if projection["complete"] else "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"], run_state_path=run_path, result_summary="GBrain ingest attempted for " + str(len(records)) + " iMessage conversations."); save_json(state)
     payload = {"ok": projection["complete"], "reason": projection["attentionReason"], "ingestedThreadCount": len(records)}; payload.update(source_next_prompt_payload(state, "imessage", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0 if projection["complete"] else 1
 
 
 def imessage_verify_readback():
-    state = load_or_create_state(); run_state = load_source_run_state("imessage"); receipt = run_state.get("ingestReceipt") if isinstance(run_state.get("ingestReceipt"), dict) else {}; projection = ingest_projection(receipt)
-    if not projection["complete"]:
-        state = set_imessage_row_state(state, "attention", "verify", "verify_readback", attention_reason=projection["attentionReason"] or "readbackMissing", run_state_path=save_source_run_state("imessage", run_state)); save_json(state)
-        payload = {"ok": False, "reason": projection["attentionReason"] or "readbackMissing"}; payload.update(source_next_prompt_payload(state, "imessage", "verify_readback")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 1
-    run_state.update({"readbackStatus": "passed", "verifiedAt": now(), "updatedAt": now()}); state = mark_source_completion_pending(state, "imessage", "checked", "GBrain ingest/readback verified for " + str(receipt.get("verifiedRecordCount") or 0) + " iMessage conversations.", run_state=run_state); save_json(state)
-    payload = {"ok": True, "readbackStatus": "passed", "verifiedRecordCount": receipt.get("verifiedRecordCount")}; payload.update(source_next_prompt_payload(state, "imessage", "complete")); print(json.dumps(payload, ensure_ascii=False, sort_keys=True)); return 0
+    return verify_common_ingestion_completion("imessage", "iMessage conversations")
 
 
 def imessage_command():
