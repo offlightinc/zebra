@@ -111,6 +111,44 @@ final class ZebraSourceOnboardingRuntimeInstallationTests: XCTestCase {
         }
     }
 
+    func testPreparingSameRuntimeVersionReusesInstalledGeneration() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stateURL = root.appendingPathComponent("support/source-onboarding-state.json", isDirectory: false)
+        let helper = ZebraSourceOnboardingHelper(stateURL: stateURL, homeDirectoryPath: root.path)
+
+        let firstLaunch = try helper.prepareLaunchResult(selectedVaultPath: nil).get()
+        let installedRuntime = stateURL.deletingLastPathComponent()
+            .appendingPathComponent("source-onboarding-runtime", isDirectory: true)
+        let firstRuntimeIdentity = try XCTUnwrap(
+            installedRuntime.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+        )
+        let firstEntrypointIdentity = try XCTUnwrap(
+            URL(fileURLWithPath: firstLaunch.helperPath)
+                .resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+        )
+
+        let secondLaunch = try helper.prepareLaunchResult(selectedVaultPath: nil).get()
+        let secondRuntimeIdentity = try XCTUnwrap(
+            installedRuntime.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+        )
+        let secondEntrypointIdentity = try XCTUnwrap(
+            URL(fileURLWithPath: secondLaunch.helperPath)
+                .resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+        )
+
+        XCTAssertEqual(
+            firstRuntimeIdentity as? AnyHashable,
+            secondRuntimeIdentity as? AnyHashable,
+            "Preparing an unchanged runtime version must reuse the installed generation"
+        )
+        XCTAssertEqual(
+            firstEntrypointIdentity as? AnyHashable,
+            secondEntrypointIdentity as? AnyHashable,
+            "Preparing an unchanged runtime version must not replace the CLI entrypoint"
+        )
+    }
+
     private func failure(
         of result: Result<ZebraSourceOnboardingHelper.LaunchContext, ZebraSourceOnboardingHelper.InstallationError>
     ) -> ZebraSourceOnboardingHelper.InstallationError? {

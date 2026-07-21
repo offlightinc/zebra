@@ -128,6 +128,96 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 0)
     }
 
+    func testSinglePutRejectsStructuredNegativeResult() throws {
+        let rejectedFixture = try Fixture(scenario: "put-ok-false")
+        let rejected = try rejectedFixture.run(records: [
+            rejectedFixture.record(id: "one", body: "body"),
+        ])
+        XCTAssertEqual(rejected["complete"] as? Bool, false)
+        XCTAssertEqual(rejected["failure"] as? String, "writeThroughFailed")
+    }
+
+    func testBulkFailureIsIsolatedAndRetriedWithBoundedPut() throws {
+        let retryFixture = try Fixture(scenario: "partial-retry")
+        let retried = try retryFixture.run(records: [
+            retryFixture.record(id: "one", body: "first"),
+            retryFixture.record(id: "two", body: "second"),
+        ])
+        XCTAssertEqual(retried["complete"] as? Bool, true)
+        XCTAssertNil(retried["failure"] as? String)
+        let events = try retryFixture.events()
+        XCTAssertEqual(events.filter { $0["command"] as? String == "import" }.count, 1)
+        XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 1)
+        XCTAssertEqual(events.filter { $0["command"] as? String == "get" }.count, 3)
+    }
+
+    func testConnectorCannotOverrideDeterministicSlug() throws {
+        let fixture = try Fixture()
+        var record = fixture.record(id: "one", body: "body")
+        record["slug"] = "sources/another-source/attacker-selected"
+
+        let result = try fixture.run(records: [record])
+
+        XCTAssertEqual(result["complete"] as? Bool, false)
+        XCTAssertEqual(result["failure"] as? String, "stagingFailed")
+        XCTAssertTrue(try fixture.events().allSatisfy {
+            !["put", "import", "get"].contains($0["command"] as? String ?? "")
+        })
+    }
+
+    func testReconcilerRejectsInconsistentWrongScopedAndDuplicateReadbacks() throws {
+        let fixture = try Fixture()
+        let acquisition: [String: Any] = [
+            "discoveredCount": 2, "selectedCount": 2, "normalizedCount": 2,
+            "failedCount": 0, "diagnosticCount": 0, "cancelled": false, "complete": true,
+        ]
+        let write: [String: Any] = ["failure": NSNull(), "sourceID": "verified-brain"]
+        let cases: [([[String: Any]], String)] = [
+            ([
+                ["slug": "sources/obsidian/one", "sourceID": "verified-brain", "identityMatch": false, "failure": NSNull()],
+                ["slug": "sources/obsidian/two", "sourceID": "verified-brain", "identityMatch": true, "failure": NSNull()],
+            ], "readbackIdentityMismatch"),
+            ([
+                ["slug": "sources/obsidian/wrong", "sourceID": "verified-brain", "identityMatch": true, "failure": NSNull()],
+                ["slug": "sources/obsidian/two", "sourceID": "verified-brain", "identityMatch": true, "failure": NSNull()],
+            ], "readbackIdentityMismatch"),
+            ([
+                ["slug": "sources/obsidian/one", "sourceID": "wrong-brain", "identityMatch": true, "failure": NSNull()],
+                ["slug": "sources/obsidian/two", "sourceID": "verified-brain", "identityMatch": true, "failure": NSNull()],
+            ], "sourceRoutingMismatch"),
+            ([
+                ["slug": "sources/obsidian/one", "sourceID": "verified-brain", "identityMatch": true, "failure": NSNull()],
+                ["slug": "sources/obsidian/one", "sourceID": "verified-brain", "identityMatch": true, "failure": NSNull()],
+            ], "readbackMissing"),
+        ]
+        let expected = ["sources/obsidian/one", "sources/obsidian/two"]
+        for (readbacks, failure) in cases {
+            let result = try fixture.reconcile(
+                acquisition: acquisition,
+                write: write,
+                readbacks: readbacks,
+                expectedSlugs: expected,
+                expectedSourceID: "verified-brain"
+            )
+            XCTAssertEqual(result["complete"] as? Bool, false, "\(readbacks)")
+            XCTAssertEqual(result["failure"] as? String, failure, "\(readbacks)")
+        }
+    }
+
+    func testCancellationDuringBulkImportTerminatesAttempt() throws {
+        let fixture = try Fixture(scenario: "slow-import")
+        let started = Date()
+        let result = try fixture.runCancellingDuringProcess(records: [
+            fixture.record(id: "one", body: "first"),
+            fixture.record(id: "two", body: "second"),
+        ])
+
+        XCTAssertEqual(result["complete"] as? Bool, false)
+        XCTAssertEqual(result["failure"] as? String, "cancelled")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2.5)
+        XCTAssertTrue(try fixture.events().filter { $0["command"] as? String == "get" }.isEmpty)
+    }
+
     func testBulkAttemptsSharingGBrainHomeAreSerialized() throws {
         let fixture = try Fixture(scenario: "detect-overlap")
         let results = try fixture.runConcurrently(records: [
@@ -307,6 +397,57 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
             return try runHarness(harness, input: input)
         }
 
+        func reconcile(
+            acquisition: [String: Any],
+            write: [String: Any],
+            readbacks: [[String: Any]],
+            expectedSlugs: [String],
+            expectedSourceID: String
+        ) throws -> [String: Any] {
+            let input = try JSONSerialization.data(withJSONObject: [
+                "acquisition": acquisition,
+                "write": write,
+                "readbacks": readbacks,
+                "expectedSlugs": expectedSlugs,
+                "expectedSourceID": expectedSourceID,
+            ], options: [.sortedKeys])
+            let harness = root.appendingPathComponent("reconcile-harness.py", isDirectory: false)
+            let harnessText = """
+            import json
+            import sys
+            sys.path.insert(0, \(String(reflecting: runtime.path)))
+            from domain import reconciliation
+            value = json.load(sys.stdin)
+            print(json.dumps(reconciliation(
+                value["acquisition"], value["write"], value["readbacks"],
+                len(value["expectedSlugs"]), expected_slugs=value["expectedSlugs"],
+                expected_source_id=value["expectedSourceID"]
+            ), sort_keys=True))
+            """
+            try harnessText.write(to: harness, atomically: true, encoding: .utf8)
+            return try runHarness(harness, input: input)
+        }
+
+        func runCancellingDuringProcess(records: [[String: Any]]) throws -> [String: Any] {
+            let cancellation = root.appendingPathComponent("cancel-requested", isDirectory: false)
+            var value = request(records: records, acquisitionComplete: true, acquisitionOverride: [:])
+            value["cancellationPath"] = cancellation.path
+            let input = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+            let harness = root.appendingPathComponent("cancellation-harness.py", isDirectory: false)
+            let harnessText = """
+            import json
+            import sys
+            sys.path.insert(0, \(String(reflecting: runtime.path)))
+            from gbrain_ingest import run_ingest
+            print(json.dumps(run_ingest(json.load(sys.stdin)), sort_keys=True))
+            """
+            try harnessText.write(to: harness, atomically: true, encoding: .utf8)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.25) {
+                FileManager.default.createFile(atPath: cancellation.path, contents: Data())
+            }
+            return try runHarness(harness, input: input)
+        }
+
         func runConcurrently(records: [[String: Any]]) throws -> [[String: Any]] {
             let requests = [
                 request(records: records, acquisitionComplete: true, acquisitionOverride: [:]),
@@ -345,7 +486,7 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
                 "complete": acquisitionComplete,
             ]
             acquisition.merge(acquisitionOverride) { _, replacement in replacement }
-            return [
+            let value: [String: Any] = [
                 "attemptID": UUID().uuidString,
                 "binding": [
                     "executable": scenario == "missing-runtime"
@@ -362,6 +503,7 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
                 "acquisition": acquisition,
                 "records": records,
             ]
+            return value
         }
 
         private func runHarness(_ harness: URL, input: Data) throws -> [String: Any] {

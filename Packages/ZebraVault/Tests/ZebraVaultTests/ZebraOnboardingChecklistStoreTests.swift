@@ -3566,7 +3566,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testSourceOnboardingNotionRedactsQuotedCredentialFieldsBeforeArtifactWrite() throws {
+    func testSourceOnboardingNotionKeepsSmokeSourceBodyOutOfControlPlaneState() throws {
         let root = try makeTemporaryDirectory()
         let fakeBin = root.appendingPathComponent("fake-bin", isDirectory: true)
         let ntnLog = root.appendingPathComponent("ntn.log", isDirectory: false)
@@ -3639,6 +3639,12 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             environment: environment
         )
         XCTAssertEqual(choose.status, 0, "stdout:\n\(choose.stdout)\nstderr:\n\(choose.stderr)")
+        let stateAfterSmoke = try readSourceOnboardingState(at: stateURL)
+        let notionRunStatePath = try XCTUnwrap(stateAfterSmoke.progress.sourceRows["notion"]?.runStatePath)
+        let persistedControlState = try String(contentsOfFile: notionRunStatePath, encoding: .utf8)
+        XCTAssertFalse(persistedControlState.contains("CONTROL_PLANE_PRIVATE_NOTION_BODY_7D29"))
+        XCTAssertFalse(persistedControlState.contains("ABCDEFGH"))
+        XCTAssertFalse(persistedControlState.contains("12345678"))
         let ingest = try runProcess(
             executableURL: helperURL,
             arguments: ["notion", "ingest"],
@@ -10439,7 +10445,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
           exit 0
         fi
         if [ "$1" = "pages" ] && [ "$2" = "get" ]; then
-          echo '{"id":"page123","title":"Test Page","oauth_code":"ABCDEFGH","code":"12345678"}'
+          echo '{"id":"page123","title":"Test Page","content":"CONTROL_PLANE_PRIVATE_NOTION_BODY_7D29","oauth_code":"ABCDEFGH","code":"12345678"}'
           exit 0
         fi
         if [ "$1" = "datasources" ] && [ "$2" = "query" ]; then

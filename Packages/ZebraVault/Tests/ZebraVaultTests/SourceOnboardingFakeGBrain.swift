@@ -68,6 +68,8 @@ enum SourceOnboardingFakeGBrain {
                 print("not json")
                 raise SystemExit(0)
             staging = pathlib.Path(args[1])
+            if scenario == "slow-import":
+                time.sleep(3)
             manifest = json.loads((staging / "zebra-ingest-manifest.json").read_text(encoding="utf-8"))
             event("staging-manifest", manifest=manifest)
             overlap = store / "import-active"
@@ -79,13 +81,14 @@ enum SourceOnboardingFakeGBrain {
                     raise SystemExit(17)
                 time.sleep(0.25)
             files = [path for path in staging.rglob("*.md")]
-            for path in files:
+            files_to_write = files[:-1] if scenario == "partial-retry" else files
+            for path in files_to_write:
                 text = path.read_text(encoding="utf-8")
                 slug = next(line.split(":", 1)[1].strip() for line in text.splitlines() if line.startswith("slug:"))
                 key = hashlib.sha256(slug.encode()).hexdigest()
                 (store / (key + ".md")).write_text(text, encoding="utf-8")
-            errors = 1 if scenario == "numeric-errors" else 0
-            imported = max(0, len(files) - 1) if scenario == "count-mismatch" else len(files)
+            errors = 1 if scenario in ("numeric-errors", "partial-retry") else 0
+            imported = max(0, len(files) - 1) if scenario in ("count-mismatch", "partial-retry") else len(files)
             payload = {"status": "success", "imported": imported, "skipped": 0, "errors": errors}
             if scenario == "write-through":
                 payload["writeThrough"] = {"ok": False}
@@ -99,7 +102,12 @@ enum SourceOnboardingFakeGBrain {
             text = sys.stdin.read()
             key = hashlib.sha256(slug.encode()).hexdigest()
             (store / (key + ".md")).write_text(text, encoding="utf-8")
-            print("not json" if scenario == "malformed-put" else json.dumps({"ok": True}))
+            if scenario == "malformed-put":
+                print("not json")
+            elif scenario == "put-ok-false":
+                print(json.dumps({"ok": False, "error": "rejected"}))
+            else:
+                print(json.dumps({"ok": True}))
             raise SystemExit(0)
 
         if command == "get":
