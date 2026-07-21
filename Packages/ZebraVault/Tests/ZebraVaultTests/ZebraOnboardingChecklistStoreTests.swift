@@ -5208,6 +5208,97 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSourceOnboardingObsidianPartialIngestRecordsFailuresWithoutCompleting() throws {
+        let fixture = try makeObsidianSmokeReadFixture(readMode: "four-denied")
+        let smoke = try runProcess(executableURL: fixture.helperURL, arguments: ["obsidian", "smoke-read"], environment: fixture.environment)
+        XCTAssertEqual(smoke.status, 0, "stdout:\n\(smoke.stdout)\nstderr:\n\(smoke.stderr)")
+        let scope = try runProcess(executableURL: fixture.helperURL, arguments: ["obsidian", "choose-scope", "--scope", "whole"], environment: fixture.environment)
+        XCTAssertEqual(scope.status, 0, "stdout:\n\(scope.stdout)\nstderr:\n\(scope.stderr)")
+        XCTAssertEqual(try jsonObject(from: scope.stdout)["estimatedFileCount"] as? Int, 5)
+        let confirm = try runProcess(executableURL: fixture.helperURL, arguments: ["obsidian", "confirm-plan", "--answer", "yes"], environment: fixture.environment)
+        XCTAssertEqual(confirm.status, 0, "stdout:\n\(confirm.stdout)\nstderr:\n\(confirm.stderr)")
+
+        let ingest = try runProcess(executableURL: fixture.helperURL, arguments: ["obsidian", "ingest"], environment: fixture.environment)
+        XCTAssertEqual(ingest.status, 0, "stdout:\n\(ingest.stdout)\nstderr:\n\(ingest.stderr)")
+        let ingestPayload = try jsonObject(from: ingest.stdout)
+        XCTAssertEqual(ingestPayload["discoveredFileCount"] as? Int, 5)
+        XCTAssertEqual(ingestPayload["selectedFileCount"] as? Int, 5)
+        XCTAssertEqual(ingestPayload["successfullyReadFileCount"] as? Int, 1)
+        XCTAssertEqual(ingestPayload["failedReadFileCount"] as? Int, 4)
+        XCTAssertEqual(ingestPayload["selectedFileCount"] as? Int, (ingestPayload["successfullyReadFileCount"] as? Int ?? -1) + (ingestPayload["failedReadFileCount"] as? Int ?? -1))
+        let attemptID = try XCTUnwrap(ingestPayload["ingestAttemptID"] as? String)
+        XCTAssertFalse(attemptID.isEmpty)
+        let artifactPath = try XCTUnwrap(ingestPayload["artifactPath"] as? String)
+        let manifestPath = try XCTUnwrap(ingestPayload["failureManifestPath"] as? String)
+
+        let artifact = try String(contentsOfFile: artifactPath, encoding: .utf8)
+        XCTAssertTrue(artifact.contains("Fixture body 5"), artifact)
+        for index in 1...4 {
+            XCTAssertFalse(artifact.contains("Fixture body \(index)"), artifact)
+            XCTAssertFalse(artifact.contains("### note-\(index).md"), artifact)
+        }
+        XCTAssertFalse(artifact.contains("read_error"), artifact)
+        XCTAssertEqual(artifact.components(separatedBy: "\n### ").count - 1, 1)
+
+        let manifestData = try Data(contentsOf: URL(fileURLWithPath: manifestPath))
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        XCTAssertEqual(manifest["ingestAttemptID"] as? String, attemptID)
+        XCTAssertEqual(manifest["failedReadFileCount"] as? Int, 4)
+        let signatures = try XCTUnwrap(manifest["signatures"] as? [[String: Any]])
+        XCTAssertEqual(signatures.count, 1)
+        let signature = try XCTUnwrap(signatures.first)
+        XCTAssertEqual(signature["errorType"] as? String, "PermissionError")
+        XCTAssertEqual(signature["errno"] as? Int, 13)
+        XCTAssertEqual(signature["message"] as? String, "Permission denied")
+        XCTAssertEqual(signature["count"] as? Int, 4)
+        let failedPaths = try XCTUnwrap(signature["paths"] as? [String])
+        XCTAssertEqual(Set(failedPaths), Set((1...4).map { "note-\($0).md" }))
+        XCTAssertEqual(signatures.reduce(0) { $0 + (($1["paths"] as? [String])?.count ?? 0) }, 4)
+        let manifestText = try String(contentsOfFile: manifestPath, encoding: .utf8)
+        XCTAssertFalse(manifestText.contains(fixture.vault.path), manifestText)
+        for index in 1...5 { XCTAssertFalse(manifestText.contains("Fixture body \(index)"), manifestText) }
+
+        let verify = try runProcess(executableURL: fixture.helperURL, arguments: ["obsidian", "verify-readback"], environment: fixture.environment)
+        XCTAssertEqual(verify.status, 1, "stdout:\n\(verify.stdout)\nstderr:\n\(verify.stderr)")
+        let verifyPayload = try jsonObject(from: verify.stdout)
+        XCTAssertEqual(verifyPayload["artifactReadbackStatus"] as? String, "passed")
+        XCTAssertEqual(verifyPayload["failureManifestStatus"] as? String, "passed")
+        XCTAssertEqual(verifyPayload["sourceCompleteness"] as? String, "incomplete")
+        XCTAssertEqual(verifyPayload["selectedFileCount"] as? Int, 5)
+        XCTAssertEqual(verifyPayload["successfullyReadFileCount"] as? Int, 1)
+        XCTAssertEqual(verifyPayload["failedReadFileCount"] as? Int, 4)
+        XCTAssertEqual(verifyPayload["failureManifestPath"] as? String, manifestPath)
+        XCTAssertNotNil(verifyPayload["errorSignatures"] as? [[String: Any]])
+        XCTAssertFalse((verifyPayload["failurePathExamples"] as? [String] ?? []).isEmpty)
+        let nextPrompt = try XCTUnwrap(verifyPayload["nextPrompt"] as? String)
+        XCTAssertTrue(nextPrompt.contains("Selected: 5"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("successfully read: 1"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("failed to read: 4"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("PermissionError"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("note-1.md"), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains(manifestPath), nextPrompt)
+        XCTAssertTrue(nextPrompt.contains("was not completed automatically"), nextPrompt)
+        XCTAssertFalse(nextPrompt.contains("report --status completed"), nextPrompt)
+
+        let state = try readSourceOnboardingState(at: fixture.stateURL)
+        let row = try XCTUnwrap(state.progress.sourceRows["obsidian"])
+        XCTAssertEqual(row.status, "attention")
+        XCTAssertNotEqual(row.status, "checked")
+        let persisted = try stateObject(in: URL(fileURLWithPath: try XCTUnwrap(row.runStatePath)))
+        XCTAssertEqual(persisted["ingestAttemptID"] as? String, attemptID)
+        XCTAssertEqual(persisted["discoveredFileCount"] as? Int, 5)
+        XCTAssertEqual(persisted["selectedFileCount"] as? Int, 5)
+        XCTAssertEqual(persisted["successfullyReadFileCount"] as? Int, 1)
+        XCTAssertEqual(persisted["failedReadFileCount"] as? Int, 4)
+        XCTAssertEqual(persisted["artifactPath"] as? String, artifactPath)
+        XCTAssertEqual(persisted["failureManifestPath"] as? String, manifestPath)
+        XCTAssertEqual(persisted["artifactReadbackStatus"] as? String, "passed")
+        XCTAssertEqual(persisted["failureManifestStatus"] as? String, "passed")
+        XCTAssertEqual(persisted["sourceCompleteness"] as? String, "incomplete")
+        XCTAssertNotEqual(persisted["completionReportPending"] as? Bool, true)
+    }
+
+    @MainActor
     func testSourceOnboardingObsidianSmokeReadDistinguishesMissingVaultAndNoMarkdown() throws {
         do {
             let fixture = try makeObsidianSmokeReadFixture()
@@ -8967,7 +9058,7 @@ final class ZebraOnboardingChecklistStoreTests: XCTestCase {
             withIntermediateDirectories: true
         )
         for index in 1...5 {
-            try "# Note \(index)\nBody".write(
+            try "# Note \(index)\nFixture body \(index)".write(
                 to: vault.appendingPathComponent("note-\(index).md", isDirectory: false),
                 atomically: true,
                 encoding: .utf8
