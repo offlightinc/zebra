@@ -15,6 +15,9 @@ FAILURES = frozenset({
     "readbackMissing",
     "readbackIdentityMismatch",
     "writeThroughFailed",
+    "filesystemPersistFailed",
+    "filesystemConflict",
+    "indexConfigurationFailed",
     "cancelled",
 })
 
@@ -111,7 +114,10 @@ def reconciliation(
     return {
         "complete": failure is None,
         "failure": failure,
-        "retryable": failure not in {None, "cancelled", "acquisitionIncomplete", "targetBindingMismatch", "sourceRoutingMismatch"},
+        "retryable": failure not in {
+            None, "cancelled", "acquisitionIncomplete", "targetBindingMismatch",
+            "sourceRoutingMismatch", "filesystemConflict", "indexConfigurationFailed",
+        },
         "expectedRecordCount": expected_count,
         "verifiedRecordCount": sum(1 for item in readbacks if item.get("identityMatch") is True),
         "expectedSlugs": list(expected_slugs) if expected_slugs is not None else None,

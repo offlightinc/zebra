@@ -55,6 +55,9 @@ enum SourceOnboardingFakeGBrain {
             current = "wrong-brain" if scenario == "wrong-source" else expected_source
             current_path = source_path + "/wrong-target" if scenario == "wrong-target" else source_path
             print(json.dumps({"source_id": current, "local_path": current_path}))
+            cancellation_path = os.environ.get("FAKE_GBRAIN_CANCELLATION_PATH")
+            if scenario == "cancel-after-route" and cancellation_path:
+                pathlib.Path(cancellation_path).write_text("cancelled")
             raise SystemExit(0)
 
         if command == "sources" and len(args) > 1 and args[1] == "list":
@@ -62,7 +65,13 @@ enum SourceOnboardingFakeGBrain {
             raise SystemExit(0)
 
         if command == "import":
-            if scenario == "import-exit":
+            attempt_file = store / "import-attempt-count"
+            attempt_count = int(attempt_file.read_text()) + 1 if attempt_file.exists() else 1
+            attempt_file.write_text(str(attempt_count))
+            if scenario == "configuration-error":
+                print("embedding_credentials_missing", file=sys.stderr)
+                raise SystemExit(1)
+            if scenario == "import-exit" or (scenario == "transient-import" and attempt_count < 3):
                 raise SystemExit(9)
             if scenario == "malformed-json":
                 print("not json")
@@ -72,6 +81,9 @@ enum SourceOnboardingFakeGBrain {
                 time.sleep(3)
             manifest = json.loads((staging / "zebra-ingest-manifest.json").read_text(encoding="utf-8"))
             event("staging-manifest", manifest=manifest)
+            if scenario == "mutate-canonical":
+                canonical = pathlib.Path(source_path) / manifest["records"][0]["relativePath"]
+                canonical.write_text(canonical.read_text(encoding="utf-8") + "user edit\\n", encoding="utf-8")
             overlap = store / "import-active"
             if scenario == "detect-overlap":
                 try:
@@ -81,19 +93,27 @@ enum SourceOnboardingFakeGBrain {
                     raise SystemExit(17)
                 time.sleep(0.25)
             files = [path for path in staging.rglob("*.md")]
-            files_to_write = files[:-1] if scenario == "partial-retry" else files
+            files_to_write = files[:-1] if scenario == "partial-retry" and attempt_count == 1 else files
+            path_slug_errors = 0
             for path in files_to_write:
                 text = path.read_text(encoding="utf-8")
                 slug = next(line.split(":", 1)[1].strip() for line in text.splitlines() if line.startswith("slug:"))
+                path_slug = path.relative_to(staging).with_suffix("").as_posix()
+                if slug != path_slug:
+                    path_slug_errors += 1
+                    continue
                 key = hashlib.sha256(slug.encode()).hexdigest()
                 (store / (key + ".md")).write_text(text, encoding="utf-8")
-            errors = 1 if scenario in ("numeric-errors", "partial-retry") else 0
-            imported = max(0, len(files) - 1) if scenario in ("count-mismatch", "partial-retry") else len(files)
+            partial = scenario == "partial-retry" and attempt_count == 1
+            errors = path_slug_errors + (1 if scenario == "numeric-errors" or partial else 0)
+            imported = max(0, len(files) - 1) if scenario == "count-mismatch" or partial else len(files) - path_slug_errors
             payload = {"status": "success", "imported": imported, "skipped": 0, "errors": errors}
             if scenario == "write-through":
                 payload["writeThrough"] = {"ok": False}
             if overlap.exists():
                 overlap.rmdir()
+            print("Found " + str(len(files)) + " markdown files")
+            print("Using 4 parallel workers")
             print(json.dumps(payload))
             raise SystemExit(0)
 

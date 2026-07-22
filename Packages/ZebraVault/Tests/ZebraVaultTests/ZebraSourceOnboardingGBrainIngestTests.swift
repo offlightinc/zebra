@@ -3,7 +3,7 @@ import XCTest
 @testable import ZebraVault
 
 final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
-    func testBulkImportUsesExplicitVerifiedSourceAndExactReadback() throws {
+    func testBulkImportAcceptsNoisyJSONAndStagesAtPathAuthoritativeSlugs() throws {
         let fixture = try Fixture()
         let result = try fixture.run(records: [
             fixture.record(id: "one", body: "first body"),
@@ -20,16 +20,35 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         let arguments = try XCTUnwrap(importEvent["arguments"] as? [String])
         XCTAssertTrue(arguments.contains("--source-id"))
         XCTAssertTrue(arguments.contains("verified-brain"))
-        XCTAssertTrue(arguments.contains("--fresh"))
+        XCTAssertFalse(arguments.contains("--fresh"))
         XCTAssertTrue(arguments.contains("--json"))
+        XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 0)
         XCTAssertEqual(events.filter { $0["command"] as? String == "get" }.count, 2)
         XCTAssertTrue(events.allSatisfy { $0["source"] as? String == "verified-brain" })
         let manifestEvent = try XCTUnwrap(events.first { $0["command"] as? String == "staging-manifest" })
         let manifest = try XCTUnwrap(manifestEvent["manifest"] as? [String: Any])
         let manifestRecords = try XCTUnwrap(manifest["records"] as? [[String: Any]])
-        XCTAssertEqual(manifestRecords.compactMap { $0["relativePath"] as? String }, ["obsidian/one.md", "obsidian/two.md"])
+        XCTAssertEqual(
+            manifestRecords.compactMap { $0["relativePath"] as? String },
+            ["sources/obsidian/one.md", "sources/obsidian/two.md"]
+        )
         XCTAssertEqual(manifestRecords.compactMap { $0["slug"] as? String }, ["sources/obsidian/one", "sources/obsidian/two"])
         XCTAssertTrue(manifestRecords.allSatisfy { ($0["identityDigest"] as? String)?.count == 64 })
+        let filesystem = try XCTUnwrap(result["filesystem"] as? [String: Any])
+        XCTAssertEqual(filesystem["state"] as? String, "verified")
+        let index = try XCTUnwrap(result["index"] as? [String: Any])
+        XCTAssertEqual(index["fresh"] as? Bool, false)
+        let operationReceiptPath = try XCTUnwrap(result["operationReceiptPath"] as? String)
+        let durableReceipt = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: operationReceiptPath)))
+                as? [String: Any]
+        )
+        XCTAssertEqual(durableReceipt["state"] as? String, "complete")
+        XCTAssertEqual(durableReceipt["complete"] as? Bool, true)
+        for record in manifestRecords {
+            let relativePath = try XCTUnwrap(record["relativePath"] as? String)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent(relativePath).path))
+        }
         let privateRoot = fixture.root.appendingPathComponent("private-staging", isDirectory: true)
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: privateRoot.path).allSatisfy {
             !$0.hasPrefix("zebra-gbrain-ingest-")
@@ -47,7 +66,6 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
             ("wrong-source", "sourceRoutingMismatch"),
             ("missing-readback", "readbackMissing"),
             ("identity-mismatch", "readbackIdentityMismatch"),
-            ("write-through", "writeThroughFailed"),
         ]
 
         for item in cases {
@@ -73,7 +91,7 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         XCTAssertEqual(stagingFailure["failure"] as? String, "stagingFailed")
     }
 
-    func testIncompleteAcquisitionBlocksWriteAndSingleRecordUsesPut() throws {
+    func testIncompleteAcquisitionBlocksWriteAndSingleRecordUsesFileImport() throws {
         let incomplete = try Fixture()
         let blocked = try incomplete.run(
             records: [incomplete.record(id: "one", body: "body")],
@@ -87,8 +105,8 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         let completed = try single.run(records: [single.record(id: "one", body: "body")])
         XCTAssertEqual(completed["complete"] as? Bool, true)
         let events = try single.events()
-        XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 1)
-        XCTAssertEqual(events.filter { $0["command"] as? String == "import" }.count, 0)
+        XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 0)
+        XCTAssertEqual(events.filter { $0["command"] as? String == "import" }.count, 1)
         XCTAssertEqual(events.filter { $0["command"] as? String == "get" }.count, 1)
     }
 
@@ -112,8 +130,8 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         }
     }
 
-    func testSinglePutRequiresStructuredResultAndOversizedRecordUsesBulkImport() throws {
-        let malformed = try Fixture(scenario: "malformed-put")
+    func testSingleFileImportRequiresStructuredResultAndHandlesLargeRecord() throws {
+        let malformed = try Fixture(scenario: "malformed-json")
         let rejected = try malformed.run(records: [malformed.record(id: "one", body: "body")])
         XCTAssertEqual(rejected["complete"] as? Bool, false)
         XCTAssertEqual(rejected["failure"] as? String, "importResultMalformed")
@@ -128,16 +146,20 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 0)
     }
 
-    func testSinglePutRejectsStructuredNegativeResult() throws {
-        let rejectedFixture = try Fixture(scenario: "put-ok-false")
-        let rejected = try rejectedFixture.run(records: [
-            rejectedFixture.record(id: "one", body: "body"),
+    func testTransientImportRetriesTwiceThenSucceeds() throws {
+        let retryFixture = try Fixture(scenario: "transient-import")
+        let retried = try retryFixture.run(records: [
+            retryFixture.record(id: "one", body: "body"),
         ])
-        XCTAssertEqual(rejected["complete"] as? Bool, false)
-        XCTAssertEqual(rejected["failure"] as? String, "writeThroughFailed")
+        XCTAssertEqual(retried["complete"] as? Bool, true)
+        let events = try retryFixture.events()
+        XCTAssertEqual(events.filter { $0["command"] as? String == "import" }.count, 3)
+        XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 0)
+        let index = try XCTUnwrap(retried["index"] as? [String: Any])
+        XCTAssertEqual(index["attemptCount"] as? Int, 3)
     }
 
-    func testBulkFailureIsIsolatedAndRetriedWithBoundedPut() throws {
+    func testBulkFailureIsIsolatedAndRetriedWithFileImport() throws {
         let retryFixture = try Fixture(scenario: "partial-retry")
         let retried = try retryFixture.run(records: [
             retryFixture.record(id: "one", body: "first"),
@@ -146,9 +168,79 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
         XCTAssertEqual(retried["complete"] as? Bool, true)
         XCTAssertNil(retried["failure"] as? String)
         let events = try retryFixture.events()
-        XCTAssertEqual(events.filter { $0["command"] as? String == "import" }.count, 1)
-        XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 1)
+        XCTAssertEqual(events.filter { $0["command"] as? String == "import" }.count, 2)
+        XCTAssertEqual(events.filter { $0["command"] as? String == "put" }.count, 0)
         XCTAssertEqual(events.filter { $0["command"] as? String == "get" }.count, 3)
+    }
+
+    func testPersistentTransientFailureStopsAfterThreeAttemptsAndKeepsCanonicalFile() throws {
+        let fixture = try Fixture(scenario: "import-exit")
+        let result = try fixture.run(records: [fixture.record(id: "one", body: "body")])
+
+        XCTAssertEqual(result["complete"] as? Bool, false)
+        XCTAssertEqual(result["state"] as? String, "indexPending")
+        XCTAssertEqual(result["retryable"] as? Bool, true)
+        let index = try XCTUnwrap(result["index"] as? [String: Any])
+        XCTAssertEqual(index["attemptCount"] as? Int, 3)
+        let imports = try fixture.events().filter { $0["command"] as? String == "import" }
+        XCTAssertEqual(imports.count, 3)
+        let importRoots = imports.compactMap { ($0["arguments"] as? [String])?.first }
+        XCTAssertEqual(Set(importRoots).count, 3)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: fixture.root.appendingPathComponent("sources/obsidian/one.md").path
+        ))
+    }
+
+    func testConfigurationFailureDoesNotAutomaticallyRetry() throws {
+        let fixture = try Fixture(scenario: "configuration-error")
+        let result = try fixture.run(records: [fixture.record(id: "one", body: "body")])
+
+        XCTAssertEqual(result["complete"] as? Bool, false)
+        XCTAssertEqual(result["failure"] as? String, "indexConfigurationFailed")
+        XCTAssertEqual(result["retryable"] as? Bool, false)
+        XCTAssertEqual(try fixture.events().filter { $0["command"] as? String == "import" }.count, 1)
+    }
+
+    func testUserModifiedCanonicalFileIsPreservedAndBlocksReimport() throws {
+        let fixture = try Fixture()
+        let original = fixture.record(id: "one", body: "first")
+        XCTAssertEqual(try fixture.run(records: [original])["complete"] as? Bool, true)
+        let canonical = fixture.root.appendingPathComponent("sources/obsidian/one.md")
+        var edited = try String(contentsOf: canonical, encoding: .utf8)
+        edited += "user note\n"
+        try edited.write(to: canonical, atomically: true, encoding: .utf8)
+        let importCountBefore = try fixture.events().filter { $0["command"] as? String == "import" }.count
+
+        let result = try fixture.run(records: [fixture.record(id: "one", body: "updated source")])
+
+        XCTAssertEqual(result["complete"] as? Bool, false)
+        XCTAssertEqual(result["failure"] as? String, "filesystemConflict")
+        XCTAssertEqual(try String(contentsOf: canonical, encoding: .utf8), edited)
+        XCTAssertEqual(
+            try fixture.events().filter { $0["command"] as? String == "import" }.count,
+            importCountBefore
+        )
+    }
+
+    func testCanonicalFileChangedDuringImportPreventsCompletion() throws {
+        let fixture = try Fixture(scenario: "mutate-canonical")
+        let result = try fixture.run(records: [fixture.record(id: "one", body: "body")])
+
+        XCTAssertEqual(result["complete"] as? Bool, false)
+        XCTAssertEqual(result["failure"] as? String, "filesystemConflict")
+        XCTAssertEqual(result["state"] as? String, "conflict")
+        let canonical = fixture.root.appendingPathComponent("sources/obsidian/one.md")
+        XCTAssertTrue(try String(contentsOf: canonical, encoding: .utf8).hasSuffix("user edit\n"))
+    }
+
+    func testCancellationAfterRouteVerificationIsNotRetryable() throws {
+        let fixture = try Fixture(scenario: "cancel-after-route")
+        let result = try fixture.runCancelledAfterRoute(records: [fixture.record(id: "one", body: "body")])
+
+        XCTAssertEqual(result["complete"] as? Bool, false)
+        XCTAssertEqual(result["failure"] as? String, "cancelled")
+        XCTAssertEqual(result["retryable"] as? Bool, false)
+        XCTAssertTrue(try fixture.events().filter { $0["command"] as? String == "import" }.isEmpty)
     }
 
     func testConnectorCannotOverrideDeterministicSlug() throws {
@@ -234,7 +326,8 @@ final class ZebraSourceOnboardingGBrainIngestTests: XCTestCase {
             "acquisitionIncomplete", "stagingFailed", "gbrainRuntimeMissing",
             "targetBindingMismatch", "sourceRoutingMismatch", "importProcessFailed",
             "importResultMalformed", "importCountMismatch", "readbackMissing",
-            "readbackIdentityMismatch", "writeThroughFailed", "cancelled",
+            "readbackIdentityMismatch", "writeThroughFailed", "filesystemPersistFailed",
+            "filesystemConflict", "indexConfigurationFailed", "cancelled",
         ]
         for failure in failures {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -448,6 +541,28 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
             return try runHarness(harness, input: input)
         }
 
+        func runCancelledAfterRoute(records: [[String: Any]]) throws -> [String: Any] {
+            let cancellation = root.appendingPathComponent("cancel-after-route", isDirectory: false)
+            var value = request(records: records, acquisitionComplete: true, acquisitionOverride: [:])
+            value["cancellationPath"] = cancellation.path
+            var binding = try XCTUnwrap(value["binding"] as? [String: Any])
+            var environment = try XCTUnwrap(binding["environment"] as? [String: String])
+            environment["FAKE_GBRAIN_CANCELLATION_PATH"] = cancellation.path
+            binding["environment"] = environment
+            value["binding"] = binding
+            let input = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+            let harness = root.appendingPathComponent("cancel-after-route-harness.py", isDirectory: false)
+            let harnessText = """
+            import json
+            import sys
+            sys.path.insert(0, \(String(reflecting: runtime.path)))
+            from gbrain_ingest import run_ingest
+            print(json.dumps(run_ingest(json.load(sys.stdin)), sort_keys=True))
+            """
+            try harnessText.write(to: harness, atomically: true, encoding: .utf8)
+            return try runHarness(harness, input: input)
+        }
+
         func runConcurrently(records: [[String: Any]]) throws -> [[String: Any]] {
             let requests = [
                 request(records: records, acquisitionComplete: true, acquisitionOverride: [:]),
@@ -500,6 +615,8 @@ private extension ZebraSourceOnboardingGBrainIngestTests {
                     ],
                 ],
                 "privateRoot": root.appendingPathComponent("private-staging", isDirectory: true).path,
+                "persistCanonical": true,
+                "retryDelays": [0, 0],
                 "acquisition": acquisition,
                 "records": records,
             ]
